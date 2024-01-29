@@ -92,8 +92,28 @@ namespace Radzen
         /// </summary>
         /// <param name="args">The <see cref="MouseEventArgs"/> instance containing the event data.</param>
         /// <param name="items">The items.</param>
-        /// <param name="click">The click.</param>
+        /// <param name="click">A click function Action</param>
         public void Open(MouseEventArgs args, IEnumerable<ContextMenuItem> items, Action<MenuItemEventArgs> click = null)
+        {
+            var options = new ContextMenuOptions();
+
+            options.Items = items;
+            options.Click = arg =>
+            {
+                click?.Invoke(arg);
+                return Task.CompletedTask;
+            };
+
+            OpenTooltip(args, options);
+        }
+        
+        /// <summary>
+        /// Opens the specified arguments.
+        /// </summary>
+        /// <param name="args">The <see cref="MouseEventArgs"/> instance containing the event data.</param>
+        /// <param name="items">The items.</param>
+        /// <param name="click">An asynchronous click function.</param>
+        public void Open(MouseEventArgs args, IEnumerable<ContextMenuItem> items, Func<MenuItemEventArgs, Task> click = null)
         {
             var options = new ContextMenuOptions();
 
@@ -164,7 +184,7 @@ namespace Radzen
         /// Gets or sets the click.
         /// </summary>
         /// <value>The click.</value>
-        public Action<MenuItemEventArgs> Click { get; set; }
+        public Func<MenuItemEventArgs, Task> Click { get; set; }
     }
 
     /// <summary>
