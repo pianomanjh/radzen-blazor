@@ -366,11 +366,23 @@ namespace Radzen.Blazor
             if (valid || newIndex < SelectedIndex)
             {
                 SelectedIndex = newIndex;
+                for (int i = 0; i < steps.Count; i++)
+                {
+                    if (i != newIndex)
+                    {
+                        steps[i].Selected = false;  
+                        // if (raiseChange)
+                        //     await steps[i].SelectedChanged.InvokeAsync(false);
+                    }
+                }
+
+                step.Selected = true;
 
                 if (raiseChange)
                 {
                     await Change.InvokeAsync(SelectedIndex);
                     await SelectedIndexChanged.InvokeAsync(SelectedIndex);
+                    //await step.SelectedChanged.InvokeAsync(true);
                     StateHasChanged();
                 }
             }

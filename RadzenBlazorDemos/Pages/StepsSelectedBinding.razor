@@ -1,0 +1,30 @@
+﻿<RadzenSteps>
+    <Steps>
+        <RadzenStepsItem @bind-Selected="@flagA">
+            <RadzenText Text="Step 1" />
+        </RadzenStepsItem>
+        <RadzenStepsItem @bind-Selected="@flagB">
+            <RadzenText Text="Step 2" />
+        </RadzenStepsItem>
+    </Steps>
+</RadzenSteps>
+<RadzenStack Orientation="Orientation.Horizontal">
+    <RadzenButton Click="SelectTabA" />
+    <RadzenButton Click="SelectTabB" />
+</RadzenStack>
+
+@code {
+    private bool flagA = false;
+    private bool flagB = true;
+
+    private void SelectTabA()
+    {
+        flagA = true;
+    }
+
+    private void SelectTabB()
+    {
+        flagB = true;
+    }
+
+}

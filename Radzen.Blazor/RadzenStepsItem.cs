@@ -84,7 +84,26 @@ namespace Radzen.Blazor
         /// </summary>
         /// <value><c>true</c> if selected; otherwise, <c>false</c>.</value>
         [Parameter]
-        public bool Selected { get; set; }
+        public bool Selected
+        {
+            get => _selected;
+            set
+            {
+                if (_selected != value)
+                {
+                    _selected = value;
+                    SelectedChanged.InvokeAsync();
+                    Steps?.Refresh();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Get or sets the SelectedChanged callback
+        /// </summary>
+        /// <value>The bool representing if the steps item is Selected</value>
+        [Parameter]
+        public EventCallback<bool> SelectedChanged { get; set; }
 
         bool _visible = true;
         /// <summary>
@@ -138,6 +157,7 @@ namespace Radzen.Blazor
         public RenderFragment ChildContent { get; set; }
 
         RadzenSteps _steps;
+        private bool _selected;
 
         /// <summary>
         /// Gets or sets the steps.
@@ -167,18 +187,18 @@ namespace Radzen.Blazor
         /// <returns>A Task representing the asynchronous operation.</returns>
         public override async Task SetParametersAsync(ParameterView parameters)
         {
-            if (parameters.DidParameterChange(nameof(Selected), Selected))
-            {
-                var selected = parameters.GetValueOrDefault<bool>(nameof(Selected));
-                if (!selected)
-                {
-                    Steps?.SelectFirst();
-                }
-                else
-                {
-                    Steps?.SelectStep(this);
-                }
-            }
+            // if (parameters.DidParameterChange(nameof(Selected), Selected))
+            // {
+            //     var selected = parameters.GetValueOrDefault<bool>(nameof(Selected));
+            //     if (!selected)
+            //     {
+            //         Steps?.SelectFirst();
+            //     }
+            //     else
+            //     {
+            //         Steps?.SelectStep(this);
+            //     }
+            // }
 
             await base.SetParametersAsync(parameters);
         }
