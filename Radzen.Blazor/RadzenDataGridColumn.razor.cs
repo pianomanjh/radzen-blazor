@@ -771,6 +771,10 @@ namespace Radzen.Blazor
 
         Func<TItem, object>? propertyValueGetter;
 
+        // Cached compiled getter for the sort property, rebuilt only when the sort property changes.
+        string? sortValueGetterProperty;
+        Func<TItem, object>? sortValueGetter;
+
         /// <summary>
         /// Gets the value for specified item.
         /// </summary>
@@ -778,7 +782,12 @@ namespace Radzen.Blazor
         /// <returns>System.Object.</returns>
         public virtual object? GetValue(TItem item)
         {
-            var value = propertyValueGetter != null && !string.IsNullOrEmpty(Property) && !Property.Contains('.', StringComparison.Ordinal) ? propertyValueGetter(item) : !string.IsNullOrEmpty(Property) ? PropertyAccess.GetValue(item, Property) : "";
+            // Use the cached compiled getter whenever one was built for this column. It already handles
+            // nested ("Address.City") and indexer ("it[\"key\"]") paths with null-propagation, so there is
+            // no need to fall back to per-cell reflection for dotted properties. Reflection remains the
+            // fallback only for columns whose property could not be compiled (e.g. late-bound dynamic items).
+            var value = propertyValueGetter != null ? propertyValueGetter(item)
+                : !string.IsNullOrEmpty(Property) ? PropertyAccess.GetValue(item, Property) : "";
 
 
             if (FilterPropertyType != null && (PropertyAccess.IsEnum(FilterPropertyType) || PropertyAccess.IsNullableEnum(FilterPropertyType) ||
@@ -939,7 +948,35 @@ namespace Radzen.Blazor
         internal object? GetSortValue(TItem item)
         {
             var sortProperty = GetSortProperty();
-            return string.IsNullOrEmpty(sortProperty) ? null : PropertyAccess.GetValue(item, sortProperty);
+            if (string.IsNullOrEmpty(sortProperty))
+            {
+                return null;
+            }
+
+            if (sortProperty != sortValueGetterProperty)
+            {
+                sortValueGetterProperty = sortProperty;
+
+                if (sortProperty == Property && propertyValueGetter != null)
+                {
+                    sortValueGetter = propertyValueGetter;
+                }
+                else
+                {
+                    // A compiled getter avoids per-row reflection while sorting in memory. Late-bound
+                    // (dynamic) items that cannot be compiled fall back to reflection below.
+                    try
+                    {
+                        sortValueGetter = PropertyAccess.Getter<TItem, object>(sortProperty);
+                    }
+                    catch
+                    {
+                        sortValueGetter = null;
+                    }
+                }
+            }
+
+            return sortValueGetter != null ? sortValueGetter(item) : PropertyAccess.GetValue(item, sortProperty);
         }
 
         internal void SetSortOrder(SortOrder? order)
@@ -1309,14 +1346,25 @@ namespace Radzen.Blazor
             return collectionFilterMode ?? CollectionFilterMode;
         }
 
+        WhiteSpace _cellClassWhiteSpace;
+        string? _cellClass;
+
         /// <summary>
         /// Get body column class.
         /// </summary>
         /// <returns></returns>
         internal string GetCellClass()
         {
-            var enumName = Enum.GetName<WhiteSpace>(WhiteSpace);
-            return $"rz-cell-data rz-text-{(enumName ?? WhiteSpace.ToString()).ToLower(CultureInfo.InvariantCulture)}";
+            // Constant per column; recompute only when WhiteSpace actually changes instead of allocating
+            // a new string (plus Enum.GetName + ToLower) for every data cell on every render.
+            if (_cellClass == null || _cellClassWhiteSpace != WhiteSpace)
+            {
+                _cellClassWhiteSpace = WhiteSpace;
+                var enumName = Enum.GetName<WhiteSpace>(WhiteSpace);
+                _cellClass = $"rz-cell-data rz-text-{(enumName ?? WhiteSpace.ToString()).ToLower(CultureInfo.InvariantCulture)}";
+            }
+
+            return _cellClass;
         }
 
         /// <summary>

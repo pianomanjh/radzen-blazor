@@ -1,0 +1,11 @@
+| Method                                        | Rows | Mean        | Error       | StdDev    | Ratio | RatioSD | Gen0   | Allocated | Alloc Ratio |
+|---------------------------------------------- |----- |------------:|------------:|----------:|------:|--------:|-------:|----------:|------------:|
+| 'Reflection - flat property'                  | 50   |  2,539.4 ns |   400.03 ns |  21.93 ns |  1.00 |    0.01 | 0.0114 |    1600 B |        1.00 |
+| 'Compiled cached getter - flat property'      | 50   |    161.5 ns |    49.00 ns |   2.69 ns |  0.06 |    0.00 |      - |         - |        0.00 |
+| 'Reflection - nested property (Address.City)' | 50   |  6,159.4 ns | 1,365.24 ns |  74.83 ns |  2.43 |    0.03 | 0.0381 |    5600 B |        3.50 |
+| 'Compiled cached getter - nested property'    | 50   |    196.2 ns |    14.75 ns |   0.81 ns |  0.08 |    0.00 |      - |         - |        0.00 |
+|                                               |      |             |             |           |       |         |        |           |             |
+| 'Reflection - flat property'                  | 500  | 25,850.0 ns | 6,958.32 ns | 381.41 ns |  1.00 |    0.02 | 0.0916 |   16000 B |        1.00 |
+| 'Compiled cached getter - flat property'      | 500  |  1,553.6 ns |   810.59 ns |  44.43 ns |  0.06 |    0.00 |      - |         - |        0.00 |
+| 'Reflection - nested property (Address.City)' | 500  | 59,459.0 ns | 9,970.74 ns | 546.53 ns |  2.30 |    0.03 | 0.3662 |   56000 B |        3.50 |
+| 'Compiled cached getter - nested property'    | 500  |  1,834.1 ns |   172.84 ns |   9.47 ns |  0.07 |    0.00 |      - |         - |        0.00 |

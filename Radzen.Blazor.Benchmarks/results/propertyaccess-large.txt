@@ -1,0 +1,16 @@
+| Method                                        | Rows   | Mean          | Error         | StdDev      | Ratio | RatioSD | Gen0    | Allocated  | Alloc Ratio |
+|---------------------------------------------- |------- |--------------:|--------------:|------------:|------:|--------:|--------:|-----------:|------------:|
+| 'Reflection - flat property'                  | 1000   |     51.691 us |    13.0015 us |   0.7127 us |  1.00 |    0.02 |  0.1831 |    32000 B |        1.00 |
+| 'Compiled cached getter - flat property'      | 1000   |      3.076 us |     0.4925 us |   0.0270 us |  0.06 |    0.00 |       - |          - |        0.00 |
+| 'Reflection - nested property (Address.City)' | 1000   |    115.395 us |    28.8799 us |   1.5830 us |  2.23 |    0.04 |  0.7324 |   112000 B |        3.50 |
+| 'Compiled cached getter - nested property'    | 1000   |      3.687 us |     1.0060 us |   0.0551 us |  0.07 |    0.00 |       - |          - |        0.00 |
+|                                               |        |               |               |             |       |         |         |            |             |
+| 'Reflection - flat property'                  | 10000  |    512.227 us |   237.0865 us |  12.9955 us |  1.00 |    0.03 |  1.9531 |   320001 B |        1.00 |
+| 'Compiled cached getter - flat property'      | 10000  |     44.178 us |     7.0246 us |   0.3850 us |  0.09 |    0.00 |       - |          - |        0.00 |
+| 'Reflection - nested property (Address.City)' | 10000  |  1,168.311 us |    28.8970 us |   1.5839 us |  2.28 |    0.05 |  7.8125 |  1120001 B |        3.50 |
+| 'Compiled cached getter - nested property'    | 10000  |     61.138 us |     2.9341 us |   0.1608 us |  0.12 |    0.00 |       - |          - |        0.00 |
+|                                               |        |               |               |             |       |         |         |            |             |
+| 'Reflection - flat property'                  | 100000 |  5,208.800 us | 2,603.7962 us | 142.7229 us |  1.00 |    0.03 | 23.4375 |  3200006 B |        1.00 |
+| 'Compiled cached getter - flat property'      | 100000 |    804.127 us |   844.4293 us |  46.2860 us |  0.15 |    0.01 |       - |          - |        0.00 |
+| 'Reflection - nested property (Address.City)' | 100000 | 12,877.115 us | 9,014.6471 us | 494.1232 us |  2.47 |    0.10 | 78.1250 | 11200012 B |        3.50 |
+| 'Compiled cached getter - nested property'    | 100000 |  1,184.620 us | 1,417.7362 us |  77.7109 us |  0.23 |    0.01 |       - |          - |        0.00 |

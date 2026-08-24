@@ -1,0 +1,5 @@
+| Method                                                  | Rows   | Mean       | Error      | StdDev    | Gen0     | Allocated   |
+|-------------------------------------------------------- |------- |-----------:|-----------:|----------:|---------:|------------:|
+| 'GetValue for every cell on a page (rows x 10 columns)' | 1000   |   1.062 ms |  0.1221 ms | 0.0067 ms |   1.9531 |   498.46 KB |
+| 'GetValue for every cell on a page (rows x 10 columns)' | 10000  |   9.988 ms |  0.0738 ms | 0.0040 ms |  31.2500 |  5069.01 KB |
+| 'GetValue for every cell on a page (rows x 10 columns)' | 100000 | 100.567 ms | 23.0105 ms | 1.2613 ms | 200.0000 | 50774.28 KB |
