@@ -12,6 +12,7 @@ namespace Radzen.Blazor.Tests
         class Address
         {
             public string City { get; set; }
+            public int ZipCode { get; set; }
         }
 
         class Person
@@ -58,6 +59,85 @@ namespace Radzen.Blazor.Tests
             Assert.Equal("Charlie", cells[0].TextContent.Trim());
             Assert.Equal("Alice", cells[1].TextContent.Trim());
             Assert.Equal("Bob", cells[2].TextContent.Trim());
+        }
+
+        // A null intermediate on a nested path must render an empty cell, matching the reflection-based value
+        // access the compiled getter replaced - not a NullReferenceException, and not the leaf type's default
+        // (e.g. "0" for an int leaf). Covers both the string Property path and the PropertyExpression path.
+
+        static List<Person> PeopleWithNullAddress() => new()
+        {
+            new Person { Id = 1, Name = "Charlie", Address = new Address { City = "Paris", ZipCode = 75001 } },
+            new Person { Id = 2, Name = "NoAddress", Address = null },
+        };
+
+        static IRenderedComponent<RadzenDataGrid<Person>> RenderGridWith(TestContext ctx, List<Person> data, RenderFragment columns)
+        {
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+            ctx.JSInterop.SetupModule("_content/Radzen.Blazor/Radzen.Blazor.js");
+            return ctx.RenderComponent<RadzenDataGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, data);
+                p.Add(g => g.Columns, columns);
+            });
+        }
+
+        [Fact]
+        public void StringProperty_NestedValueTypeLeaf_NullIntermediate_RendersEmptyNotDefault()
+        {
+            using var ctx = new TestContext();
+            var component = RenderGridWith(ctx, PeopleWithNullAddress(), builder =>
+            {
+                builder.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.Property), "Address.ZipCode");
+                builder.CloseComponent();
+            });
+
+            var cells = component.FindAll(".rz-cell-data");
+            Assert.Equal("75001", cells[0].TextContent.Trim());
+            Assert.Equal("", cells[1].TextContent.Trim()); // null Address -> empty, not "0"
+        }
+
+        [Fact]
+        public void StringProperty_NestedReferenceLeaf_NullIntermediate_RendersEmpty()
+        {
+            using var ctx = new TestContext();
+            var component = RenderGridWith(ctx, PeopleWithNullAddress(), builder =>
+            {
+                builder.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.Property), "Address.City");
+                builder.CloseComponent();
+            });
+
+            var cells = component.FindAll(".rz-cell-data");
+            Assert.Equal("Paris", cells[0].TextContent.Trim());
+            Assert.Equal("", cells[1].TextContent.Trim());
+        }
+
+        [Fact]
+        public void PropertyExpression_NestedPath_NullIntermediate_DoesNotThrow_RendersEmpty()
+        {
+            using var ctx = new TestContext();
+            // x => x.Address.City would NRE on a null Address if compiled as a raw lambda; the member-path
+            // expression must instead route through the null-safe getter.
+            var component = RenderGridWith(ctx, PeopleWithNullAddress(), builder =>
+            {
+                builder.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.PropertyExpression),
+                    (System.Linq.Expressions.Expression<Func<Person, object>>)(p => p.Address.City));
+                builder.CloseComponent();
+                builder.OpenComponent(2, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(3, nameof(RadzenDataGridColumn<Person>.PropertyExpression),
+                    (System.Linq.Expressions.Expression<Func<Person, object>>)(p => p.Address.ZipCode));
+                builder.CloseComponent();
+            });
+
+            var cells = component.FindAll(".rz-cell-data");
+            // row 0: City, ZipCode ; row 1 (null Address): both empty
+            Assert.Equal("Paris", cells[0].TextContent.Trim());
+            Assert.Equal("75001", cells[1].TextContent.Trim());
+            Assert.Equal("", cells[2].TextContent.Trim());
+            Assert.Equal("", cells[3].TextContent.Trim());
         }
 
         [Fact]

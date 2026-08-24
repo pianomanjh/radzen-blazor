@@ -200,11 +200,18 @@ namespace Radzen.Blazor
             // or filterable (there is no member to translate to a query).
             if (PropertyExpression != null && string.IsNullOrEmpty(Property))
             {
-                propertyValueGetter = PropertyExpression.Compile();
-
                 if (TryGetMemberPath(PropertyExpression, out var path))
                 {
+                    // A simple member access drives the string sort/filter/group pipeline and gets the same
+                    // null-safe value getter the string Property path uses (built in SetColumnDefaults), so a
+                    // null intermediate yields an empty cell rather than throwing.
                     Property = path;
+                }
+                else
+                {
+                    // A computed expression has no member path to translate; render it via the raw compiled
+                    // delegate (it is the caller's expression, and is not sortable/filterable).
+                    propertyValueGetter = PropertyExpression.Compile();
                 }
             }
 
@@ -256,12 +263,14 @@ namespace Radzen.Blazor
             }
             else if (!string.IsNullOrEmpty(Property))
             {
-                propertyValueGetter ??= PropertyAccess.Getter<TItem, object>(Property);
+                propertyValueGetter ??= PropertyAccess.NullSafeGetter<TItem>(Property);
             }
 
             if (!string.IsNullOrEmpty(Property) && (typeof(TItem).IsGenericType && typeof(IDictionary<,>).IsAssignableFrom(typeof(TItem).GetGenericTypeDefinition()) ||
                 typeof(IDictionary).IsAssignableFrom(typeof(TItem)) || typeof(System.Data.DataRow).IsAssignableFrom(typeof(TItem))))
             {
+                // Dictionary / DataRow items resolve through an indexer, not a member chain, so they keep the
+                // standard getter (its null semantics for these are unchanged by this branch).
                 propertyValueGetter ??= PropertyAccess.Getter<TItem, object>(Property);
             }
 

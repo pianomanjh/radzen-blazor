@@ -16,6 +16,8 @@ public static class PropertyAccess
 {
     private static readonly ConcurrentDictionary<(Type ItemType, Type ValueType, string PropertyName, Type? TargetType), Delegate> getterCache = new();
 
+    private static readonly ConcurrentDictionary<(Type ItemType, string PropertyName, Type? TargetType), Delegate> nullSafeGetterCache = new();
+
     /// <summary>
     /// Creates a function that will return the specified property. The compiled function is cached so repeated calls with the same arguments do not recompile it.
     /// </summary>
@@ -33,8 +35,28 @@ public static class PropertyAccess
             _ => CreateGetter<TItem, TValue>(propertyName, type));
     }
 
+    /// <summary>
+    /// Like <see cref="Getter{TItem, TValue}"/> for an <see cref="object"/> value, but a null reference
+    /// encountered part-way along a dotted path yields <c>null</c> instead of the default of the leaf type.
+    /// For "Order.Total" where <c>Total</c> is a value type, a null <c>Order</c> returns <c>null</c> (an empty
+    /// cell) rather than a boxed <c>0</c> - matching the reflection-based <see cref="GetValue"/> it replaces on
+    /// hot render paths. The compiled function is cached like <see cref="Getter{TItem, TValue}"/>.
+    /// </summary>
+    /// <typeparam name="TItem">The owner type.</typeparam>
+    /// <param name="propertyName">Name of the property (possibly dotted) to return.</param>
+    /// <param name="type">Optional type to cast the item to before accessing the property.</param>
+    /// <returns>A function returning the property value, or null if an intermediate member is null.</returns>
     [RequiresUnreferencedCode(TrimMessages.ExpressionTreeReflection)]
-    private static Func<TItem, TValue> CreateGetter<TItem, TValue>(string propertyName, Type? type)
+    public static Func<TItem, object> NullSafeGetter<TItem>(string propertyName, Type? type = null)
+    {
+        ArgumentNullException.ThrowIfNull(propertyName);
+
+        return (Func<TItem, object>)nullSafeGetterCache.GetOrAdd((typeof(TItem), propertyName, type),
+            _ => CreateGetter<TItem, object>(propertyName, type, nullToNull: true));
+    }
+
+    [RequiresUnreferencedCode(TrimMessages.ExpressionTreeReflection)]
+    private static Func<TItem, TValue> CreateGetter<TItem, TValue>(string propertyName, Type? type, bool nullToNull = false)
     {
         if (propertyName.Contains('[', StringComparison.Ordinal))
         {
@@ -116,12 +138,32 @@ public static class PropertyAccess
             return AccessNoInterface(instance, memberName);
         }
 
+        // When nullToNull is set, a null reference intermediate makes the whole result null (default(TValue),
+        // which is null for the object getter) rather than the leaf type's default. We accumulate the
+        // "some intermediate is null" test and only evaluate the raw access when every intermediate is
+        // non-null - so the raw access never dereferences null, and the OrElse chain short-circuits so the
+        // guard itself never does either. Value-type / Nullable<T> intermediates keep the existing
+        // per-member null propagation.
+        Expression? nullGuard = null;
         foreach (var member in propertyName.Split('.'))
         {
-            body = AccessWithNullPropagation(body, member);
+            if (nullToNull && !body.Type.IsValueType && Nullable.GetUnderlyingType(body.Type) == null)
+            {
+                var isNull = Expression.Equal(body, Expression.Constant(null, body.Type));
+                nullGuard = nullGuard == null ? isNull : Expression.OrElse(nullGuard, isNull);
+                body = AccessNoInterface(body, member);
+            }
+            else
+            {
+                body = AccessWithNullPropagation(body, member);
+            }
         }
 
         body = Expression.Convert(body, typeof(TValue));
+        if (nullGuard != null)
+        {
+            body = Expression.Condition(nullGuard, Expression.Default(typeof(TValue)), body);
+        }
         return Expression.Lambda<Func<TItem, TValue>>(body, arg).Compile();
     }
 
