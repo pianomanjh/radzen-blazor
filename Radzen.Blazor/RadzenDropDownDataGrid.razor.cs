@@ -928,16 +928,53 @@ namespace Radzen.Blazor
                         var valueList = values.Cast<object>().ToList();
                         if (!string.IsNullOrEmpty(ValueProperty))
                         {
-                            foreach (object v in valueList)
+                            if (typeof(EnumerableQuery).IsAssignableFrom(Query.GetType()))
                             {
-                                var item = Query.Where(new FilterDescriptor[]
-                                    {
-                                        new FilterDescriptor() { Property = ValueProperty, FilterValue = v }
-                                    }, LogicalFilterOperator.And, FilterCaseSensitivity.Default).FirstOrDefault();
-
-                                if (item != null && !selectedItems.AsQueryable().Where(i => object.Equals(GetItemOrValueFromProperty(i, ValueProperty), v)).Any())
+                                // In-memory: resolve every value against a single value->item lookup instead of a
+                                // per-value query plus a per-value selectedItems scan. O(items + selected) rather
+                                // than O(items x selected) with a query allocated per value.
+                                var itemsByValue = new Dictionary<object, object>();
+                                foreach (var i in Query.OfType<object>())
                                 {
-                                    selectedItems.Add(item);
+                                    var iv = GetItemOrValueFromProperty(i, ValueProperty);
+                                    if (iv != null)
+                                    {
+                                        itemsByValue.TryAdd(iv, i);
+                                    }
+                                }
+
+                                var existingValues = new HashSet<object>();
+                                foreach (var si in selectedItems)
+                                {
+                                    var sv = GetItemOrValueFromProperty(si, ValueProperty);
+                                    if (sv != null)
+                                    {
+                                        existingValues.Add(sv);
+                                    }
+                                }
+
+                                foreach (object v in valueList)
+                                {
+                                    if (v != null && itemsByValue.TryGetValue(v, out var item) && existingValues.Add(v))
+                                    {
+                                        selectedItems.Add(item);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // Non-in-memory (e.g. EF): keep the per-value query so the lookup stays server-side.
+                                foreach (object v in valueList)
+                                {
+                                    var item = Query.Where(new FilterDescriptor[]
+                                        {
+                                            new FilterDescriptor() { Property = ValueProperty, FilterValue = v }
+                                        }, LogicalFilterOperator.And, FilterCaseSensitivity.Default).FirstOrDefault();
+
+                                    if (item != null && !selectedItems.AsQueryable().Where(i => object.Equals(GetItemOrValueFromProperty(i, ValueProperty), v)).Any())
+                                    {
+                                        selectedItems.Add(item);
+                                    }
                                 }
                             }
                         }

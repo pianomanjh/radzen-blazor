@@ -88,3 +88,23 @@ cannot compile.
 The win here is CPU, not allocation: the per-item reflection was expensive to run, but its allocation is
 small next to the render tree (allocation is framework-bound, as elsewhere). At 1000 suggestions the list
 renders ~2.5× faster.
+
+## RadzenDropDownDataGrid — same O(items × selected) multiselect selection
+
+`RadzenDropDownDataGrid` overrides `SelectItemFromValue` with the same shape as the base dropdown had:
+each bound value was resolved with a `Query.Where(FilterDescriptor…)` **per value** plus a per-value
+`selectedItems` scan — O(items × selected), with a filter expression built per value. Fixed the same way
+(value→item lookup once for in-memory data; per-value query kept for a non-in-memory/EF view).
+
+*This is the dropdown's own selection logic, not the embedded grid — the inner `RadzenDataGrid`'s per-cell
+costs are out of scope here and come from the DataGrid work.*
+
+### Result — render a 500-item multiselect DropDownDataGrid
+
+| Selected | Baseline | Optimized | Speedup | Allocation |
+|---------:|---------:|----------:|--------:|-----------:|
+| 10  | 26.3 ms / 763 KB  | 4.0 ms / 512 KB | 6.5× | −33% |
+| 100 | 239 ms / 3.81 MB  | 4.9 ms / 537 KB | 48×  | −86% |
+| 250 | 557 ms / 9.26 MB  | 5.1 ms / 608 KB | 110× | −93% |
+
+Flat in the selected count instead of exploding. All 4935 tests pass; builds clean on net8/9/10.

@@ -1,0 +1,5 @@
+| Method                                                   | Items | Selected | Mean     | Error    | StdDev    | Allocated |
+|--------------------------------------------------------- |------ |--------- |---------:|---------:|----------:|----------:|
+| 'Render multiselect DropDownDataGrid (Items x Selected)' | 500   | 10       | 4.039 ms | 2.633 ms | 0.1443 ms | 511.96 KB |
+| 'Render multiselect DropDownDataGrid (Items x Selected)' | 500   | 100      | 4.924 ms | 7.919 ms | 0.4341 ms | 537.25 KB |
+| 'Render multiselect DropDownDataGrid (Items x Selected)' | 500   | 250      | 5.062 ms | 1.205 ms | 0.0660 ms | 607.96 KB |
