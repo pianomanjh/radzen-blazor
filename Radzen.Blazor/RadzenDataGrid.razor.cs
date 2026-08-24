@@ -1283,7 +1283,7 @@ namespace Radzen.Blazor
             }
         }
 
-        static readonly IReadOnlyDictionary<string, object> EmptyCellAttributes =
+        static readonly IReadOnlyDictionary<string, object> EmptyAttributes =
             new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(new Dictionary<string, object>());
 
         internal IReadOnlyDictionary<string, object> CellAttributes(TItem item, RadzenDataGridColumn<TItem> column)
@@ -1293,7 +1293,7 @@ namespace Radzen.Blazor
             // wrapper for every cell on every render. The result is only read by callers, never mutated.
             if (CellRender == null)
             {
-                return EmptyCellAttributes;
+                return EmptyAttributes;
             }
 
             var args = new Radzen.DataGridCellRenderEventArgs<TItem>() { Data = item, Column = column };
@@ -1323,19 +1323,25 @@ namespace Radzen.Blazor
                     break;
             }
 
-            return new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes);
+            return args.HasAttributes
+                ? new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes)
+                : EmptyAttributes;
         }
 
         internal IReadOnlyDictionary<string, object> FooterCellAttributes(RadzenDataGridColumn<TItem> column)
         {
-            var args = new Radzen.DataGridCellRenderEventArgs<TItem>() { Column = column };
-
-            if (FooterCellRender != null)
+            if (FooterCellRender == null)
             {
-                FooterCellRender(args);
+                return EmptyAttributes;
             }
 
-            return new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes);
+            var args = new Radzen.DataGridCellRenderEventArgs<TItem>() { Column = column };
+
+            FooterCellRender(args);
+
+            return args.HasAttributes
+                ? new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes)
+                : EmptyAttributes;
         }
 
         internal Dictionary<int, int> rowSpans = new Dictionary<int, int>();
@@ -2927,7 +2933,11 @@ namespace Radzen.Blazor
                 RowRender(args);
             }
 
-            return new Tuple<Radzen.RowRenderEventArgs<TItem>, IReadOnlyDictionary<string, object>>(args, new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes));
+            var attributes = args.HasAttributes
+                ? new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes)
+                : EmptyAttributes;
+
+            return new Tuple<Radzen.RowRenderEventArgs<TItem>, IReadOnlyDictionary<string, object>>(args, attributes);
         }
 
         internal Tuple<GroupRowRenderEventArgs, IReadOnlyDictionary<string, object>> GroupRowAttributes(RadzenDataGridGroupRow<TItem> item)
@@ -2939,7 +2949,11 @@ namespace Radzen.Blazor
                 GroupRowRender(args);
             }
 
-            return new Tuple<GroupRowRenderEventArgs, IReadOnlyDictionary<string, object>>(args, new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes));
+            var attributes = args.HasAttributes
+                ? new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes)
+                : EmptyAttributes;
+
+            return new Tuple<GroupRowRenderEventArgs, IReadOnlyDictionary<string, object>>(args, attributes);
         }
 
         bool settingsChanged;
