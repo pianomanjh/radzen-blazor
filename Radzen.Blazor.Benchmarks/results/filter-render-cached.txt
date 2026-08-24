@@ -1,0 +1,6 @@
+| Method                            | Mode                | Rows | Mean     | Error    | StdDev   | Gen0      | Gen1      | Gen2     | Allocated |
+|---------------------------------- |-------------------- |----- |---------:|---------:|---------:|----------:|----------:|---------:|----------:|
+| 'Render grid (filter UI variant)' | Off                 | 100  | 40.97 ms | 19.27 ms | 1.056 ms |  888.8889 |  777.7778 | 444.4444 |   12.2 MB |
+| 'Render grid (filter UI variant)' | EagerPopups_Default | 100  | 63.63 ms | 85.70 ms | 4.698 ms | 1428.5714 | 1285.7143 | 571.4286 |  19.18 MB |
+| 'Render grid (filter UI variant)' | OnDemandPopups      | 100  | 35.19 ms | 69.35 ms | 3.802 ms |  909.0909 |  818.1818 | 363.6364 |  12.33 MB |
+| 'Render grid (filter UI variant)' | SimpleWithMenu      | 100  | 48.21 ms | 47.73 ms | 2.616 ms | 1111.1111 | 1000.0000 | 444.4444 |  14.58 MB |

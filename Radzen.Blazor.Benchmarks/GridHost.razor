@@ -3,7 +3,8 @@
 @using Radzen.Blazor
 @namespace Radzen.Blazor.Benchmarks
 
-<RadzenDataGrid @ref="Grid" Data="@Data" TItem="Person" AllowSorting="true" AllowFiltering="true" AllowPaging="true" PageSize="@PageSize"
+<RadzenDataGrid @ref="Grid" Data="@Data" TItem="Person" AllowSorting="true" AllowFiltering="@AllowFiltering"
+                FilterPopupRenderMode="@FilterPopup" FilterMode="@FilterMode" AllowPaging="true" PageSize="@PageSize"
                 RowClick="@RowClickCb" RowDoubleClick="@RowDblCb" CellContextMenu="@CellCtxCb">
     <Columns>
         <RadzenDataGridColumn TItem="Person" Property="Id" Title="Id" Width="70px" TextAlign="TextAlign.Right" />
@@ -26,6 +27,13 @@
     // 0 = no handlers, 1 = RowClick only (1 onclick closure/cell),
     // 2 = RowClick + RowDoubleClick + CellContextMenu (3 closures/cell).
     [Parameter] public int Interactive { get; set; }
+
+    [Parameter] public bool AllowFiltering { get; set; } = true;
+
+    // Default is PopupRenderMode.Initial - every column's filter popup renders eagerly on every render.
+    [Parameter] public PopupRenderMode FilterPopup { get; set; } = PopupRenderMode.Initial;
+
+    [Parameter] public FilterMode FilterMode { get; set; } = FilterMode.Advanced;
 
     public RadzenDataGrid<Person> Grid { get; set; }
 

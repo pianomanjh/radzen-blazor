@@ -141,6 +141,33 @@ Two hot strings were rebuilt identically for work that never varies by row:
 Columns that carry width (with column groups), alignment, or min/max styles previously allocated a
 fresh identical string for every cell; that is now zero.
 
+### Filtering / searching — the per-column filter UI (not just initial render)
+
+Beyond the row body, every filterable column carries a filter UI. Two things dominate here:
+
+**The default eager filter popups.** `FilterPopupRenderMode` defaults to `PopupRenderMode.Initial`,
+which renders every column's filter popup — operator dropdowns, value editors, and for date columns a
+full date-picker calendar — eagerly on **every** render, even though it stays hidden until the user
+opens it. `PopupRenderMode.OnDemand` renders it on first open instead.
+
+| Filter UI (100 rows, 10 cols) | Time | Allocated |
+|---|---:|---:|
+| Filtering off | 41 ms | 12.2 MB |
+| **Eager popups (`Initial`, the default)** | 76 ms | **19.2 MB** |
+| On-demand popups (`OnDemand`) | 49 ms | 12.3 MB |
+
+The default adds **~7 MB (+57%) and ~34 ms per render** for hidden popups; on-demand returns to
+roughly the filtering-off cost. This is a per-grid setting, not a code change — `OnDemand` is the
+performance choice for grids with many filterable columns (especially date/numeric columns). Changing
+the library default is a maintainer decision, surfaced here with numbers.
+
+**`GetFilterOperators()` was recomputed per menu item.** In `SimpleWithMenu` mode the operator menu
+called `GetFilterOperators()` ~16× per column per render, each running `Enum.GetValues<FilterOperator>()`
+plus a LINQ filter (a lazy query re-evaluated on every enumeration). The result is constant per column,
+so it is now materialized once and reused. Render time in that mode: 54.7 ms → 48.2 ms (~12% faster);
+allocation is essentially unchanged (the operator arrays are small). A modest CPU cleanup, not a big
+win — the eager-popup default above is the real lever.
+
 ### Aggregate — full grid render (bUnit `RenderComponent`, all changes vs. master)
 
 End-to-end render of the whole grid. This total is dominated by Blazor's own render-tree and markup

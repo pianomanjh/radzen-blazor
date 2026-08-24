@@ -1790,10 +1790,34 @@ namespace Radzen.Blazor
             return !string.IsNullOrWhiteSpace(internalWidth) ? internalWidth : Grid?.ColumnWidth;
         }
 
+        IEnumerable<FilterOperator>? _filterOperatorsCache;
+        IEnumerable<FilterOperator>? _filterOperatorsKey;
+        Type? _filterOperatorsTypeKey;
+
         /// <summary>
         /// Get possible column filter operators.
         /// </summary>
         public virtual IEnumerable<FilterOperator> GetFilterOperators()
+        {
+            // The operator set is constant per column (it depends only on FilterOperators and the cached
+            // FilterPropertyType), yet it is consumed many times per render - once per operator-menu item
+            // and per operator dropdown - and the general-case branch below returns a lazy LINQ query that
+            // re-runs Enum.GetValues plus its predicate on every enumeration. Materialize it once and reuse
+            // it until an input actually changes.
+            if (_filterOperatorsCache != null
+                && ReferenceEquals(_filterOperatorsKey, FilterOperators)
+                && _filterOperatorsTypeKey == FilterPropertyType)
+            {
+                return _filterOperatorsCache;
+            }
+
+            _filterOperatorsKey = FilterOperators;
+            _filterOperatorsTypeKey = FilterPropertyType;
+            _filterOperatorsCache = ComputeFilterOperators().ToArray();
+            return _filterOperatorsCache;
+        }
+
+        private IEnumerable<FilterOperator> ComputeFilterOperators()
         {
             if (FilterOperators != null)
             {
