@@ -14,8 +14,12 @@ namespace Radzen.Blazor.Benchmarks;
 [MarkdownExporterAttribute.GitHub]
 public class FullRenderBenchmarks
 {
-    [Params(100, 500)]
+    [Params(500)]
     public int Rows { get; set; }
+
+    // 0 = non-interactive, 1 = RowClick (1 onclick closure/cell), 2 = RowClick + dblclick + contextmenu.
+    [Params(0, 1, 2)]
+    public int Interactive { get; set; }
 
     private List<Person> data;
 
@@ -31,7 +35,8 @@ public class FullRenderBenchmarks
 
         var host = ctx.RenderComponent<GridHost>(p => p
             .Add(x => x.Data, data)
-            .Add(x => x.PageSize, Rows));
+            .Add(x => x.PageSize, Rows)
+            .Add(x => x.Interactive, Interactive));
 
         return host.Markup.Length;
     }
