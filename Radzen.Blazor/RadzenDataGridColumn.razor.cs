@@ -459,6 +459,12 @@ namespace Radzen.Blazor
         /// string path. The member path is derived from the expression (e.g. <c>"Address.City"</c>) and used for the
         /// existing sorting, filtering and grouping pipeline, so it composes with every other column feature.
         /// Ignored when the string <see cref="Property"/> is already set.
+        /// <para>
+        /// A simple member-access expression is null-safe: a null along the path renders an empty cell, exactly as the
+        /// string <see cref="Property"/> does. A <em>computed</em> expression (anything that is not a plain member chain,
+        /// e.g. <c>x =&gt; x.Address.City.ToUpper()</c>) is invoked as written and must guard its own nulls (e.g.
+        /// <c>x =&gt; x.Address?.City?.ToUpper()</c>); it renders but is not sortable or filterable.
+        /// </para>
         /// </summary>
         [Parameter]
         public Expression<Func<TItem, object>>? PropertyExpression { get; set; }
@@ -1094,11 +1100,13 @@ namespace Radzen.Blazor
                 }
                 else
                 {
-                    // A compiled getter avoids per-row reflection while sorting in memory. Late-bound
-                    // (dynamic) items that cannot be compiled fall back to reflection below.
+                    // A compiled getter avoids per-row reflection while sorting in memory. NullSafeGetter so a
+                    // null intermediate sorts as null (matching the reflection fallback below and the display
+                    // value), not the leaf type's default. Late-bound (dynamic) items that cannot be compiled
+                    // fall back to reflection below.
                     try
                     {
-                        sortValueGetter = PropertyAccess.Getter<TItem, object>(sortProperty);
+                        sortValueGetter = PropertyAccess.NullSafeGetter<TItem>(sortProperty);
                     }
                     catch
                     {

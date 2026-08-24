@@ -142,8 +142,9 @@ public static class PropertyAccess
         // which is null for the object getter) rather than the leaf type's default. We accumulate the
         // "some intermediate is null" test and only evaluate the raw access when every intermediate is
         // non-null - so the raw access never dereferences null, and the OrElse chain short-circuits so the
-        // guard itself never does either. Value-type / Nullable<T> intermediates keep the existing
-        // per-member null propagation.
+        // guard itself never does either. This covers both a reference intermediate (== null) and a
+        // Nullable<T> intermediate whose member is read through .Value (!HasValue), so e.g. a null
+        // DateTime? in "ShippedDate.Year" yields null rather than the leaf's default (0).
         Expression? nullGuard = null;
         foreach (var member in propertyName.Split('.'))
         {
@@ -152,6 +153,12 @@ public static class PropertyAccess
                 var isNull = Expression.Equal(body, Expression.Constant(null, body.Type));
                 nullGuard = nullGuard == null ? isNull : Expression.OrElse(nullGuard, isNull);
                 body = AccessNoInterface(body, member);
+            }
+            else if (nullToNull && Nullable.GetUnderlyingType(body.Type) != null && member is not ("Value" or "HasValue"))
+            {
+                var isNull = Expression.Not(Expression.Property(body, "HasValue"));
+                nullGuard = nullGuard == null ? isNull : Expression.OrElse(nullGuard, isNull);
+                body = AccessNoInterface(Expression.Property(body, "Value"), member);
             }
             else
             {

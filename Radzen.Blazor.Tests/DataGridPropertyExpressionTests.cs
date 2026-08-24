@@ -15,11 +15,17 @@ namespace Radzen.Blazor.Tests
             public int ZipCode { get; set; }
         }
 
+        struct Detail
+        {
+            public int Level { get; set; }
+        }
+
         class Person
         {
             public int Id { get; set; }
             public string Name { get; set; }
             public Address Address { get; set; }
+            public Detail? Detail { get; set; }
         }
 
         static List<Person> People() => new()
@@ -67,8 +73,8 @@ namespace Radzen.Blazor.Tests
 
         static List<Person> PeopleWithNullAddress() => new()
         {
-            new Person { Id = 1, Name = "Charlie", Address = new Address { City = "Paris", ZipCode = 75001 } },
-            new Person { Id = 2, Name = "NoAddress", Address = null },
+            new Person { Id = 1, Name = "Charlie", Address = new Address { City = "Paris", ZipCode = 75001 }, Detail = new Detail { Level = 7 } },
+            new Person { Id = 2, Name = "NoAddress", Address = null, Detail = null },
         };
 
         static IRenderedComponent<RadzenDataGrid<Person>> RenderGridWith(TestContext ctx, List<Person> data, RenderFragment columns)
@@ -96,6 +102,24 @@ namespace Radzen.Blazor.Tests
             var cells = component.FindAll(".rz-cell-data");
             Assert.Equal("75001", cells[0].TextContent.Trim());
             Assert.Equal("", cells[1].TextContent.Trim()); // null Address -> empty, not "0"
+        }
+
+        [Fact]
+        public void StringProperty_NullableValueTypeIntermediate_NullIntermediate_RendersEmptyNotDefault()
+        {
+            using var ctx = new TestContext();
+            // "Detail.Level" where Detail is a Nullable<Detail> (a value type). A null Detail must render
+            // empty, not the leaf int's default "0".
+            var component = RenderGridWith(ctx, PeopleWithNullAddress(), builder =>
+            {
+                builder.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.Property), "Detail.Level");
+                builder.CloseComponent();
+            });
+
+            var cells = component.FindAll(".rz-cell-data");
+            Assert.Equal("7", cells[0].TextContent.Trim());
+            Assert.Equal("", cells[1].TextContent.Trim()); // null Detail -> empty, not "0"
         }
 
         [Fact]
