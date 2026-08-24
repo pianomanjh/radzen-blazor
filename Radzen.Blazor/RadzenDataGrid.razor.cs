@@ -505,7 +505,7 @@ namespace Radzen.Blazor
         [Parameter]
         public EventCallback<DataGridColumnGroupEventArgs<TItem>> Group { get; set; }
 
-        internal string getFrozenColumnClass(RadzenDataGridColumn<TItem> column, IList<RadzenDataGridColumn<TItem>> visibleColumns)
+        internal string getFrozenColumnClass(RadzenDataGridColumn<TItem> column)
         {
             if (!column.IsFrozen())
             {
