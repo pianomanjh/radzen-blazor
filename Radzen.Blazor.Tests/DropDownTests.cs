@@ -188,6 +188,44 @@ namespace Radzen.Blazor.Tests
         }
 
         [Fact]
+        public void DropDown_Multiple_SelectsItemsMatchingBoundValueByValueProperty()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var component = DropDown<IEnumerable<int>>(ctx, parameters =>
+            {
+                parameters.Add(p => p.ValueProperty, nameof(DataItem.Id));
+                parameters.Add(p => p.Multiple, true);
+                parameters.Add(p => p.Value, new List<int> { 2 });
+            });
+
+            var selected = component.FindAll(".rz-state-highlight");
+            Assert.Equal(1, selected.Count);
+            Assert.Equal("Item 2", selected[0].TextContent.Trim());
+        }
+
+        [Fact]
+        public void DropDown_Multiple_DoesNotDuplicateItemsForRepeatedBoundValues()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            // A value repeated in the bound collection must still select its item exactly once.
+            var component = DropDown<IEnumerable<int>>(ctx, parameters =>
+            {
+                parameters.Add(p => p.ValueProperty, nameof(DataItem.Id));
+                parameters.Add(p => p.Multiple, true);
+                parameters.Add(p => p.Value, new List<int> { 1, 1, 2 });
+            });
+
+            var selected = component.FindAll(".rz-state-highlight");
+            Assert.Equal(2, selected.Count);
+            var texts = selected.Select(s => s.TextContent.Trim()).OrderBy(t => t).ToList();
+            Assert.Equal(new[] { "Item 1", "Item 2" }, texts);
+        }
+
+        [Fact]
         public void DropDown_AppliesSelectionStyleWhenMultipleSelectionIsEnabled()
         {
             using var ctx = new TestContext();

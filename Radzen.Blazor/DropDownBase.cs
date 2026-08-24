@@ -1607,17 +1607,45 @@ namespace Radzen
                     {
                         if (!string.IsNullOrEmpty(ValueProperty))
                         {
-                            foreach (object v in values.Cast<dynamic>().ToList())
+                            if (typeof(EnumerableQuery).IsAssignableFrom(view.GetType()))
                             {
-                                dynamic item;
-
-                                if (typeof(EnumerableQuery).IsAssignableFrom(view.GetType()))
+                                // In-memory: resolve every value against a single value->item lookup instead of
+                                // scanning the view (and re-scanning selectedItems) once per value. This turns an
+                                // O(items x selected) pass with a LINQ query allocated per value into O(items + selected).
+                                var itemsByValue = new Dictionary<object, object>();
+                                foreach (var i in view.OfType<object>())
                                 {
-                                    item = view.OfType<object>().Where(i => object.Equals(GetItemOrValueFromProperty(i, ValueProperty), v)).FirstOrDefault()!;
+                                    var iv = GetItemOrValueFromProperty(i, ValueProperty);
+                                    if (iv != null)
+                                    {
+                                        itemsByValue.TryAdd(iv, i);
+                                    }
                                 }
-                                else
+
+                                var existingValues = new HashSet<object>();
+                                foreach (var si in selectedItems)
                                 {
-                                    item = view.AsQueryable().Where(new FilterDescriptor[]
+                                    var sv = GetItemOrValueFromProperty(si, ValueProperty);
+                                    if (sv != null)
+                                    {
+                                        existingValues.Add(sv);
+                                    }
+                                }
+
+                                foreach (object v in values.Cast<object>())
+                                {
+                                    if (v != null && itemsByValue.TryGetValue(v, out var item) && existingValues.Add(v))
+                                    {
+                                        selectedItems.Add(item);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // Non-in-memory (e.g. EF): keep the per-value query so the lookup stays server-side.
+                                foreach (object v in values.Cast<dynamic>().ToList())
+                                {
+                                    dynamic item = view.AsQueryable().Where(new FilterDescriptor[]
                                     {
                                         new FilterDescriptor()
                                         {
@@ -1627,11 +1655,11 @@ namespace Radzen
                                     },
                                     LogicalFilterOperator.And,
                                     FilterCaseSensitivity.Default).FirstOrDefault()!;
-                                }
 
-                                if (!object.Equals(item, null) && !selectedItems.AsQueryable().Where(i => object.Equals(GetItemOrValueFromProperty(i, ValueProperty), v)).Any())
-                                {
-                                    selectedItems.Add(item);
+                                    if (!object.Equals(item, null) && !selectedItems.AsQueryable().Where(i => object.Equals(GetItemOrValueFromProperty(i, ValueProperty), v)).Any())
+                                    {
+                                        selectedItems.Add(item);
+                                    }
                                 }
                             }
                         }
@@ -1653,6 +1681,12 @@ namespace Radzen
         /// </summary>
         [Parameter] public IEqualityComparer<object>? ItemComparer { get; set; }
 
+        // Set view of the current multiselect values, rebuilt only when internalValue is reassigned.
+        // IsItemSelectedByValue is called for every rendered item (3-4x each), so a per-call linear scan of
+        // the selected values makes a multiselect render O(items x selected). A set lookup makes it O(items).
+        IEnumerable? _selectedValuesSource;
+        HashSet<object>? _selectedValuesSet;
+
         internal bool IsItemSelectedByValue(object v)
         {
             switch (internalValue)
@@ -1660,7 +1694,14 @@ namespace Radzen
                 case string s:
                     return object.Equals(s, v);
                 case IEnumerable enumerable:
-                    return enumerable.Cast<object>().Contains(v);
+                    // Matches the previous enumerable.Cast<object>().Contains(v) semantics (default equality),
+                    // but O(1) per call instead of O(selected). Rebuilt when internalValue changes reference.
+                    if (!ReferenceEquals(_selectedValuesSource, enumerable))
+                    {
+                        _selectedValuesSource = enumerable;
+                        _selectedValuesSet = new HashSet<object>(enumerable.Cast<object>());
+                    }
+                    return _selectedValuesSet!.Contains(v);
                 case null:
                     return false;
                 default:

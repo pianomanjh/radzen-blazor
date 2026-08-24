@@ -1,0 +1,5 @@
+| Method                                           | Items | Selected | Mean     | Error     | StdDev   | Gen0     | Gen1     | Gen2     | Allocated |
+|------------------------------------------------- |------ |--------- |---------:|----------:|---------:|---------:|---------:|---------:|----------:|
+| 'Render multiselect dropdown (Items x Selected)' | 500   | 10       | 10.15 ms | 49.023 ms | 2.687 ms | 593.7500 | 578.1250 | 328.1250 |   5.73 MB |
+| 'Render multiselect dropdown (Items x Selected)' | 500   | 100      | 10.45 ms |  5.329 ms | 0.292 ms | 562.5000 | 531.2500 | 312.5000 |   5.81 MB |
+| 'Render multiselect dropdown (Items x Selected)' | 500   | 250      | 13.59 ms | 11.249 ms | 0.617 ms | 562.5000 | 500.0000 | 312.5000 |   5.99 MB |
