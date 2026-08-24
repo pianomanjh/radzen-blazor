@@ -872,6 +872,16 @@ namespace Radzen.Blazor
             }
         }
 
+        // Single-entry memo for the row-independent data-cell style. Every data cell of a column produces
+        // the same style string within a render, so it is computed once and reused until an input changes.
+        bool _dataCellStyleValid;
+        string? _dataCellStyle;
+        string? _dataCellStyleWidth;
+        TextAlign _dataCellStyleAlign;
+        string? _dataCellStyleMin;
+        string? _dataCellStyleMax;
+        bool _dataCellStyleColGroup;
+
         /// <summary>
         /// Gets the cell style.
         /// </summary>
@@ -882,11 +892,28 @@ namespace Radzen.Blazor
         public virtual string GetStyle(bool forCell = false, bool isHeaderOrFooterCell = false, bool isForCol = false)
         {
 #pragma warning disable CA1508 // Lazy init: the first '??=' is intentionally reached with a null list.
-            // Allocate the list lazily: the vast majority of data cells contribute no style at all, so an
+            var width = GetWidthOrGridSetting()?.Trim();
+
+            // Fast path: a plain data cell of a non-frozen column. Its style depends only on the column's own
+            // width/alignment/min/max (and, when a width is set, whether the grid uses column groups) - never
+            // on the row - so it is memoized and the string is rebuilt only when one of those inputs changes.
+            var isDataCell = forCell && !isHeaderOrFooterCell && !isForCol && !IsFrozen();
+            var colGroup = false;
+            if (isDataCell)
+            {
+                colGroup = !string.IsNullOrEmpty(width) && !GridHasNoColumnGroups();
+                if (_dataCellStyleValid && _dataCellStyle != null
+                    && _dataCellStyleWidth == width && _dataCellStyleAlign == TextAlign
+                    && _dataCellStyleMin == MinWidth && _dataCellStyleMax == MaxWidth
+                    && _dataCellStyleColGroup == colGroup)
+                {
+                    return _dataCellStyle;
+                }
+            }
+
+            // The vast majority of data cells contribute no style at all, so allocate the list lazily - an
             // empty cell should not allocate a List (plus the joined string) on every render.
             List<string>? style = null;
-
-            var width = GetWidthOrGridSetting()?.Trim();
 
             // GridHasNoColumnGroups() scans every column, so only evaluate it when a width is actually set
             // (its result is used nowhere else) instead of once per cell.
@@ -921,7 +948,20 @@ namespace Radzen.Blazor
                 (style ??= new List<string>()).Add($"max-width:{MaxWidth}");
             }
 
-            return style == null ? string.Empty : string.Join(";", style);
+            var result = style == null ? string.Empty : string.Join(";", style);
+
+            if (isDataCell)
+            {
+                _dataCellStyleWidth = width;
+                _dataCellStyleAlign = TextAlign;
+                _dataCellStyleMin = MinWidth;
+                _dataCellStyleMax = MaxWidth;
+                _dataCellStyleColGroup = colGroup;
+                _dataCellStyle = result;
+                _dataCellStyleValid = true;
+            }
+
+            return result;
 #pragma warning restore CA1508
         }
 

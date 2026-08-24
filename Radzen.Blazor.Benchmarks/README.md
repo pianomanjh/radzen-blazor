@@ -119,6 +119,28 @@ For every cell the grid built a `DataGridCellRenderEventArgs` (which eagerly all
 allocations per cell just to return an empty attribute set. It now returns a shared empty dictionary
 when `CellRender` is null (the result is only read, never mutated).
 
+### Wasted (row-independent) string allocation
+
+Two hot strings were rebuilt identically for work that never varies by row:
+
+- **`GetStyle`** returns the same style string for every cell of a column within a render, yet rebuilt
+  it (list + interpolation + `string.Join`) per cell. It now memoizes the data-cell style with a
+  single-entry cache keyed by the inputs that actually affect it (width, alignment, min/max, column
+  groups), so the string is built once per column and reused until an input changes. Output is
+  identical; the memo self-invalidates when any keyed input changes (covered by tests).
+- **`RowStyle`** only ever yields one of four constant strings but interpolated one per row; it now
+  returns cached constants.
+
+`GetStyle` over 10 columns (alignment set), all data cells:
+
+| Rows | Baseline | Optimized | Time | Allocation |
+|-----:|--------------------:|------------------:|-----:|-----------:|
+| 1,000  | 327.9 µs / 343.8 KB | 157.9 µs / **0 B** | −52% | −100% |
+| 10,000 | 3,405 µs / 3.44 MB  | 1,523 µs / **0 B** | −55% | −100% |
+
+Columns that carry width (with column groups), alignment, or min/max styles previously allocated a
+fresh identical string for every cell; that is now zero.
+
 ### Aggregate — full grid render (bUnit `RenderComponent`, all changes vs. master)
 
 End-to-end render of the whole grid. This total is dominated by Blazor's own render-tree and markup

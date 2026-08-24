@@ -5,16 +5,16 @@
 
 <RadzenDataGrid @ref="Grid" Data="@Data" TItem="Person" AllowSorting="true" AllowFiltering="true" AllowPaging="true" PageSize="@PageSize">
     <Columns>
-        <RadzenDataGridColumn TItem="Person" Property="Id" Title="Id" />
-        <RadzenDataGridColumn TItem="Person" Property="FirstName" Title="First name" />
-        <RadzenDataGridColumn TItem="Person" Property="LastName" Title="Last name" />
-        <RadzenDataGridColumn TItem="Person" Property="Email" Title="Email" />
-        <RadzenDataGridColumn TItem="Person" Property="HireDate" Title="Hire date" FormatString="{0:d}" />
-        <RadzenDataGridColumn TItem="Person" Property="Salary" Title="Salary" FormatString="{0:C}" />
-        <RadzenDataGridColumn TItem="Person" Property="IsManager" Title="Manager" />
-        <RadzenDataGridColumn TItem="Person" Property="Status" Title="Status" />
-        <RadzenDataGridColumn TItem="Person" Property="Address.City" Title="City" />
-        <RadzenDataGridColumn TItem="Person" Property="Address.Country" Title="Country" />
+        <RadzenDataGridColumn TItem="Person" Property="Id" Title="Id" Width="70px" TextAlign="TextAlign.Right" />
+        <RadzenDataGridColumn TItem="Person" Property="FirstName" Title="First name" Width="140px" />
+        <RadzenDataGridColumn TItem="Person" Property="LastName" Title="Last name" Width="140px" />
+        <RadzenDataGridColumn TItem="Person" Property="Email" Title="Email" Width="200px" />
+        <RadzenDataGridColumn TItem="Person" Property="HireDate" Title="Hire date" FormatString="{0:d}" Width="120px" />
+        <RadzenDataGridColumn TItem="Person" Property="Salary" Title="Salary" FormatString="{0:C}" Width="120px" TextAlign="TextAlign.Right" />
+        <RadzenDataGridColumn TItem="Person" Property="IsManager" Title="Manager" Width="90px" />
+        <RadzenDataGridColumn TItem="Person" Property="Status" Title="Status" Width="110px" />
+        <RadzenDataGridColumn TItem="Person" Property="Address.City" Title="City" Width="140px" />
+        <RadzenDataGridColumn TItem="Person" Property="Address.Country" Title="Country" Width="140px" />
     </Columns>
 </RadzenDataGrid>
 

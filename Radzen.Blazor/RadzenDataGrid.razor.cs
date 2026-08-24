@@ -2877,11 +2877,22 @@ namespace Radzen.Blazor
 
         internal Dictionary<TItem, bool> selectedItems = new Dictionary<TItem, bool>();
 
+        // RowStyle only ever produces one of these four constants; returning them avoids interpolating
+        // (and allocating) an identical string for every row on every render.
+        const string RowClass = "rz-data-row  ";
+        const string RowClassEditing = "rz-data-row rz-datatable-edit ";
+        const string RowClassSelected = "rz-state-highlight rz-data-row  ";
+        const string RowClassSelectedEditing = "rz-state-highlight rz-data-row rz-datatable-edit ";
+
         internal string RowStyle(TItem item, int index)
         {
-            var isInEditMode = IsRowInEditMode(item) ? "rz-datatable-edit" : "";
+            var editing = IsRowInEditMode(item);
+            var selected = (RowSelect.HasDelegate || ValueChanged.HasDelegate || SelectionMode == DataGridSelectionMode.Multiple)
+                && ContainsItemKey(selectedItems, item);
 
-            return (RowSelect.HasDelegate || ValueChanged.HasDelegate || SelectionMode == DataGridSelectionMode.Multiple) && ContainsItemKey(selectedItems, item) ? $"rz-state-highlight rz-data-row {isInEditMode} " : $"rz-data-row {isInEditMode} ";
+            return selected
+                ? (editing ? RowClassSelectedEditing : RowClassSelected)
+                : (editing ? RowClassEditing : RowClass);
         }
 
         internal string? RowAriaSelected(TItem item, int index)
