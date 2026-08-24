@@ -109,3 +109,19 @@ nested columns — grids with more nested/frozen columns benefit more.)
 
 The isolated benchmarks above show the magnitude of each individual fix; this table shows what
 survives once Blazor's fixed rendering overhead is included.
+
+### Row membership tests (selected / edited / expanded)
+
+For every row on every render the grid tested membership in `selectedItems`, `editedItems` and
+`expandedItems` via `items.Keys.Any(i => ItemEquals(i, item))` — an O(selected) scan plus a LINQ
+closure, and it runs 2-3 times per row (row style, aria-selected, edit mode). When no `KeyProperty`
+is set (the default) the dictionary's own equality already matches, so this is an equivalent O(1)
+`ContainsKey`. A single helper now does the O(1) test in that case and a closure-free loop otherwise.
+
+| Rows | Selected | Baseline | Optimized | Speedup | Alloc removed |
+|-----:|---------:|---------------------:|------------------:|--------:|--------------:|
+| 1,000  | 50 | 178.8 µs / 128 KB   | 6.7 µs / **0 B**   | 27× | 128 KB |
+| 10,000 | 50 | 1,841 µs / 1.28 MB  | 163 µs / **0 B**   | 11× | 1.28 MB |
+
+Per render this ran 2-3 times per row, and the old cost grew with the number of selected rows; the
+`ContainsKey` form is O(1) per row regardless.
