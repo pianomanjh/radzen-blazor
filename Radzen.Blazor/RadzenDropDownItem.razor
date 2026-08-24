@@ -67,6 +67,46 @@ else
     [Parameter]
     public object Item { get; set; } = default!;
 
+    bool hasRendered;
+    object? lastItem;
+    bool lastSelected;
+    bool lastDisabled;
+    bool lastMultiple;
+
+    /// <summary>
+    /// Skips re-rendering an item whose visible state has not changed. Without this every item in the list
+    /// re-renders whenever the parent re-renders (e.g. the containing page re-renders for an unrelated
+    /// reason), which is O(items) wasted work. Only the plain path is skipped: a Template or an ItemRender
+    /// handler can produce content/visibility that depends on external state, so those always re-render.
+    /// </summary>
+    protected override bool ShouldRender()
+    {
+        var dropDown = DropDown;
+        if (dropDown == null || dropDown.Template != null || dropDown.ItemRender != null)
+        {
+            return true;
+        }
+
+        var selected = dropDown.IsSelected(Item);
+        var multiple = dropDown.Multiple;
+
+        if (hasRendered
+            && ReferenceEquals(lastItem, Item)
+            && lastSelected == selected
+            && lastDisabled == Disabled
+            && lastMultiple == multiple)
+        {
+            return false;
+        }
+
+        hasRendered = true;
+        lastItem = Item;
+        lastSelected = selected;
+        lastDisabled = Disabled;
+        lastMultiple = multiple;
+        return true;
+    }
+
     async Task SelectItem(MouseEventArgs args,bool isclick)
     {
         var dropDown = DropDown;

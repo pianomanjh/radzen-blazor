@@ -1,0 +1,11 @@
+No-op parent re-render cost (KB) - a forced re-render with NO data change.
+Item render cost scales with item count => every item re-renders on every parent render.
+
+                    Before ShouldRender   After item ShouldRender
+Items=100                846                   785
+Items=500               4085                  3786
+Items=2000             16306                 15115
+
+The item-level ShouldRender skips unchanged item CONTENT, but the dominant re-render
+cost is the parent rendering all N item frames plus its own O(n) header work
+(IsAllSelected x4, Data.Cast().Any() x3). That is virtualization territory.

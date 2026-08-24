@@ -108,3 +108,18 @@ costs are out of scope here and come from the DataGrid work.*
 | 250 | 557 ms / 9.26 MB  | 5.1 ms / 608 KB | 110× | −93% |
 
 Flat in the selected count instead of exploding. All 4935 tests pass; builds clean on net8/9/10.
+
+## Unnecessary re-renders
+
+None of the dropdown/grid item/row/column components override `ShouldRender`, so a parent re-render
+(e.g. the containing page re-rendering for an unrelated reason) cascades into every child. Measured with
+a forced no-op re-render (`dotnet run -- rerender <items>`): the cost scales linearly with item count
+(~8 KB/item: 100→846 KB, 500→4.1 MB, 2000→16.3 MB), i.e. every item re-renders even though nothing changed.
+
+`RadzenDropDownItem` now overrides `ShouldRender` to skip an item whose `Item`/selected/disabled/multiple
+state is unchanged (only the plain path — a `Template` or `ItemRender` can produce dynamic content, so
+those always render). This is the idiomatic Blazor fix and is correct/tested, but it is a **modest** win
+here (500 items: 4.1 MB → 3.8 MB, ~7%): the dominant re-render cost is the *parent* rendering all N item
+frames plus its own O(n) work (`IsAllSelected` ×4, `Data.Cast().Any()` ×3 per the map), which item-level
+`ShouldRender` cannot remove. For large lists the real lever for re-render cost — as for first-render — is
+**virtualization** (`AllowVirtualization`, default off), so a closed dropdown does not render N items at all.
