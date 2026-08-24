@@ -198,3 +198,43 @@ is set (the default) the dictionary's own equality already matches, so this is a
 
 Per render this ran 2-3 times per row, and the old cost grew with the number of selected rows; the
 `ContainsKey` form is O(1) per row regardless.
+
+## Unnecessary re-renders — why the grid keeps none of the dropdown's row `ShouldRender`
+
+The same re-render analysis run on the dropdown family was repeated here. A forced parent re-render
+with **no data change** (`dotnet run -- rerender <rows>`) still re-renders every row: the cost is
+~40-48% of the first render and scales linearly with row count.
+
+| Rows | First render | No-op re-render (avg) | re-render / first |
+|-----:|-------------:|----------------------:|------------------:|
+| 100  | 29.3 MB  | 11.5 MB | 39% |
+| 500  | 91.3 MB  | 42.3 MB | 46% |
+| 2000 | 326 MB   | 158 MB  | 48% |
+
+For the dropdown this pointed to an item-level `ShouldRender` (a modest win, since the parent
+dominates). **That fix is deliberately *not* applied to the grid row**, because it would be a
+correctness regression, not an optimization:
+
+- A `RadzenDropDownItem` renders an item's text and its selected/disabled state over what is almost
+  always an immutable lookup list, so skipping a render when `(Item, selected, disabled, multiple)`
+  is unchanged is safe.
+- A `RadzenDataGridRow` renders the item's **current property values**, and the canonical Radzen
+  refresh pattern mutates a bound item *in place* (same object reference) and calls `Reload()`. The
+  row must re-render to show the new value even though its `Item` reference, `Index` and selection are
+  all unchanged. A reference-equality `ShouldRender` on the row skips that render and shows a stale
+  cell.
+
+This was verified, not assumed: adding a reference-equality `ShouldRender` to `RadzenDataGridRow`
+makes an in-place-mutation-then-`Reload` render show the old value (`Expected: Alicia, Actual: Alice`)
+and breaks 3 existing DataGrid tests. `DataGridRegressionCoverageTests.InPlaceMutation_ThenReload_UpdatesCell`
+now locks in the requirement so the optimization cannot be re-introduced by accident.
+
+The grid was also checked for the other two things found on the dropdown branch and neither applies:
+there is **no dead/write-only collection** like the dropdown's removed `keys` set (`selectedItems`,
+`expandedItems`, `editContexts`, `sorts` … are all read back), and the single `CascadingValue Value=this`
+is stable, so there is no cascading-parameter churn. Rows and header cells are already keyed
+(`SetKey(item)` / `@key=column`), so keyed diffing is in effect.
+
+As on the dropdown, the real lever for re-render cost at scale is **virtualization**
+(`AllowVirtualization`, default off), which removes off-screen rows from the render tree entirely —
+something a per-row `ShouldRender` cannot do, and which stays correct under in-place mutation.

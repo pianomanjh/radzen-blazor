@@ -261,5 +261,38 @@ namespace Radzen.Blazor.Tests
 
             Assert.Contains("data-row=\"r\"", component.Markup);
         }
+
+        // ---- in-place mutation must re-render (why the row has no reference-equality ShouldRender) -----
+
+        // The grid's rows carry no ShouldRender override on purpose: a row renders the item's *current*
+        // property values, and the common Radzen refresh pattern mutates a bound item in place (same
+        // object reference) and calls Reload(). The row must re-render to show the new value even though
+        // its Item reference, Index and selection are all unchanged. A reference-equality ShouldRender on
+        // the row (the optimization that is safe for the immutable dropdown-item list) would skip this
+        // render and display a stale cell. This test locks in that requirement.
+        [Fact]
+        public async Task InPlaceMutation_ThenReload_UpdatesCell()
+        {
+            using var ctx = NewCtx();
+            var people = People();
+            var component = ctx.RenderComponent<RadzenDataGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, people);
+                p.Add(g => g.Columns, b =>
+                {
+                    b.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                    b.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.Property), "Name");
+                    b.CloseComponent();
+                });
+            });
+
+            Assert.Equal("Alice", component.FindAll(".rz-cell-data")[0].TextContent.Trim());
+
+            // Mutate the bound item in place - same reference, no collection change.
+            people[0].Name = "Alicia";
+            await component.InvokeAsync(() => component.Instance.Reload());
+
+            Assert.Equal("Alicia", component.FindAll(".rz-cell-data")[0].TextContent.Trim());
+        }
     }
 }

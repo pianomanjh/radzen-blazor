@@ -23,7 +23,52 @@ public static class Program
             return;
         }
 
+        if (args.Length > 0 && args[0] == "rerender")
+        {
+            MeasureReRender(args);
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+    }
+
+    // Measures whether a forced parent re-render (no data change) re-renders all N row components.
+    // If the second render allocates about as much as the first, every row re-rendered unnecessarily.
+    static void MeasureReRender(string[] args)
+    {
+        int rows = args.Length > 1 && int.TryParse(args[1], out var it) ? it : 500;
+        var data = Person.Generate(rows);
+
+        static long Alloc() => GC.GetAllocatedBytesForCurrentThread();
+
+        using var ctx = new TestContext();
+        ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+        ctx.JSInterop.SetupModule("_content/Radzen.Blazor/Radzen.Blazor.js");
+
+        var b0 = Alloc();
+        var host = ctx.RenderComponent<GridHost>(p => p
+            .Add(x => x.Data, data)
+            .Add(x => x.PageSize, rows));
+        var firstRender = Alloc() - b0;
+        var firstCount = host.RenderCount;
+
+        // Force several parent re-renders with NO data change.
+        const int reRenders = 10;
+        var b1 = Alloc();
+        for (int i = 0; i < reRenders; i++)
+        {
+            host.Render();
+        }
+        var perReRender = (Alloc() - b1) / (double)reRenders;
+        var totalCount = host.RenderCount;
+
+        Console.WriteLine($"Rows={rows}");
+        Console.WriteLine($"First render          : {firstRender / 1024.0,9:F1} KB   (RenderCount {firstCount})");
+        Console.WriteLine($"Forced re-render (avg) : {perReRender / 1024.0,9:F1} KB   (+{totalCount - firstCount} root renders over {reRenders} forced)");
+        Console.WriteLine($"re-render / first      : {perReRender / firstRender,9:P0}");
+        Console.WriteLine(perReRender > firstRender * 0.5
+            ? ">> A no-op re-render costs about as much as the first: children re-render unnecessarily."
+            : ">> A no-op re-render is much cheaper: children are largely skipped.");
     }
 
     // Allocation attribution harness. Renders a real grid and reports how many bytes are allocated
