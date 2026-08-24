@@ -313,9 +313,12 @@ namespace Radzen.Blazor
                                 b.AddAttribute(8, "InEditMode", IsRowInEditMode(context));
                                 b.AddAttribute(9, "Index", virtualDataItems.IndexOf(context));
 
-                                if (editContexts.Keys.Any(i => ItemEquals(i, context)))
+                                // Same O(1) single lookup the non-virtualized path uses (see DrawGroupOrDataRows):
+                                // the old form scanned editContexts.Keys per rendered row and allocated a closure,
+                                // then looked the value up a second time.
+                                if (editContexts.TryGetValue(context, out var editContext))
                                 {
-                                    b.AddAttribute(10, nameof(RadzenDataGridRow<TItem>.EditContext), editContexts[context]);
+                                    b.AddAttribute(10, nameof(RadzenDataGridRow<TItem>.EditContext), editContext);
                                 }
 
                                 b.SetKey(context);

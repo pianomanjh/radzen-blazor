@@ -199,6 +199,35 @@ is set (the default) the dictionary's own equality already matches, so this is a
 Per render this ran 2-3 times per row, and the old cost grew with the number of selected rows; the
 `ContainsKey` form is O(1) per row regardless.
 
+#### Virtualized-row path: the same lookup, un-optimized
+
+The membership fix above landed on the non-virtualized row path. The **virtualized** path built each
+row with `editContexts.Keys.Any(i => ItemEquals(i, context))` — an O(edited) key scan plus a per-row
+closure — and then looked the value up a second time (`editContexts[context]`). It now uses the same
+single O(1) `editContexts.TryGetValue(context, out …)` the non-virtualized path uses, so the two paths
+match. This is a small consistency fix (the virtualized path renders few rows by design), but it also
+removes a per-rendered-row closure allocation and a redundant lookup.
+
+#### Not yet applied — `KeyProperty` membership is still O(items × selected)
+
+When `KeyProperty` **is** set (common when the bound data is re-fetched from a server/EF so the items are
+new instances that are equal only by key), `ContainsItemKey` cannot use the dictionary's own hashing and
+falls back to a linear `ItemEquals` scan that invokes the compiled key getter twice per comparison and
+**boxes** the key value. It is *worse* than the old default-case scan. Measured over a page of rows
+(`*SelectionMembershipBenchmarks*`, KeyProperty variants):
+
+| Rows | Selected | Current (scan + key getter) | Key-value HashSet | Speedup | Allocation |
+|-----:|---------:|----------------------------:|------------------:|--------:|-----------:|
+| 1,000  | 50 | 323 µs / 1.19 MB   | 11 µs / 26 KB  | **29×** | 45× less |
+| 10,000 | 50 | 3,426 µs / 12.2 MB | 95 µs / 242 KB | **36×** | 50× less |
+
+The fix is to index the membership state by the key **value** (an O(1) `HashSet<object>`/`Dictionary`)
+instead of by the item, so lookups are O(1) with or without `KeyProperty`. This is a **structural change
+to selection/edit/expand state** (`selectedItems` / `editedItems` / `expandedItems` are read across the
+grid and the row component), so it is documented here with numbers rather than applied blind — and it
+only bites for **large, non-virtualized** grids with `KeyProperty` and many selected rows; virtualization
+already collapses the per-row factor to the viewport size, which is the recommended answer at that scale.
+
 ## Unnecessary re-renders — why the grid keeps none of the dropdown's row `ShouldRender`
 
 The same re-render analysis run on the dropdown family was repeated here. A forced parent re-render

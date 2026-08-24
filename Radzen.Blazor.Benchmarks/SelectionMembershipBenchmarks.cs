@@ -24,12 +24,19 @@ public class SelectionMembershipBenchmarks
 
     private List<Person> data;
     private Dictionary<Person, bool> selected;
+    // Distinct instances with the SAME key values as the selected rows - models KeyProperty + a data
+    // reload (EF/server), where the bound items are new objects that equal the selection by key only.
+    private List<Person> reloaded;
+    private System.Func<Person, object> keyGetter;
 
     [GlobalSetup]
     public void Setup()
     {
         data = Person.Generate(Rows);
         selected = data.Take(Selected).ToDictionary(p => p, _ => true);
+        keyGetter = p => p.Id;
+        // A fresh set of instances carrying the same Ids (so reference equality fails, key equality holds).
+        reloaded = data.Select(p => new Person { Id = p.Id }).ToList();
     }
 
     [Benchmark(Baseline = true, Description = "Keys.Any(i => Equals(i, item)) per row")]
@@ -53,6 +60,56 @@ public class SelectionMembershipBenchmarks
         foreach (var p in data)
         {
             if (selected.Count != 0 && selected.ContainsKey(p))
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // --- KeyProperty set: the current fallback still scans + invokes the key getter twice per compare. ---
+
+    [Benchmark(Description = "KeyProperty: scan + key getter per row (current)")]
+    public int KeyPropertyScan()
+    {
+        int count = 0;
+        foreach (var p in reloaded)
+        {
+            if (selected.Count != 0 && ContainsByKeyScan(p))
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    bool ContainsByKeyScan(Person item)
+    {
+        var target = keyGetter(item);
+        foreach (var i in selected.Keys)
+        {
+            if (Equals(keyGetter(i), target))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [Benchmark(Description = "KeyProperty: key-value HashSet, O(1) per row (proposed)")]
+    public int KeyPropertyHashSet()
+    {
+        // Build the key-value set once (amortized over all rows/renders), then O(1) per row.
+        var keys = new HashSet<object>(selected.Count);
+        foreach (var i in selected.Keys)
+        {
+            keys.Add(keyGetter(i));
+        }
+
+        int count = 0;
+        foreach (var p in reloaded)
+        {
+            if (keys.Count != 0 && keys.Contains(keyGetter(p)))
             {
                 count++;
             }
