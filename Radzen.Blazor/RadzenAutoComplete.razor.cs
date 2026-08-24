@@ -332,7 +332,11 @@ namespace Radzen.Blazor
         /// </summary>
         internal object? GetItemText(object? item)
         {
-            if (item == null || string.IsNullOrEmpty(TextProperty))
+            // Preserve GetItemOrValueFromProperty's contract: a primitive/string item (or an empty
+            // TextProperty) yields the item itself, never a member read off the primitive. Without this
+            // guard a List<string> with TextProperty="Length" would compile a real getter and show the
+            // length instead of the string.
+            if (item == null || string.IsNullOrEmpty(TextProperty) || Convert.GetTypeCode(item) != TypeCode.Object)
             {
                 return PropertyAccess.GetItemOrValueFromProperty(item, TextProperty ?? string.Empty);
             }

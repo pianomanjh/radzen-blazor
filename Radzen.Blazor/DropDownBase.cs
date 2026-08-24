@@ -1677,6 +1677,7 @@ namespace Radzen
         // the selected values makes a multiselect render O(items x selected). A set lookup makes it O(items).
         IEnumerable? _selectedValuesSource;
         HashSet<object>? _selectedValuesSet;
+        int _selectedValuesSourceCount;
 
         internal bool IsItemSelectedByValue(object v)
         {
@@ -1686,13 +1687,20 @@ namespace Radzen
                     return object.Equals(s, v);
                 case IEnumerable enumerable:
                     // Matches the previous enumerable.Cast<object>().Contains(v) semantics (default equality),
-                    // but O(1) per call instead of O(selected). Rebuilt when internalValue changes reference.
-                    if (!ReferenceEquals(_selectedValuesSource, enumerable))
+                    // but O(1) per call instead of O(selected). The bound value collection can be updated
+                    // either by swapping the reference (the component's own selection path does this) or by
+                    // mutating it in place then calling StateHasChanged (external code) - the latter keeps the
+                    // same reference, so the cache is also invalidated when the element count changes. Count is
+                    // read from ICollection when possible so this stays O(1); the previous reference-only guard
+                    // left an in-place add/remove showing a stale checked state.
+                    var count = enumerable is ICollection collection ? collection.Count : enumerable.Cast<object>().Count();
+                    if (_selectedValuesSet == null || !ReferenceEquals(_selectedValuesSource, enumerable) || _selectedValuesSourceCount != count)
                     {
                         _selectedValuesSource = enumerable;
+                        _selectedValuesSourceCount = count;
                         _selectedValuesSet = new HashSet<object>(enumerable.Cast<object>());
                     }
-                    return _selectedValuesSet!.Contains(v);
+                    return _selectedValuesSet.Contains(v);
                 case null:
                     return false;
                 default:

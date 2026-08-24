@@ -198,6 +198,30 @@ namespace Radzen.Blazor.Tests
         }
 
         [Fact]
+        public void AutoComplete_PrimitiveItems_WithTextPropertyNamingRealMember_RendersItemItself()
+        {
+            // Regression: the cached-getter path must keep GetItemOrValueFromProperty's primitive contract -
+            // for a List<string> a non-empty TextProperty that happens to name a real member of string
+            // ("Length") must still render the string itself, not string.Length.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+            var data = new List<string> { "alpha", "beta" };
+
+            var component = ctx.RenderComponent<RadzenAutoComplete>(parameters =>
+            {
+                parameters
+                    .Add(p => p.Data, data)
+                    .Add(p => p.TextProperty, "Length")
+                    .Add(p => p.OpenOnFocus, true);
+            });
+
+            var items = component.FindAll(".rz-autocomplete-list-item");
+            Assert.Contains(items, i => i.TextContent.Trim() == "alpha");
+            Assert.Contains(items, i => i.TextContent.Trim() == "beta");
+            Assert.DoesNotContain(items, i => i.TextContent.Trim() == "5");
+        }
+
+        [Fact]
         public void AutoComplete_Renders_LoadingTemplate_WhenIsLoading()
         {
             using var ctx = new TestContext();

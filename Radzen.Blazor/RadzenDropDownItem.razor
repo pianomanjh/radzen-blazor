@@ -68,16 +68,23 @@ else
     public object Item { get; set; } = default!;
 
     bool hasRendered;
-    object? lastItem;
+    object? lastText;
     bool lastSelected;
-    bool lastDisabled;
+    bool lastItemDisabled;
+    bool lastDropDownDisabled;
     bool lastMultiple;
 
     /// <summary>
-    /// Skips re-rendering an item whose visible state has not changed. Without this every item in the list
-    /// re-renders whenever the parent re-renders (e.g. the containing page re-renders for an unrelated
+    /// Skips re-rendering an item whose rendered output has not changed. Without this every item in the
+    /// list re-renders whenever the parent re-renders (e.g. the containing page re-renders for an unrelated
     /// reason), which is O(items) wasted work. Only the plain path is skipped: a Template or an ItemRender
     /// handler can produce content/visibility that depends on external state, so those always re-render.
+    ///
+    /// The plain item's markup is a pure function of the resolved text, its selected state, whether it or
+    /// the whole component is disabled, and the multiple/single layout - so every one of those is tracked.
+    /// The <em>resolved text</em> (not the Item reference) is compared, so an item mutated in place or a
+    /// runtime change to <c>TextProperty</c> re-renders; <c>DropDown.Disabled</c> and the
+    /// <c>DisabledProperty</c> value are tracked so a runtime disable is reflected too.
     /// </summary>
     protected override bool ShouldRender()
     {
@@ -87,22 +94,29 @@ else
             return true;
         }
 
+        var text = dropDown.GetItemOrValueFromProperty(Item, dropDown.TextProperty ?? string.Empty);
         var selected = dropDown.IsSelected(Item);
         var multiple = dropDown.Multiple;
+        var dropDownDisabled = dropDown.Disabled;
+        // Mirrors ItemAttributes: with no ItemRender handler, an item is disabled only via DisabledProperty.
+        var itemDisabled = !string.IsNullOrEmpty(dropDown.DisabledProperty)
+            && dropDown.GetItemOrValueFromProperty(Item, dropDown.DisabledProperty) is bool b && b;
 
         if (hasRendered
-            && ReferenceEquals(lastItem, Item)
+            && Equals(lastText, text)
             && lastSelected == selected
-            && lastDisabled == Disabled
+            && lastItemDisabled == itemDisabled
+            && lastDropDownDisabled == dropDownDisabled
             && lastMultiple == multiple)
         {
             return false;
         }
 
         hasRendered = true;
-        lastItem = Item;
+        lastText = text;
         lastSelected = selected;
-        lastDisabled = Disabled;
+        lastItemDisabled = itemDisabled;
+        lastDropDownDisabled = dropDownDisabled;
         lastMultiple = multiple;
         return true;
     }
