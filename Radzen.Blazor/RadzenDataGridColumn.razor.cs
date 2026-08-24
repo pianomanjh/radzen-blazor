@@ -193,13 +193,19 @@ namespace Radzen.Blazor
         /// </summary>
         protected override void OnInitialized()
         {
-            // A strongly-typed PropertyExpression supplies both the member path (for the sort/filter/group
-            // pipeline, which is string based) and the value getter (compiled straight from the expression,
-            // no reflection on a string path). The string Property still wins if it was set explicitly.
-            if (PropertyExpression != null && string.IsNullOrEmpty(Property) && TryGetMemberPath(PropertyExpression, out var path))
+            // A strongly-typed PropertyExpression supplies the value getter (compiled straight from the
+            // expression, no reflection on a string path). The string Property still wins if it was set
+            // explicitly. When the expression is a simple member access, its path also drives the string
+            // based sort/filter/group pipeline; a computed expression still renders but is not sortable
+            // or filterable (there is no member to translate to a query).
+            if (PropertyExpression != null && string.IsNullOrEmpty(Property))
             {
-                Property = path;
                 propertyValueGetter = PropertyExpression.Compile();
+
+                if (TryGetMemberPath(PropertyExpression, out var path))
+                {
+                    Property = path;
+                }
             }
 
             if (Grid != null)

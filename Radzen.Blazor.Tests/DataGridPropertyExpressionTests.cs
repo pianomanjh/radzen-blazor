@@ -116,6 +116,67 @@ namespace Radzen.Blazor.Tests
         }
 
         [Fact]
+        public void PropertyExpression_SortsGridView_ByDerivedPath()
+        {
+            using var ctx = new TestContext();
+
+            var component = RenderGrid(ctx, builder =>
+            {
+                builder.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.PropertyExpression),
+                    (System.Linq.Expressions.Expression<Func<Person, object>>)(p => p.Name));
+                builder.AddAttribute(2, nameof(RadzenDataGridColumn<Person>.SortOrder), SortOrder.Ascending);
+                builder.CloseComponent();
+            });
+
+            // Sorting a PropertyExpression column runs through the ordinary (string-path) sort pipeline.
+            var names = component.Instance.View.ToList().Select(p => p.Name).ToList();
+            Assert.Equal(new[] { "Alice", "Bob", "Charlie" }, names);
+        }
+
+        [Fact]
+        public void PropertyExpression_FiltersGridView_ByDerivedPath()
+        {
+            using var ctx = new TestContext();
+
+            var component = RenderGrid(ctx, builder =>
+            {
+                builder.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.PropertyExpression),
+                    (System.Linq.Expressions.Expression<Func<Person, object>>)(p => p.Address.City));
+                builder.AddAttribute(2, nameof(RadzenDataGridColumn<Person>.FilterValue), "London");
+                builder.AddAttribute(3, nameof(RadzenDataGridColumn<Person>.FilterOperator), FilterOperator.Equals);
+                builder.CloseComponent();
+            });
+
+            // Filtering a PropertyExpression column runs through the ordinary (string-path) filter pipeline.
+            var cities = component.Instance.View.ToList().Select(p => p.Address.City).ToList();
+            Assert.Equal(new[] { "London" }, cities);
+        }
+
+        [Fact]
+        public void PropertyExpression_Computed_RendersValue_ButHasNoSortableProperty()
+        {
+            using var ctx = new TestContext();
+
+            var component = RenderGrid(ctx, builder =>
+            {
+                builder.OpenComponent(0, typeof(RadzenDataGridColumn<Person>));
+                builder.AddAttribute(1, nameof(RadzenDataGridColumn<Person>.PropertyExpression),
+                    (System.Linq.Expressions.Expression<Func<Person, object>>)(p => p.Name + " (" + p.Address.City + ")"));
+                builder.CloseComponent();
+            });
+
+            // A computed expression has no member path, so it cannot drive the string sort/filter pipeline,
+            // but it should still render its value in the cell.
+            var cells = component.FindAll(".rz-cell-data");
+            Assert.Equal("Charlie (Paris)", cells[0].TextContent.Trim());
+            Assert.Equal("Alice (Berlin)", cells[1].TextContent.Trim());
+
+            Assert.True(string.IsNullOrEmpty(component.Instance.ColumnsCollection.Single().Property));
+        }
+
+        [Fact]
         public void PropertyExpression_IsIgnored_WhenStringPropertySet()
         {
             using var ctx = new TestContext();
