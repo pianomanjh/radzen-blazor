@@ -96,16 +96,24 @@ internally), yet every call site materialized `columns.Where(c => c.GetVisible()
 to pass it in. The parameter and those list expressions were removed — one list allocation per cell
 gone, for every grid, whether or not it has frozen columns.
 
-### Aggregate — full grid render (bUnit `RenderComponent`, all three changes vs. master)
+### `CellAttributes` — 3 allocations per cell in the common case
+
+For every cell the grid built a `DataGridCellRenderEventArgs` (which eagerly allocates a backing
+`Dictionary`) and wrapped it in a `ReadOnlyDictionary`, even with no `CellRender` handler — three
+allocations per cell just to return an empty attribute set. It now returns a shared empty dictionary
+when `CellRender` is null (the result is only read, never mutated).
+
+### Aggregate — full grid render (bUnit `RenderComponent`, all changes vs. master)
 
 End-to-end render of the whole grid. This total is dominated by Blazor's own render-tree and markup
-allocation; the grid optimizations remove a consistent slice on top of that. (No frozen columns, 2
-nested columns — grids with more nested/frozen columns benefit more.)
+allocation; the grid optimizations remove a consistent slice on top of that. This is the *worst
+case* for these changes — no selected rows, no `CellRender`, only 2 nested columns; grids with
+selection, nested paths, or frozen columns gain more (see the isolated benchmarks above).
 
 | Rows | Baseline (master) | Optimized | Time | Allocation |
 |-----:|------------------:|----------:|-----:|-----------:|
-| 100 | 14.87 MB / 51.9 ms | 13.91 MB / 48.1 ms | −7% | −6% |
-| 500 | 46.53 MB / 145 ms  | 41.88 MB / 138 ms  | −5% | −10% |
+| 100 | 14.87 MB / 51.9 ms | 13.45 MB / 51.4 ms | −1% | −10% |
+| 500 | 46.53 MB / 145 ms  | 39.92 MB / 129 ms  | −11% | −14% |
 
 The isolated benchmarks above show the magnitude of each individual fix; this table shows what
 survives once Blazor's fixed rendering overhead is included.

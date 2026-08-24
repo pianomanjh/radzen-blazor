@@ -1283,14 +1283,22 @@ namespace Radzen.Blazor
             }
         }
 
+        static readonly IReadOnlyDictionary<string, object> EmptyCellAttributes =
+            new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(new Dictionary<string, object>());
+
         internal IReadOnlyDictionary<string, object> CellAttributes(TItem item, RadzenDataGridColumn<TItem> column)
         {
+            // Without a CellRender handler there are no custom attributes, so return a shared empty
+            // dictionary instead of allocating an event args, its backing dictionary and a ReadOnlyDictionary
+            // wrapper for every cell on every render. The result is only read by callers, never mutated.
+            if (CellRender == null)
+            {
+                return EmptyCellAttributes;
+            }
+
             var args = new Radzen.DataGridCellRenderEventArgs<TItem>() { Data = item, Column = column };
 
-            if (CellRender != null)
-            {
-                CellRender(args);
-            }
+            CellRender(args);
 
             return new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(args.Attributes);
         }
