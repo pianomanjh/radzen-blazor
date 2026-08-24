@@ -178,6 +178,26 @@ namespace Radzen.Blazor.Tests
         }
 
         [Fact]
+        public void AutoComplete_RendersItemText_ViaTextProperty()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+            var data = new[] { new { Name = "Apple" }, new { Name = "Banana" } };
+
+            var component = ctx.RenderComponent<RadzenAutoComplete>(parameters =>
+            {
+                parameters
+                    .Add(p => p.Data, data)
+                    .Add(p => p.TextProperty, "Name")
+                    .Add(p => p.OpenOnFocus, true);
+            });
+
+            var items = component.FindAll(".rz-autocomplete-list-item");
+            Assert.Contains(items, i => i.TextContent.Trim() == "Apple");
+            Assert.Contains(items, i => i.TextContent.Trim() == "Banana");
+        }
+
+        [Fact]
         public void AutoComplete_Renders_LoadingTemplate_WhenIsLoading()
         {
             using var ctx = new TestContext();

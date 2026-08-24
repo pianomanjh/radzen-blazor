@@ -68,5 +68,23 @@ After the fix, a re-trace of the render and separate measurements settled the re
   `Visible`/`Disabled`/`Attributes` from it, and it is tiny next to the render tree — not worth the risk.
 
 Net: the one big RadzenDropDown win (the O(n² ) multiselect selection) is fixed; the rest is framework-bound.
-The remaining family wins are in **RadzenAutoComplete** (reads item text via uncached reflection per item —
-it does not derive from DropDownBase's getter cache) and **RadzenDropDownDataGrid**.
+The remaining family wins are in **RadzenAutoComplete** (below) and **RadzenDropDownDataGrid**.
+
+## RadzenAutoComplete — cache the item-text getter
+
+`RadzenAutoComplete` does not derive from `DropDownBase`, so it had no getter cache: each rendered
+suggestion read its `TextProperty` via uncached reflection (`PropertyAccess.GetItemOrValueFromProperty`
+→ `GetProperty` + `PropertyInfo.GetValue` + `path.Split('.')`), per item per render. It now compiles a
+getter once per `(item type, TextProperty)` and reuses it, with a reflection fallback for anything it
+cannot compile.
+
+### Result — render the suggestion list
+
+| Items | Baseline | Optimized | Speedup |
+|------:|---------:|----------:|--------:|
+| 200  | 1.01 ms / 834 KB  | 1.35 ms / 828 KB | ~flat (noise) |
+| 1000 | 7.42 ms / 3.24 MB | 3.00 ms / 3.21 MB | **2.5× faster** |
+
+The win here is CPU, not allocation: the per-item reflection was expensive to run, but its allocation is
+small next to the render tree (allocation is framework-bound, as elsewhere). At 1000 suggestions the list
+renders ~2.5× faster.

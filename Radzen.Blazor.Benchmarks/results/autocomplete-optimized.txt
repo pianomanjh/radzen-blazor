@@ -1,0 +1,4 @@
+| Method                                | Items | Mean     | Error    | StdDev    | Gen0     | Gen1     | Gen2     | Allocated  |
+|-------------------------------------- |------ |---------:|---------:|----------:|---------:|---------:|---------:|-----------:|
+| 'Render autocomplete suggestion list' | 200   | 1.345 ms | 1.154 ms | 0.0633 ms |   3.9063 |        - |        - |   827.7 KB |
+| 'Render autocomplete suggestion list' | 1000  | 3.002 ms | 2.717 ms | 0.1489 ms | 312.5000 | 312.5000 | 312.5000 | 3205.34 KB |

@@ -320,6 +320,41 @@ namespace Radzen.Blazor
             }
         }
 
+        Func<object, object?>? textPropertyGetter;
+        Type? textPropertyGetterType;
+        string? textPropertyGetterProperty;
+
+        /// <summary>
+        /// Reads an item's TextProperty. Unlike DropDownBase this component has no getter cache, so the
+        /// suggestion list previously read every item via uncached reflection. This compiles a getter once
+        /// per (item type, TextProperty) and reuses it, falling back to reflection for anything it cannot
+        /// compile (mismatched types, indexer/dynamic items).
+        /// </summary>
+        internal object? GetItemText(object? item)
+        {
+            if (item == null || string.IsNullOrEmpty(TextProperty))
+            {
+                return PropertyAccess.GetItemOrValueFromProperty(item, TextProperty ?? string.Empty);
+            }
+
+            var type = item.GetType();
+            if (textPropertyGetterType != type || textPropertyGetterProperty != TextProperty)
+            {
+                textPropertyGetterType = type;
+                textPropertyGetterProperty = TextProperty;
+                try
+                {
+                    textPropertyGetter = PropertyAccess.Getter<object, object?>(TextProperty, type);
+                }
+                catch
+                {
+                    textPropertyGetter = null;
+                }
+            }
+
+            return textPropertyGetter != null ? textPropertyGetter(item) : PropertyAccess.GetItemOrValueFromProperty(item, TextProperty);
+        }
+
         /// <summary>
         /// Handles the @bind:set binding of the underlying input element.
         /// </summary>
@@ -340,7 +375,7 @@ namespace Radzen.Blazor
         {
             if (!string.IsNullOrEmpty(TextProperty))
             {
-                Value = PropertyAccess.GetItemOrValueFromProperty(item, TextProperty)?.ToString();
+                Value = GetItemText(item)?.ToString();
             }
             else
             {
