@@ -1,0 +1,4 @@
+| Method                                             | Rows  | Mean      | Error      | StdDev   | Allocated |
+|--------------------------------------------------- |------ |----------:|-----------:|---------:|----------:|
+| 'GetStyle for every data cell (rows x 10 columns)' | 1000  |  55.84 us |   5.661 us | 0.310 us |         - |
+| 'GetStyle for every data cell (rows x 10 columns)' | 10000 | 567.94 us | 149.959 us | 8.220 us |         - |

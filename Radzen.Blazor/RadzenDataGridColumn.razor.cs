@@ -828,44 +828,64 @@ namespace Radzen.Blazor
         /// <returns>System.String.</returns>
         public virtual string GetStyle(bool forCell = false, bool isHeaderOrFooterCell = false, bool isForCol = false)
         {
-            var style = new List<string>();
+#pragma warning disable CA1508 // Lazy init: the first '??=' is intentionally reached with a null list.
+            // Allocate the list lazily: the vast majority of data cells contribute no style at all, so an
+            // empty cell should not allocate a List (plus the joined string) on every render.
+            List<string>? style = null;
 
             var width = GetWidthOrGridSetting()?.Trim();
 
-            var hasColGroup = Grid.allColumns.All(c => c.Parent == null);
-
-            if (!string.IsNullOrEmpty(width) && (isForCol || !hasColGroup))
+            // GridHasNoColumnGroups() scans every column, so only evaluate it when a width is actually set
+            // (its result is used nowhere else) instead of once per cell.
+            if (!string.IsNullOrEmpty(width) && (isForCol || !GridHasNoColumnGroups()))
             {
-                style.Add($"width:{width}");
+                (style ??= new List<string>()).Add($"width:{width}");
             }
 
             if (forCell && TextAlign != TextAlign.Left)
             {
                 var enumName = Enum.GetName<TextAlign>(TextAlign);
-                style.Add($"text-align:{(enumName ?? TextAlign.ToString()).ToLower(CultureInfo.InvariantCulture)};");
+                (style ??= new List<string>()).Add($"text-align:{(enumName ?? TextAlign.ToString()).ToLower(CultureInfo.InvariantCulture)};");
             }
 
             if (forCell && IsFrozen())
             {
-                style.Add(GetStackedStyleForFrozen());
+                (style ??= new List<string>()).Add(GetStackedStyleForFrozen());
             }
 
             if (!isHeaderOrFooterCell && IsFrozen() || (isHeaderOrFooterCell && Grid.ColumnsCollection.Where(c => c.GetVisible() && c.IsFrozen()).Any()))
             {
-                style.Add($"z-index:{(isHeaderOrFooterCell && IsFrozen() ? 2 : 1)}");
+                (style ??= new List<string>()).Add($"z-index:{(isHeaderOrFooterCell && IsFrozen() ? 2 : 1)}");
             }
 
             if (!string.IsNullOrEmpty(MinWidth))
             {
-                style.Add($"min-width:{MinWidth}");
+                (style ??= new List<string>()).Add($"min-width:{MinWidth}");
             }
 
             if (!string.IsNullOrEmpty(MaxWidth))
             {
-                style.Add($"max-width:{MaxWidth}");
+                (style ??= new List<string>()).Add($"max-width:{MaxWidth}");
             }
 
-            return string.Join(";", style);
+            return style == null ? string.Empty : string.Join(";", style);
+#pragma warning restore CA1508
+        }
+
+        // Allocation-free equivalent of Grid.allColumns.All(c => c.Parent == null): the LINQ form boxes an
+        // enumerator on every call, and GetStyle runs for every cell on every render.
+        private bool GridHasNoColumnGroups()
+        {
+            var columns = Grid.allColumns;
+            for (int i = 0; i < columns.Count; i++)
+            {
+                if (columns[i].Parent != null)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private string GetStackedStyleForFrozen()
