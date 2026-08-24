@@ -1600,36 +1600,7 @@ namespace Radzen
                         {
                             if (typeof(EnumerableQuery).IsAssignableFrom(view.GetType()))
                             {
-                                // In-memory: resolve every value against a single value->item lookup instead of
-                                // scanning the view (and re-scanning selectedItems) once per value. This turns an
-                                // O(items x selected) pass with a LINQ query allocated per value into O(items + selected).
-                                var itemsByValue = new Dictionary<object, object>();
-                                foreach (var i in view.OfType<object>())
-                                {
-                                    var iv = GetItemOrValueFromProperty(i, ValueProperty);
-                                    if (iv != null)
-                                    {
-                                        itemsByValue.TryAdd(iv, i);
-                                    }
-                                }
-
-                                var existingValues = new HashSet<object>();
-                                foreach (var si in selectedItems)
-                                {
-                                    var sv = GetItemOrValueFromProperty(si, ValueProperty);
-                                    if (sv != null)
-                                    {
-                                        existingValues.Add(sv);
-                                    }
-                                }
-
-                                foreach (object v in values.Cast<object>())
-                                {
-                                    if (v != null && itemsByValue.TryGetValue(v, out var item) && existingValues.Add(v))
-                                    {
-                                        selectedItems.Add(item);
-                                    }
-                                }
+                                AddSelectedItemsByValue(view, values);
                             }
                             else
                             {
@@ -1672,6 +1643,45 @@ namespace Radzen
         /// </summary>
         [Parameter] public IEqualityComparer<object>? ItemComparer { get; set; }
 
+        /// <summary>
+        /// Resolves each bound value against the in-memory <paramref name="source"/> and adds any not already
+        /// selected. Builds one value-&gt;item lookup and one existing-values set instead of scanning the source
+        /// (and re-scanning <c>selectedItems</c>) once per value, making a multiselect binding
+        /// O(items + selected) instead of O(items x selected). Shared by the base dropdown and
+        /// <see cref="RadzenDropDownDataGrid{TValue}"/>, which differ only in the in-memory source they pass;
+        /// the non-in-memory (e.g. EF) path stays at each call site so its lookup remains server-side.
+        /// </summary>
+        private protected void AddSelectedItemsByValue(IEnumerable source, IEnumerable values)
+        {
+            var itemsByValue = new Dictionary<object, object>();
+            foreach (var i in source.OfType<object>())
+            {
+                var iv = GetItemOrValueFromProperty(i, ValueProperty!);
+                if (iv != null)
+                {
+                    itemsByValue.TryAdd(iv, i);
+                }
+            }
+
+            var existingValues = new HashSet<object>();
+            foreach (var si in selectedItems)
+            {
+                var sv = GetItemOrValueFromProperty(si, ValueProperty!);
+                if (sv != null)
+                {
+                    existingValues.Add(sv);
+                }
+            }
+
+            foreach (object v in values.Cast<object>())
+            {
+                if (v != null && itemsByValue.TryGetValue(v, out var item) && existingValues.Add(v))
+                {
+                    selectedItems.Add(item);
+                }
+            }
+        }
+
         // Set view of the current multiselect values, rebuilt only when internalValue is reassigned.
         // IsItemSelectedByValue is called for every rendered item (3-4x each), so a per-call linear scan of
         // the selected values makes a multiselect render O(items x selected). A set lookup makes it O(items).
@@ -1687,14 +1697,22 @@ namespace Radzen
                     return object.Equals(s, v);
                 case IEnumerable enumerable:
                     // Matches the previous enumerable.Cast<object>().Contains(v) semantics (default equality),
-                    // but O(1) per call instead of O(selected). The bound value collection can be updated
-                    // either by swapping the reference (the component's own selection path does this) or by
-                    // mutating it in place then calling StateHasChanged (external code) - the latter keeps the
-                    // same reference, so the cache is also invalidated when the element count changes. Count is
-                    // read from ICollection when possible so this stays O(1); the previous reference-only guard
-                    // left an in-place add/remove showing a stale checked state.
-                    var count = enumerable is ICollection collection ? collection.Count : enumerable.Cast<object>().Count();
-                    if (_selectedValuesSet == null || !ReferenceEquals(_selectedValuesSource, enumerable) || _selectedValuesSourceCount != count)
+                    // but O(1) per call instead of O(selected). The bound value collection can be updated either
+                    // by swapping the reference (the component's own selection path does this) or by mutating it
+                    // in place then calling StateHasChanged (external code) - the latter keeps the same
+                    // reference, so for an ICollection the cache is also invalidated when the element count
+                    // changes (an O(1) read). A non-ICollection sequence is materialised once per reference
+                    // only: counting it every call would re-enumerate it per item and undo the O(items) goal.
+                    var isCollection = false;
+                    var count = 0;
+                    if (enumerable is ICollection collection)
+                    {
+                        isCollection = true;
+                        count = collection.Count;
+                    }
+                    if (_selectedValuesSet == null
+                        || !ReferenceEquals(_selectedValuesSource, enumerable)
+                        || (isCollection && _selectedValuesSourceCount != count))
                     {
                         _selectedValuesSource = enumerable;
                         _selectedValuesSourceCount = count;

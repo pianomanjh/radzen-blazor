@@ -98,9 +98,9 @@ else
         var selected = dropDown.IsSelected(Item);
         var multiple = dropDown.Multiple;
         var dropDownDisabled = dropDown.Disabled;
-        // Mirrors ItemAttributes: with no ItemRender handler, an item is disabled only via DisabledProperty.
-        var itemDisabled = !string.IsNullOrEmpty(dropDown.DisabledProperty)
-            && dropDown.GetItemOrValueFromProperty(Item, dropDown.DisabledProperty) is bool b && b;
+        // With no ItemRender handler, an item is disabled only via DisabledProperty - resolved through the
+        // same accessor ItemAttributes uses so the two cannot drift.
+        var itemDisabled = dropDown.GetItemDisabled(Item);
 
         if (hasRendered
             && Equals(lastText, text)

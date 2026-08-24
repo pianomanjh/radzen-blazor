@@ -930,36 +930,7 @@ namespace Radzen.Blazor
                         {
                             if (typeof(EnumerableQuery).IsAssignableFrom(Query.GetType()))
                             {
-                                // In-memory: resolve every value against a single value->item lookup instead of a
-                                // per-value query plus a per-value selectedItems scan. O(items + selected) rather
-                                // than O(items x selected) with a query allocated per value.
-                                var itemsByValue = new Dictionary<object, object>();
-                                foreach (var i in Query.OfType<object>())
-                                {
-                                    var iv = GetItemOrValueFromProperty(i, ValueProperty);
-                                    if (iv != null)
-                                    {
-                                        itemsByValue.TryAdd(iv, i);
-                                    }
-                                }
-
-                                var existingValues = new HashSet<object>();
-                                foreach (var si in selectedItems)
-                                {
-                                    var sv = GetItemOrValueFromProperty(si, ValueProperty);
-                                    if (sv != null)
-                                    {
-                                        existingValues.Add(sv);
-                                    }
-                                }
-
-                                foreach (object v in valueList)
-                                {
-                                    if (v != null && itemsByValue.TryGetValue(v, out var item) && existingValues.Add(v))
-                                    {
-                                        selectedItems.Add(item);
-                                    }
-                                }
+                                AddSelectedItemsByValue(Query, valueList);
                             }
                             else
                             {

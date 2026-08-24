@@ -134,15 +134,21 @@ namespace Radzen.Blazor
         [Parameter]
         public Action<DropDownItemRenderEventArgs<TValue>>? ItemRender { get; set; }
 
+        // The item-level disabled state (from DisabledProperty) resolved the same way for the render args and
+        // for RadzenDropDownItem.ShouldRender, so both read it through here rather than each deriving it.
+        internal bool GetItemDisabled(object? item)
+        {
+            return !string.IsNullOrEmpty(DisabledProperty)
+                && GetItemOrValueFromProperty(item, DisabledProperty) is bool disabled && disabled;
+        }
+
         internal DropDownItemRenderEventArgs<TValue> ItemAttributes(RadzenDropDownItem<TValue> item)
         {
-            var disabled = !string.IsNullOrEmpty(DisabledProperty) ? GetItemOrValueFromProperty(item.Item, DisabledProperty) : false;
-
-            var args = new DropDownItemRenderEventArgs<TValue>() 
-            { 
-                DropDown = this, 
-                Item = item.Item, 
-                Disabled = disabled is bool ? (bool)disabled : false,
+            var args = new DropDownItemRenderEventArgs<TValue>()
+            {
+                DropDown = this,
+                Item = item.Item,
+                Disabled = GetItemDisabled(item.Item),
             };
 
             if (ItemRender != null)
