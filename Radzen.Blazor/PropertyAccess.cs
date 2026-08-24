@@ -147,7 +147,7 @@ public static class PropertyAccess
         Expression? nullGuard = null;
         foreach (var member in propertyName.Split('.'))
         {
-            if (nullToNull && !body.Type.IsValueType && Nullable.GetUnderlyingType(body.Type) == null)
+            if (nullToNull && !body.Type.IsValueType)
             {
                 var isNull = Expression.Equal(body, Expression.Constant(null, body.Type));
                 nullGuard = nullGuard == null ? isNull : Expression.OrElse(nullGuard, isNull);

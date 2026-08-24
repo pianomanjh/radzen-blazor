@@ -889,7 +889,7 @@ namespace Radzen.Blazor
 
         // Single-entry memo for the row-independent data-cell style. Every data cell of a column produces
         // the same style string within a render, so it is computed once and reused until an input changes.
-        bool _dataCellStyleValid;
+        // The style is never null once computed, so _dataCellStyle != null is itself the validity flag.
         string? _dataCellStyle;
         string? _dataCellStyleWidth;
         TextAlign _dataCellStyleAlign;
@@ -917,7 +917,7 @@ namespace Radzen.Blazor
             if (isDataCell)
             {
                 colGroup = !string.IsNullOrEmpty(width) && !GridHasNoColumnGroups();
-                if (_dataCellStyleValid && _dataCellStyle != null
+                if (_dataCellStyle != null
                     && _dataCellStyleWidth == width && _dataCellStyleAlign == TextAlign
                     && _dataCellStyleMin == MinWidth && _dataCellStyleMax == MaxWidth
                     && _dataCellStyleColGroup == colGroup)
@@ -930,9 +930,13 @@ namespace Radzen.Blazor
             // empty cell should not allocate a List (plus the joined string) on every render.
             List<string>? style = null;
 
-            // GridHasNoColumnGroups() scans every column, so only evaluate it when a width is actually set
-            // (its result is used nowhere else) instead of once per cell.
-            if (!string.IsNullOrEmpty(width) && (isForCol || !GridHasNoColumnGroups()))
+            // Include the width unless the grid uses column groups (which carry it themselves); a <col>
+            // element always keeps it. GridHasNoColumnGroups() scans every column, so a data cell reuses the
+            // colGroup result it already computed above rather than scanning a second time.
+            var includeWidth = isDataCell
+                ? colGroup
+                : !string.IsNullOrEmpty(width) && (isForCol || !GridHasNoColumnGroups());
+            if (includeWidth)
             {
                 (style ??= new List<string>()).Add($"width:{width}");
             }
@@ -973,7 +977,6 @@ namespace Radzen.Blazor
                 _dataCellStyleMax = MaxWidth;
                 _dataCellStyleColGroup = colGroup;
                 _dataCellStyle = result;
-                _dataCellStyleValid = true;
             }
 
             return result;
