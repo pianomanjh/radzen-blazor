@@ -1,0 +1,4 @@
+| Method                                        | Items  | Mean     | Error    | StdDev    | Gen0    | Gen1    | Gen2    | Allocated  |
+|---------------------------------------------- |------- |---------:|---------:|----------:|--------:|--------:|--------:|-----------:|
+| 'Filter items by text (one search operation)' | 10000  | 1.463 ms | 1.451 ms | 0.0796 ms |       - |       - |       - |  445.97 KB |
+| 'Filter items by text (one search operation)' | 100000 | 5.245 ms | 1.673 ms | 0.0917 ms | 46.8750 | 15.6250 | 15.6250 | 4888.95 KB |

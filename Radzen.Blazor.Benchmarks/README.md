@@ -49,3 +49,24 @@ became O(items + selected). All 4931 tests pass; builds clean on net8/9/10.
 
 > The trace was essential: fixing `IsItemSelectedByValue` alone cut allocation but barely moved the
 > (noisy) time, because `SelectItemFromValue` dominated. The allocation trace pointed straight at it.
+
+## What was checked and found NOT to be a further win (RadzenDropDown)
+
+After the fix, a re-trace of the render and separate measurements settled the rest:
+
+- **Item text access is already cached.** `type = Data.AsQueryable().ElementType` matches the item type, so
+  the compiled getter is used per item — no per-item reflection. (The `String.Split` seen in the trace has
+  no Radzen frame in its stack; it is bUnit's HTML-attribute serialization, which real Blazor never runs.)
+- **The remaining render allocation is the Blazor render tree** (`RadzenDropDownItem.BuildRenderTree` — one
+  component per item) plus bUnit serialization. For large lists the lever is virtualization
+  (`AllowVirtualization`, default off), not library micro-optimization — same conclusion as the grid.
+- **Search/filter execution is O(items) and cheap.** `Query.Where(TextProperty, searchText, op, cs)` over
+  100k items is ~5.2 ms / 4.9 MB for one search (mostly materializing the matched subset); 10k is
+  ~1.5 ms / 0.45 MB. No O(n²), one expression build per search. The cost of a search is re-rendering the
+  matched items (framework), not the filter execution.
+- `ItemAttributes` allocates one small args object per item, but the item genuinely reads
+  `Visible`/`Disabled`/`Attributes` from it, and it is tiny next to the render tree — not worth the risk.
+
+Net: the one big RadzenDropDown win (the O(n² ) multiselect selection) is fixed; the rest is framework-bound.
+The remaining family wins are in **RadzenAutoComplete** (reads item text via uncached reflection per item —
+it does not derive from DropDownBase's getter cache) and **RadzenDropDownDataGrid**.
