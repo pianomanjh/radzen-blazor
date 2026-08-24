@@ -48,6 +48,24 @@ foreach (var ev in log.Events)
 }
 ```
 
+## Profiling a filter/search operation
+
+`profile` covers rendering; `filter <rows> [loop]` covers the work an applied filter or a debounced
+search keystroke triggers — rebuilding the filter descriptors + expression tree and re-running
+filter+sort+count+page:
+
+```bash
+dotnet run -c Release --project Radzen.Blazor.Benchmarks -- filter 10000        # KB / operation
+dotnet run -c Release --project Radzen.Blazor.Benchmarks -- filter 10000 loop    # continuous, for tracing
+```
+
+What it showed: a filter operation over 10k rows allocates ~62 KB — small. By call stack that is ~17%
+expression compilation (`LambdaCompiler`/`Expression.Compile`, because `EnumerableQuery` recompiles the
+tree per enumeration), ~15% sort, ~11% reflection, the rest filter/sort data arrays. The dominant cost
+of *applying* a filter is the **re-render it triggers** (the same ~72 MB), within which the eager filter
+popups (`FilterPopupRenderMode.Initial`, ~7 MB) are the one addressable grid-code chunk. There is no
+hidden big win in the filter execution path itself.
+
 ## What it showed for a 500-row render
 
 - `System.String` (31%) and `RenderTreeFrame[]` (16%) lead; of the string bytes, ~72% carry no

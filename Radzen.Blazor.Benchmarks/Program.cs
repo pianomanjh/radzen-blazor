@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using BenchmarkDotNet.Running;
 using Bunit;
+using Radzen;
 
 namespace Radzen.Blazor.Benchmarks;
 
@@ -12,6 +14,12 @@ public static class Program
         if (args.Length > 0 && args[0] == "profile")
         {
             Profile(args);
+            return;
+        }
+
+        if (args.Length > 0 && args[0] == "filter")
+        {
+            ProfileFilter(args);
             return;
         }
 
@@ -78,6 +86,58 @@ public static class Program
                 if (++n % 50 == 0) Console.WriteLine($"  {n} renders");
             }
         }
+    }
+
+    // Profiles the filter-operation work a search/filter triggers: the grid rebuilds the filter
+    // FilterDescriptors + expression tree and re-executes filter+sort+count+page over the data. This is
+    // what OnFilter -> View recompute does on every applied filter and every debounced search keystroke.
+    static void ProfileFilter(string[] args)
+    {
+        int rows = args.Length > 1 && int.TryParse(args[1], out var r) ? r : 10_000;
+        var data = Person.Generate(rows);
+
+        var ctx = new TestContext();
+        ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+        ctx.JSInterop.SetupModule("_content/Radzen.Blazor/Radzen.Blazor.js");
+        var host = ctx.RenderComponent<GridHost>(p => p
+            .Add(x => x.Data, data.Take(10).ToList())
+            .Add(x => x.PageSize, 10));
+
+        var columns = host.Instance.Grid.ColumnsCollection.ToList();
+        var firstName = columns.First(c => c.Property == "FirstName");
+
+        static long Alloc() => GC.GetAllocatedBytesForCurrentThread();
+
+        // One filter/search operation: rebuild filter descriptors + expression, filter, order, count, page.
+        int Operate(int i)
+        {
+            firstName.SetFilterValue("First" + (i % 9)); // changes each iteration so it is not a no-op
+            var q = data.AsQueryable().Where<Person>(columns).OrderBy("LastName desc");
+            var count = q.Count();
+            var page = q.Skip(0).Take(50).ToList();
+            return count + page.Count;
+        }
+
+        for (int i = 0; i < 3; i++) Operate(i); // warm up
+
+        const int iterations = 20;
+        long bytes = 0;
+        var before = Alloc();
+        int sink = 0;
+        for (int i = 0; i < iterations; i++) sink += Operate(i);
+        bytes = Alloc() - before;
+
+        Console.WriteLine($"Rows={rows}, one filter operation = rebuild descriptors+expression, filter+sort+count+page");
+        Console.WriteLine($"Allocated: {bytes / (double)iterations / 1024:F1} KB / operation  (sink={sink})");
+
+        if (args.Length > 2 && args[2] == "loop")
+        {
+            Console.WriteLine("Looping filter operations for profiler capture. Ctrl-C to stop.");
+            long n = 0;
+            while (true) { sink += Operate((int)(n % 9)); if (++n % 200 == 0) Console.WriteLine($"  {n} ops"); }
+        }
+
+        ctx.Dispose();
     }
 
     sealed class RenderedComponent
