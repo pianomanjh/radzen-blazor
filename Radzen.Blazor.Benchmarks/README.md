@@ -39,6 +39,22 @@ memoizes the constant per-column string. **No public API change** — `Property`
 > only used for the opt-in `CustomFilterExpression`. Reflection, not dynamic LINQ, dominated the
 > per-cell cost.
 
+## Strongly-typed `PropertyExpression` (opt-in, QuickGrid-style)
+
+`RadzenDataGridColumn` gains an optional `PropertyExpression` parameter as a type-safe alternative to
+the string `Property`:
+
+```razor
+<RadzenDataGridColumn TItem="Person" PropertyExpression="@(p => p.Address.City)" Title="City" />
+```
+
+The member path (`"Address.City"`) is derived from the expression and fed into the existing
+string-based sort/filter/group pipeline, so it composes with every other column feature. The value
+getter is compiled directly from the supplied expression instead of being built by reflecting over a
+string path. The string `Property` still wins when both are set. Benefits are compile-time checking
+and refactor-safe renames; per-render value-access cost is the same as the string form (which already
+uses a cached compiled getter — see below).
+
 ## Results
 
 Measured on .NET 10, `--job short`. (Allocated is exact regardless of job.)

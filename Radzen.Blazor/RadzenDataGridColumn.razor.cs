@@ -193,6 +193,15 @@ namespace Radzen.Blazor
         /// </summary>
         protected override void OnInitialized()
         {
+            // A strongly-typed PropertyExpression supplies both the member path (for the sort/filter/group
+            // pipeline, which is string based) and the value getter (compiled straight from the expression,
+            // no reflection on a string path). The string Property still wins if it was set explicitly.
+            if (PropertyExpression != null && string.IsNullOrEmpty(Property) && TryGetMemberPath(PropertyExpression, out var path))
+            {
+                Property = path;
+                propertyValueGetter = PropertyExpression.Compile();
+            }
+
             if (Grid != null)
             {
                 Grid.AddColumn(this);
@@ -241,13 +250,13 @@ namespace Radzen.Blazor
             }
             else if (!string.IsNullOrEmpty(Property))
             {
-                propertyValueGetter = PropertyAccess.Getter<TItem, object>(Property);
+                propertyValueGetter ??= PropertyAccess.Getter<TItem, object>(Property);
             }
 
             if (!string.IsNullOrEmpty(Property) && (typeof(TItem).IsGenericType && typeof(IDictionary<,>).IsAssignableFrom(typeof(TItem).GetGenericTypeDefinition()) ||
                 typeof(IDictionary).IsAssignableFrom(typeof(TItem)) || typeof(System.Data.DataRow).IsAssignableFrom(typeof(TItem))))
             {
-                propertyValueGetter = PropertyAccess.Getter<TItem, object>(Property);
+                propertyValueGetter ??= PropertyAccess.Getter<TItem, object>(Property);
             }
 
             if (_filterPropertyType == typeof(string) && filterOperator != FilterOperator.Custom && filterOperator == null && _filterOperator == null)
@@ -427,6 +436,50 @@ namespace Radzen.Blazor
         /// <value>The property name.</value>
         [Parameter]
         public string Property { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the bound property as a strongly-typed expression, e.g. <c>Property="@(x => x.Address.City)"</c>,
+        /// as an alternative to the string <see cref="Property"/>. This gives compile-time checking and refactor-safe
+        /// renames, and the value getter is built directly from the supplied expression rather than from reflection on a
+        /// string path. The member path is derived from the expression (e.g. <c>"Address.City"</c>) and used for the
+        /// existing sorting, filtering and grouping pipeline, so it composes with every other column feature.
+        /// Ignored when the string <see cref="Property"/> is already set.
+        /// </summary>
+        [Parameter]
+        public Expression<Func<TItem, object>>? PropertyExpression { get; set; }
+
+        /// <summary>
+        /// Derives a dotted member path (e.g. "Address.City") from a simple member-access expression, unwrapping the
+        /// Convert node the compiler inserts when boxing to object. Returns false for anything that is not a chain of
+        /// member accesses rooted at the lambda parameter.
+        /// </summary>
+        internal static bool TryGetMemberPath(Expression<Func<TItem, object>> expression, out string path)
+        {
+            path = string.Empty;
+
+            var body = expression.Body;
+            while (body is UnaryExpression unary &&
+                   (unary.NodeType == ExpressionType.Convert || unary.NodeType == ExpressionType.ConvertChecked))
+            {
+                body = unary.Operand;
+            }
+
+            var parts = new List<string>();
+            while (body is MemberExpression member)
+            {
+                parts.Add(member.Member.Name);
+                body = member.Expression!;
+            }
+
+            if (body is not ParameterExpression || parts.Count == 0)
+            {
+                return false;
+            }
+
+            parts.Reverse();
+            path = string.Join('.', parts);
+            return true;
+        }
 
         /// <summary>
         /// Gets or sets the sort property name.
