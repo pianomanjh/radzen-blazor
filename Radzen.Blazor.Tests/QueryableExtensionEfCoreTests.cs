@@ -140,5 +140,31 @@ namespace Radzen.Blazor.Tests
 
             Assert.Equal(3, result.Count);
         }
+
+        // A column's strongly-typed PropertyExpression is turned into a member-path string, which drives
+        // the same OrderBy/Where pipeline the string Property uses. This proves that path still translates
+        // to SQL against a real EF Core provider - i.e. the expression flows into the IQueryable pipeline.
+        [Fact]
+        public void PropertyExpression_DerivedPath_SortsAndFilters_TranslatesToSql()
+        {
+            using var context = CreateContext();
+
+            Assert.True(Radzen.Blazor.RadzenDataGridColumn<Client>.TryGetMemberPath(c => c.ClientNr, out var path));
+            Assert.Equal("ClientNr", path);
+
+            var sorted = context.Clients.AsQueryable().OrderBy(path + " desc");
+            Assert.Contains("ORDER BY", sorted.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+            var sortedNrs = sorted.ToList().Where(c => c.ClientNr != null).Select(c => c.ClientNr).ToList();
+            Assert.Equal(sortedNrs.OrderByDescending(x => x).ToList(), sortedNrs);
+
+            var filters = new List<FilterDescriptor>
+            {
+                new FilterDescriptor { Property = path, FilterValue = 150L, FilterOperator = FilterOperator.GreaterThan }
+            };
+
+            var filtered = context.Clients.AsQueryable().Where(filters, LogicalFilterOperator.And, FilterCaseSensitivity.Default);
+            Assert.Contains("WHERE", filtered.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+            Assert.All(filtered.ToList(), c => Assert.True(c.ClientNr > 150));
+        }
     }
 }

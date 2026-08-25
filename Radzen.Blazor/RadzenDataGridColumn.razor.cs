@@ -193,11 +193,21 @@ namespace Radzen.Blazor
         /// </summary>
         protected override void OnInitialized()
         {
+            ApplyPropertyExpression();
+
             if (Grid != null)
             {
                 Grid.AddColumn(this);
                 SetColumnDefaults();
             }
+        }
+
+        /// <inheritdoc />
+        protected override void OnParametersSet()
+        {
+            // Sync Property from PropertyExpression before the render's sort/filter/group pipeline reads it.
+            ApplyPropertyExpression();
+            base.OnParametersSet();
         }
 
         private void SetColumnDefaults()
@@ -419,6 +429,43 @@ namespace Radzen.Blazor
         /// <value>The property name.</value>
         [Parameter]
         public string Property { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the bound property as a strongly-typed expression, e.g. <c>Property="@(x => x.Address.City)"</c>, as a refactor-safe alternative to the string <see cref="Property"/>. A simple member access also drives sorting, filtering and grouping; a computed expression renders but is not sortable or filterable. Mutually exclusive with <see cref="Property"/> - setting both throws.
+        /// </summary>
+        [Parameter]
+        public Expression<Func<TItem, object>>? PropertyExpression { get; set; }
+
+        /// <summary>
+        /// Derives a dotted member path (e.g. "Address.City") from a simple member-access expression. Returns false for anything that is not a chain of member accesses rooted at the lambda parameter.
+        /// </summary>
+        internal static bool TryGetMemberPath(Expression<Func<TItem, object>> expression, out string path)
+        {
+            path = string.Empty;
+
+            var body = expression.Body;
+            while (body is UnaryExpression unary &&
+                   (unary.NodeType == ExpressionType.Convert || unary.NodeType == ExpressionType.ConvertChecked))
+            {
+                body = unary.Operand;
+            }
+
+            var parts = new List<string>();
+            while (body is MemberExpression member)
+            {
+                parts.Add(member.Member.Name);
+                body = member.Expression!;
+            }
+
+            if (body is not ParameterExpression || parts.Count == 0)
+            {
+                return false;
+            }
+
+            parts.Reverse();
+            path = string.Join('.', parts);
+            return true;
+        }
 
         /// <summary>
         /// Gets or sets the sort property name.
@@ -767,10 +814,83 @@ namespace Radzen.Blazor
         string? sortValueGetterProperty;
         Func<TItem, object>? sortValueGetter;
 
+        Expression<Func<TItem, object>>? appliedPropertyExpression;
+        bool appliedPropertyExpressionSet;
+        string? expressionMemberPath;             // derived path when the current expression is a simple member access
+        Func<TItem, object>? expressionGetter;    // compiled delegate when the current expression is computed
+        bool expressionGetterActive;              // true while propertyValueGetter holds expressionGetter
+
+        // Syncs the string Property from PropertyExpression: a member expression drives Property, a computed one
+        // supplies the value delegate. Recompiles only when the expression reference changes.
+        private void ApplyPropertyExpression()
+        {
+            var expression = PropertyExpression;
+
+            if (!appliedPropertyExpressionSet || !ReferenceEquals(expression, appliedPropertyExpression))
+            {
+                // Expression reference changed (first run, swap, or clear): drop state from the old one, re-derive.
+                if (expressionMemberPath != null && Property == expressionMemberPath)
+                {
+                    Property = string.Empty;
+                }
+
+                if (expressionGetterActive)
+                {
+                    propertyValueGetter = null;
+                    propertyValueGetterProperty = null;
+                    expressionGetterActive = false;
+                }
+
+                appliedPropertyExpression = expression;
+                appliedPropertyExpressionSet = true;
+                expressionMemberPath = null;
+                expressionGetter = null;
+
+                if (expression != null)
+                {
+                    if (TryGetMemberPath(expression, out var path))
+                    {
+                        expressionMemberPath = path;
+                    }
+                    else
+                    {
+                        expressionGetter = expression.Compile();
+                    }
+                }
+            }
+
+            if (expression == null)
+            {
+                return;
+            }
+
+            if (expressionMemberPath != null)
+            {
+                // A simple member access drives the string sort/filter/group pipeline.
+                Property = expressionMemberPath;
+            }
+            else
+            {
+                // A computed expression has no member path; render it via the raw delegate (not sortable/filterable).
+                Property = string.Empty;
+                propertyValueGetter = expressionGetter;
+                propertyValueGetterProperty = Property;
+                expressionGetterActive = true;
+            }
+        }
+
         // Rebuilds the cached value getter when the bound Property changes, so a reused column instance whose
         // Property parameter is reassigned does not keep rendering the old property.
         private void EnsurePropertyValueGetter()
         {
+            ApplyPropertyExpression();
+
+            // A computed PropertyExpression supplies its own compiled delegate (Property is empty); keep it.
+            if (PropertyExpression != null && string.IsNullOrEmpty(Property))
+            {
+                return;
+            }
+
             if (propertyValueGetterProperty == Property)
             {
                 return;
@@ -1013,6 +1133,8 @@ namespace Radzen.Blazor
         /// <returns>System.String.</returns>
         public string GetSortProperty()
         {
+            ApplyPropertyExpression();
+
             if (!string.IsNullOrEmpty(SortProperty))
             {
                 return SortProperty;
@@ -1109,6 +1231,8 @@ namespace Radzen.Blazor
         /// <returns>System.String.</returns>
         public string GetGroupProperty()
         {
+            ApplyPropertyExpression();
+
             if (!string.IsNullOrEmpty(GroupProperty))
             {
                 return GroupProperty;
@@ -1125,6 +1249,8 @@ namespace Radzen.Blazor
         /// <returns>System.String.</returns>
         public string GetFilterProperty()
         {
+            ApplyPropertyExpression();
+
             if (!string.IsNullOrEmpty(FilterProperty))
             {
                 return FilterProperty;
@@ -1164,6 +1290,15 @@ namespace Radzen.Blazor
         /// <returns>A Task representing the asynchronous operation.</returns>
         public override async Task SetParametersAsync(ParameterView parameters)
         {
+            // Property and PropertyExpression are mutually exclusive - a column binds through one or the other.
+            var suppliedProperty = parameters.TryGetValue<string>(nameof(Property), out var pv) && !string.IsNullOrEmpty(pv);
+            var suppliedExpression = parameters.TryGetValue<Expression<Func<TItem, object>>>(nameof(PropertyExpression), out var ev) && ev != null;
+            if (suppliedProperty && suppliedExpression)
+            {
+                throw new InvalidOperationException(
+                    $"RadzenDataGridColumn: set either Property (\"{pv}\") or PropertyExpression, not both.");
+            }
+
             if (parameters.DidParameterChange(nameof(Visible), Visible) ||
                 parameters.DidParameterChange(nameof(Title), Title))
             {
