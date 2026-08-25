@@ -16,6 +16,8 @@ public static class PropertyAccess
 {
     private static readonly ConcurrentDictionary<(Type ItemType, Type ValueType, string PropertyName, Type? TargetType), Delegate> getterCache = new();
 
+    private static readonly ConcurrentDictionary<(Type ItemType, string PropertyName, Type? TargetType), Delegate> nullSafeGetterCache = new();
+
     /// <summary>
     /// Creates a function that will return the specified property. The compiled function is cached so repeated calls with the same arguments do not recompile it.
     /// </summary>
@@ -33,8 +35,24 @@ public static class PropertyAccess
             _ => CreateGetter<TItem, TValue>(propertyName, type));
     }
 
+    /// <summary>
+    /// Like <see cref="Getter{TItem, TValue}"/> for an <see cref="object"/> value, but a null intermediate along a dotted path yields null rather than the leaf type's default. The compiled function is cached.
+    /// </summary>
+    /// <typeparam name="TItem">The owner type.</typeparam>
+    /// <param name="propertyName">Name of the property to return.</param>
+    /// <param name="type">Type of the object.</param>
+    /// <returns>A function which returns the specified property, or null if an intermediate member is null.</returns>
     [RequiresUnreferencedCode(TrimMessages.ExpressionTreeReflection)]
-    private static Func<TItem, TValue> CreateGetter<TItem, TValue>(string propertyName, Type? type)
+    public static Func<TItem, object> NullSafeGetter<TItem>(string propertyName, Type? type = null)
+    {
+        ArgumentNullException.ThrowIfNull(propertyName);
+
+        return (Func<TItem, object>)nullSafeGetterCache.GetOrAdd((typeof(TItem), propertyName, type),
+            _ => CreateGetter<TItem, object>(propertyName, type, nullToNull: true));
+    }
+
+    [RequiresUnreferencedCode(TrimMessages.ExpressionTreeReflection)]
+    private static Func<TItem, TValue> CreateGetter<TItem, TValue>(string propertyName, Type? type, bool nullToNull = false)
     {
         if (propertyName.Contains('[', StringComparison.Ordinal))
         {
@@ -116,12 +134,36 @@ public static class PropertyAccess
             return AccessNoInterface(instance, memberName);
         }
 
+        // When nullToNull is set, a null intermediate makes the whole result null rather than the leaf type's default.
+        Expression? nullGuard = null;
         foreach (var member in propertyName.Split('.'))
         {
-            body = AccessWithNullPropagation(body, member);
+            if (nullToNull && !body.Type.IsValueType)
+            {
+                var isNull = Expression.Equal(body, Expression.Constant(null, body.Type));
+                nullGuard = nullGuard == null ? isNull : Expression.OrElse(nullGuard, isNull);
+                body = AccessNoInterface(body, member);
+            }
+            else if (nullToNull && Nullable.GetUnderlyingType(body.Type) != null && member != "HasValue")
+            {
+                // A null Nullable<T> yields null. This also guards an explicit ".Value" in the path (which would
+                // otherwise throw); ".HasValue" keeps its boolean semantics and falls through unguarded below.
+                var isNull = Expression.Not(Expression.Property(body, "HasValue"));
+                nullGuard = nullGuard == null ? isNull : Expression.OrElse(nullGuard, isNull);
+                var value = Expression.Property(body, "Value");
+                body = member == "Value" ? value : AccessNoInterface(value, member);
+            }
+            else
+            {
+                body = AccessWithNullPropagation(body, member);
+            }
         }
 
         body = Expression.Convert(body, typeof(TValue));
+        if (nullGuard != null)
+        {
+            body = Expression.Condition(nullGuard, Expression.Default(typeof(TValue)), body);
+        }
         return Expression.Lambda<Func<TItem, TValue>>(body, arg).Compile();
     }
 
