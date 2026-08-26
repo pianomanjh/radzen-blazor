@@ -1,0 +1,15 @@
+@using System.Collections.Generic
+@using Radzen
+@using Radzen.Blazor
+@namespace Radzen.Blazor.Benchmarks
+
+<RadzenDropDown @ref="DropDown" TValue="IEnumerable<int>" Multiple="true"
+                Data="@Data" TextProperty="Name" ValueProperty="Id"
+                @bind-Value="@Selected" />
+
+@code {
+    [Parameter] public IEnumerable<Item> Data { get; set; }
+    [Parameter] public IEnumerable<int> Selected { get; set; }
+
+    public RadzenDropDown<IEnumerable<int>> DropDown { get; set; }
+}

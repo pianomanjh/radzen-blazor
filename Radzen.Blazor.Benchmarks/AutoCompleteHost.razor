@@ -1,0 +1,12 @@
+@using System.Collections.Generic
+@using Radzen
+@using Radzen.Blazor
+@namespace Radzen.Blazor.Benchmarks
+
+<RadzenAutoComplete @ref="AutoComplete" Data="@Data" TextProperty="Name" OpenOnFocus="true" />
+
+@code {
+    [Parameter] public IEnumerable<Item> Data { get; set; }
+
+    public RadzenAutoComplete AutoComplete { get; set; }
+}
