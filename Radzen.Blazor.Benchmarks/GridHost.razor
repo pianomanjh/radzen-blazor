@@ -1,0 +1,48 @@
+@using System.Collections.Generic
+@using Radzen
+@using Radzen.Blazor
+@namespace Radzen.Blazor.Benchmarks
+
+<RadzenDataGrid @ref="Grid" Data="@Data" TItem="Person" AllowSorting="true" AllowFiltering="@AllowFiltering"
+                FilterPopupRenderMode="@FilterPopup" FilterMode="@FilterMode" AllowPaging="true" PageSize="@PageSize"
+                RowClick="@RowClickCb" RowDoubleClick="@RowDblCb" CellContextMenu="@CellCtxCb">
+    <Columns>
+        <RadzenDataGridColumn TItem="Person" Property="Id" Title="Id" Width="70px" TextAlign="TextAlign.Right" />
+        <RadzenDataGridColumn TItem="Person" Property="FirstName" Title="First name" Width="140px" />
+        <RadzenDataGridColumn TItem="Person" Property="LastName" Title="Last name" Width="140px" />
+        <RadzenDataGridColumn TItem="Person" Property="Email" Title="Email" Width="200px" />
+        <RadzenDataGridColumn TItem="Person" Property="HireDate" Title="Hire date" FormatString="{0:d}" Width="120px" />
+        <RadzenDataGridColumn TItem="Person" Property="Salary" Title="Salary" FormatString="{0:C}" Width="120px" TextAlign="TextAlign.Right" />
+        <RadzenDataGridColumn TItem="Person" Property="IsManager" Title="Manager" Width="90px" />
+        <RadzenDataGridColumn TItem="Person" Property="Status" Title="Status" Width="110px" />
+        <RadzenDataGridColumn TItem="Person" Property="Address.City" Title="City" Width="140px" />
+        <RadzenDataGridColumn TItem="Person" Property="Address.Country" Title="Country" Width="140px" />
+    </Columns>
+</RadzenDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<Person> Data { get; set; }
+    [Parameter] public int PageSize { get; set; } = 50;
+
+    // 0 = no handlers, 1 = RowClick only (1 onclick closure/cell),
+    // 2 = RowClick + RowDoubleClick + CellContextMenu (3 closures/cell).
+    [Parameter] public int Interactive { get; set; }
+
+    [Parameter] public bool AllowFiltering { get; set; } = true;
+
+    // Default is PopupRenderMode.Initial - every column's filter popup renders eagerly on every render.
+    [Parameter] public PopupRenderMode FilterPopup { get; set; } = PopupRenderMode.Initial;
+
+    [Parameter] public FilterMode FilterMode { get; set; } = FilterMode.Advanced;
+
+    public RadzenDataGrid<Person> Grid { get; set; }
+
+    EventCallback<DataGridRowMouseEventArgs<Person>> RowClickCb =>
+        Interactive >= 1 ? EventCallback.Factory.Create<DataGridRowMouseEventArgs<Person>>(this, () => { }) : EventCallback<DataGridRowMouseEventArgs<Person>>.Empty;
+
+    EventCallback<DataGridRowMouseEventArgs<Person>> RowDblCb =>
+        Interactive >= 2 ? EventCallback.Factory.Create<DataGridRowMouseEventArgs<Person>>(this, () => { }) : EventCallback<DataGridRowMouseEventArgs<Person>>.Empty;
+
+    EventCallback<DataGridCellMouseEventArgs<Person>> CellCtxCb =>
+        Interactive >= 2 ? EventCallback.Factory.Create<DataGridCellMouseEventArgs<Person>>(this, () => { }) : EventCallback<DataGridCellMouseEventArgs<Person>>.Empty;
+}
