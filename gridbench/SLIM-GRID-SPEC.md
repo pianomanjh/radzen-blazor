@@ -97,6 +97,12 @@ collection of value types, because the *element* type decides the operator, not 
 Such a column is not sortable: no provider can order rows by a list. An explicit `SortBy` re-enables
 it, naming something that can be ordered.
 
+For a collection of **objects**, `FilterProperty` names a member of the element:
+`Property="@(r => r.Accounts)" FilterProperty="Name"` filters on `Accounts.Any(a => a.Name ...)` and
+offers the account names in a check-box list. It is a string rather than an expression because the
+element type is not a type parameter of the column, so there is no lambda to write against it. Display
+of such a column still calls the element's `ToString()`; a `Template` covers anything else.
+
 A column typed as `object` cannot be recognised statically, so its value decides per cell - one type
 test. A typed collection column takes the same path; the element type itself is resolved once per
 closed generic type, not per column.
@@ -229,6 +235,8 @@ Each layer below caught real faults the previous one missed. Use all of them.
 - ~~Whether to support `RadzenDataFilter` interop in v1~~ - **resolved.** The grid speaks
   `FilterDescriptor` in both directions, which is what `RadzenDataFilter` emits. The path derivation of
   §4 is what makes that possible.
-- The built-in filter UI is a text box and nothing else: no operator menu, no date popup, no numeric
-  range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter code.
-  `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
+- The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no date
+  popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
+  code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
+- Whether a collection of objects should get a `DisplayProperty` to match `FilterProperty`. Without one
+  its cells call the element's `ToString()`.

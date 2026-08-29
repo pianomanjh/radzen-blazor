@@ -243,11 +243,23 @@ The grid exposes its filters as `FilterDescriptor`s and accepts them back, which
 `RadzenDataFilter` and `LoadData` already speak. Re-measured with nothing filtered: 149.65 KB, against
 149.29 KB before it was added.
 
-The built-in filter UI is deliberately one text box per column, in a second header row matching
-`RadzenDataGrid`'s `div.rz-cell-filter > div.rz-cell-filter-content > span.rz-cell-filter-label`
-structure exactly. No operator menu, no date popup, no numeric range, no enum picker - those are most
-of `RadzenDataGrid`'s filter code and none of its filter engine. `FilterTemplate` replaces the box for
+The built-in filter UI is a text box per column, in a second header row matching `RadzenDataGrid`'s
+`div.rz-cell-filter > div.rz-cell-filter-content > span.rz-cell-filter-label` structure exactly, or -
+under `FilterMode.CheckBoxList`, on the grid or per column - a multi-select of the column's distinct
+values filtering with `In`. `RadzenDropDown` in `Multiple` mode already draws a check box per item, so
+that mode needs no popup, toggle button or apply step of the grid's own; `RadzenDataGrid` spends a
+`RadzenPopup`, a `RadzenListBox`, a loading state and two buttons on the same job.
+
+The values come from a composed `Select(...).Distinct()` - a query, not an enumeration, so an Entity
+Framework source runs `SELECT DISTINCT` rather than pulling every row across the wire - cached per
+column until the data changes. `FilterLookupData` supplies them instead, for a source too large or too
+remote to ask.
+
+Still no operator menu, no date popup, no numeric range, no enum picker: those are most of
+`RadzenDataGrid`'s filter code and none of its filter engine. `FilterTemplate` replaces the control for
 any column that needs more.
+
+Re-measured with none of it in use: 150.13 KB at 1000 x 5, against 149.84 KB before.
 
 ### Collection-valued columns
 
@@ -288,7 +300,7 @@ It is now a test project that runs in CI with nobody watching:
 dotnet test Radzen.Blazor.FastGrid.Tests
 ```
 
-192 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
+215 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
 8 x 5 data in the same run, in two layers:
 
 - **Markup** (`MarkupParityTests`) - the table's `rz-grid-table` / `rz-grid-table-striped`; `rz-data-row`

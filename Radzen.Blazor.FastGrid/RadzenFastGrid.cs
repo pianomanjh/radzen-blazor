@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using System.Threading.Tasks;
+using System.Collections;
 using Microsoft.AspNetCore.Components.Web;
 using Radzen.Blazor;
 
@@ -268,6 +269,10 @@ namespace Radzen.FastGrid
                     {
                         builder.AddContent(80, column.FilterTemplate(column));
                     }
+                    else if (FilterModeOf(column) == FilterMode.CheckBoxList)
+                    {
+                        RenderFilterList(builder, column);
+                    }
                     else
                     {
                         RenderFilterInput(builder, column);
@@ -281,6 +286,27 @@ namespace Radzen.FastGrid
             }
 
             builder.CloseElement();
+        }
+
+        // A multi-select of the column's distinct values, filtering with In. RadzenDropDown in Multiple
+        // mode already draws a check box per item, so this is the check-box list without a popup, a
+        // toggle button or an apply step of its own.
+        void RenderFilterList(RenderTreeBuilder builder, ColumnBase<TItem> column)
+        {
+            var captured = column;
+
+            builder.OpenComponent<RadzenDropDown<IEnumerable>>(99);
+            builder.AddAttribute(100, nameof(RadzenDropDown<IEnumerable>.Data), FilterLookup(column));
+            builder.AddAttribute(101, nameof(RadzenDropDown<IEnumerable>.Multiple), true);
+            builder.AddAttribute(102, nameof(RadzenDropDown<IEnumerable>.AllowClear), true);
+            builder.AddAttribute(103, nameof(RadzenDropDown<IEnumerable>.AllowFiltering), true);
+            builder.AddAttribute(104, nameof(RadzenDropDown<IEnumerable>.FilterCaseSensitivity),
+                FilterCaseSensitivity.CaseInsensitive);
+            builder.AddAttribute(105, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
+            builder.AddAttribute(106, nameof(RadzenDropDown<IEnumerable>.Value), column.CurrentFilterValue);
+            builder.AddAttribute(107, nameof(RadzenDropDown<IEnumerable>.Change),
+                EventCallback.Factory.Create<object>(this, value => OnFilterSelection(captured, value)));
+            builder.CloseComponent();
         }
 
         void RenderFilterInput(RenderTreeBuilder builder, ColumnBase<TItem> column)
