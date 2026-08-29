@@ -694,8 +694,12 @@
             <text>
             @if (this.AllowCompositeDataCells ? RowIndex == column.GetLevel() : (column.Parent != null && RowIndex == column.GetLevel() || column.Columns == null))
             {
-                <td role="gridcell" class="@(string.IsNullOrEmpty(cellClass) ? null : cellClass)" style="@(string.IsNullOrEmpty(cellStyle) ? null : cellStyle)" @attributes="@cellAttributes" @oncontextmenu:preventDefault="@this.CellContextMenu.HasDelegate" @oncontextmenu:stopPropagation="@this.CellContextMenu.HasDelegate" @onkeydown:stopPropagation>
-                    @if (this.Responsive)
+                // The two oncontextmenu modifiers are no-ops unless CellContextMenu has a handler, but
+                // Razor emits an event-modifier attribute whichever way its expression evaluates, and on
+                // a large grid that costs more than everything else on the cell put together. So the <td>
+                // is written twice with the body shared, rather than paying for two attributes worth
+                // "false" on every cell of every read-only grid.
+                RenderFragment cellContent = @<text>                    @if (this.Responsive)
                     {
                         <span class="rz-column-title">
                             @if (column.HeaderTemplate != null)
@@ -790,8 +794,16 @@
                                 }
                             }
                         </span>
-                    }
-                </td>
+                    }</text>;
+
+                if (this.CellContextMenu.HasDelegate)
+                {
+                    <td role="gridcell" class="@(string.IsNullOrEmpty(cellClass) ? null : cellClass)" style="@(string.IsNullOrEmpty(cellStyle) ? null : cellStyle)" @attributes="@cellAttributes" @oncontextmenu:preventDefault="true" @oncontextmenu:stopPropagation="true" @onkeydown:stopPropagation>@cellContent</td>
+                }
+                else
+                {
+                    <td role="gridcell" class="@(string.IsNullOrEmpty(cellClass) ? null : cellClass)" style="@(string.IsNullOrEmpty(cellStyle) ? null : cellStyle)" @attributes="@cellAttributes" @onkeydown:stopPropagation>@cellContent</td>
+                }
             }
             else
             {
