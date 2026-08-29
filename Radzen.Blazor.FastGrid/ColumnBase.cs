@@ -22,6 +22,14 @@ namespace Radzen.FastGrid
         /// <summary>Header text.</summary>
         [Parameter] public string? Title { get; set; }
 
+        /// <summary>
+        /// The text actually drawn in the header. A derived column overrides this to supply a default
+        /// when <see cref="Title" /> is not set; it must not assign to the parameter itself, since a
+        /// parameter written from the component keeps its assigned value on the next parameter set and
+        /// the header would then go stale.
+        /// </summary>
+        public virtual string? HeaderText => Title;
+
         /// <summary>Additional CSS class for the column's cells.</summary>
         [Parameter] public string? CssClass { get; set; }
 
