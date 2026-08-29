@@ -6,6 +6,7 @@ using System.Linq.Expressions;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Radzen.Blazor;
+using Radzen.FastGrid;
 
 // Renders RadzenDataGrid and the slim prototype to real HTML and writes a side-by-side page that
 // links the actual Radzen theme stylesheet, so the markup can be looked at rather than only measured.
@@ -48,6 +49,32 @@ static class VisualDump
             p.Add(g => g.Columns, slimCols);
         });
 
+        var fast = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+        {
+            p.Add(g => g.Data, people);
+            p.Add(g => g.AllowSorting, true);
+            p.Add(g => g.ChildContent, (RenderFragment)(b =>
+            {
+                var s = 0;
+                b.OpenComponent<PropertyColumn<Person, int>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, int>>)(x => x.Id));
+                b.AddAttribute(s++, "Title", "Id"); b.CloseComponent();
+                b.OpenComponent<PropertyColumn<Person, string>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, string>>)(x => x.Name));
+                b.AddAttribute(s++, "Title", "Name"); b.CloseComponent();
+                b.OpenComponent<PropertyColumn<Person, int>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, int>>)(x => x.Age));
+                b.AddAttribute(s++, "Title", "Age"); b.CloseComponent();
+                b.OpenComponent<PropertyColumn<Person, DateTime>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, DateTime>>)(x => x.Hired));
+                b.AddAttribute(s++, "Title", "Hired"); b.CloseComponent();
+                b.OpenComponent<PropertyColumn<Person, decimal>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, decimal>>)(x => x.Salary));
+                b.AddAttribute(s++, "Title", "Salary"); b.CloseComponent();
+            }));
+        });
+
+        File.WriteAllText(Path.Combine(outDir, "fast.html"), fast.Markup);
         File.WriteAllText(Path.Combine(outDir, "radzen.html"), radzen.Markup);
         File.WriteAllText(Path.Combine(outDir, "slim.html"), slim.Markup);
 
@@ -62,6 +89,7 @@ static class VisualDump
 </head><body>
 <div class=""pane""><h2>RadzenDataGrid</h2>{radzen.Markup}</div>
 <div class=""pane""><h2>SlimGrid prototype</h2>{slim.Markup}</div>
+<div class=""pane""><h2>RadzenFastGrid</h2>{fast.Markup}</div>
 </body></html>";
         File.WriteAllText(Path.Combine(outDir, "compare.html"), page);
         Console.WriteLine($"wrote {outDir}/compare.html");
