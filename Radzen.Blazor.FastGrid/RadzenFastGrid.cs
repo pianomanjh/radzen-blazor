@@ -21,7 +21,7 @@ namespace Radzen.FastGrid
     public class RadzenFastGrid<TItem> : ComponentBase
     {
         readonly List<ColumnBase<TItem>> columns = new();
-        bool collecting;
+        bool collectingColumns;
 
         /// <summary>The rows to display.</summary>
         [Parameter] public IEnumerable<TItem>? Data { get; set; }
@@ -52,14 +52,15 @@ namespace Radzen.FastGrid
 
         internal void AddColumn(ColumnBase<TItem> column)
         {
-            if (collecting)
+            // Only while a collection pass is open. A column sets its parameters whenever the renderer
+            // walks it, which is not only during collection; without this window the list would gain a
+            // duplicate every time that happened, and the column count would depend on how many
+            // registrations landed between the clear below and the table being drawn.
+            if (collectingColumns)
             {
                 columns.Add(column);
             }
         }
-
-        /// <inheritdoc />
-        protected override void OnParametersSet() => collecting = true;
 
         /// <summary>Sorts by the given column, toggling direction when it is already the sorted one.</summary>
         public void SortBy(ColumnBase<TItem> column)
@@ -95,6 +96,8 @@ namespace Radzen.FastGrid
         {
             columns.Clear();
 
+            collectingColumns = true;
+
             builder.OpenComponent<CascadingValue<RadzenFastGrid<TItem>>>(0);
             builder.AddAttribute(1, "Value", this);
             builder.AddAttribute(2, "IsFixed", true);
@@ -105,7 +108,21 @@ namespace Radzen.FastGrid
 
                 // ... and Defer runs after, so the table below sees a populated column list.
                 inner.OpenComponent<Defer>(1);
-                inner.AddAttribute(2, "ChildContent", (RenderFragment)RenderTable);
+                inner.AddAttribute(2, "ChildContent", (RenderFragment)(deferred =>
+                {
+                    // Everything above has registered by now, so close the window before drawing.
+                    collectingColumns = false;
+
+                    // A column can leave the set between renders. The sort must not outlive it, or the
+                    // grid keeps ordering by a column nothing on screen names and nothing can clear.
+                    if (SortColumn is not null && !columns.Contains(SortColumn))
+                    {
+                        SortColumn = null;
+                        SortDescending = false;
+                    }
+
+                    RenderTable(deferred);
+                }));
                 inner.CloseComponent();
             }));
             builder.CloseComponent();
@@ -170,7 +187,7 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(16, "class", "rz-column-title");
                 builder.OpenElement(17, "span");
                 builder.AddAttribute(18, "class", "rz-column-title-content rz-text-truncate");
-                builder.AddContent(19, column.Title);
+                builder.AddContent(19, column.HeaderText);
                 builder.CloseElement();
 
                 if (ReferenceEquals(SortColumn, column))
@@ -232,9 +249,15 @@ namespace Radzen.FastGrid
 
                     builder.OpenElement(29, "td");
                     builder.AddAttribute(30, "role", "gridcell");
-                    builder.AddAttribute(31, "class", string.IsNullOrEmpty(column.CssClass)
-                        ? "rz-cell-data"
-                        : "rz-cell-data " + column.CssClass);
+
+                    // rz-cell-data belongs on the span, not here: the theme's rules for it are all
+                    // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
+                    // both places is inert under the shipped themes but would apply a custom
+                    // `.rz-cell-data { padding: ... }` twice.
+                    if (!string.IsNullOrEmpty(column.CssClass))
+                    {
+                        builder.AddAttribute(31, "class", column.CssClass);
+                    }
 
                     builder.OpenElement(32, "span");
                     builder.AddAttribute(33, "class", "rz-cell-data");

@@ -16,6 +16,10 @@ Run it with:
 | `Probe.cs` | Structural probe — counts render-tree frames, elements, attributes and child components per render |
 | `Scaffold.cs` | Isolates the cost of Blazor's per-row *component* scaffolding, with no grid code involved |
 | `Slim.cs` | `SlimGrid<T>` prototype — Radzen's markup, QuickGrid's architecture |
+| `VisualDump.cs`, `measure.js` | Ad hoc side-by-side render and Playwright geometry read-back, for looking at by hand |
+
+The styling contract is **not** verified from here. It lives in `../Radzen.Blazor.FastGrid.Tests`
+(`dotnet test Radzen.Blazor.FastGrid.Tests`), which runs unattended — see *Styling parity check* below.
 
 All render benchmarks use a minimal in-memory `Renderer` (the Benchmark.Blazor technique) so no
 browser or JS interop is involved.
@@ -198,3 +202,84 @@ The pass caught four markup faults in the prototype that no allocation benchmark
 Point 3 is the useful one: the correct markup is also the cheaper markup. Point 4 is the cautionary one -
 it survived a screenshot being looked at, and was caught only when someone compared the two header rows
 deliberately. Render correctness needs eyes *and* measured geometry, not only allocation numbers.
+
+## The component: `RadzenFastGrid`
+
+`Radzen.Blazor.FastGrid` is the prototype turned into a real component: expression columns compiled to
+`Func<T,string>`, a `Defer`-based column collection pass, sorting the column applies itself, selection,
+row click and an empty template — everything §3 of the spec calls free or conditional.
+
+Same harness, same 5-column data, `--job short`:
+
+| N=1000 | Time | Allocated | vs RadzenDataGrid |
+| --- | --- | --- | --- |
+| `RadzenDataGrid` (with PR #8) | 17,916 us | 18,189 KB | 1x |
+| `SlimGrid` prototype | 1,196 us | 266 KB | 68x leaner |
+| **`RadzenFastGrid`** | **1,079 us** | **149 KB** | **122x leaner** |
+| QuickGrid | 2,429 us | 370 KB | 49x leaner |
+
+It is leaner than the prototype it came from, because the prototype used Radzen's compiled
+`Func<T,object>` getters and paid a box per cell; `PropertyColumn<T,TProp>` compiles to `Func<T,string>`
+and does not (§4 of the spec). It renders the same 5,000 cells as the other three.
+
+## Styling parity check (automated)
+
+The pass above found those four faults by hand: run two scripts, read a screenshot, compare two header
+rows deliberately. That worked once and is not repeatable - fault 4 already slipped past the first look.
+It is now a test project that runs in CI with nobody watching:
+
+```
+dotnet test Radzen.Blazor.FastGrid.Tests
+```
+
+98 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
+8 x 5 data in the same run, in two layers:
+
+- **Markup** (`MarkupParityTests`) - the table's `rz-grid-table` / `rz-grid-table-striped`; `rz-data-row`
+  on every row with no class that varies row to row; `<td role="gridcell">` wrapping a
+  `<span class="rz-cell-data">`; the `th > div > span.rz-column-title > span.rz-column-title-content`
+  chain; and no `rz-datatable-scrollable` claimed without the scroll container it implies. Every rule is
+  asserted against `RadzenDataGrid` too, in the same run, so the check cannot drift into describing a
+  contract Radzen does not keep. The scrollable rule is the one deliberate asymmetry, and says so.
+- **Geometry** (`GeometryParityTests`) - both grids laid out by Chromium against the real
+  `standard-base.css`, with header cell, body cell and table heights compared to `RadzenDataGrid` within
+  0.5px and to the recorded 37 / 37 / 332 baseline within 1px.
+
+Two guards keep the geometry half honest. It never skips: no node, no Playwright or no Chromium fails the
+run with a message naming which one, because a check that quietly disappears in CI is the failure this
+exists to prevent. And the absolute baseline is asserted alongside the parity comparison, because two
+*unstyled* grids agree with each other perfectly - the run also checks that the stylesheet was fetched
+and that the theme's custom properties resolve.
+
+### Proving it discriminates
+
+Rule 1 of the verification protocol applies to this check as much as anything else, so each assertion was
+confirmed to fail with the component deliberately broken:
+
+| Break | Fails | Reported as |
+| --- | --- | --- |
+| Remove the `th > div` wrapper | 5 tests | chain `0 matched, out of 5 header cells`; header `37px -> 19px`, table `332px -> 314px` |
+| Drop `rz-grid-table-striped` | 1 | `class="rz-grid-table rz-grid-table-fixed"` |
+| Add an alternating `rz-datatable-even`/`-odd` | 1 | `found 'rz-datatable-even' in class="rz-data-row rz-datatable-even"` |
+| Add an alternating class *not* named odd/even | 1 | `2 distinct class lists: "rz-data-row rz-stripe-a", "rz-data-row rz-stripe-b"` |
+| Add `rz-datatable-scrollable` | 1 | claimed `with no scroll container inside` |
+| Drop the `<span class="rz-cell-data">` | 5 | `the td has no element children`; body cell `37px -> 35px` |
+| Drop `rz-data-row` | 1 | `class="rz-row"` |
+| Unreachable stylesheet | 8 | `resources failed to load, so the page is not styled as intended` |
+
+The alternating-class rule is checked two ways on purpose. The named form catches Radzen's own
+`rz-datatable-odd`/`-even`; the general form - all rows must carry an identical class list - catches an
+alternating class under any name, which is what a keyword match would miss.
+
+### Divergences the check does not fail on
+
+Rendered geometry, text alignment and column widths are identical, but the two grids' markup is not, and
+these are the differences the parity rules deliberately do not cover:
+
+| Divergence | Consequence |
+| --- | --- |
+| No `title="<value>"` on the cell span | `RadzenDataGrid` emits one, so a cell truncated to an ellipsis still reveals its full value on hover. `RadzenFastGrid` truncates identically and shows nothing. A real loss, and invisible to a geometry check. |
+| No `rz-text-truncate` on the cell span | Inert: `.rz-grid-table td .rz-cell-data` already sets `overflow/text-overflow/white-space`. Verified: identical computed styles. |
+| No `<colgroup>`, no `role="presentation"` on the table | Widths match today only because five equal columns under `table-layout: fixed` distribute evenly with or without it. This diverges the moment column widths are supported. |
+| No `rz-text-align-*` class on `th`/`td` | Inert for the default, which the theme resolves to `start` either way. `RadzenFastGrid` has no `TextAlign` concept at all yet. |
+| No `rz-datatable-scrollable`, no `rz-data-grid-data[role="grid"]`, no `rz-has-pager` | Deliberate (spec §6). The scroll container is also what carries `RadzenDataGrid`'s keyboard navigation, so that is not free either. |

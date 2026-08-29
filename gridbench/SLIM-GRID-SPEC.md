@@ -136,7 +136,14 @@ Verified against the real stylesheet: rendered geometry matches exactly (header 
 - Table: `rz-grid-table rz-grid-table-fixed rz-grid-table-striped`
 - Row: `rz-data-row` — **no alternating class.** Striping is `:nth-child` off the table-level class;
   computing odd/even per row is both wrong and wasted work.
-- Cell: `<td role="gridcell" class="rz-cell-data"><span class="rz-cell-data">…</span></td>`
+- Cell: `<td role="gridcell"><span class="rz-cell-data">…</span></td>`. The span is what carries the
+  cell's colour, font size, line height and ellipsis truncation, via `.rz-grid-table td .rz-cell-data`.
+  `RadzenDataGrid` puts the class on the span **only**, and so does `RadzenFastGrid`. An earlier version
+  of this line also put it on the `td`. Harmless under the shipped themes — every `.rz-cell-data` rule is
+  a descendant selector — but it is not what Radzen emits, and a custom theme writing a bare
+  `.rz-cell-data` rule would have applied it twice. `RadzenDataGrid` also emits `title="<value>"` on the span so
+  a truncated cell reveals itself on hover; that costs ~61 B/cell (§ *Marginal cost* in `README.md`) and
+  is currently not paid.
 - **Header cell is structurally coupled:** the theme gives `th` `padding: 0` and hangs the header padding
   off a *direct child div*. `th > div > span.rz-column-title > span.rz-column-title-content` is required.
   Without the div the header row renders shorter. Per column, not per row, so it costs nothing.
@@ -173,14 +180,23 @@ Each layer below caught real faults the previous one missed. Use all of them.
 
 1. **Tests** — and check each one *discriminates*: break the thing deliberately and confirm the test
    fails. Several tests written during this work passed whether or not the code was correct.
-2. **Markup diff against `RadzenDataGrid`** — `dotnet run --project gridbench -- visual <dir>` writes
+2. **Styling parity check** — `dotnet test Radzen.Blazor.FastGrid.Tests`. Layers 3 and 4 below, and the
+   structural half of layer 2, run automatically and fail with a non-zero exit: it renders both grids
+   over the same data, asserts the markup contract in §6 against `RadzenDataGrid` in the same run, and
+   compares rendered header/body/table heights through Chromium against the real stylesheet. Every one
+   of its assertions was confirmed to fail with the component deliberately broken — see
+   *Proving it discriminates* in `README.md`. It never skips: a missing node, Playwright or Chromium
+   fails the run rather than quietly passing.
+3. **Markup diff against `RadzenDataGrid`** — `dotnet run --project gridbench -- visual <dir>` writes
    both grids' real HTML. Diff them. This caught a bug where a cell's `style` vanished entirely while
-   every test still passed.
-3. **Visual pass** — screenshot `compare.html` against the real theme. Caught missing striping and a
-   `rz-datatable-scrollable` class that lied about the markup.
-4. **Geometry** — `node measure.js` reads rendered sizes back through Playwright. Caught a short header
-   row that survived a screenshot being looked at.
-5. **Benchmarks** — `--filter "*SlimBench*"` etc. Numbers last: they say nothing about correctness.
+   every test still passed. Still worth doing by hand for anything the parity check does not assert;
+   `README.md` lists the divergences it deliberately allows.
+4. **Visual pass** — screenshot `compare.html` against the real theme. Caught missing striping and a
+   `rz-datatable-scrollable` class that lied about the markup. Both are now assertions in step 2; keep
+   the eye for what no assertion has been written for yet.
+5. **Geometry** — `node measure.js` reads rendered sizes back through Playwright, ad hoc. Caught a short
+   header row that survived a screenshot being looked at, which is why step 2 exists at all.
+6. **Benchmarks** — `--filter "*SlimBench*"` etc. Numbers last: they say nothing about correctness.
 
 ## 10. Open decisions
 

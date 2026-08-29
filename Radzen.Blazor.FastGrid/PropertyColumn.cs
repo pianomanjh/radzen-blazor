@@ -37,6 +37,9 @@ namespace Radzen.FastGrid
         public override string? PropertyPath => path;
 
         /// <inheritdoc />
+        public override string? HeaderText => Title ?? path;
+
+        /// <inheritdoc />
         protected override void OnParametersSet()
         {
             if (ReferenceEquals(property, Property) && format == Format && ReferenceEquals(sortBy, SortBy))
@@ -53,13 +56,30 @@ namespace Radzen.FastGrid
             // boxes and then stringifies; producing the string directly skips the box.
             var compiled = Property.Compile();
 
-            cellText = Format is { Length: > 0 } f && typeof(IFormattable).IsAssignableFrom(typeof(TProp))
-                ? item => ((IFormattable?)compiled(item))?.ToString(f, CultureInfo.CurrentCulture)
-                : item => compiled(item)?.ToString();
+            if (Format is not { Length: > 0 } f)
+            {
+                cellText = item => compiled(item)?.ToString();
+            }
+            else if (typeof(IFormattable).IsAssignableFrom(Nullable.GetUnderlyingType(typeof(TProp)) ?? typeof(TProp)))
+            {
+                // Nullable<T> does not itself implement IFormattable even when T does, so the underlying
+                // type is what decides. Casting to IFormattable boxes, but only on the format path.
+                cellText = item => ((IFormattable?)(object?)compiled(item))?.ToString(f, CultureInfo.CurrentCulture);
+            }
+            else
+            {
+                // TProp is object, or another type that says nothing about the value. Ask the value.
+                cellText = item =>
+                {
+                    var value = compiled(item);
+
+                    return value is IFormattable formattable
+                        ? formattable.ToString(f, CultureInfo.CurrentCulture)
+                        : value?.ToString();
+                };
+            }
 
             path = PropertyPathResolver.For(SortBy ?? Property);
-
-            Title ??= path;
         }
 
         /// <inheritdoc />
