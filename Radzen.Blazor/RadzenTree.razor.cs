@@ -160,10 +160,12 @@ namespace Radzen.Blazor
 
         internal Tuple<Radzen.TreeItemRenderEventArgs, IReadOnlyDictionary<string, object>> ItemAttributes(RadzenTreeItem item)
         {
-            var args = new TreeItemRenderEventArgs() { Data = item.GetAllChildValues(), Value = item.Value };
+            var args = new TreeItemRenderEventArgs() { Value = item.Value };
 
             if (ItemRender != null)
             {
+                // GetAllChildValues walks the whole subtree; only compute it when a handler will read it.
+                args.Data = item.GetAllChildValues();
                 ItemRender(args);
             }
 
@@ -752,6 +754,41 @@ namespace Radzen.Blazor
         internal async Task ChangeState()
         {
             await InvokeAsync(StateHasChanged);
+        }
+
+        object? checkedValuesSource;
+        int checkedValuesSetCount = -1;
+        HashSet<object?>? checkedValuesSet;
+
+        // Membership test shared by every RadzenTreeItem's IsChecked during a render pass. CheckedValues is
+        // memoized as a set so the test is O(1) per node rather than a per-call Cast().Contains() scan. The
+        // set is rebuilt on CheckedValues reassignment (reference check), on a count-changing in-place edit
+        // when CheckedValues is a collection (an automatic backstop), and on every parameter set.
+        internal bool IsValueChecked(object? value)
+        {
+            var current = CheckedValues;
+            if (current == null)
+            {
+                return false;
+            }
+
+            var count = current is ICollection<object> collection ? collection.Count : -1;
+
+            if (checkedValuesSet == null || !ReferenceEquals(checkedValuesSource, current) || checkedValuesSetCount != count)
+            {
+                checkedValuesSource = current;
+                checkedValuesSetCount = count;
+                checkedValuesSet = new HashSet<object?>(current.Cast<object?>());
+            }
+
+            return checkedValuesSet.Contains(value);
+        }
+
+        /// <inheritdoc />
+        protected override void OnParametersSet()
+        {
+            checkedValuesSet = null;
+            base.OnParametersSet();
         }
 
         /// <inheritdoc />

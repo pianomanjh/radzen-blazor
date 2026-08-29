@@ -452,14 +452,31 @@ namespace Radzen.Blazor
 
         internal bool? IsChecked()
         {
-            var checkedValues = GetCheckedValues();
-
-            if (Tree?.AllowCheckParents == true && HasChildren && IsOneChildUnchecked() && IsOneChildChecked())
+            if (Tree?.AllowCheckParents == true && HasChildren)
             {
-                return null;
+                // One subtree walk decides the tri-state (does any child differ?), instead of a separate
+                // "any unchecked" and "any checked" pass; membership is O(1) via the tree's memoized set.
+                var anyChecked = false;
+                var anyUnchecked = false;
+                foreach (var childValue in GetAllChildValues())
+                {
+                    if (Tree.IsValueChecked(childValue))
+                    {
+                        anyChecked = true;
+                    }
+                    else
+                    {
+                        anyUnchecked = true;
+                    }
+
+                    if (anyChecked && anyUnchecked)
+                    {
+                        return null;
+                    }
+                }
             }
 
-            return checkedValues.Contains(Value);
+            return Tree?.IsValueChecked(Value) ?? false;
         }
 
         IEnumerable<object?> GetCheckedValues()
@@ -495,12 +512,6 @@ namespace Radzen.Blazor
         {
             var checkedValues = GetCheckedValues();
             return GetAllChildValues().Any(i => !checkedValues.Contains(i));
-        }
-
-        bool IsOneChildChecked()
-        {
-            var checkedValues = GetCheckedValues();
-            return GetAllChildValues().Any(i => checkedValues.Contains(i));
         }
 
         async Task UpdateCheckedValuesWithParents(bool? value)

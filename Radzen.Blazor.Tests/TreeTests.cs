@@ -172,6 +172,60 @@ namespace Radzen.Blazor.Tests
         }
 
         [Fact]
+        public void Tree_CheckParents_RendersMixed_AndReflectsInPlaceMutation()
+        {
+            using var ctx = new TestContext();
+            var laptop = new Product { Name = "Laptop" };
+            var phone = new Product { Name = "Phone" };
+            var data = new List<Category>
+            {
+                new Category { Name = "Electronics", Products = new List<Product> { laptop, phone } }
+            };
+
+            // One of the two children checked -> the parent must render the mixed tri-state.
+            var checkedValues = new List<object> { laptop };
+
+            void BuildTree(ComponentParameterCollectionBuilder<RadzenTree> parameters)
+            {
+                parameters.Add(p => p.AllowCheckBoxes, true);
+                parameters.Add(p => p.AllowCheckParents, true);
+                parameters.Add(p => p.CheckedValues, checkedValues);
+                parameters.Add(p => p.Data, data);
+                parameters.Add(p => p.ChildContent, builder =>
+                {
+                    builder.OpenComponent<RadzenTreeLevel>(0);
+                    builder.AddAttribute(1, "TextProperty", "Name");
+                    builder.AddAttribute(2, "ChildrenProperty", "Products");
+                    builder.AddAttribute(3, "Expanded", (object c) => true);
+                    builder.AddAttribute(4, "HasChildren", (object c) => c is Category);
+                    builder.CloseComponent();
+
+                    builder.OpenComponent<RadzenTreeLevel>(5);
+                    builder.AddAttribute(6, "TextProperty", "Name");
+                    builder.AddAttribute(7, "HasChildren", (object product) => false);
+                    builder.CloseComponent();
+                });
+            }
+
+            var component = ctx.RenderComponent<RadzenTree>(BuildTree);
+
+            // The parent renders its aria-checked before its child items register, so the tri-state settles
+            // on the following render pass. Render once more to reach the settled state.
+            component.Render();
+
+            var parent = component.FindAll("[role=treeitem]").First(i => i.GetAttribute("aria-level") == "1");
+            Assert.Equal("mixed", parent.GetAttribute("aria-checked"));
+
+            // Check the second child in place (same list reference). The memoized checked-value set must
+            // refresh on re-render, so the parent is no longer mixed.
+            checkedValues.Add(phone);
+            component.SetParametersAndRender(BuildTree);
+
+            parent = component.FindAll("[role=treeitem]").First(i => i.GetAttribute("aria-level") == "1");
+            Assert.Equal("false", parent.GetAttribute("aria-checked"));
+        }
+
+        [Fact]
         public void Tree_Renders_WithExpandableItems()
         {
             using var ctx = new TestContext();
