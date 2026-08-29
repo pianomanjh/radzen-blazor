@@ -136,3 +136,23 @@ Three conclusions:
 Note the bare figure is dominated by boxing: the getter returns `object`, so an `int`, `DateTime` or
 `decimal` cell allocates a box. A strongly-typed column (QuickGrid's `PropertyColumn<T, TProp>` shape)
 would remove most of that 45 B/cell.
+
+## Typed expression columns vs string property names
+
+1000 rows x 5 columns (int, string, int, DateTime, decimal), identical output.
+
+| Column shape | Allocated | vs Radzen's |
+| --- | --- | --- |
+| `Property="Name"` -> `Func<T,object>` (Radzen today) | 220.47 KB | 1.00x |
+| `Expression<Func<T,TProp>>` -> `AddContent(value)` | 165.78 KB | 0.75x |
+| `Expression<Func<T,TProp>>` -> `Func<T,string>` -> `AddContent(string)` | **118.91 KB** | **0.54x** |
+
+There is no ergonomics-versus-performance trade here: the strongly-typed, compile-time-checked column is
+also the cheapest. `RenderTreeBuilder` has no generic `AddContent<T>`, so handing it a value type binds
+the `object` overload, which boxes *and* then stringifies - the naive typed column (row 2) still pays for
+the box. Compiling the expression once into a `Func<T,string>`, as QuickGrid's `PropertyColumn` does,
+skips the box entirely and only pays for the string. That is where the remaining 46% comes from.
+
+So a slim grid should take expressions rather than string property names - better call sites, compile-time
+safety, refactor-safe, and a lower floor. It does mean deliberately *not* mirroring RadzenDataGrid's
+`Property="Name"` convention, which is the real cost of the decision.
