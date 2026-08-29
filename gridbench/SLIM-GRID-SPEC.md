@@ -120,7 +120,12 @@ display-only column.
 - **`LoadData` stays**, as the escape hatch for sources that are not composable queryables — REST, OData,
   gRPC, stored procedures. Async `Data` does not replace it; it only removes the need for it with EF.
 - **Gate the cost.** Build the `OrderBy` string only when `LoadData.HasDelegate || IsOData`. A grid using
-  neither must pay nothing for their existence. (Rule 3.)
+  neither must pay nothing for their existence. (Rule 3.) Measured after the data path landed: 0.13 KB
+  at 1000 x 5, inside the noise.
+- **Never render from the parameter-set path.** `ComponentBase` renders after `OnParametersSetAsync`
+  returns; a `StateHasChanged()` inside it flushes the queued render early and the one that follows is a
+  second full pass over every row. That cost +94% allocation and no test noticed, because the second
+  pass produces identical DOM. `APlainGridRendersExactlyOnce` pins it.
 - **No dynamic LINQ.** Sorting uses typed expressions; filtering builds predicates with `Expression.Call`.
   Note `Radzen.Blazor` has **no** `System.Linq.Dynamic.Core` package reference — it ships its own
   161-line `DynamicExtensions.cs`. So there is no dependency to avoid, but there is a string-parse cost
@@ -141,9 +146,13 @@ Verified against the real stylesheet: rendered geometry matches exactly (header 
   `RadzenDataGrid` puts the class on the span **only**, and so does `RadzenFastGrid`. An earlier version
   of this line also put it on the `td`. Harmless under the shipped themes — every `.rz-cell-data` rule is
   a descendant selector — but it is not what Radzen emits, and a custom theme writing a bare
-  `.rz-cell-data` rule would have applied it twice. `RadzenDataGrid` also emits `title="<value>"` on the span so
-  a truncated cell reveals itself on hover; that costs ~61 B/cell (§ *Marginal cost* in `README.md`) and
-  is currently not paid.
+  `.rz-cell-data` rule would have applied it twice.
+- **No `title="<value>"` on the cell span — decided, not overlooked.** `RadzenDataGrid` emits one, so a
+  cell truncated to an ellipsis reveals its full value on hover. It costs ~61 B/cell (§ *Marginal cost*
+  in `README.md`) — at 1000 x 5 that is 305 KB against a 149 KB budget, so it would triple the
+  component's allocation to restore a hover affordance. It is deliberately not paid. A caller who needs
+  it can use a `TemplateColumn` for that column and emit the attribute there, paying for it only where
+  it is wanted.
 - **Header cell is structurally coupled:** the theme gives `th` `padding: 0` and hangs the header padding
   off a *direct child div*. `th > div > span.rz-column-title > span.rz-column-title-content` is required.
   Without the div the header row renders shorter. Per column, not per row, so it costs nothing.

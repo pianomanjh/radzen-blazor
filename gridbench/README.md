@@ -222,6 +222,36 @@ It is leaner than the prototype it came from, because the prototype used Radzen'
 `Func<T,object>` getters and paid a box per cell; `PropertyColumn<T,TProp>` compiles to `Func<T,string>`
 and does not (§4 of the spec). It renders the same 5,000 cells as the other three.
 
+## The data path: paging, `LoadData` and async execution
+
+Everything in it is behind a test that is false by construction for an in-memory grid -
+`LoadData.HasDelegate`, `Data is IQueryable<TItem>`, `Data is ODataEnumerable<TItem>` - so nothing is
+materialized, counted or string-formatted unless one of them is true. Re-measured after it was added:
+
+| N=1000, no paging, no LoadData, no executor | Allocated |
+| --- | --- |
+| before the data path | 149.16 KB |
+| after | 149.29 KB |
+
+That is the whole cost of its existence: 0.13 KB, inside the run-to-run noise.
+
+### The trap it walked into first
+
+The first version called `StateHasChanged()` from the parameter-set path. `ComponentBase` already
+renders after `OnParametersSetAsync` returns, but the earlier call had already flushed the queued
+render, so the second one queued another - **two full passes over every row, +94% allocation** (149 KB
+-> 289 KB at N=1000, 1,079 us -> 2,393 us). Nothing failed. Every test passed, the markup was identical
+and the geometry was identical, because rendering the same thing twice produces the same DOM.
+
+Two things caught it, and only because both were run:
+
+- the benchmark, which is why the numbers are re-measured after every change rather than at the end;
+- a batch counter added to `CountingRenderer` (`dotnet run --project gridbench -- probe`), which named
+  the cause in one line: `RadzenFastGrid: batches 2`.
+
+It is now pinned by `APlainGridRendersExactlyOnce` in the test project, which asserts bUnit's
+`RenderCount` rather than anything about the output - the only layer that can see this class of fault.
+
 ## Styling parity check (automated)
 
 The pass above found those four faults by hand: run two scripts, read a screenshot, compare two header
@@ -278,7 +308,7 @@ these are the differences the parity rules deliberately do not cover:
 
 | Divergence | Consequence |
 | --- | --- |
-| No `title="<value>"` on the cell span | `RadzenDataGrid` emits one, so a cell truncated to an ellipsis still reveals its full value on hover. `RadzenFastGrid` truncates identically and shows nothing. A real loss, and invisible to a geometry check. |
+| No `title="<value>"` on the cell span | **Decided, not overlooked.** `RadzenDataGrid` emits one, so a cell truncated to an ellipsis still reveals its full value on hover; `RadzenFastGrid` truncates identically and shows nothing. A real loss, and invisible to a geometry check. It costs ~61 B/cell - 305 KB at 1000 x 5, against a 149 KB budget - so paying it everywhere would triple the component's allocation for a hover affordance. A `TemplateColumn` can emit it for the one column that needs it. |
 | No `rz-text-truncate` on the cell span | Inert: `.rz-grid-table td .rz-cell-data` already sets `overflow/text-overflow/white-space`. Verified: identical computed styles. |
 | No `<colgroup>`, no `role="presentation"` on the table | Widths match today only because five equal columns under `table-layout: fixed` distribute evenly with or without it. This diverges the moment column widths are supported. |
 | No `rz-text-align-*` class on `th`/`td` | Inert for the default, which the theme resolves to `start` either way. `RadzenFastGrid` has no `TextAlign` concept at all yet. |
