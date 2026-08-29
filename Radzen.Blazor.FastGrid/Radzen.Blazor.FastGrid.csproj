@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RootNamespace>Radzen.FastGrid</RootNamespace>
+    <PackageId>Radzen.Blazor.FastGrid</PackageId>
+    <Description>A read-only, expression-typed data grid for Radzen.Blazor, built for large row counts.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Radzen.Blazor\Radzen.Blazor.csproj" />
+  </ItemGroup>
+</Project>

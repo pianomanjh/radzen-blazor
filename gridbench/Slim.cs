@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using Radzen;
 using Radzen.Blazor;
+using Radzen.FastGrid;
 using QG = Microsoft.AspNetCore.Components.QuickGrid;
 
 // Prototype of a read-only "slim" grid: keeps RadzenDataGrid's markup shape and CSS classes,
@@ -183,6 +184,34 @@ public class SlimBench
         using var r = new BenchmarkRenderer(services);
         await r.RenderComponent(typeof(SlimGrid<Person>), ParameterView.FromDictionary(
             new Dictionary<string, object?> { ["Data"] = people, ["Columns"] = slimCols }));
+    }
+
+    static readonly RenderFragment FastCols = b =>
+    {
+        var s = 0;
+        b.OpenComponent<PropertyColumn<Person, int>>(s++);
+        b.AddAttribute(s++, "Property", (System.Linq.Expressions.Expression<Func<Person, int>>)(x => x.Id));
+        b.AddAttribute(s++, "Title", "Id"); b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, string>>(s++);
+        b.AddAttribute(s++, "Property", (System.Linq.Expressions.Expression<Func<Person, string>>)(x => x.Name));
+        b.AddAttribute(s++, "Title", "Name"); b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, int>>(s++);
+        b.AddAttribute(s++, "Property", (System.Linq.Expressions.Expression<Func<Person, int>>)(x => x.Age));
+        b.AddAttribute(s++, "Title", "Age"); b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, DateTime>>(s++);
+        b.AddAttribute(s++, "Property", (System.Linq.Expressions.Expression<Func<Person, DateTime>>)(x => x.Hired));
+        b.AddAttribute(s++, "Title", "Hired"); b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, decimal>>(s++);
+        b.AddAttribute(s++, "Property", (System.Linq.Expressions.Expression<Func<Person, decimal>>)(x => x.Salary));
+        b.AddAttribute(s++, "Title", "Salary"); b.CloseComponent();
+    };
+
+    [Benchmark(Description = "RadzenFastGrid")]
+    public async Task FastGrid()
+    {
+        using var r = new BenchmarkRenderer(services);
+        await r.RenderComponent(typeof(RadzenFastGrid<Person>), ParameterView.FromDictionary(
+            new Dictionary<string, object?> { ["Data"] = people, ["ChildContent"] = FastCols }));
     }
 
     [Benchmark(Description = "QuickGrid")]

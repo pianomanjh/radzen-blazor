@@ -14,5 +14,6 @@
     <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid.EntityFrameworkAdapter" Version="10.*-*" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.*-*" />
     <ProjectReference Include="..\Radzen.Blazor\Radzen.Blazor.csproj" />
+    <ProjectReference Include="..\Radzen.Blazor.FastGrid\Radzen.Blazor.FastGrid.csproj" />
   </ItemGroup>
 </Project>
