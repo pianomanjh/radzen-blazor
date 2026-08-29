@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -63,6 +64,15 @@ namespace Radzen.FastGrid
         /// <see cref="IQueryable{T}" /> you do not need it; see the package README.
         /// </summary>
         [Parameter] public EventCallback<LoadDataArgs> LoadData { get; set; }
+
+        /// <summary>Whether column filters are applied. Columns still carry their filters when off.</summary>
+        [Parameter] public bool AllowFiltering { get; set; }
+
+        /// <summary>How string comparisons treat case. The provider decides by default.</summary>
+        [Parameter] public FilterCaseSensitivity FilterCaseSensitivity { get; set; }
+
+        /// <summary>How the columns' filters combine.</summary>
+        [Parameter] public LogicalFilterOperator LogicalFilterOperator { get; set; } = LogicalFilterOperator.And;
 
         /// <summary>Whether a load is in flight. Only ever true on an asynchronous path.</summary>
         public bool IsLoading { get; private set; }
@@ -157,6 +167,172 @@ namespace Radzen.FastGrid
         /// </summary>
         public Task Reload() => RefreshAsync();
 
+        /// <summary>
+        /// Filters a column by a value, and reloads. Passing null for the operator restores the column's
+        /// default - Contains for a string column, Equals otherwise.
+        /// </summary>
+        public Task Filter(ColumnBase<TItem> column, object? value, FilterOperator? filterOperator = null)
+        {
+            if (column is null || !column.CanFilter)
+            {
+                return Task.CompletedTask;
+            }
+
+            column.SetFilter(value, filterOperator);
+
+            // A narrower set has different pages; the row that was on page 3 may not exist any more.
+            skip = 0;
+
+            return RefreshAsync();
+        }
+
+        /// <summary>
+        /// Applies what was typed into a column's filter box. The text is converted to the column's
+        /// property type; text that is not a value of that type filters nothing rather than throwing,
+        /// which is what a half-typed date or number looks like.
+        /// </summary>
+        Task OnFilterInput(ColumnBase<TItem> column, string? text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return Filter(column, null);
+            }
+
+            var type = Nullable.GetUnderlyingType(column.FilterPropertyType) ?? column.FilterPropertyType;
+
+            if (type == typeof(string) || type == typeof(object))
+            {
+                return Filter(column, text);
+            }
+
+            try
+            {
+                return Filter(column, Convert.ChangeType(text, type, CultureInfo.CurrentCulture));
+            }
+            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException)
+            {
+                return Filter(column, null);
+            }
+        }
+
+        /// <summary>Clears every column's filter, and reloads.</summary>
+        public Task ClearFilters()
+        {
+            var cleared = false;
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                if (columns[i].HasFilter)
+                {
+                    columns[i].SetFilter(null, null);
+                    cleared = true;
+                }
+            }
+
+            if (!cleared)
+            {
+                return Task.CompletedTask;
+            }
+
+            skip = 0;
+
+            return RefreshAsync();
+        }
+
+        /// <summary>
+        /// The filters the columns currently carry, in the descriptor form the rest of Radzen speaks -
+        /// what `RadzenDataFilter` emits and what a `LoadData` handler receives. Empty when nothing is
+        /// filtered, and never built unless something asks.
+        /// </summary>
+        public IReadOnlyList<FilterDescriptor> Filters => BuildFilters() ?? (IReadOnlyList<FilterDescriptor>)Array.Empty<FilterDescriptor>();
+
+        /// <summary>
+        /// Applies a set of descriptors to the columns they name, so a `RadzenDataFilter` or restored
+        /// settings can drive the grid. Descriptors naming no column are ignored.
+        /// </summary>
+        public Task ApplyFilters(IEnumerable<FilterDescriptor> filters)
+        {
+            ArgumentNullException.ThrowIfNull(filters);
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                columns[i].SetFilter(null, null);
+            }
+
+            foreach (var filter in filters)
+            {
+                var column = ColumnByFilterPath(filter.Property);
+
+                column?.SetFilter(filter.FilterValue, filter.FilterOperator);
+            }
+
+            skip = 0;
+
+            return RefreshAsync();
+        }
+
+        ColumnBase<TItem>? ColumnByFilterPath(string? path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return null;
+            }
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                if (columns[i].CanFilter && string.Equals(columns[i].FilterPropertyPath, path, StringComparison.Ordinal))
+                {
+                    return columns[i];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The columns' filters as descriptors, or null when nothing is filtered - the common case, and
+        /// the one that must allocate nothing.
+        /// </summary>
+        List<FilterDescriptor>? BuildFilters()
+        {
+            List<FilterDescriptor>? filters = null;
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.HasFilter)
+                {
+                    continue;
+                }
+
+                (filters ??= new List<FilterDescriptor>()).Add(new FilterDescriptor
+                {
+                    Property = column.FilterPropertyPath,
+                    FilterValue = column.CurrentFilterValue,
+                    FilterOperator = column.CurrentFilterOperator,
+                    Type = column.FilterPropertyType,
+                });
+            }
+
+            return filters;
+        }
+
+        /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
+        IQueryable<TItem> ApplyFilters(IQueryable<TItem> source)
+        {
+            if (!AllowFiltering)
+            {
+                return source;
+            }
+
+            var filters = BuildFilters();
+
+            // QueryableExtension builds a typed expression tree from the descriptors - the same one
+            // RadzenDataGrid composes - so this still translates to SQL rather than parsing a string.
+            return filters is null ? source : source.Where(filters, LogicalFilterOperator, FilterCaseSensitivity);
+        }
+
         /// <summary>Moves to a zero-based page and reloads.</summary>
         public Task GoToPage(int page)
         {
@@ -201,7 +377,8 @@ namespace Radzen.FastGrid
         async Task LoadPageAsync(IAsyncQueryExecutor async, IQueryable<TItem> source)
         {
             var token = BeginLoad();
-            var ordered = SortColumn?.ApplySort(source, SortDescending) ?? source;
+            var filtered = ApplyFilters(source);
+            var ordered = SortColumn?.ApplySort(filtered, SortDescending) ?? filtered;
             var paged = AllowPaging ? ordered.Skip(skip).Take(pageSize) : ordered;
 
             IsLoading = true;
@@ -213,7 +390,8 @@ namespace Radzen.FastGrid
 
                 // A page is a subset, so its length says nothing about the total and the total costs a
                 // second round trip. An unpaged query is the whole set, so the list already is the count.
-                var count = AllowPaging ? await async.CountAsync(source, token) : items.Count;
+                // The count is of the filtered set, not the source: the pager counts what is on screen.
+                var count = AllowPaging ? await async.CountAsync(filtered, token) : items.Count;
 
                 if (token.IsCancellationRequested)
                 {
@@ -246,7 +424,10 @@ namespace Radzen.FastGrid
                 Skip = AllowPaging ? skip : null,
                 Top = AllowPaging ? pageSize : null,
                 OrderBy = OrderBy(),
+                Filters = BuildFilters(),
             };
+
+            args.Filter = FilterString(args.Filters);
 
             IsLoading = true;
 
@@ -297,6 +478,32 @@ namespace Radzen.FastGrid
             return SortDescending ? property + " desc" : property + " asc";
         }
 
+        /// <summary>
+        /// The filter in the string form `LoadData` and OData consume. Built only for a `LoadData`
+        /// handler; a grid composing over a queryable filters with the descriptors themselves.
+        /// </summary>
+        string? FilterString(IEnumerable<FilterDescriptor>? filters)
+        {
+            if (filters is null)
+            {
+                return null;
+            }
+
+            var composites = filters.Select(f => new CompositeFilterDescriptor
+            {
+                Property = f.Property,
+                FilterValue = f.FilterValue,
+                FilterOperator = f.FilterOperator,
+                Type = f.Type,
+            }).ToList();
+
+            var text = IsOData()
+                ? composites.ToODataFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity)
+                : composites.ToFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity);
+
+            return string.IsNullOrEmpty(text) ? null : text;
+        }
+
         bool IsOData()
         {
             // Keyed on the instance, not computed once: on the LoadData path Data is replaced by every
@@ -325,6 +532,25 @@ namespace Radzen.FastGrid
                 return data;
             }
 
+            data = Composed(data);
+
+            return AllowPaging ? data.Skip(skip).Take(pageSize) : data;
+        }
+
+        /// <summary>
+        /// Filters and sorts, without paging. Nothing is wrapped in a queryable unless something is
+        /// actually filtered or sorted, so an unfiltered, unsorted grid enumerates its source directly.
+        /// </summary>
+        IEnumerable<TItem> Composed(IEnumerable<TItem> data)
+        {
+            var filters = AllowFiltering ? BuildFilters() : null;
+
+            if (filters is not null)
+            {
+                data = (data as IQueryable<TItem> ?? data.AsQueryable())
+                    .Where(filters, LogicalFilterOperator, FilterCaseSensitivity);
+            }
+
             if (SortColumn is not null)
             {
                 // The column applies its own ordering, so it stays a typed expression the provider can
@@ -334,7 +560,7 @@ namespace Radzen.FastGrid
                     : SortColumn.ApplySort(data.AsQueryable(), SortDescending) ?? data;
             }
 
-            return AllowPaging ? data.Skip(skip).Take(pageSize) : data;
+            return data;
         }
 
         int TotalCount()
@@ -347,6 +573,13 @@ namespace Radzen.FastGrid
             if (loadedCount is { } counted)
             {
                 return counted;
+            }
+
+            // A filtered grid must count what the filter left, which means composing and walking it.
+            // Only pay that when something is actually filtered.
+            if (AllowFiltering && BuildFilters() is not null)
+            {
+                return Composed(Data ?? Enumerable.Empty<TItem>()).Count();
             }
 
             // Count without enumerating where the source can say. Enumerable.Count() already does this

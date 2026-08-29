@@ -231,6 +231,90 @@ namespace Radzen.FastGrid
             }
 
             builder.CloseElement();
+
+            if (AllowFiltering)
+            {
+                RenderFilterRow(builder, cols);
+            }
+
+            builder.CloseElement();
+        }
+
+        // Matches RadzenDataGrid's filter row exactly: a second header row whose th holds
+        // div.rz-cell-filter > div.rz-cell-filter-content > span.rz-cell-filter-label directly, with no
+        // title wrapper. The theme's th padding hangs off that first div, as it does off the title one.
+        void RenderFilterRow(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        {
+            builder.OpenElement(70, "tr");
+            builder.AddAttribute(71, "role", "row");
+
+            for (var i = 0; i < cols.Count; i++)
+            {
+                var column = cols[i];
+
+                builder.OpenElement(72, "th");
+                builder.AddAttribute(73, "role", "columnheader");
+                builder.AddAttribute(74, "scope", "col");
+                builder.AddAttribute(75, "class", "rz-unselectable-text");
+
+                if (column.CanFilter || column.FilterTemplate is not null)
+                {
+                    builder.OpenElement(76, "div");
+                    builder.AddAttribute(77, "class", "rz-cell-filter");
+                    builder.OpenElement(78, "div");
+                    builder.AddAttribute(79, "class", "rz-cell-filter-content");
+
+                    if (column.FilterTemplate is not null)
+                    {
+                        builder.AddContent(80, column.FilterTemplate(column));
+                    }
+                    else
+                    {
+                        RenderFilterInput(builder, column);
+                    }
+
+                    builder.CloseElement();
+                    builder.CloseElement();
+                }
+
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+
+        void RenderFilterInput(RenderTreeBuilder builder, ColumnBase<TItem> column)
+        {
+            var captured = column;
+
+            builder.OpenElement(81, "span");
+            builder.AddAttribute(82, "class", "rz-cell-filter-label");
+            builder.AddAttribute(83, "style", "height:35px; width:100%;");
+
+            builder.OpenElement(84, "input");
+            builder.AddAttribute(85, "type", "text");
+            builder.AddAttribute(86, "autocomplete", "off");
+            builder.AddAttribute(87, "class", "rz-textbox");
+            builder.AddAttribute(88, "style", "width: 100%;");
+            builder.AddAttribute(89, "aria-label", column.HeaderText);
+            builder.AddAttribute(90, "value", column.CurrentFilterValue);
+            builder.AddAttribute(91, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
+                value => OnFilterInput(captured, value), column.CurrentFilterValue?.ToString()));
+            builder.CloseElement();
+
+            if (column.HasFilter)
+            {
+                builder.OpenElement(92, "button");
+                builder.AddAttribute(93, "type", "button");
+                builder.AddAttribute(94, "tabindex", "-1");
+                builder.AddAttribute(95, "class", "notranslate rzi rz-cell-filter-clear");
+                builder.AddAttribute(96, "style", "position:absolute;inset-inline-end:10px;");
+                builder.AddAttribute(97, "onclick",
+                    EventCallback.Factory.Create<MouseEventArgs>(this, _ => Filter(captured, null)));
+                builder.AddContent(98, "close");
+                builder.CloseElement();
+            }
+
             builder.CloseElement();
         }
 

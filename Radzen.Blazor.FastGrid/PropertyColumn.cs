@@ -16,6 +16,7 @@ namespace Radzen.FastGrid
     {
         Expression<Func<TItem, TProp>>? property;
         Expression<Func<TItem, TProp>>? sortBy;
+        Expression<Func<TItem, TProp>>? filterBy;
         Func<TItem, string?>? cellText;
         string? format;
 
@@ -36,19 +37,37 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         public override string? PropertyPath => path;
 
+        /// <summary>
+        /// The property to filter by, when it differs from the one displayed. Must be of the same type;
+        /// a column filtered on an unrelated property is a different column.
+        /// </summary>
+        [Parameter] public Expression<Func<TItem, TProp>>? FilterBy { get; set; }
+
+        string? filterPath;
+
         /// <inheritdoc />
         public override string? HeaderText => Title ?? path;
 
         /// <inheritdoc />
+        public override string? FilterPropertyPath => filterPath;
+
+        /// <inheritdoc />
+        public override Type FilterPropertyType => typeof(TProp);
+
+        /// <inheritdoc />
         protected override void OnParametersSet()
         {
-            if (ReferenceEquals(property, Property) && format == Format && ReferenceEquals(sortBy, SortBy))
+            base.OnParametersSet();
+
+            if (ReferenceEquals(property, Property) && format == Format && ReferenceEquals(sortBy, SortBy)
+                && ReferenceEquals(filterBy, FilterBy))
             {
                 return;
             }
 
             property = Property;
             sortBy = SortBy;
+            filterBy = FilterBy;
             format = Format;
 
             // Compile to a Func<TItem, string> rather than reading the value as object. RenderTreeBuilder
@@ -79,7 +98,14 @@ namespace Radzen.FastGrid
                 };
             }
 
-            path = PropertyPathResolver.For(SortBy ?? Property);
+            var propertyPath = PropertyPathResolver.For(Property);
+
+            path = SortBy is null ? propertyPath : PropertyPathResolver.For(SortBy);
+
+            // Filtering follows the displayed property, not the sort key: a column that displays First
+            // and sorts by Last still filters on what the reader can see. A computed column has no path
+            // of its own, so an explicit sort key is the only one it can offer.
+            filterPath = FilterBy is not null ? PropertyPathResolver.For(FilterBy) : propertyPath ?? path;
         }
 
         /// <inheritdoc />

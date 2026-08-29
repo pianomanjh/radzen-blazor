@@ -36,6 +36,104 @@ namespace Radzen.FastGrid
         /// <summary>Whether the column offers sorting. Ignored when the column has no sortable path.</summary>
         [Parameter] public bool Sortable { get; set; } = true;
 
+        /// <summary>Whether the column offers filtering. Ignored when the column has no filterable path.</summary>
+        [Parameter] public bool Filterable { get; set; } = true;
+
+        /// <summary>
+        /// The value this column filters by. Setting it declares the initial filter; changing it later
+        /// replaces whatever the grid's own filtering put there.
+        /// </summary>
+        [Parameter] public object? FilterValue { get; set; }
+
+        /// <summary>
+        /// How <see cref="FilterValue" /> is compared. Defaults to <c>Contains</c> for a string column
+        /// and <c>Equals</c> for every other type.
+        /// </summary>
+        [Parameter] public FilterOperator? FilterOperator { get; set; }
+
+        /// <summary>
+        /// Replaces the built-in filter input for this column. The built-in one is a text box and
+        /// nothing more - no operator menu, no date popup, no numeric range - so anything richer, and
+        /// anything a computed column needs, goes here.
+        /// </summary>
+        [Parameter] public RenderFragment<ColumnBase<TItem>>? FilterTemplate { get; set; }
+
+        object? declaredFilterValue;
+        FilterOperator? declaredFilterOperator;
+
+        /// <summary>The value the column is filtering by right now.</summary>
+        public object? CurrentFilterValue { get; private set; }
+
+        /// <summary>The operator the column is filtering with right now.</summary>
+        public FilterOperator CurrentFilterOperator { get; private set; }
+
+        /// <summary>
+        /// The dotted path this column filters by. Defaults to <see cref="PropertyPath" />; a column with
+        /// no path cannot be filtered, for the same reason it cannot be sorted.
+        /// </summary>
+        public virtual string? FilterPropertyPath => PropertyPath;
+
+        /// <summary>The CLR type of the filtered property, which decides how a value is compared.</summary>
+        public virtual Type FilterPropertyType => typeof(object);
+
+        /// <summary>Whether this column can be filtered.</summary>
+        public virtual bool CanFilter => Filterable && FilterPropertyPath is not null;
+
+        /// <summary>
+        /// Whether the column's current filter would actually narrow anything. An empty value filters
+        /// nothing, except for the operators that are about emptiness themselves.
+        /// </summary>
+        public bool HasFilter =>
+            CanFilter &&
+            (CurrentFilterValue is not null && CurrentFilterValue as string != string.Empty
+                || CurrentFilterOperator is Radzen.FilterOperator.IsNull or Radzen.FilterOperator.IsNotNull
+                    or Radzen.FilterOperator.IsEmpty or Radzen.FilterOperator.IsNotEmpty);
+
+        /// <summary>Sets the column's live filter. Called by the grid; does not reload on its own.</summary>
+        internal void SetFilter(object? value, FilterOperator? filterOperator)
+        {
+            CurrentFilterValue = value;
+            CurrentFilterOperator = filterOperator ?? DefaultFilterOperator;
+        }
+
+        FilterOperator DefaultFilterOperator => FilterPropertyType == typeof(string)
+            ? Radzen.FilterOperator.Contains
+            : Radzen.FilterOperator.Equals;
+
+        bool filterInitialized;
+
+        /// <inheritdoc />
+        protected override void OnParametersSet()
+        {
+            if (!filterInitialized)
+            {
+                // Both parameters may legitimately be null, so the first pass cannot be told from a
+                // no-op by comparing them; it has to be marked.
+                filterInitialized = true;
+                declaredFilterValue = FilterValue;
+                declaredFilterOperator = FilterOperator;
+                CurrentFilterValue = FilterValue;
+                CurrentFilterOperator = FilterOperator ?? DefaultFilterOperator;
+
+                return;
+            }
+
+            // The declared value is the authority whenever it changes, and the grid's own filtering owns
+            // it in between. Tracking what was declared separately keeps this out of the parameter
+            // itself, which a component must not assign to.
+            if (!Equals(declaredFilterValue, FilterValue))
+            {
+                declaredFilterValue = FilterValue;
+                CurrentFilterValue = FilterValue;
+            }
+
+            if (declaredFilterOperator != FilterOperator)
+            {
+                declaredFilterOperator = FilterOperator;
+                CurrentFilterOperator = FilterOperator ?? DefaultFilterOperator;
+            }
+        }
+
         /// <summary>
         /// The dotted property path this column sorts, filters and persists by, or <c>null</c> when the
         /// authored expression is computed rather than a simple member access.

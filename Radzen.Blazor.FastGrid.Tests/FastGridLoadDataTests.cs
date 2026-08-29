@@ -222,6 +222,126 @@ namespace Radzen.FastGrid.Tests
             Assert.Contains("30", summary, StringComparison.Ordinal);
         }
 
+        static void TypeInFilter(IRenderedComponent<LoadDataHost> cut, int index, string text) =>
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[index].Change(text);
+
+        [Fact]
+        public void FilteringReloadsAndCarriesTheDescriptors()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p => p.Add(h => h.AllowFiltering, true));
+
+            TypeInFilter(cut, 0, "First1");
+
+            var filter = Assert.Single(calls[^1].Filters!);
+
+            Assert.Equal("First", filter.Property);
+            Assert.Equal("First1", filter.FilterValue);
+            Assert.Equal(FilterOperator.Contains, filter.FilterOperator);
+        }
+
+        [Fact]
+        public void CarriesTheFilterAsALinqString()
+        {
+            // A handler that hands the string to a queryable needs the LINQ form, not the OData one.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p => p.Add(h => h.AllowFiltering, true));
+
+            TypeInFilter(cut, 0, "First1");
+
+            Assert.Contains("First", calls[^1].Filter!, StringComparison.Ordinal);
+            Assert.Contains("Contains", calls[^1].Filter!, StringComparison.Ordinal);
+            Assert.DoesNotContain("contains(", calls[^1].Filter!, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void CarriesTheFilterAsAnODataStringForAnODataSource()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p => p.Add(h => h.AllowFiltering, true),
+                source: rows => new ODataEnumerable<Person>(rows));
+
+            TypeInFilter(cut, 0, "First1");
+
+            Assert.Contains("contains(", calls[^1].Filter!, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void CarriesNoFilterUntilSomethingIsFiltered()
+        {
+            using var ctx = new TestContext();
+
+            Render(ctx, p => p.Add(h => h.AllowFiltering, true));
+
+            Assert.Null(calls[0].Filter);
+            Assert.Null(calls[0].Filters);
+        }
+
+        [Fact]
+        public void AFilterThatProducesNoTextIsSentAsNoFilterAtAll()
+        {
+            // The Custom operator means "I will filter this myself", so it produces no expression. An
+            // empty string is not the same as no filter: a handler appending it to a query would send
+            // one that cannot parse.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p => p.Add(h => h.AllowFiltering, true));
+
+            cut.InvokeAsync(() => cut.Instance.Grid!.ApplyFilters(new[]
+            {
+                new FilterDescriptor
+                {
+                    Property = "First", FilterValue = "First1", FilterOperator = FilterOperator.Custom,
+                },
+            }));
+
+            Assert.NotNull(calls[^1].Filters);
+            Assert.Null(calls[^1].Filter);
+        }
+
+        [Fact]
+        public void RendersWhatTheHandlerServedWithoutFilteringItAgain()
+        {
+            // The handler owns the filter. Applying it again to its result would narrow twice - and for
+            // a handler that filtered on something else entirely, would empty the grid.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(h => h.AllowFiltering, true);
+                p.Add(h => h.AllowPaging, true);
+                p.Add(h => h.PageSize, 4);
+            });
+
+            TypeInFilter(cut, 0, "Nothing matches this");
+
+            Assert.Equal(new[] { "First1", "First2", "First3", "First4" }, FirstNames(cut));
+        }
+
+        [Fact]
+        public void FilteringReturnsToTheFirstPageBeforeReloading()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(h => h.AllowFiltering, true);
+                p.Add(h => h.AllowPaging, true);
+                p.Add(h => h.PageSize, 4);
+            });
+
+            cut.InvokeAsync(() => cut.Instance.Grid!.GoToPage(3));
+
+            Assert.Equal(12, calls[^1].Skip);
+
+            TypeInFilter(cut, 0, "First1");
+
+            Assert.Equal(0, calls[^1].Skip);
+        }
+
         [Fact]
         public void ReloadInvokesItAgain()
         {
@@ -283,6 +403,8 @@ namespace Radzen.FastGrid.Tests
 
         [Parameter] public bool AllowSorting { get; set; }
 
+        [Parameter] public bool AllowFiltering { get; set; }
+
         [Parameter] public bool ShowPagingSummary { get; set; }
 
         [Parameter] public int PageSize { get; set; } = 10;
@@ -311,6 +433,7 @@ namespace Radzen.FastGrid.Tests
             builder.AddAttribute(5, nameof(RadzenFastGrid<Person>.AllowSorting), AllowSorting);
             builder.AddAttribute(6, nameof(RadzenFastGrid<Person>.PageSize), PageSize);
             builder.AddAttribute(7, nameof(RadzenFastGrid<Person>.ShowPagingSummary), ShowPagingSummary);
+            builder.AddAttribute(10, nameof(RadzenFastGrid<Person>.AllowFiltering), AllowFiltering);
             builder.AddAttribute(8, nameof(RadzenFastGrid<Person>.LoadData),
                 EventCallback.Factory.Create<LoadDataArgs>(this, args => OnLoad(args, this)));
             builder.AddComponentReferenceCapture(9, o => Grid = (RadzenFastGrid<Person>)o);

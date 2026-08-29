@@ -57,7 +57,12 @@ namespace Radzen.FastGrid.Tests
             string format = null,
             Expression<Func<TItem, TProp>> sortBy = null,
             bool sortable = true,
-            string cssClass = null) => (builder, seq) =>
+            string cssClass = null,
+            object filterValue = null,
+            FilterOperator? filterOperator = null,
+            Expression<Func<TItem, TProp>> filterBy = null,
+            bool filterable = true,
+            RenderFragment<ColumnBase<TItem>> filterTemplate = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
@@ -85,6 +90,31 @@ namespace Radzen.FastGrid.Tests
             if (cssClass is not null)
             {
                 builder.AddAttribute(seq + 6, nameof(PropertyColumn<TItem, TProp>.CssClass), cssClass);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 7, nameof(PropertyColumn<TItem, TProp>.FilterValue), filterValue);
+            }
+
+            if (filterOperator is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(PropertyColumn<TItem, TProp>.FilterOperator), filterOperator);
+            }
+
+            if (filterBy is not null)
+            {
+                builder.AddAttribute(seq + 9, nameof(PropertyColumn<TItem, TProp>.FilterBy), filterBy);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 10, nameof(PropertyColumn<TItem, TProp>.Filterable), false);
+            }
+
+            if (filterTemplate is not null)
+            {
+                builder.AddAttribute(seq + 11, nameof(PropertyColumn<TItem, TProp>.FilterTemplate), filterTemplate);
             }
 
             builder.CloseComponent();
