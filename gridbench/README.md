@@ -163,13 +163,28 @@ safety, refactor-safe, and a lower floor. It does mean deliberately *not* mirror
 HTML, and builds a side-by-side page linking the actual Radzen theme stylesheet. Screenshot it with
 Playwright and look at it.
 
-Styling compatibility is essentially free: the core table CSS is class-based
+Styling compatibility is close to free for the **body**: that CSS is class-based
 (`.rz-datatable-data, .rz-grid-table { td { ... } .rz-cell-data { ... } }`), so markup carrying the same
-class names picks up the whole theme - including custom themes and CSS variables - with no work. The
-deep `>` chains in the stylesheet apply only to the *scrollable* layout variant; the plain table
-structure has no structural coupling at all.
+class names picks up the whole theme - custom themes and CSS variables included - with no work.
 
-The pass caught three markup faults in the prototype that no allocation benchmark would ever surface:
+The **header is not**, and an earlier version of this note wrongly said there was no structural coupling
+anywhere. The theme gives `th` `padding: 0` and puts the header padding on a *direct child div*:
+
+```scss
+th {
+  padding: 0;
+  > div:not(.rz-cell-filter) { display: flex; align-items: center; padding: var(--rz-grid-header-cell-padding); }
+}
+```
+
+So `th > div` is load-bearing. Without that wrapper the header row renders shorter than the grid's -
+which is exactly what happened, and it took a person looking at the screenshot to notice. With it, the
+rendered geometry matches exactly: header cell 37px, body cell 37px, table 332px on both.
+
+`measure.js` reads back the rendered geometry with Playwright rather than relying on the eye, since two
+of the four faults below were invisible in a first look at the screenshot.
+
+The pass caught four markup faults in the prototype that no allocation benchmark would ever surface:
 
 1. The wrapper claimed `rz-datatable-scrollable` without the nested structure that variant's CSS
    expects - a class that was simply a lie about the markup.
@@ -177,5 +192,9 @@ The pass caught three markup faults in the prototype that no allocation benchmar
 3. The renderer computed an alternating odd/even class per row - which is both *wrong* (the theme
    stripes with `:nth-child` from the table-level class) and wasted work on every row.
 
-Point 3 is the useful one: the correct markup is also the cheaper markup. Worth remembering that render
-correctness needs eyes, not only numbers.
+4. The header cell was missing the `th > div` wrapper the theme's padding hangs off, so the header row
+   was shorter than RadzenDataGrid's.
+
+Point 3 is the useful one: the correct markup is also the cheaper markup. Point 4 is the cautionary one -
+it survived a screenshot being looked at, and was caught only when someone compared the two header rows
+deliberately. Render correctness needs eyes *and* measured geometry, not only allocation numbers.

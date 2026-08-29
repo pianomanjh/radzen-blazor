@@ -53,12 +53,22 @@ public sealed class SlimGrid<TItem> : ComponentBase
         b.OpenElement(5, "tr");
         for (var j = 0; j < cols.Count; j++)
         {
+            // The theme gives <th> padding:0 and puts the header padding on a direct child <div>, so
+            // that wrapper is load-bearing: without it the header row renders shorter than the grid's.
+            // The inner rz-column-title-content span carries the ellipsis truncation. Both are per
+            // column rather than per row, so the extra elements cost nothing at scale.
             b.OpenElement(6, "th");
             b.AddAttribute(7, "class", "rz-unselectable-text rz-text-align-left");
             b.AddAttribute(8, "role", "columnheader");
-            b.OpenElement(9, "span");
-            b.AddAttribute(10, "class", "rz-column-title");
-            b.AddContent(11, cols[j].Title);
+            b.AddAttribute(9, "scope", "col");
+            b.OpenElement(10, "div");
+            b.OpenElement(11, "span");
+            b.AddAttribute(12, "class", "rz-column-title");
+            b.OpenElement(13, "span");
+            b.AddAttribute(14, "class", "rz-column-title-content rz-text-truncate");
+            b.AddContent(15, cols[j].Title);
+            b.CloseElement();
+            b.CloseElement();
             b.CloseElement();
             b.CloseElement();
         }
