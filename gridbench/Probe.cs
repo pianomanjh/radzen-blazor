@@ -21,11 +21,12 @@ sealed class CountingRenderer : Renderer
     public override Dispatcher Dispatcher { get; } = Dispatcher.CreateDefault();
     protected override void HandleException(Exception e) => throw e;
 
-    public int Frames, Elements, Components, Attributes, Text, Markup, Td, Tr;
+    public int Frames, Elements, Components, Attributes, Text, Markup, Td, Tr, Batches;
     public readonly Dictionary<string, int> ComponentTypes = new();
 
     protected override Task UpdateDisplayAsync(in RenderBatch batch)
     {
+        Batches++;
         var frames = batch.ReferenceFrames;
         for (var i = 0; i < frames.Count; i++)
         {
@@ -105,6 +106,10 @@ static class Probe
         await rz.Render(typeof(RadzenDataGrid<Person>), ParameterView.FromDictionary(
             new Dictionary<string, object?> { ["Data"] = people, ["Columns"] = radzenCols }));
 
+        var fg = new CountingRenderer(services);
+        await fg.Render(typeof(Radzen.FastGrid.RadzenFastGrid<Person>), ParameterView.FromDictionary(
+            new Dictionary<string, object?> { ["Data"] = people, ["ChildContent"] = SlimBench.FastCols }));
+
         var qg = new CountingRenderer(services);
         await qg.Render(typeof(QG.QuickGrid<Person>), ParameterView.FromDictionary(
             new Dictionary<string, object?> { ["Items"] = queryable, ["ChildContent"] = qgCols }));
@@ -120,6 +125,8 @@ static class Probe
         Row("  markup", rz.Markup, qg.Markup);
         Row("<tr> emitted", rz.Tr, qg.Tr);
         Row("<td> emitted", rz.Td, qg.Td);
+        Console.WriteLine($"\n  RadzenFastGrid: batches {fg.Batches}, frames {fg.Frames:N0}, td {fg.Td:N0}, tr {fg.Tr:N0}");
+        Console.WriteLine($"  RadzenDataGrid: batches {rz.Batches}    QuickGrid: batches {qg.Batches}");
         Console.WriteLine();
         Console.WriteLine($"  frames per row : Radzen {(double)rz.Frames / n,8:F1}   QuickGrid {(double)qg.Frames / n,8:F1}");
         Console.WriteLine($"  components/row : Radzen {(double)rz.Components / n,8:F1}   QuickGrid {(double)qg.Components / n,8:F1}");

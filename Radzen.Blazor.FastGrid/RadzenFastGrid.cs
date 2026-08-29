@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components.Web;
+using Radzen.Blazor;
 
 namespace Radzen.FastGrid
 {
@@ -18,7 +20,7 @@ namespace Radzen.FastGrid
     /// </remarks>
     /// <typeparam name="TItem">The row type.</typeparam>
     [CascadingTypeParameter(nameof(TItem))]
-    public class RadzenFastGrid<TItem> : ComponentBase
+    public partial class RadzenFastGrid<TItem> : ComponentBase
     {
         readonly List<ColumnBase<TItem>> columns = new();
         bool collectingColumns;
@@ -63,32 +65,21 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>Sorts by the given column, toggling direction when it is already the sorted one.</summary>
-        public void SortBy(ColumnBase<TItem> column)
+        public Task SortBy(ColumnBase<TItem> column)
         {
-            if (!column.CanSort)
+            if (column is null || !column.CanSort)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             SortDescending = ReferenceEquals(SortColumn, column) && !SortDescending;
             SortColumn = column;
-            StateHasChanged();
-        }
 
-        IEnumerable<TItem> View()
-        {
-            var data = Data ?? Enumerable.Empty<TItem>();
+            // A sort change moves the whole set, not just the page, so go back to the first page - the
+            // row that was on page 3 is not on page 3 any more.
+            skip = 0;
 
-            if (SortColumn is null)
-            {
-                return data;
-            }
-
-            // The column applies its own ordering, so it stays a typed expression the provider can
-            // translate rather than a parsed string.
-            return data is IQueryable<TItem> queryable
-                ? SortColumn.ApplySort(queryable, SortDescending) ?? data
-                : SortColumn.ApplySort(data.AsQueryable(), SortDescending) ?? data;
+            return RefreshAsync();
         }
 
         /// <inheritdoc />
@@ -137,6 +128,11 @@ namespace Radzen.FastGrid
                 ? "rz-data-grid rz-datatable"
                 : "rz-data-grid rz-datatable " + CssClass);
 
+            if (AllowPaging && PagerPosition.HasFlag(PagerPosition.Top))
+            {
+                RenderPager(builder, 40);
+            }
+
             builder.OpenElement(2, "table");
             builder.AddAttribute(3, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
 
@@ -144,7 +140,37 @@ namespace Radzen.FastGrid
             RenderBody(builder, cols);
 
             builder.CloseElement();
+
+            if (AllowPaging && PagerPosition.HasFlag(PagerPosition.Bottom))
+            {
+                RenderPager(builder, 60);
+            }
+
             builder.CloseElement();
+        }
+
+        // A sequence number identifies a position in the source, so the two pager positions take
+        // separate ranges rather than both writing the same numbers into one region.
+        void RenderPager(RenderTreeBuilder builder, int sequence)
+        {
+            builder.OpenComponent<RadzenPager>(sequence);
+            builder.AddAttribute(sequence + 1, nameof(RadzenPager.Count), TotalCount());
+            builder.AddAttribute(sequence + 2, nameof(RadzenPager.PageSize), pageSize);
+            builder.AddAttribute(sequence + 3, nameof(RadzenPager.PageNumbersCount), PageNumbersCount);
+            builder.AddAttribute(sequence + 4, nameof(RadzenPager.HorizontalAlign), PagerHorizontalAlign);
+            builder.AddAttribute(sequence + 5, nameof(RadzenPager.AlwaysVisible), PagerAlwaysVisible);
+            builder.AddAttribute(sequence + 6, nameof(RadzenPager.ShowPagingSummary), ShowPagingSummary);
+            builder.AddAttribute(sequence + 7, nameof(RadzenPager.PageChanged),
+                EventCallback.Factory.Create<PagerEventArgs>(this, OnPageChanged));
+
+            if (PageSizeOptions is not null)
+            {
+                builder.AddAttribute(sequence + 8, nameof(RadzenPager.PageSizeOptions), PageSizeOptions);
+                builder.AddAttribute(sequence + 9, nameof(RadzenPager.PageSizeChanged),
+                    EventCallback.Factory.Create<int>(this, OnPageSizeChanged));
+            }
+
+            builder.CloseComponent();
         }
 
         void RenderHead(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)

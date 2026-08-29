@@ -186,7 +186,7 @@ public class SlimBench
             new Dictionary<string, object?> { ["Data"] = people, ["Columns"] = slimCols }));
     }
 
-    static readonly RenderFragment FastCols = b =>
+    internal static readonly RenderFragment FastCols = b =>
     {
         var s = 0;
         b.OpenComponent<PropertyColumn<Person, int>>(s++);
