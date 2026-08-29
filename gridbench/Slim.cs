@@ -44,9 +44,9 @@ public sealed class SlimGrid<TItem> : ComponentBase
     {
         var cols = Columns;
         b.OpenElement(0, "div");
-        b.AddAttribute(1, "class", "rz-data-grid rz-has-paginator rz-datatable rz-datatable-scrollable");
+        b.AddAttribute(1, "class", "rz-data-grid rz-datatable");
         b.OpenElement(2, "table");
-        b.AddAttribute(3, "class", "rz-grid-table rz-grid-table-fixed");
+        b.AddAttribute(3, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
 
         // header
         b.OpenElement(4, "thead");
@@ -73,7 +73,8 @@ public sealed class SlimGrid<TItem> : ComponentBase
             b.OpenElement(13, "tr");
             b.AddAttribute(14, "role", "row");
             b.AddAttribute(15, "aria-rowindex", index + 1);
-            b.AddAttribute(16, "class", (index & 1) == 0 ? "rz-data-row" : "rz-data-row rz-datatable-odd");
+            // No alternating class: rz-grid-table-striped stripes via :nth-child in CSS.
+            b.AddAttribute(16, "class", "rz-data-row");
             for (var j = 0; j < cols.Count; j++)
             {
                 var c = cols[j];

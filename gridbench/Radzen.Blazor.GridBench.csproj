@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+    <PackageReference Include="bunit.web" Version="1.36.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.*-*" />
     <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid.EntityFrameworkAdapter" Version="10.*-*" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.*-*" />

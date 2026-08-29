@@ -244,6 +244,12 @@ public class Program
 {
     public static async Task Main(string[] a)
     {
+        if (a.Length > 0 && a[0] == "visual")
+        {
+            VisualDump.Run(a.Length > 1 ? a[1] : "visual-out");
+            return;
+        }
+
         if (a.Length > 0 && a[0] == "probe")
         {
             foreach (var n in new[] { 200, 1000 }) await Probe.Run(n);
