@@ -603,55 +603,82 @@
 
     internal RenderFragment RenderCell(RadzenDataGridColumn<TItem> column, TItem Item, IReadOnlyDictionary<string, object> Attributes, Tuple<Radzen.RowRenderEventArgs<TItem>, IReadOnlyDictionary<string, object>> rowArgs, int RowIndex)
     {
-            var cellAttributes = new Dictionary<string, object>(Attributes);
+            // class and style are written as explicit attributes on the <td> below rather than through
+            // the splat, so the per-cell dictionary is only needed when something else has to go on the
+            // cell: a CellRender handler's own attributes, a row/col span, or a click handler. Without
+            // any of those - the common case - no dictionary is allocated and the splat is a no-op over
+            // a shared empty instance.
+            var cellStyle = GetCellStyle(column, Attributes);
+            var cellClass = GetCellCssClass(column, Item, Attributes);
 
             var rowspan = column.GetRowSpan(true);
-            if(rowspan > 1)
-            {
-                SetAttribute(cellAttributes, "rowspan", rowspan);
-            }
-
             var colspan = column.GetColSpan(true);
-            if(colspan > 1)
-            {
-                SetAttribute(cellAttributes, "colspan", colspan);
-            }
 
-            var cellStyle = GetCellStyle(column, Attributes);
-            if(!string.IsNullOrEmpty(cellStyle))
-            {
-                SetAttribute(cellAttributes, "style", cellStyle);
-            }
+            var rowOnclickChains = RowClickActive
+                && rowArgs.Item2.TryGetValue("onclick", out var rowOnclick)
+                && !IsChainableClickHandler(rowOnclick);
 
-            var cellClass = GetCellCssClass(column, Item, Attributes);
-            if (!string.IsNullOrEmpty(cellClass))
-            {
-                SetAttribute(cellAttributes, "class", cellClass);
-            }
+            IReadOnlyDictionary<string, object>? cellAttributes;
 
-            // A non-chainable consumer onclick (e.g. a string) occupies the <tr>, so the built-in row click
-            // can't ride it - raise it from the cell for that row instead, alongside any cell click.
-            if (RowClickActive && rowArgs.Item2.TryGetValue("onclick", out var rowOnclick) && !IsChainableClickHandler(rowOnclick))
+            if (Attributes.Count == 0 && rowspan <= 1 && colspan <= 1
+                && !rowOnclickChains && !CellClick.HasDelegate
+                && !CellDoubleClick.HasDelegate && !RowDoubleClick.HasDelegate
+                && !CellContextMenu.HasDelegate)
             {
-                SetAttribute(cellAttributes, "onclick", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: async (eventArgs) =>
+                // null rather than an empty dictionary: AddMultipleAttributes short-circuits on null,
+                // where an empty IReadOnlyDictionary still boxes an enumerator per cell.
+                cellAttributes = null;
+            }
+            else
+            {
+                // class and style are already folded into cellClass/cellStyle by GetCellCssClass and
+                // GetCellStyle, so they are dropped here to keep the splat from overriding them.
+                var attributes = new Dictionary<string, object>();
+
+                foreach (var attribute in Attributes)
                 {
-                    if (CellClick.HasDelegate) { await OnCellClickHandler(column, Item, eventArgs); }
-                    await OnRowClickHandler(Item, eventArgs);
-                }));
-            }
-            else if (CellClick.HasDelegate)
-            {
-                SetAttribute(cellAttributes, "onclick", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: (eventArgs) => OnCellClickHandler(column, Item, eventArgs)));
-            }
+                    if (attribute.Key != "class" && attribute.Key != "style")
+                    {
+                        attributes[attribute.Key] = attribute.Value;
+                    }
+                }
 
-            if (CellDoubleClick.HasDelegate || RowDoubleClick.HasDelegate)
-            {
-                SetAttribute(cellAttributes, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: (eventArgs) => OnDblClick(column, Item, eventArgs)));
-            }
+                cellAttributes = attributes;
 
-            if (CellContextMenu.HasDelegate)
-            {
-                SetAttribute(cellAttributes, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: (eventArgs) => OnContextMenu(column, Item, eventArgs)));
+                if(rowspan > 1)
+                {
+                    SetAttribute(attributes, "rowspan", rowspan);
+                }
+
+                if(colspan > 1)
+                {
+                    SetAttribute(attributes, "colspan", colspan);
+                }
+
+                // A non-chainable consumer onclick (e.g. a string) occupies the <tr>, so the built-in row
+                // click can't ride it - raise it from the cell for that row instead, alongside any cell click.
+                if (rowOnclickChains)
+                {
+                    SetAttribute(attributes, "onclick", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: async (eventArgs) =>
+                    {
+                        if (CellClick.HasDelegate) { await OnCellClickHandler(column, Item, eventArgs); }
+                        await OnRowClickHandler(Item, eventArgs);
+                    }));
+                }
+                else if (CellClick.HasDelegate)
+                {
+                    SetAttribute(attributes, "onclick", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: (eventArgs) => OnCellClickHandler(column, Item, eventArgs)));
+                }
+
+                if (CellDoubleClick.HasDelegate || RowDoubleClick.HasDelegate)
+                {
+                    SetAttribute(attributes, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: (eventArgs) => OnDblClick(column, Item, eventArgs)));
+                }
+
+                if (CellContextMenu.HasDelegate)
+                {
+                    SetAttribute(attributes, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(receiver: this, callback: (eventArgs) => OnContextMenu(column, Item, eventArgs)));
+                }
             }
 
             var title = column.Template == null && this.ShowCellDataAsTooltip || column.ShowCellDataAsTooltip ? $"{column.GetValue(Item)}" : "";
@@ -667,7 +694,7 @@
             <text>
             @if (this.AllowCompositeDataCells ? RowIndex == column.GetLevel() : (column.Parent != null && RowIndex == column.GetLevel() || column.Columns == null))
             {
-                <td role="gridcell" @attributes="@cellAttributes" @oncontextmenu:preventDefault="@this.CellContextMenu.HasDelegate" @oncontextmenu:stopPropagation="@this.CellContextMenu.HasDelegate" @onkeydown:stopPropagation>
+                <td role="gridcell" class="@(string.IsNullOrEmpty(cellClass) ? null : cellClass)" style="@(string.IsNullOrEmpty(cellStyle) ? null : cellStyle)" @attributes="@cellAttributes" @oncontextmenu:preventDefault="@this.CellContextMenu.HasDelegate" @oncontextmenu:stopPropagation="@this.CellContextMenu.HasDelegate" @onkeydown:stopPropagation>
                     @if (this.Responsive)
                     {
                         <span class="rz-column-title">
