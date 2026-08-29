@@ -158,3 +158,121 @@ public class ScaffoldBench
     [Benchmark(Description = "d) + 2 CascadingValues per row (Radzen shape)")]
     public Task Cascade2() => Render(typeof(CascadeRows2));
 }
+
+// ---- Per-cell cost isolation -------------------------------------------------------------
+// Same N x 5 markup again, rows always inline. Only the way each CELL is emitted varies:
+// direct AddAttribute calls, versus Radzen's shape (a Dictionary per cell, splatted via
+// @attributes, produced by a RenderFragment returned per cell).
+
+public sealed class CellDirect : ComponentBase
+{
+    [Parameter] public List<RowData> Items { get; set; }
+    protected override void BuildRenderTree(RenderTreeBuilder b)
+    {
+        b.OpenElement(0, "table"); b.OpenElement(1, "tbody");
+        foreach (var it in Items)
+        {
+            b.OpenElement(2, "tr");
+            for (var j = 0; j < 5; j++)
+            {
+                b.OpenElement(3, "td");
+                b.AddAttribute(4, "role", "gridcell");
+                b.AddAttribute(5, "class", "rz-cell-data");
+                b.AddContent(6, it.Name);
+                b.CloseElement();
+            }
+            b.CloseElement();
+        }
+        b.CloseElement(); b.CloseElement();
+    }
+}
+
+// + a Dictionary per cell, splatted
+public sealed class CellDictionary : ComponentBase
+{
+    [Parameter] public List<RowData> Items { get; set; }
+    protected override void BuildRenderTree(RenderTreeBuilder b)
+    {
+        b.OpenElement(0, "table"); b.OpenElement(1, "tbody");
+        foreach (var it in Items)
+        {
+            b.OpenElement(2, "tr");
+            for (var j = 0; j < 5; j++)
+            {
+                var attrs = new Dictionary<string, object>
+                { ["role"] = "gridcell", ["class"] = "rz-cell-data" };
+                b.OpenElement(3, "td");
+                b.AddMultipleAttributes(4, attrs);
+                b.AddContent(5, it.Name);
+                b.CloseElement();
+            }
+            b.CloseElement();
+        }
+        b.CloseElement(); b.CloseElement();
+    }
+}
+
+// + a RenderFragment returned per cell (Radzen's RenderCell shape)
+public sealed class CellFragment : ComponentBase
+{
+    [Parameter] public List<RowData> Items { get; set; }
+
+    static RenderFragment Cell(RowData it, Dictionary<string, object> attrs) => b =>
+    {
+        b.OpenElement(0, "td");
+        b.AddMultipleAttributes(1, attrs);
+        b.AddContent(2, it.Name);
+        b.CloseElement();
+    };
+
+    protected override void BuildRenderTree(RenderTreeBuilder b)
+    {
+        b.OpenElement(0, "table"); b.OpenElement(1, "tbody");
+        foreach (var it in Items)
+        {
+            b.OpenElement(2, "tr");
+            for (var j = 0; j < 5; j++)
+            {
+                var attrs = new Dictionary<string, object>
+                { ["role"] = "gridcell", ["class"] = "rz-cell-data" };
+                b.AddContent(3, Cell(it, attrs));
+            }
+            b.CloseElement();
+        }
+        b.CloseElement(); b.CloseElement();
+    }
+}
+
+[MemoryDiagnoser]
+public class CellBench
+{
+    [Params(1000)] public int N;
+    IServiceProvider services;
+    List<RowData> items;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var sc = new ServiceCollection();
+        sc.AddSingleton<IJSRuntime, NoopJSRuntime>();
+        services = sc.BuildServiceProvider();
+        items = Enumerable.Range(0, N).Select(i => new RowData
+        { Id = i, Name = "Person " + i, Age = 20 + i % 45, Hired = "2015-01-01", Salary = "40000" }).ToList();
+    }
+
+    async Task Render(Type t)
+    {
+        using var r = new BenchmarkRenderer(services);
+        await r.RenderComponent(t, ParameterView.FromDictionary(
+            new Dictionary<string, object?> { ["Items"] = items }));
+    }
+
+    [Benchmark(Baseline = true, Description = "cells written directly")]
+    public Task Direct() => Render(typeof(CellDirect));
+
+    [Benchmark(Description = "+ Dictionary per cell, splatted")]
+    public Task Dict() => Render(typeof(CellDictionary));
+
+    [Benchmark(Description = "+ RenderFragment per cell (Radzen shape)")]
+    public Task Fragment() => Render(typeof(CellFragment));
+}
