@@ -30,6 +30,9 @@ namespace Radzen.FastGrid.Tests
 
         /// <summary>The same, of a value type, so the element type decides the filter operator.</summary>
         public int[] Codes { get; set; }
+
+        /// <summary>A collection of objects, which is what FilterProperty exists for.</summary>
+        public List<Company> Accounts { get; set; }
     }
 
     public class Company
@@ -70,7 +73,10 @@ namespace Radzen.FastGrid.Tests
             bool filterable = true,
             RenderFragment<ColumnBase<TItem>> filterTemplate = null,
             string separator = null,
-            Expression<Func<TItem, TProp>> sortByPath = null) => (builder, seq) =>
+            Expression<Func<TItem, TProp>> sortByPath = null,
+            FilterMode? filterMode = null,
+            System.Collections.IEnumerable filterLookupData = null,
+            string filterProperty = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
@@ -135,6 +141,21 @@ namespace Radzen.FastGrid.Tests
                 builder.AddAttribute(seq + 13, nameof(PropertyColumn<TItem, TProp>.SortBy), sortByPath);
             }
 
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 14, nameof(PropertyColumn<TItem, TProp>.FilterMode), filterMode);
+            }
+
+            if (filterLookupData is not null)
+            {
+                builder.AddAttribute(seq + 15, nameof(PropertyColumn<TItem, TProp>.FilterLookupData), filterLookupData);
+            }
+
+            if (filterProperty is not null)
+            {
+                builder.AddAttribute(seq + 16, nameof(PropertyColumn<TItem, TProp>.FilterProperty), filterProperty);
+            }
+
             builder.CloseComponent();
         };
 
@@ -182,25 +203,29 @@ namespace Radzen.FastGrid.Tests
             {
                 Id = 3, First = "Carol", Last = "Adams", Salary = 4000m, Bonus = 250.5m,
                 Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" },
-                Regions = new() { "North", "West" }, Codes = new[] { 10, 20 }
+                Regions = new() { "North", "West" }, Codes = new[] { 10, 20 },
+                Accounts = new() { new() { Name = "Acme" }, new() { Name = "Globex" } }
             },
             new Person
             {
                 Id = 1, First = "Alice", Last = "Draper", Salary = 2000m, Bonus = null,
                 Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" },
-                Regions = new() { "South" }, Codes = new[] { 20 }
+                Regions = new() { "South" }, Codes = new[] { 20 },
+                Accounts = new() { new() { Name = "Initech" } }
             },
             new Person
             {
                 Id = 4, First = "Dave", Last = "Bell", Salary = 1000m, Bonus = 10m,
                 Hired = new DateTime(2018, 11, 30), Customer = new Company { Name = "Xray" },
-                Regions = new(), Codes = System.Array.Empty<int>()
+                Regions = new(), Codes = System.Array.Empty<int>(),
+                Accounts = new()
             },
             new Person
             {
                 Id = 2, First = "Bob", Last = "Cook", Salary = 3000m, Bonus = 99.25m,
                 Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" },
-                Regions = new() { "North", "East", "South" }, Codes = new[] { 30 }
+                Regions = new() { "North", "East", "South" }, Codes = new[] { 30 },
+                Accounts = new() { new() { Name = "Acme" }, new() { Name = "Umbrella" } }
             },
         };
 
@@ -216,6 +241,7 @@ namespace Radzen.FastGrid.Tests
                 Customer = new Company { Name = "Company" + i },
                 Regions = new() { "Region" + i },
                 Codes = new[] { i },
+                Accounts = new() { new Company { Name = "Account" + i } },
             })
             .ToList();
     }

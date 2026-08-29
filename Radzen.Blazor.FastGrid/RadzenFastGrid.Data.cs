@@ -71,6 +71,12 @@ namespace Radzen.FastGrid
         /// <summary>How string comparisons treat case. The provider decides by default.</summary>
         [Parameter] public FilterCaseSensitivity FilterCaseSensitivity { get; set; }
 
+        /// <summary>
+        /// How filters are presented. <c>Simple</c> is a text box per column; <c>CheckBoxList</c> is a
+        /// multi-select of the column's distinct values. A column can override it.
+        /// </summary>
+        [Parameter] public FilterMode FilterMode { get; set; } = FilterMode.Simple;
+
         /// <summary>How the columns' filters combine.</summary>
         [Parameter] public LogicalFilterOperator LogicalFilterOperator { get; set; } = LogicalFilterOperator.And;
 
@@ -151,6 +157,7 @@ namespace Radzen.FastGrid
             }
 
             lastData = Data;
+            lookups.Clear();
 
             // Drop what any previous load produced. Deliberately not RefreshAsync: that renders, and the
             // render ComponentBase queues after this returns would then be the second of two - a whole
@@ -215,6 +222,65 @@ namespace Radzen.FastGrid
             {
                 return Filter(column, null);
             }
+        }
+
+        /// <summary>The filter presentation this column actually uses.</summary>
+        internal FilterMode FilterModeOf(ColumnBase<TItem> column) => column.FilterMode ?? FilterMode;
+
+        readonly Dictionary<ColumnBase<TItem>, IEnumerable> lookups = new();
+
+        /// <summary>
+        /// The values a column's check-box-list offers. Cached per column and dropped whenever the data
+        /// changes, so the distinct query runs once rather than on every render of the filter row.
+        /// </summary>
+        internal IEnumerable FilterLookup(ColumnBase<TItem> column)
+        {
+            if (column.FilterLookupData is { } supplied)
+            {
+                return supplied;
+            }
+
+            if (lookups.TryGetValue(column, out var cached))
+            {
+                return cached;
+            }
+
+            var source = Data as IQueryable<TItem> ?? Data?.AsQueryable();
+            var values = source is null ? null : column.DistinctValues(source);
+
+            var materialized = values is null
+                ? (IEnumerable)Array.Empty<object>()
+                // Materialized here rather than left lazy: the list box reads it on every render, and
+                // Cast/Where run in memory anyway once the provider has answered the distinct query.
+                : values.Cast<object>().ToList().Where(v => v != null).OrderBy(v => v).ToList();
+
+            lookups[column] = materialized;
+
+            return materialized;
+        }
+
+        /// <summary>Applies a check-box-list selection. Nothing ticked is no filter, not an empty result.</summary>
+        Task OnFilterSelection(ColumnBase<TItem> column, object? value)
+        {
+            if (value is not IEnumerable sequence || value is string)
+            {
+                return Filter(column, null, Radzen.FilterOperator.In);
+            }
+
+            // Typed as the column's element type, not List<object>: the predicate becomes
+            // Contains<TElement>(selected, x), and a List<object> there is not an IEnumerable<TElement>,
+            // so a provider cannot translate it and the comparison never binds.
+            var type = Nullable.GetUnderlyingType(column.FilterElementType) ?? column.FilterElementType;
+            var selected = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!;
+
+            foreach (var item in sequence)
+            {
+                selected.Add(item);
+            }
+
+            // An empty list is passed through rather than turned into null here: HasFilter is the single
+            // rule for what counts as a filter, and it already treats an empty sequence as none.
+            return Filter(column, selected, Radzen.FilterOperator.In);
         }
 
         /// <summary>Clears every column's filter, and reloads.</summary>
@@ -311,6 +377,10 @@ namespace Radzen.FastGrid
                 (filters ??= new List<FilterDescriptor>()).Add(new FilterDescriptor
                 {
                     Property = column.FilterPropertyPath,
+
+                    // Names a member of the collection's element, so the predicate becomes
+                    // Customers.Any(c => c.Name ...) rather than a comparison against the collection.
+                    FilterProperty = string.IsNullOrEmpty(column.FilterProperty) ? null : column.FilterProperty,
                     FilterValue = column.CurrentFilterValue,
                     FilterOperator = column.CurrentFilterOperator,
                     Type = column.FilterPropertyType,

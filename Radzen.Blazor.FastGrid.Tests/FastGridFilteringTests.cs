@@ -372,6 +372,29 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ADescriptorCarryingAnEmptyListIsNoFilter()
+        {
+            // The rule has to hold wherever the value comes from, not only from the check-box list:
+            // "in the empty set" would leave the grid blank with no visible filter to remove.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), TwoColumns());
+
+            cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
+            {
+                new FilterDescriptor
+                {
+                    Property = "First",
+                    FilterValue = new List<string>(),
+                    FilterOperator = FilterOperator.In,
+                },
+            }));
+
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+            Assert.Empty(cut.Instance.Filters);
+        }
+
+        [Fact]
         public void ClearFiltersClearsEveryColumn()
         {
             using var ctx = new TestContext();

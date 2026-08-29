@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
@@ -52,6 +53,31 @@ namespace Radzen.FastGrid
         [Parameter] public FilterOperator? FilterOperator { get; set; }
 
         /// <summary>
+        /// A member of the collection's element to filter on, for a column bound to a collection of
+        /// objects: <c>Property="@(r =&gt; r.Customers)" FilterProperty="Name"</c> matches a row when any
+        /// customer's name matches. A string rather than an expression because the element type is not a
+        /// type parameter of the column, so there is nothing to write the lambda against.
+        /// </summary>
+        [Parameter] public string? FilterProperty { get; set; }
+
+        /// <summary>
+        /// How this column's filter is presented, overriding the grid's <c>FilterMode</c>.
+        /// </summary>
+        [Parameter] public FilterMode? FilterMode { get; set; }
+
+        /// <summary>
+        /// The values offered by a check-box-list filter. Supply this to skip the distinct scan of the
+        /// data - which is what a large or remote source wants - or to offer values the data has none of.
+        /// </summary>
+        [Parameter] public IEnumerable? FilterLookupData { get; set; }
+
+        /// <summary>
+        /// The distinct values of this column across <paramref name="source" />, for a check-box-list
+        /// filter. Composed as a query rather than materialized, so a provider can translate it.
+        /// </summary>
+        public virtual IQueryable? DistinctValues(IQueryable<TItem> source) => null;
+
+        /// <summary>
         /// Replaces the built-in filter input for this column. The built-in one is a text box and
         /// nothing more - no operator menu, no date popup, no numeric range - so anything richer, and
         /// anything a computed column needs, goes here.
@@ -92,9 +118,20 @@ namespace Radzen.FastGrid
         /// </summary>
         public bool HasFilter =>
             CanFilter &&
-            (CurrentFilterValue is not null && CurrentFilterValue as string != string.Empty
+            (HasFilterValue
                 || CurrentFilterOperator is Radzen.FilterOperator.IsNull or Radzen.FilterOperator.IsNotNull
                     or Radzen.FilterOperator.IsEmpty or Radzen.FilterOperator.IsNotEmpty);
+
+        bool HasFilterValue => CurrentFilterValue switch
+        {
+            null => false,
+            string text => text.Length > 0,
+
+            // A check-box-list filter with nothing ticked is not a filter that matches nothing; it is no
+            // filter. Testing for null only would leave the grid empty as soon as the last box is cleared.
+            IEnumerable sequence => sequence.GetEnumerator().MoveNext(),
+            _ => true,
+        };
 
         /// <summary>Sets the column's live filter. Called by the grid; does not reload on its own.</summary>
         internal void SetFilter(object? value, FilterOperator? filterOperator)
