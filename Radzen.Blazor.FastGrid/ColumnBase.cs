@@ -76,6 +76,13 @@ namespace Radzen.FastGrid
         /// <summary>The CLR type of the filtered property, which decides how a value is compared.</summary>
         public virtual Type FilterPropertyType => typeof(object);
 
+        /// <summary>
+        /// The type a filter value is compared against. For a collection-valued column that is the
+        /// element type, since the filter matches a row when any member matches - so a list of strings
+        /// filters like a string, not like a list.
+        /// </summary>
+        public virtual Type FilterElementType => FilterPropertyType;
+
         /// <summary>Whether this column can be filtered.</summary>
         public virtual bool CanFilter => Filterable && FilterPropertyPath is not null;
 
@@ -96,7 +103,7 @@ namespace Radzen.FastGrid
             CurrentFilterOperator = filterOperator ?? DefaultFilterOperator;
         }
 
-        FilterOperator DefaultFilterOperator => FilterPropertyType == typeof(string)
+        FilterOperator DefaultFilterOperator => FilterElementType == typeof(string)
             ? Radzen.FilterOperator.Contains
             : Radzen.FilterOperator.Equals;
 

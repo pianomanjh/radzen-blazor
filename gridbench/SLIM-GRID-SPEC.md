@@ -86,6 +86,21 @@ sealed class TemplateColumn<TItem> : ColumnBase<TItem>
     RenderFragment<TItem> Template              // ~94 B/cell, see README
 ```
 
+### Collection-valued properties
+
+A property that is a collection is **listed**, not stringified: `List<string>.ToString()` is the type
+name, which is why such a column otherwise needs a template doing nothing but `string.Join`. The
+members are joined with `Separator` (default `", "`), `Format` applies to each member, and the filter
+matches a row when **any** member matches - `Contains` for a collection of strings, `Equals` for a
+collection of value types, because the *element* type decides the operator, not the property type.
+
+Such a column is not sortable: no provider can order rows by a list. An explicit `SortBy` re-enables
+it, naming something that can be ordered.
+
+A column typed as `object` cannot be recognised statically, so its value decides per cell - one type
+test. A typed collection column takes the same path; the element type itself is resolved once per
+closed generic type, not per column.
+
 The column applies its own sort (`ApplySort`), since only it knows `TProp`. Strongly typed, translates to
 SQL, and skips the dynamic-LINQ string parse entirely. This is QuickGrid's `GridSort<T>` shape.
 
@@ -211,4 +226,9 @@ Each layer below caught real faults the previous one missed. Use all of them.
 
 - Package and namespace name.
 - Whether virtualization is in scope for v1 (`Virtualize` integration is orthogonal to the render path).
-- Whether to support `RadzenDataFilter` interop in v1 (needs string-path filtering, §4).
+- ~~Whether to support `RadzenDataFilter` interop in v1~~ - **resolved.** The grid speaks
+  `FilterDescriptor` in both directions, which is what `RadzenDataFilter` emits. The path derivation of
+  §4 is what makes that possible.
+- The built-in filter UI is a text box and nothing else: no operator menu, no date popup, no numeric
+  range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter code.
+  `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
