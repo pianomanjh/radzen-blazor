@@ -156,3 +156,26 @@ skips the box entirely and only pays for the string. That is where the remaining
 So a slim grid should take expressions rather than string property names - better call sites, compile-time
 safety, refactor-safe, and a lower floor. It does mean deliberately *not* mirroring RadzenDataGrid's
 `Property="Name"` convention, which is the real cost of the decision.
+
+## Visual pass
+
+`dotnet run --project gridbench -- visual <dir>` renders both grids through bUnit, writes their real
+HTML, and builds a side-by-side page linking the actual Radzen theme stylesheet. Screenshot it with
+Playwright and look at it.
+
+Styling compatibility is essentially free: the core table CSS is class-based
+(`.rz-datatable-data, .rz-grid-table { td { ... } .rz-cell-data { ... } }`), so markup carrying the same
+class names picks up the whole theme - including custom themes and CSS variables - with no work. The
+deep `>` chains in the stylesheet apply only to the *scrollable* layout variant; the plain table
+structure has no structural coupling at all.
+
+The pass caught three markup faults in the prototype that no allocation benchmark would ever surface:
+
+1. The wrapper claimed `rz-datatable-scrollable` without the nested structure that variant's CSS
+   expects - a class that was simply a lie about the markup.
+2. The table was missing `rz-grid-table-striped`, so rows did not stripe.
+3. The renderer computed an alternating odd/even class per row - which is both *wrong* (the theme
+   stripes with `:nth-child` from the table-level class) and wasted work on every row.
+
+Point 3 is the useful one: the correct markup is also the cheaper markup. Worth remembering that render
+correctness needs eyes, not only numbers.
