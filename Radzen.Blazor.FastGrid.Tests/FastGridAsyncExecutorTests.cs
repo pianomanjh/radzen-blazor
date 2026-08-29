@@ -179,6 +179,85 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void FiltersThroughTheProviderBeforeMaterializing()
+        {
+            // The filter must reach the executor as part of the query. Applying it to the page after it
+            // comes back would fetch an unfiltered page and then hide most of it.
+            using var ctx = new TestContext();
+            var executor = new FakeExecutor();
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+
+            var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+            });
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("First1");
+
+            Assert.Contains("Where", executor.LastExpression, StringComparison.Ordinal);
+            Assert.Equal(new[] { "First1", "First10", "First11", "First12" }, FirstNames(cut));
+        }
+
+        [Fact]
+        public void CountsWhatTheFilterLeftRatherThanTheWholeSource()
+        {
+            using var ctx = new TestContext();
+            var executor = new FakeExecutor();
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+
+            var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+            });
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("First1");
+
+            // First1 and First10..First19.
+            Assert.Equal(11, executor.LastCount);
+        }
+
+        [Fact]
+        public void CarriesTheCaseSensitivitySettingIntoTheQuery()
+        {
+            using var ctx = new TestContext();
+            var executor = new FakeExecutor();
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+
+            var cut = Render(ctx, People.Sample().AsQueryable(), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterCaseSensitivity, FilterCaseSensitivity.CaseInsensitive);
+            });
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("a");
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave" }, FirstNames(cut));
+        }
+
+        [Fact]
+        public void CarriesTheLogicalOperatorIntoTheQuery()
+        {
+            using var ctx = new TestContext();
+            var executor = new FakeExecutor();
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+
+            var cut = Render(ctx, People.Sample().AsQueryable(), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.LogicalFilterOperator, LogicalFilterOperator.Or);
+            });
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("Carol");
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[1].Change("4");
+
+            Assert.Equal(new[] { "Carol", "Dave" }, FirstNames(cut));
+        }
+
+        [Fact]
         public async Task ASupersededLoadDoesNotOverwriteTheNewerOne()
         {
             // Page 2 is asked for while page 1 is still in flight. If the slow first answer were allowed
