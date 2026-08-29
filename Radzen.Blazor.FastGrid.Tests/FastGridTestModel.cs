@@ -24,6 +24,12 @@ namespace Radzen.FastGrid.Tests
         public DateTime Hired { get; set; }
 
         public Company Customer { get; set; }
+
+        /// <summary>A collection-valued property, which a column lists rather than stringifies.</summary>
+        public List<string> Regions { get; set; }
+
+        /// <summary>The same, of a value type, so the element type decides the filter operator.</summary>
+        public int[] Codes { get; set; }
     }
 
     public class Company
@@ -62,7 +68,9 @@ namespace Radzen.FastGrid.Tests
             FilterOperator? filterOperator = null,
             Expression<Func<TItem, TProp>> filterBy = null,
             bool filterable = true,
-            RenderFragment<ColumnBase<TItem>> filterTemplate = null) => (builder, seq) =>
+            RenderFragment<ColumnBase<TItem>> filterTemplate = null,
+            string separator = null,
+            Expression<Func<TItem, TProp>> sortByPath = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
@@ -117,6 +125,16 @@ namespace Radzen.FastGrid.Tests
                 builder.AddAttribute(seq + 11, nameof(PropertyColumn<TItem, TProp>.FilterTemplate), filterTemplate);
             }
 
+            if (separator is not null)
+            {
+                builder.AddAttribute(seq + 12, nameof(PropertyColumn<TItem, TProp>.Separator), separator);
+            }
+
+            if (sortByPath is not null)
+            {
+                builder.AddAttribute(seq + 13, nameof(PropertyColumn<TItem, TProp>.SortBy), sortByPath);
+            }
+
             builder.CloseComponent();
         };
 
@@ -163,22 +181,26 @@ namespace Radzen.FastGrid.Tests
             new Person
             {
                 Id = 3, First = "Carol", Last = "Adams", Salary = 4000m, Bonus = 250.5m,
-                Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" }
+                Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" },
+                Regions = new() { "North", "West" }, Codes = new[] { 10, 20 }
             },
             new Person
             {
                 Id = 1, First = "Alice", Last = "Draper", Salary = 2000m, Bonus = null,
-                Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" }
+                Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" },
+                Regions = new() { "South" }, Codes = new[] { 20 }
             },
             new Person
             {
                 Id = 4, First = "Dave", Last = "Bell", Salary = 1000m, Bonus = 10m,
-                Hired = new DateTime(2018, 11, 30), Customer = new Company { Name = "Xray" }
+                Hired = new DateTime(2018, 11, 30), Customer = new Company { Name = "Xray" },
+                Regions = new(), Codes = System.Array.Empty<int>()
             },
             new Person
             {
                 Id = 2, First = "Bob", Last = "Cook", Salary = 3000m, Bonus = 99.25m,
-                Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" }
+                Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" },
+                Regions = new() { "North", "East", "South" }, Codes = new[] { 30 }
             },
         };
 
@@ -192,6 +214,8 @@ namespace Radzen.FastGrid.Tests
                 Bonus = i % 3 == 0 ? null : (decimal?)(i * 1.5m),
                 Hired = new DateTime(2020, 1, 1).AddDays(i),
                 Customer = new Company { Name = "Company" + i },
+                Regions = new() { "Region" + i },
+                Codes = new[] { i },
             })
             .ToList();
     }

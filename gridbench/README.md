@@ -235,6 +235,32 @@ materialized, counted or string-formatted unless one of them is true. Re-measure
 
 That is the whole cost of its existence: 0.13 KB, inside the run-to-run noise.
 
+### Filtering
+
+Filters compose through `QueryableExtension.Where(source, descriptors, ...)` - public, and a typed
+expression tree rather than a parsed predicate string, so an Entity Framework query still translates.
+The grid exposes its filters as `FilterDescriptor`s and accepts them back, which is the currency
+`RadzenDataFilter` and `LoadData` already speak. Re-measured with nothing filtered: 149.65 KB, against
+149.29 KB before it was added.
+
+The built-in filter UI is deliberately one text box per column, in a second header row matching
+`RadzenDataGrid`'s `div.rz-cell-filter > div.rz-cell-filter-content > span.rz-cell-filter-label`
+structure exactly. No operator menu, no date popup, no numeric range, no enum picker - those are most
+of `RadzenDataGrid`'s filter code and none of its filter engine. `FilterTemplate` replaces the box for
+any column that needs more.
+
+### Collection-valued columns
+
+A column bound to a collection lists its members rather than stringifying the collection, and filters
+a row in when any member matches. Re-measured with no collection column present: 149.84 KB, against
+149.65 KB before - the element type is resolved once per closed generic type rather than per column,
+which is what closed the 1.2 KB the first version cost.
+
+Filtering an **array** turned out to be broken in `QueryableExtension` itself, and is fixed here rather
+than worked around: the collection's item type was read only from generic arguments, so an array
+property was left with none and the predicate was built against the array - `the binary operator Equal
+is not defined for Int32[] and Int32`. `RadzenDataGrid` had the same fault.
+
 ### The trap it walked into first
 
 The first version called `StateHasChanged()` from the parameter-set path. `ComponentBase` already
@@ -262,7 +288,7 @@ It is now a test project that runs in CI with nobody watching:
 dotnet test Radzen.Blazor.FastGrid.Tests
 ```
 
-98 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
+192 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
 8 x 5 data in the same run, in two layers:
 
 - **Markup** (`MarkupParityTests`) - the table's `rz-grid-table` / `rz-grid-table-striped`; `rz-data-row`

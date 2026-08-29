@@ -198,7 +198,9 @@ namespace Radzen.FastGrid
                 return Filter(column, null);
             }
 
-            var type = Nullable.GetUnderlyingType(column.FilterPropertyType) ?? column.FilterPropertyType;
+            // The element type, not the property type: a filter on a list of dates is compared against a
+            // date, and Convert.ChangeType would have no idea what to do with the list.
+            var type = Nullable.GetUnderlyingType(column.FilterElementType) ?? column.FilterElementType;
 
             if (type == typeof(string) || type == typeof(object))
             {
