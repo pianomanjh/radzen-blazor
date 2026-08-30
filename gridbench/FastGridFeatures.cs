@@ -156,16 +156,27 @@ public class FastGridFeatureBench
     [Benchmark(Description = "+ footer templates that aggregate")]
     public Task FooterAggregate() => Render(null, aggregates ??= Templated(true, people));
 
+    // Against the sorted-by-one row below, not against bare: bare is not sorted at all, so measuring
+    // multi-column sorting against it charges the second sort for the cost of sorting at all.
+    [Benchmark(Description = "+ sorted by one column")]
+    public Task SingleSort() => Render(p => p["AllowSorting"] = true, Sorted(1));
+
     [Benchmark(Description = "+ sorted by two columns")]
     public Task MultiSort() => Render(p =>
     {
         p["AllowSorting"] = true;
         p["AllowMultiColumnSorting"] = true;
         p["ShowMultiColumnSortingIndex"] = true;
-    }, MultiSorted);
+    }, Sorted(2));
+
+    static RenderFragment one;
+    static RenderFragment two;
+
+    static RenderFragment Sorted(int count) =>
+        count == 1 ? one ??= SortedBy(1) : two ??= SortedBy(2);
 
     // Declared rather than clicked, so the sort is in place for the render being measured.
-    static readonly RenderFragment MultiSorted = b =>
+    static RenderFragment SortedBy(int count) => b =>
     {
         var s = 0;
 
@@ -182,6 +193,9 @@ public class FastGridFeatureBench
         b.AddAttribute(s++, "Title", "Age");
         b.AddAttribute(s++, "SortOrder", SortOrder.Ascending);
         b.CloseComponent();
+
+        // Age repeats every 45 rows, so the second sort has real work to do rather than tie-breaking
+        // a key that is already unique.
         b.OpenComponent<PropertyColumn<Person, DateTime>>(s++);
         b.AddAttribute(s++, "Property", (Expression<Func<Person, DateTime>>)(x => x.Hired));
         b.AddAttribute(s++, "Title", "Hired");
@@ -189,7 +203,12 @@ public class FastGridFeatureBench
         b.OpenComponent<PropertyColumn<Person, decimal>>(s++);
         b.AddAttribute(s++, "Property", (Expression<Func<Person, decimal>>)(x => x.Salary));
         b.AddAttribute(s++, "Title", "Salary");
-        b.AddAttribute(s++, "SortOrder", SortOrder.Descending);
+
+        if (count > 1)
+        {
+            b.AddAttribute(s++, "SortOrder", SortOrder.Descending);
+        }
+
         b.CloseComponent();
     };
 
