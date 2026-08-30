@@ -131,15 +131,25 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void AnExplicitSortByMakesItSortableAgain()
+        public void ASortByOfTheCollectionsOwnTypeDoesNotMakeItSortable()
         {
+            // SortBy on a PropertyColumn is typed at TProp, which for a collection column is the
+            // collection - so the only sort key the type parameter admits is another uncomparable one.
+            // Offering it produced a header with rz-sortable-column and an onclick that threw
+            // InvalidOperationException from Comparer<List<string>>.Default on the first click.
+            // CollectionColumn, whose SortBy names a member, is the way to sort one of these.
             using var ctx = new TestContext();
 
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, List<string>>(p => p.Regions, sortByPath: x => x.Regions)),
                 p => p.Add(g => g.AllowSorting, true));
 
-            Assert.Contains("rz-sortable-column", cut.FindAll("thead th")[0].ClassName);
+            var header = cut.FindAll("thead th")[0];
+
+            Assert.DoesNotContain("rz-sortable-column", header.ClassName);
+
+            // No handler at all, so there is nothing to click and nothing to throw.
+            Assert.Null(header.QuerySelector("div")!.GetAttribute("onclick"));
         }
 
         [Fact]

@@ -22,6 +22,7 @@ namespace Radzen.FastGrid
         Expression<Func<TItem, TProp>>? filterBy;
         Func<TItem, string?>? cellText;
         string? format;
+        string? separator;
 
         /// <summary>The property this column displays.</summary>
         [Parameter, EditorRequired] public Expression<Func<TItem, TProp>> Property { get; set; } = default!;
@@ -47,6 +48,7 @@ namespace Radzen.FastGrid
         public bool IsCollection => ElementType is not null;
 
         string? path;
+        string? displayPath;
 
         /// <inheritdoc />
         public override string? PropertyPath => path;
@@ -64,7 +66,11 @@ namespace Radzen.FastGrid
         static readonly Type? ElementType = CollectionElementType(typeof(TProp));
 
         /// <inheritdoc />
-        public override string? HeaderText => Title ?? path;
+        /// <remarks>
+        /// The displayed property, not the sort key: a column showing First and sorting by Last is a
+        /// column of first names, and heading it "Last" describes the ordering rather than the cells.
+        /// </remarks>
+        public override string? HeaderText => Title ?? displayPath;
 
         /// <inheritdoc />
         public override string? FilterPropertyPath => filterPath;
@@ -78,12 +84,22 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override void OnParametersSet()
         {
-            base.OnParametersSet();
+            Derive();
 
+            // After Derive, not before: the base picks the default filter operator from
+            // EffectiveFilterType, which for a column declared as object is read off the filter path -
+            // and that path is derived below. Called first, it defaulted such a column to Equals, and
+            // nothing afterwards recomputes it, so a declared FilterValue matched nothing for good.
+            base.OnParametersSet();
+        }
+
+        void Derive()
+        {
             // Equivalent rather than ReferenceEquals: Razor hands this a freshly built expression tree on
             // every render, so reference equality never holds for a column authored in markup and the
             // column recompiled per render. Measured at 5x the render cost of a grid that did not.
             if (format == Format
+                && separator == Separator
                 && PropertyPathResolver.Equivalent(property, Property)
                 && PropertyPathResolver.Equivalent(sortBy, SortBy)
                 && PropertyPathResolver.Equivalent(filterBy, FilterBy))
@@ -96,13 +112,22 @@ namespace Radzen.FastGrid
             filterBy = FilterBy;
             format = Format;
 
+            // Separator is baked into the delegate below, so it belongs in the guard above: without it
+            // a column bound to a user's choice of separator kept the first one for good.
+            separator = Separator;
+
             // Built by a static method rather than inline: the lambdas below capture the compiled getter,
             // and a lambda capturing a local makes the compiler allocate the enclosing method's display
             // class on entry - here, on every parameter set of every column, taken branch or not.
-            cellText = BuildCellText(Property.Compile(), Separator, Format is { Length: > 0 } ? Format : null);
+            // A column with no Property renders empty cells rather than throwing out of the render: the
+            // parameter is EditorRequired, which is a warning, not a guarantee.
+            cellText = Property is null
+                ? null
+                : BuildCellText(Property.Compile(), Separator, Format is { Length: > 0 } ? Format : null);
 
             var propertyPath = PropertyPathResolver.For(Property);
 
+            displayPath = propertyPath;
             path = SortBy is null ? propertyPath : PropertyPathResolver.For(SortBy);
 
             // Filtering follows the displayed property, not the sort key: a column that displays First
@@ -197,16 +222,20 @@ namespace Radzen.FastGrid
                 return null;
             }
 
+            // FilterBy, not Property: the values offered have to be the ones the filter compares, or
+            // the list shows one column's values and every choice filters another column by them.
+            var selector = FilterBy ?? Property;
+
             if (!IsCollection)
             {
-                return source.Select(Property).Distinct();
+                return source.Select(selector).Distinct();
             }
 
             // TProp is the collection, so the element type is not a type parameter here and SelectMany
             // has to be built by hand. CollectionColumn<TItem, TElement> has it as a parameter and does
             // this as an ordinary generic call.
             return Projection
-                .SelectMany(source, typeof(TItem), ElementType!, AsSequenceSelector())
+                .SelectMany(source, typeof(TItem), ElementType!, AsSequenceSelector(selector))
                 .Distinct();
         }
 
@@ -215,33 +244,36 @@ namespace Radzen.FastGrid
         /// SelectMany's signature demands - a lambda returning <c>List&lt;T&gt;</c> is not the same
         /// delegate type, however assignable the values are.
         /// </summary>
-        LambdaExpression AsSequenceSelector()
+        static LambdaExpression AsSequenceSelector(Expression<Func<TItem, TProp>> selector)
         {
             var sequenceType = typeof(IEnumerable<>).MakeGenericType(ElementType!);
 
             if (typeof(TProp) == sequenceType)
             {
-                return Property;
+                return selector;
             }
 
             // A widening reference conversion, which every provider strips before translating.
             return Expression.Lambda(
                 typeof(Func<,>).MakeGenericType(typeof(TItem), sequenceType),
-                Expression.Convert(Property.Body, sequenceType),
-                Property.Parameters);
+                Expression.Convert(selector.Body, sequenceType),
+                selector.Parameters);
         }
 
         /// <inheritdoc />
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
-            => builder.AddContent(sequence, cellText!(item));
+            => builder.AddContent(sequence, cellText?.Invoke(item));
 
         /// <summary>
-        /// A collection column has nothing to order by - no provider can sort rows by a list - so it is
-        /// sortable only when an explicit <see cref="SortBy" /> names something that can be. A column
-        /// typed as <c>object</c> whose values happen to be collections cannot be recognised statically
-        /// and stays sortable; give it a real type, or set <c>Sortable="false"</c>.
+        /// A collection column has nothing to order by: no provider can sort rows by a list, and
+        /// <see cref="SortBy" /> here is typed at <typeparamref name="TProp" />, which for such a column
+        /// is the collection - so the only sort key the type parameter admits is another uncomparable
+        /// one, and offering it produced a clickable header that threw on the first click. Use
+        /// <see cref="CollectionColumn{TItem, TElement}" />, whose SortBy names a member instead. A
+        /// column typed as <c>object</c> whose values happen to be collections cannot be recognised
+        /// statically and stays sortable; give it a real type, or set <c>Sortable="false"</c>.
         /// </summary>
-        public override bool CanSort => Sortable && path is not null && (!IsCollection || SortBy is not null);
+        public override bool CanSort => Sortable && path is not null && !IsCollection;
 
         /// <summary>
         /// The element type of a collection-valued property, or null when the property is a single value.

@@ -159,9 +159,11 @@ namespace Radzen.FastGrid
         /// <summary>
         /// The member of one element to show, or the element itself when no display member was named.
         /// The cast is what a non-generic join costs; the alternative is a copy of the loop per column
-        /// type, which is what this shares away.
+        /// type, which is what this shares away. A null member is left null rather than read through: a
+        /// partly populated graph is not a reason to take the render down.
         /// </summary>
-        object? Select(object? element) => member is null ? element : member((TElement)element!);
+        object? Select(object? element) =>
+            member is null || element is null ? element : member((TElement)element);
 
         /// <inheritdoc />
         /// <remarks>
