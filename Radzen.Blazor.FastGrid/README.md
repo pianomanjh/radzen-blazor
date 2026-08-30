@@ -296,6 +296,23 @@ not the markup: the toggle cell was trimmed to the button alone after the geomet
 RadzenDataGrid's empty `rz-column-title` span takes no space, and the allocation did not move, because
 `RenderTreeBuilder` rents its frame array from a pool.
 
+Against the same feature on `RadzenDataGrid`, which is the comparison that decides whether 403 KB is a
+lot:
+
+| | Allocated | Row detail costs it |
+| --- | ---: | ---: |
+| `RadzenFastGrid` | 151.47 KB -> 555.13 KB | **+404 KB** |
+| `RadzenDataGrid` | 18,191 KB -> 23,967 KB | **+5,775 KB** |
+
+Row detail costs `RadzenDataGrid` fourteen times what it costs this grid, because there it is a
+component per row that can be expanded rather than a cell and a delegate. With the feature on both
+sides this grid is **43x leaner** - further ahead than the 120x-to-33x drop against a `RadzenDataGrid`
+with the feature switched off suggests, because that comparison charges one grid for the feature and
+not the other.
+
+QuickGrid has no row detail, so there is nothing to compare; a `RadzenFastGrid` with it on is heavier
+than QuickGrid, which is the price of doing something QuickGrid does not do.
+
 `ShowExpandColumn="false"` is the way out where the cost matters: the feature stays, the per-row toggle
 goes, and expansion comes from your own UI through `ToggleRow`. That is +0.27 KB rather than +403.
 

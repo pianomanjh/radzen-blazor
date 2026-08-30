@@ -124,9 +124,23 @@ three things:
   and is itself the answer to "why is this grid heavier than QuickGrid now".
 
 The second is the one that decides. `RadzenDataGrid`'s baseline already includes the cost of features
-it cannot switch off, so comparing a switched-on FastGrid against a switched-off RadzenDataGrid
-flatters this grid; comparing both with the feature on is the honest test, and is what the reference
-rows exist for.
+it cannot switch off, so comparing a switched-on FastGrid against a switched-off RadzenDataGrid is not
+like for like; comparing both with the feature on is the honest test, and is what the reference rows
+exist for.
+
+Worth recording that the honest test did not go the way it was expected to. The assumption when these
+rows were added was that comparing a switched-on FastGrid against a switched-off RadzenDataGrid
+*flattered* FastGrid. It does the opposite:
+
+| N=1000 | Allocated | Row detail costs it |
+| --- | ---: | ---: |
+| `RadzenFastGrid` | 151.47 KB -> 555.13 KB | +404 KB |
+| `RadzenDataGrid` | 18,191 KB -> 23,967 KB | +5,775 KB |
+
+Row detail is fourteen times more expensive on `RadzenDataGrid`, so with it on both sides the gap
+*widens* from 120x to 43x rather than narrowing to 33x. The unfair comparison was the pessimistic one.
+Which is the argument for the reference rows either way: the direction of the error was not guessable,
+and one of the two numbers had never been measured at all.
 
 ## Marginal cost of each feature on a slim renderer
 
