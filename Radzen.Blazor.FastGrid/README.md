@@ -132,7 +132,24 @@ puts each cell's value in a `title`, and is off for the same reason.
 
 ### What each of these costs
 
-Measured on the component, 1000 rows x 5 columns, one feature at a time against the same baseline:
+Two different questions, and the table below answers only the second.
+
+**What does having them cost?** Every feature here sits behind a check that is false by construction
+when it is unused - `RowClick.HasDelegate`, `column.CellStyle is { }`, `FooterTemplate is not null`,
+`sorts.Count == 0`. So an unused feature costs a branch, and the branches are per render or per column,
+never per row. Measured end to end: the commit before any of this work renders 1000 x 5 in **150.44 KB**,
+and the same grid with every feature on this page present and all of them switched off renders it in
+**151.30 KB**. That is **+0.86 KB, or 0.6%**, and it is constant rather than per-row - at 200 rows the
+difference is the same fraction of a kilobyte. It is two lists the grid keeps for its drawn columns and
+its sort, allocated once per component.
+
+Three things are not conditional, and belong to that 0.86 KB rather than to the table: the drawn-column
+list is rebuilt every render whether or not any column sets `Visible` or `OrderIndex`; the colgroup and
+footer are each decided by a scan of the columns every render; and `WhiteSpace` is always applied, since
+it chooses the cell class rather than adding one.
+
+**What does using them cost?** This, measured on the component, 1000 rows x 5 columns, one feature at a
+time against the same baseline:
 
 | | Allocated | Marginal | Time |
 | --- | ---: | ---: | ---: |
