@@ -7,9 +7,9 @@ At 1000 rows x 5 columns, rendering identical output:
 
 | | Time | Allocated |
 | --- | ---: | ---: |
-| `RadzenDataGrid` | 16,849 us | 18,189 KB |
-| **`RadzenFastGrid`** | **1,072 us** | **150 KB** |
-| Blazor `QuickGrid` | 2,270 us | 370 KB |
+| `RadzenDataGrid` | 17,790 us | 18,189 KB |
+| **`RadzenFastGrid`** | **1,178 us** | **151 KB** |
+| Blazor `QuickGrid` | 2,342 us | 370 KB |
 
 It gets there by not doing three things a general-purpose grid has to: no component per row, no cascading
 value per row, no render fragment per cell. Those are what inline editing needs, and this grid does not

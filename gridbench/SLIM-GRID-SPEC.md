@@ -192,12 +192,13 @@ Verified against the real stylesheet: rendered geometry matches exactly (header 
   of this line also put it on the `td`. Harmless under the shipped themes — every `.rz-cell-data` rule is
   a descendant selector — but it is not what Radzen emits, and a custom theme writing a bare
   `.rz-cell-data` rule would have applied it twice.
-- **No `title="<value>"` on the cell span — decided, not overlooked.** `RadzenDataGrid` emits one, so a
-  cell truncated to an ellipsis reveals its full value on hover. It costs ~61 B/cell (§ *Marginal cost*
-  in `README.md`) — at 1000 x 5 that is 305 KB against a 149 KB budget, so it would triple the
-  component's allocation to restore a hover affordance. It is deliberately not paid. A caller who needs
-  it can use a `TemplateColumn` for that column and emit the attribute there, paying for it only where
-  it is wanted.
+- **`title="<value>"` on the cell span is opt-in, not absent.** `RadzenDataGrid` always emits one, so a
+  cell truncated to an ellipsis reveals its full value on hover. This spec predicted ~61 B/cell from the
+  prototype — 305 KB at 1000 x 5, a tripling — and said not to pay it. The shipped component measures
+  **+116 KB**, about 23 B/cell, so it is +77% rather than 3x: the prediction was pessimistic because the
+  real column's text path is cheaper than the prototype's. It is still off by default, being an attribute
+  per cell plus a second derivation of the cell's text, and a `TemplateColumn` is still the way to have
+  it on one column rather than all of them.
 - **Header cell is structurally coupled:** the theme gives `th` `padding: 0` and hangs the header padding
   off a *direct child div*. `th > div > span.rz-column-title > span.rz-column-title-content` is required.
   Without the div the header row renders shorter. Per column, not per row, so it costs nothing.
