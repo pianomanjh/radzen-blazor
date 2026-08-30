@@ -272,6 +272,96 @@ namespace Radzen.Blazor.Tests
             Assert.Equal("true", Checked("Keyboard"));
         }
 
+        // A HashSet built with an IEqualityComparer answers membership its own way, and CheckedValues is
+        // IEnumerable<object>, so such a set arrives as ICollection<object> - which is exactly what
+        // Cast().Contains() dispatched to before the memo. Rebuilding it as a HashSet with the default
+        // comparer asks a different question and gets a different answer.
+        sealed class ByName : IEqualityComparer<object>
+        {
+            public new bool Equals(object x, object y) => Name(x) == Name(y);
+
+            public int GetHashCode(object obj) => Name(obj)?.GetHashCode() ?? 0;
+
+            static string Name(object o) => (o as Product)?.Name;
+        }
+
+        [Fact]
+        public void Tree_HonoursTheComparerOnTheBoundCheckedValues()
+        {
+            using var ctx = new TestContext();
+
+            var laptop = new Product { Name = "Laptop" };
+            var keyboard = new Product { Name = "Keyboard" };
+
+            // A different instance carrying the same name. Under the set's own comparer the tree's Laptop
+            // is checked; under reference equality it is not.
+            var checkedValues = new HashSet<object>(new ByName()) { new Product { Name = "Laptop" } };
+
+            var component = ctx.RenderComponent<RadzenTree>(parameters =>
+            {
+                parameters.Add(p => p.AllowCheckBoxes, true);
+                parameters.Add(p => p.CheckedValues, checkedValues);
+                parameters.Add(p => p.Data, new List<Product> { laptop, keyboard });
+                parameters.Add(p => p.ChildContent, builder =>
+                {
+                    builder.OpenComponent<RadzenTreeLevel>(0);
+                    builder.AddAttribute(1, "TextProperty", "Name");
+                    builder.AddAttribute(2, "HasChildren", (object product) => false);
+                    builder.CloseComponent();
+                });
+            });
+
+            string Checked(string text) => component.FindAll("[role=treeitem]")
+                .First(i => i.TextContent.Contains(text)).GetAttribute("aria-checked");
+
+            Assert.Equal("true", Checked("Laptop"));
+            Assert.Equal("false", Checked("Keyboard"));
+        }
+
+        // ShouldRender on the tree only runs when the tree renders. RadzenTreeItem renders independently -
+        // after its own click, or its own StateHasChanged - and reads the memo through IsChecked without
+        // the tree's lifecycle running at all, so a memo discarded only on the tree's renders survived
+        // into an item-initiated one and answered from state that had already changed.
+        [Fact]
+        public void Tree_ReflectsSameCountMutation_OnItemOnlyRender()
+        {
+            using var ctx = new TestContext();
+
+            var laptop = new Product { Name = "Laptop" };
+            var phone = new Product { Name = "Phone" };
+            var keyboard = new Product { Name = "Keyboard" };
+            var checkedValues = new List<object> { laptop, phone };
+
+            var component = ctx.RenderComponent<RadzenTree>(parameters =>
+            {
+                parameters.Add(p => p.AllowCheckBoxes, true);
+                parameters.Add(p => p.CheckedValues, checkedValues);
+                parameters.Add(p => p.Data, new List<Product> { laptop, phone, keyboard });
+                parameters.Add(p => p.ChildContent, builder =>
+                {
+                    builder.OpenComponent<RadzenTreeLevel>(0);
+                    builder.AddAttribute(1, "TextProperty", "Name");
+                    builder.AddAttribute(2, "HasChildren", (object product) => false);
+                    builder.CloseComponent();
+                });
+            });
+
+            string Checked(string text) => component.FindAll("[role=treeitem]")
+                .First(i => i.TextContent.Contains(text)).GetAttribute("aria-checked");
+
+            Assert.Equal("true", Checked("Laptop"));
+
+            // Same list, same count, nothing observable changed about it - and then a render that only
+            // the item raises, with the tree's own lifecycle untouched.
+            checkedValues[0] = keyboard;
+
+            component.FindAll("[role=treeitem]").First(i => i.TextContent.Contains("Laptop")).Click();
+
+            // Laptop only. Keyboard's item did not render in that batch, so its markup is still the
+            // markup of the previous one - which is Blazor working correctly, not the memo.
+            Assert.Equal("false", Checked("Laptop"));
+        }
+
         [Fact]
         public void Tree_Renders_WithExpandableItems()
         {

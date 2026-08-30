@@ -96,6 +96,20 @@ namespace Radzen.Blazor
         [CascadingParameter]
         public RadzenTree? Tree { get; set; }
 
+        /// <inheritdoc />
+        protected override void OnAfterRender(bool firstRender)
+        {
+            // An item renders independently of the tree - after its own click, or its own StateHasChanged -
+            // and reads the tree's checked-value memo through IsChecked without the tree's own lifecycle
+            // running. Discarding it here, at the end of every batch this item took part in, is what keeps
+            // the memo from outliving the state it was built from on that path; the tree does the same for
+            // its own renders. After the batch rather than before it, so the memo still spans a whole tree
+            // render pass, which is the only place it pays.
+            Tree?.DiscardCheckedValuesMemo();
+
+            base.OnAfterRender(firstRender);
+        }
+
         /// <summary>
         /// The RadzenTreeItem which contains this item.
         /// </summary>

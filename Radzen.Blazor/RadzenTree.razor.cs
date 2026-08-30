@@ -763,18 +763,30 @@ namespace Radzen.Blazor
         // memoized as a set so the test is O(1) per node rather than a per-call Cast().Contains() scan -
         // and with AllowCheckParents a single node's tri-state already asks this once per descendant.
         //
-        // The memo lives for exactly one render pass. Nothing about a bound collection can be inferred
+        // The memo lives for exactly one render batch. Nothing about a bound collection can be inferred
         // from the outside: a caller is free to edit it in place without changing its reference, its
         // count, or anything else observable, and a render the tree raises itself never passes through
-        // OnParametersSet. So the memo is not validated, it is discarded - at the start of every render,
-        // where it can never outlive the state it was built from. Building it costs one pass over
-        // CheckedValues, against the per-node scans it replaces within that same render.
+        // OnParametersSet. So the memo is not validated, it is discarded - see DiscardCheckedValuesMemo,
+        // which every render that could have read it calls on its way out. Building it costs one pass over
+        // CheckedValues, against the per-node scans it replaces within that same batch.
         internal bool IsValueChecked(object? value)
         {
             var current = CheckedValues;
+
             if (current == null)
             {
                 return false;
+            }
+
+            // A collection that answers membership for itself is the authority on it, and a memo built
+            // with EqualityComparer<object>.Default answers a different question. CheckedValues is
+            // IEnumerable<object>, so a HashSet<object> built with an IEqualityComparer arrives here as
+            // ICollection<object> and this is exactly what Cast().Contains() used to dispatch to - it is
+            // also already O(1), so there is nothing for a memo to buy. Only the collections whose
+            // Contains is known to be default equality are memoized.
+            if (current is ICollection<object?> collection && !AnswersByDefaultEquality(collection))
+            {
+                return collection.Contains(value);
             }
 
             // SetCheckedValues assigns CheckedValues directly, so a reassignment can also land between two
@@ -788,10 +800,31 @@ namespace Radzen.Blazor
             return checkedValuesSet.Contains(value);
         }
 
+        // The collections whose Contains is EqualityComparer<object>.Default, and which the memo can
+        // therefore answer for without changing the answer. Anything else - a set with a comparer, or a
+        // caller's own ICollection - is asked directly. ObservableCollection is here because it always
+        // wraps a List; Collection<T> in general is not, since it wraps whatever IList it was given.
+        static bool AnswersByDefaultEquality(ICollection<object?> collection) => collection switch
+        {
+            object?[] => true,
+            List<object?> => true,
+            System.Collections.ObjectModel.ObservableCollection<object?> => true,
+            HashSet<object?> set => set.Comparer.Equals(EqualityComparer<object?>.Default),
+            _ => false,
+        };
+
+        // Called by every render that could have read the memo, on its way out: the tree's own, and each
+        // RadzenTreeItem's. An item renders independently of the tree - after its own click, or its own
+        // StateHasChanged - and reaches IsValueChecked without the tree's lifecycle running at all, so
+        // discarding only on the tree's renders left a memo that outlived the state it was built from and
+        // was then read by an item-initiated render. Discarding after the batch rather than before one is
+        // what lets the memo still span a whole tree render pass, which is where it pays.
+        internal void DiscardCheckedValuesMemo() => checkedValuesSet = null;
+
         /// <inheritdoc />
         protected override bool ShouldRender()
         {
-            checkedValuesSet = null;
+            DiscardCheckedValuesMemo();
             return base.ShouldRender();
         }
 
@@ -799,8 +832,15 @@ namespace Radzen.Blazor
         protected override void OnParametersSet()
         {
             // ShouldRender is not consulted for a component's first render; this covers it.
-            checkedValuesSet = null;
+            DiscardCheckedValuesMemo();
             base.OnParametersSet();
+        }
+
+        /// <inheritdoc />
+        protected override void OnAfterRender(bool firstRender)
+        {
+            DiscardCheckedValuesMemo();
+            base.OnAfterRender(firstRender);
         }
 
         /// <inheritdoc />
