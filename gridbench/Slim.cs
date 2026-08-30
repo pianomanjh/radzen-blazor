@@ -138,6 +138,9 @@ public class SlimBench
     static readonly (string prop, string title)[] Cols =
         { ("Id", "Id"), ("Name", "Name"), ("Age", "Age"), ("Hired", "Hired"), ("Salary", "Salary") };
 
+    /// <summary>The same five columns, for the feature bench's reference rows.</summary>
+    internal static RenderFragment RadzenColumnsForComparison => RadzenCols;
+
     static readonly RenderFragment RadzenCols = builder =>
     {
         int s = 0;

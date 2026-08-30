@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using Radzen;
+using Radzen.Blazor;
 using Radzen.FastGrid;
 
 // What each feature added to RadzenFastGrid actually costs, measured on the shipped component rather
@@ -91,6 +92,32 @@ public class FastGridFeatureBench
 
     [Benchmark(Baseline = true, Description = "bare")]
     public Task Bare() => Render(null);
+
+    // The two reference points, in the same table as the features rather than in a document beside it.
+    // A feature's marginal cost says what it cost; only these say whether the grid is still worth using
+    // once it is paid - and for row detail the answer differs depending on which one you ask.
+    [Benchmark(Description = "= RadzenDataGrid, same columns")]
+    public async Task ReferenceDataGrid()
+    {
+        using var r = new BenchmarkRenderer(services);
+
+        await r.RenderComponent(typeof(RadzenDataGrid<Person>), ParameterView.FromDictionary(
+            new Dictionary<string, object?> { ["Data"] = people, ["Columns"] = SlimBench.RadzenColumnsForComparison }));
+    }
+
+    [Benchmark(Description = "= RadzenDataGrid + row detail")]
+    public async Task ReferenceDataGridRowDetail()
+    {
+        using var r = new BenchmarkRenderer(services);
+
+        await r.RenderComponent(typeof(RadzenDataGrid<Person>), ParameterView.FromDictionary(
+            new Dictionary<string, object?>
+            {
+                ["Data"] = people,
+                ["Columns"] = SlimBench.RadzenColumnsForComparison,
+                ["Template"] = Detail,
+            }));
+    }
 
     [Benchmark(Description = "+ widths and alignment")]
     public Task Geometry() => Render(null, Sized);

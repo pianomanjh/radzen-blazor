@@ -107,6 +107,27 @@ templates. Removing them unconditionally breaks any `RadzenTextBox` (or similar)
 `Template`, and would also un-shadow an outer `EditContext` when the grid sits inside an `EditForm`.
 A shippable version has to cascade conditionally, so the 25% is not free.
 
+## Recording a measurement
+
+A feature's marginal cost answers "what did this cost". It does not answer "is this grid still worth
+using", which is the question anyone reading a commit is actually asking - and the two can point
+different ways. Row detail costs 403 KB, which leaves the grid 33x leaner than `RadzenDataGrid` and,
+for the first time, *heavier* than QuickGrid. Neither of those facts was in the commit that added it.
+
+So `FastGridFeatureBench` carries the two reference points as rows of its own, in the same table as the
+features rather than in a document beside it, and a commit that changes what the grid costs records
+three things:
+
+- what the feature costs against the bare grid,
+- where that leaves the grid against `RadzenDataGrid` with the same feature on,
+- and against QuickGrid, noting where QuickGrid has no such feature to compare - which is most of them,
+  and is itself the answer to "why is this grid heavier than QuickGrid now".
+
+The second is the one that decides. `RadzenDataGrid`'s baseline already includes the cost of features
+it cannot switch off, so comparing a switched-on FastGrid against a switched-off RadzenDataGrid
+flatters this grid; comparing both with the feature on is the honest test, and is what the reference
+rows exist for.
+
 ## Marginal cost of each feature on a slim renderer
 
 Measured by adding exactly one feature to the bare slim renderer, 1000 rows x 5 columns, same rows and
