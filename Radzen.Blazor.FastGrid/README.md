@@ -148,6 +148,29 @@ large table:
 </RadzenFastDropDownDataGrid>
 ```
 
+A lookup is paid for twice - once by every form that carries it, once by the user who opens it - so both
+are measured. Over 1,000 rows, ten per page, three columns, sorting on:
+
+| | Time | Allocated |
+| --- | ---: | ---: |
+| `RadzenDropDownDataGrid`, never opened | 4,275 us | 177.3 KB |
+| **`RadzenFastDropDownDataGrid`, never opened** | **4.3 us** | **6.3 KB** |
+| `RadzenDropDownDataGrid`, opened | 4,273 us | 178.4 KB |
+| **`RadzenFastDropDownDataGrid`, opened** | **151 us** | **39.4 KB** |
+
+Both render the same thirty cells when open. The rows behind the lookup barely move either figure - at
+fifty rows the numbers are the same - because paging means only ten of them are ever drawn; what is
+being compared is the shape of the render, not the size of the source.
+
+The second pair costs the first almost nothing: `RadzenDropDownDataGrid` renders its popup grid whether
+or not anyone opens it, so a form with twenty lookups on it has drawn twenty grids before the user
+touches one. This one builds nothing until the first open - 26 render-tree frames against 716 - and
+keeps what it builds afterwards.
+
+Filtering is off on both in that measurement, because they do not offer the same thing:
+`RadzenDropDownDataGrid` has one search box above its popup grid, this one has the grid's own per-column
+filter row.
+
 It is **not** a drop-in replacement for `RadzenDropDownDataGrid`. That component's columns are
 `RadzenDataGridColumn`, which name their property with a string; these are the grid's own columns, which
 name it with an expression - so the row type is a type parameter here and the authoring is checked at
