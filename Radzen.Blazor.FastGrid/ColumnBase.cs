@@ -93,6 +93,7 @@ namespace Radzen.FastGrid
         internal string CellClass => ClassFor(WhiteSpace);
 
         string? cellStyle;
+        bool cellStyleKnown;
         TextAlign cellStyleAlign;
         string? cellStyleMin;
         string? cellStyleMax;
@@ -107,7 +108,10 @@ namespace Radzen.FastGrid
         {
             get
             {
-                if (cellStyle is not null
+                // Tracked with a flag rather than by testing cellStyle for null, because null is the
+                // answer for the commonest column there is - the memo would never engage for exactly
+                // the case it exists to keep cheap.
+                if (cellStyleKnown
                     && cellStyleAlign == TextAlign
                     && string.Equals(cellStyleMin, MinWidth, StringComparison.Ordinal)
                     && string.Equals(cellStyleMax, MaxWidth, StringComparison.Ordinal))
@@ -115,6 +119,7 @@ namespace Radzen.FastGrid
                     return cellStyle;
                 }
 
+                cellStyleKnown = true;
                 cellStyleAlign = TextAlign;
                 cellStyleMin = MinWidth;
                 cellStyleMax = MaxWidth;
