@@ -329,6 +329,21 @@ its own method restored 150 KB exactly.
 The frame counter said the tree was identical, so only the benchmark could see this - which is why the
 numbers are re-measured after every change rather than at the end.
 
+### The visual pass, second time
+
+The component grew a filter row, a check-box list and a pager after the first visual pass, so
+`dotnet run --project gridbench -- visual <dir>` now dumps a fully featured grid as a fourth pane, sorted
+so the sort icon is in the output at all - both grids draw it only on the column actually sorted.
+
+It found one divergence: `RadzenDataGrid` emits `rzi-sort` alongside the direction class and this did
+not. Inert under the shipped themes, because the direction rule wins for both glyph and colour either
+way, but a custom theme's `.rzi-sort` rule would apply to one grid and not the other. Now matched.
+
+It also confirmed what the geometry check cannot: that the pager, the filter boxes and the check-box
+list are laid out and drawn correctly against the real theme. Worth noting the first screenshot showed
+every icon as raw ligature text - `first_page`, `arrow_drop_down` - which was the harness not copying the
+font files next to the stylesheet, not the component. Look twice before believing a visual fault.
+
 ### The trap it walked into first
 
 The first version called `StateHasChanged()` from the parameter-set path. `ComponentBase` already

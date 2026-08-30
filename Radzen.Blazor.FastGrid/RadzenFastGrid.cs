@@ -222,8 +222,11 @@ namespace Radzen.FastGrid
                 {
                     builder.OpenElement(20, "span");
                     builder.AddAttribute(21, "class", SortDescending
-                        ? "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort-desc"
-                        : "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort-asc");
+                        // rzi-sort as well as the direction class, which is what RadzenDataGrid emits.
+                        // The direction rule wins for both glyph and colour either way, but matching the
+                        // class list exactly is what keeps a custom theme's rules applying to both.
+                        ? "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-desc"
+                        : "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-asc");
                     builder.CloseElement();
                 }
 

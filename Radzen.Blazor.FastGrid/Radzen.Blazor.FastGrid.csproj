@@ -8,8 +8,11 @@
     <RootNamespace>Radzen.FastGrid</RootNamespace>
     <PackageId>Radzen.Blazor.FastGrid</PackageId>
     <Description>A read-only, expression-typed data grid for Radzen.Blazor, built for large row counts.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>blazor;radzen;datagrid;grid;performance</PackageTags>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="..\Radzen.Blazor\Radzen.Blazor.csproj" />
   </ItemGroup>
 </Project>

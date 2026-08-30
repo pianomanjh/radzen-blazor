@@ -74,6 +74,42 @@ static class VisualDump
             }));
         });
 
+        // Everything the component grew after the first visual pass: a filter row, a check-box list, a
+        // pager. Allocation numbers say nothing about whether any of it renders correctly.
+        var featured = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+        {
+            p.Add(g => g.Data, Person.Make(40));
+            p.Add(g => g.AllowSorting, true);
+            p.Add(g => g.AllowFiltering, true);
+            p.Add(g => g.AllowPaging, true);
+            p.Add(g => g.PageSize, 5);
+            p.Add(g => g.ShowPagingSummary, true);
+            p.Add(g => g.PageSizeOptions, new[] { 5, 10, 20 });
+            p.Add(g => g.ChildContent, (RenderFragment)(b =>
+            {
+                var s = 0;
+                b.OpenComponent<PropertyColumn<Person, int>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, int>>)(x => x.Id));
+                b.AddAttribute(s++, "Title", "Id"); b.CloseComponent();
+                b.OpenComponent<PropertyColumn<Person, string>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, string>>)(x => x.Name));
+                b.AddAttribute(s++, "Title", "Name"); b.CloseComponent();
+                b.OpenComponent<PropertyColumn<Person, int>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, int>>)(x => x.Age));
+                b.AddAttribute(s++, "Title", "Age");
+                b.AddAttribute(s++, "FilterMode", Radzen.FilterMode.CheckBoxList); b.CloseComponent();
+                b.OpenComponent<PropertyColumn<Person, decimal>>(s++);
+                b.AddAttribute(s++, "Property", (Expression<Func<Person, decimal>>)(x => x.Salary));
+                b.AddAttribute(s++, "Format", "C");
+                b.AddAttribute(s++, "Title", "Salary"); b.CloseComponent();
+            }));
+        });
+
+        // Sorted, so the sort icon is in the dump. Both grids draw it only on the column actually
+        // sorted, so an unsorted screenshot says nothing about whether it renders at all.
+        featured.FindAll("thead th")[1].QuerySelector("div")!.Click();
+
+        File.WriteAllText(Path.Combine(outDir, "featured.html"), featured.Markup);
         File.WriteAllText(Path.Combine(outDir, "fast.html"), fast.Markup);
         File.WriteAllText(Path.Combine(outDir, "radzen.html"), radzen.Markup);
         File.WriteAllText(Path.Combine(outDir, "slim.html"), slim.Markup);
@@ -90,6 +126,7 @@ static class VisualDump
 <div class=""pane""><h2>RadzenDataGrid</h2>{radzen.Markup}</div>
 <div class=""pane""><h2>SlimGrid prototype</h2>{slim.Markup}</div>
 <div class=""pane""><h2>RadzenFastGrid</h2>{fast.Markup}</div>
+<div class=""pane""><h2>RadzenFastGrid — sorting, filtering, check-box list, paging</h2>{featured.Markup}</div>
 </body></html>";
         File.WriteAllText(Path.Combine(outDir, "compare.html"), page);
         Console.WriteLine($"wrote {outDir}/compare.html");
