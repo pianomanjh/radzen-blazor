@@ -49,7 +49,10 @@ Target: under ~1,000 KB for a realistic configuration. Anything above that means
    Bind `onclick` only when the corresponding `EventCallback.HasDelegate`.
 3. **Nothing is paid for when switched off.** Feature costs are conditional, never unconditional. The
    `oncontextmenu` modifiers in `RadzenDataGrid` cost 10.6% of its entire allocation while evaluating to
-   `false` on every cell — that is the failure mode to avoid.
+   `false` on every cell — that is the failure mode to avoid. The same trap in C# rather than Razor: a
+   lambda capturing a local makes the compiler allocate that method's display class **on entry**, not at
+   the declaration, so a per-row method with an unused closure inside a branch costs a closure per row.
+   That was 21% of this component's allocation until it was moved into its own method.
 4. **Free features are in, not out.** Selection, row-style callbacks and responsive column titles measured
    at *zero* marginal allocation. There is no performance argument for omitting them.
 
@@ -243,7 +246,10 @@ Each layer below caught real faults the previous one missed. Use all of them.
 ## 10. Open decisions
 
 - Package and namespace name.
-- Whether virtualization is in scope for v1 (`Virtualize` integration is orthogonal to the render path).
+- ~~Whether virtualization is in scope for v1~~ - **done.** `AllowVirtualization` puts the rows through
+  `Virtualize` with `SpacerElement="tr"`, and one items provider serves every source. It is exclusive
+  with paging: the two solve the same problem, so `Paging` is a single property both the pager and the
+  view read.
 - ~~Whether to support `RadzenDataFilter` interop in v1~~ - **resolved.** The grid speaks
   `FilterDescriptor` in both directions, which is what `RadzenDataFilter` emits. The path derivation of
   §4 is what makes that possible.

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Components.Rendering;
 using System.Threading.Tasks;
 using System.Collections;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.AspNetCore.Components.Web.Virtualization;
 using Radzen.Blazor;
 
 namespace Radzen.FastGrid
@@ -129,7 +130,7 @@ namespace Radzen.FastGrid
                 ? "rz-data-grid rz-datatable"
                 : "rz-data-grid rz-datatable " + CssClass);
 
-            if (AllowPaging && PagerPosition.HasFlag(PagerPosition.Top))
+            if (Paging && PagerPosition.HasFlag(PagerPosition.Top))
             {
                 RenderPager(builder, 40);
             }
@@ -142,7 +143,7 @@ namespace Radzen.FastGrid
 
             builder.CloseElement();
 
-            if (AllowPaging && PagerPosition.HasFlag(PagerPosition.Bottom))
+            if (Paging && PagerPosition.HasFlag(PagerPosition.Bottom))
             {
                 RenderPager(builder, 60);
             }
@@ -349,75 +350,127 @@ namespace Radzen.FastGrid
             builder.OpenElement(22, "tbody");
             builder.AddAttribute(23, "role", "rowgroup");
 
-            var any = false;
-            var rowClickable = RowClick.HasDelegate;
-            var selection = Selection;
-
-            foreach (var item in View())
+            if (AllowVirtualization)
             {
-                any = true;
+                RenderVirtualizedRows(builder, cols);
+            }
+            else
+            {
+                var any = false;
 
-                builder.OpenElement(24, "tr");
-                builder.AddAttribute(25, "role", "row");
+                foreach (var item in View())
+                {
+                    any = true;
 
-                // No alternating class: rz-grid-table-striped stripes with :nth-child in CSS.
-                if (selection is not null && selection.Contains(item))
-                {
-                    builder.AddAttribute(26, "class", "rz-data-row rz-state-highlight");
-                    builder.AddAttribute(27, "aria-selected", "true");
-                }
-                else
-                {
-                    builder.AddAttribute(26, "class", "rz-data-row");
+                    RenderRow(builder, cols, item);
                 }
 
-                // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
-                if (rowClickable)
+                if (!any)
                 {
-                    var captured = item;
-                    builder.AddAttribute(28, "onclick",
-                        EventCallback.Factory.Create<MouseEventArgs>(this, _ => RowClick.InvokeAsync(captured)));
+                    RenderEmpty(builder, cols);
                 }
-
-                for (var i = 0; i < cols.Count; i++)
-                {
-                    var column = cols[i];
-
-                    builder.OpenElement(29, "td");
-                    builder.AddAttribute(30, "role", "gridcell");
-
-                    // rz-cell-data belongs on the span, not here: the theme's rules for it are all
-                    // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
-                    // both places is inert under the shipped themes but would apply a custom
-                    // `.rz-cell-data { padding: ... }` twice.
-                    if (!string.IsNullOrEmpty(column.CssClass))
-                    {
-                        builder.AddAttribute(31, "class", column.CssClass);
-                    }
-
-                    builder.OpenElement(32, "span");
-                    builder.AddAttribute(33, "class", "rz-cell-data");
-                    column.RenderCell(builder, 34, item);
-                    builder.CloseElement();
-
-                    builder.CloseElement();
-                }
-
-                builder.CloseElement();
             }
 
-            if (!any && EmptyTemplate is not null)
+            builder.CloseElement();
+        }
+
+        void RenderRow(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols, TItem item)
+        {
+            var selection = Selection;
+            var rowClickable = RowClick.HasDelegate;
+
+            builder.OpenElement(24, "tr");
+            builder.AddAttribute(25, "role", "row");
+
+            // No alternating class: rz-grid-table-striped stripes with :nth-child in CSS.
+            if (selection is not null && selection.Contains(item))
             {
-                builder.OpenElement(35, "tr");
-                builder.OpenElement(36, "td");
-                builder.AddAttribute(37, "class", "rz-datatable-emptymessage");
-                builder.AddAttribute(38, "colspan", cols.Count);
-                builder.AddContent(39, EmptyTemplate);
+                builder.AddAttribute(26, "class", "rz-data-row rz-state-highlight");
+                builder.AddAttribute(27, "aria-selected", "true");
+            }
+            else
+            {
+                builder.AddAttribute(26, "class", "rz-data-row");
+            }
+
+            // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
+            if (rowClickable)
+            {
+                builder.AddAttribute(28, "onclick", RowClickHandler(item));
+            }
+
+            for (var i = 0; i < cols.Count; i++)
+            {
+                var column = cols[i];
+
+                builder.OpenElement(29, "td");
+                builder.AddAttribute(30, "role", "gridcell");
+
+                // rz-cell-data belongs on the span, not here: the theme's rules for it are all
+                // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
+                // both places is inert under the shipped themes but would apply a custom
+                // `.rz-cell-data { padding: ... }` twice.
+                if (!string.IsNullOrEmpty(column.CssClass))
+                {
+                    builder.AddAttribute(31, "class", column.CssClass);
+                }
+
+                builder.OpenElement(32, "span");
+                builder.AddAttribute(33, "class", "rz-cell-data");
+                column.RenderCell(builder, 34, item);
                 builder.CloseElement();
+
                 builder.CloseElement();
             }
 
             builder.CloseElement();
+        }
+
+        // The closure lives here rather than in RenderRow: a lambda capturing a local of RenderRow makes
+        // the compiler allocate that method's display class on entry, for every row, whether or not the
+        // branch that needs it is taken. Measured at 31 B/row - a fifth of the component's whole budget.
+        EventCallback<MouseEventArgs> RowClickHandler(TItem item) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this, _ => RowClick.InvokeAsync(item));
+
+        void RenderEmpty(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        {
+            if (EmptyTemplate is null)
+            {
+                return;
+            }
+
+            builder.OpenElement(35, "tr");
+            builder.OpenElement(36, "td");
+            builder.AddAttribute(37, "class", "rz-datatable-emptymessage");
+            builder.AddAttribute(38, "colspan", cols.Count);
+            builder.AddContent(39, EmptyTemplate);
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        // Virtualize renders a fragment per visible row, which is a delegate the inline path does not
+        // pay - but only for the rows on screen, which is the whole point. The cells stay inline.
+        void RenderVirtualizedRows(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        {
+            builder.OpenComponent<Virtualize<TItem>>(110);
+            builder.AddAttribute(111, nameof(Virtualize<TItem>.ItemsProvider),
+                new ItemsProviderDelegate<TItem>(ProvideRows));
+
+            // The spacers Virtualize puts above and below the window are divs by default, which is not
+            // valid inside a tbody; the rendered rows would be laid out as though the table had none.
+            builder.AddAttribute(112, nameof(Virtualize<TItem>.SpacerElement), "tr");
+            builder.AddAttribute(113, nameof(Virtualize<TItem>.ItemSize), ItemSize);
+
+            if (VirtualizationOverscanCount > 0)
+            {
+                builder.AddAttribute(114, nameof(Virtualize<TItem>.OverscanCount), VirtualizationOverscanCount);
+            }
+
+            builder.AddAttribute(115, nameof(Virtualize<TItem>.ChildContent), (RenderFragment<TItem>)(item =>
+                rows => RenderRow(rows, cols, item)));
+
+            builder.AddComponentReferenceCapture(116, component => virtualize = (Virtualize<TItem>)component);
+            builder.CloseComponent();
         }
     }
 }
