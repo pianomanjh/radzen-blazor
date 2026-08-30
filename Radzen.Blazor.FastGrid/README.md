@@ -128,6 +128,30 @@ listens - an unhandled event costs no attribute and no delegate. That matters mo
 a delegate per cell is five times a delegate per row on a five-column grid. `ShowCellDataAsTooltip`
 puts each cell's value in a `title`, and is off for the same reason.
 
+### What each of these costs
+
+Measured on the component, 1000 rows x 5 columns, one feature at a time against the same baseline:
+
+| | Allocated | Marginal | Time |
+| --- | ---: | ---: | ---: |
+| *bare* | 151.16 KB | - | 1.00x |
+| widths and alignment | 151.47 KB | +0.31 KB | 1.04x |
+| selection (1 row in 4) | 151.22 KB | +0.06 KB | 1.04x |
+| `RowClass` | 151.26 KB | +0.10 KB | 1.00x |
+| responsive titles | 151.22 KB | +0.06 KB | 1.43x |
+| cell tooltip | 266.81 KB | **+116 KB** | 1.42x |
+| row click | 461.30 KB | **+310 KB** | 1.19x |
+| cell click | 1,633.76 KB | **+1,483 KB** | 2.05x |
+
+The layout, selection and row-styling features are free, as designed: a few hundred bytes across a
+whole render, against a 151 KB baseline. What is not free is a delegate, and a delegate per *cell*
+least of all - a cell click costs five times a row click on five columns, and eleven times the whole
+rest of the component. All three of the expensive rows are opt-in and cost nothing until you opt in.
+
+Responsive titles allocate nothing and still cost 43% more time: a span and a text frame per cell is
+work even when it is not memory. The tooltip's 116 KB is the `title` attribute plus deriving each
+cell's text a second time, since `RenderCell` writes into the builder rather than returning a string.
+
 ## Data
 
 `Data` takes an `IEnumerable<T>` or an `IQueryable<T>`. Sorting, filtering and paging compose onto it,
