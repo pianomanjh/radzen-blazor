@@ -212,6 +212,21 @@ public class FastGridFeatureBench
         b.CloseComponent();
     };
 
+    // Two rows, because row detail has an availability cost and a use cost and they are nothing alike:
+    // declaring the Template is what turns the per-row toggle on, whether or not a row is expanded.
+    static readonly RenderFragment<Person> Detail =
+        person => b => b.AddContent(0, person.Name);
+
+    [Benchmark(Description = "+ row detail available, none expanded")]
+    public Task RowDetail() => Render(p => p["Template"] = Detail);
+
+    [Benchmark(Description = "+ row detail, no toggle column")]
+    public Task RowDetailNoToggle() => Render(p =>
+    {
+        p["Template"] = Detail;
+        p["ShowExpandColumn"] = false;
+    });
+
     [Benchmark(Description = "+ settings raised on every reload")]
     public Task Settings() => Render(p =>
         p["SettingsChanged"] = EventCallback.Factory.Create<FastGridSettings>(new object(), _ => { }));
