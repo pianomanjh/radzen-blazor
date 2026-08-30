@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Reflection;
 using System.Text;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -21,7 +20,6 @@ namespace Radzen.FastGrid
         Expression<Func<TItem, TProp>>? property;
         Expression<Func<TItem, TProp>>? sortBy;
         Expression<Func<TItem, TProp>>? filterBy;
-        string? filterProperty;
         Func<TItem, string?>? cellText;
         string? format;
 
@@ -75,38 +73,7 @@ namespace Radzen.FastGrid
         public override Type FilterPropertyType => typeof(TProp);
 
         /// <inheritdoc />
-        public override Type FilterElementType => filterMemberType ?? ElementType ?? typeof(TProp);
-
-        Type? filterMemberType;
-
-        /// <summary>
-        /// The type at the end of <see cref="ColumnBase{TItem}.FilterProperty" />, which is what a filter
-        /// value is compared against once the path is followed. Without it a filter on
-        /// <c>Accounts</c>/<c>Name</c> would be converted to a Company and silently dropped.
-        /// </summary>
-        Type? ResolveFilterMemberType()
-        {
-            if (string.IsNullOrEmpty(FilterProperty))
-            {
-                return null;
-            }
-
-            var type = ElementType ?? typeof(TProp);
-
-            foreach (var step in FilterProperty.Split('.'))
-            {
-                var member = type.GetProperty(step);
-
-                if (member is null)
-                {
-                    return null;
-                }
-
-                type = member.PropertyType;
-            }
-
-            return type;
-        }
+        public override Type FilterElementType => ElementType ?? typeof(TProp);
 
         /// <inheritdoc />
         protected override void OnParametersSet()
@@ -114,7 +81,7 @@ namespace Radzen.FastGrid
             base.OnParametersSet();
 
             if (ReferenceEquals(property, Property) && format == Format && ReferenceEquals(sortBy, SortBy)
-                && ReferenceEquals(filterBy, FilterBy) && filterProperty == FilterProperty)
+                && ReferenceEquals(filterBy, FilterBy))
             {
                 return;
             }
@@ -122,9 +89,7 @@ namespace Radzen.FastGrid
             property = Property;
             sortBy = SortBy;
             filterBy = FilterBy;
-            filterProperty = FilterProperty;
             format = Format;
-            filterMemberType = ResolveFilterMemberType();
 
             // Compile to a Func<TItem, string> rather than reading the value as object. RenderTreeBuilder
             // has no generic AddContent<T>, so handing it a value type binds the object overload, which
@@ -186,8 +151,7 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         /// <remarks>
         /// Composed rather than enumerated, so an Entity Framework source runs SELECT DISTINCT rather
-        /// than pulling every row across the wire. A collection column projects its members, and
-        /// <see cref="ColumnBase{TItem}.FilterProperty" /> then picks a member of each.
+        /// than pulling every row across the wire. A collection column offers its members.
         /// </remarks>
         public override IQueryable? DistinctValues(IQueryable<TItem> source)
         {
@@ -198,31 +162,16 @@ namespace Radzen.FastGrid
 
             if (!IsCollection)
             {
-                return string.IsNullOrEmpty(FilterProperty)
-                    ? source.Select(Property).Distinct()
-                    : Project(source.Select(Property), typeof(TProp), FilterProperty);
+                return source.Select(Property).Distinct();
             }
 
-            var elements = SelectMany(source);
+            // TProp is the collection, so the element type is not a type parameter here and SelectMany
+            // has to be built by hand. CollectionColumn<TItem, TElement> has it as a parameter and does
+            // this as an ordinary generic call.
+            var elements = Projection.SelectMany(source, typeof(TItem), ElementType!, AsSequenceSelector());
 
-            return string.IsNullOrEmpty(FilterProperty)
-                ? elements.Distinct()
-                : Project(elements, ElementType!, FilterProperty);
+            return Projection.Distinct(elements, ElementType!);
         }
-
-        static readonly MethodInfo SelectManyMethod = typeof(Queryable).GetMethods()
-            .Single(m => m.Name == nameof(Queryable.SelectMany)
-                && m.GetParameters().Length == 2
-                && m.GetParameters()[1].ParameterType.GetGenericArguments()[0]
-                    .GetGenericArguments().Length == 2);
-
-        /// <summary>
-        /// <c>source.SelectMany(Property)</c>, built by hand because the element type is not a type
-        /// parameter of this column and so cannot be written as a generic call.
-        /// </summary>
-        IQueryable SelectMany(IQueryable<TItem> source) => (IQueryable)SelectManyMethod
-            .MakeGenericMethod(typeof(TItem), ElementType!)
-            .Invoke(null, new object[] { source, AsSequenceSelector() })!;
 
         /// <summary>
         /// The property expression retyped as returning <c>IEnumerable&lt;TElement&gt;</c>, which is what
@@ -244,42 +193,6 @@ namespace Radzen.FastGrid
                 Expression.Convert(Property.Body, sequenceType),
                 Property.Parameters);
         }
-
-        /// <summary>Projects a member of each element, for a lookup over objects rather than values.</summary>
-        static IQueryable Project(IQueryable source, Type type, string member)
-        {
-            var parameter = Expression.Parameter(type, "x");
-            var body = (Expression)parameter;
-
-            foreach (var step in member.Split('.'))
-            {
-                var property = body.Type.GetProperty(step);
-
-                if (property is null)
-                {
-                    return source;
-                }
-
-                body = Expression.Property(body, property);
-            }
-
-            var selector = Expression.Lambda(body, parameter);
-
-            var select = SelectMethod.MakeGenericMethod(type, body.Type);
-            var projected = (IQueryable)select.Invoke(null, new object[] { source, selector })!;
-
-            return (IQueryable)DistinctMethod.MakeGenericMethod(body.Type)
-                .Invoke(null, new object[] { projected })!;
-        }
-
-        static readonly MethodInfo SelectMethod = typeof(Queryable).GetMethods()
-            .Single(m => m.Name == nameof(Queryable.Select)
-                && m.GetParameters().Length == 2
-                && m.GetParameters()[1].ParameterType.GetGenericArguments()[0]
-                    .GetGenericArguments().Length == 2);
-
-        static readonly MethodInfo DistinctMethod = typeof(Queryable).GetMethods()
-            .Single(m => m.Name == nameof(Queryable.Distinct) && m.GetParameters().Length == 1);
 
         /// <inheritdoc />
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)

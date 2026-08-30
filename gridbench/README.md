@@ -261,6 +261,21 @@ any column that needs more.
 
 Re-measured with none of it in use: 150.13 KB at 1000 x 5, against 149.84 KB before.
 
+### Collections of objects
+
+`CollectionColumn<TItem, TElement>` takes the element type as a parameter, so `DisplayProperty` and
+`FilterProperty` are expressions rather than strings, and Razor infers the element type from
+`Property` - `AuthoringSample.razor` in the test project is what proves that, since every other test
+builds its fragments by hand and so never exercises Razor's inference.
+
+The subtlety worth recording: a selector declared as returning `object` hides its member's real type
+**two different ways**. A value type is wrapped in a `Convert` node; a reference type is not wrapped at
+all, and the tree just carries a body narrower than the delegate's return type. Stripping `Convert` -
+the obvious implementation - handles `a => a.Size` and silently fails on `a => a.Name`, leaving the
+member looking like `object`: the wrong default operator, the wrong conversion of what was typed into
+the box, and a distinct query projected to `object`. Comparing `body.Type` to `ReturnType` catches
+both.
+
 ### Collection-valued columns
 
 A column bound to a collection lists its members rather than stringifying the collection, and filters
@@ -300,7 +315,7 @@ It is now a test project that runs in CI with nobody watching:
 dotnet test Radzen.Blazor.FastGrid.Tests
 ```
 
-215 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
+228 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
 8 x 5 data in the same run, in two layers:
 
 - **Markup** (`MarkupParityTests`) - the table's `rz-grid-table` / `rz-grid-table-striped`; `rz-data-row`

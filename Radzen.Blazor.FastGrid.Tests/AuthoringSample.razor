@@ -1,0 +1,28 @@
+@*
+    Authored the way a page would author it, which the hand-built render fragments elsewhere in this
+    project cannot check: every generic parameter here is inferred by Razor. If CollectionColumn's
+    TElement stopped being inferable from Property, this file would fail to compile rather than fail a
+    test - which is the point of it.
+*@
+<RadzenFastGrid Data="@Data" AllowSorting="true" AllowFiltering="true" FilterMode="FilterMode.CheckBoxList">
+    <PropertyColumn Property="@(p => p.First)" Title="First" />
+    <PropertyColumn Property="@(p => p.Customer.Name)" Title="Customer" />
+    <PropertyColumn Property="@(p => p.Salary)" Format="C" Title="Salary" />
+    <PropertyColumn Property="@(p => p.Regions)" Separator=" / " Title="Regions" />
+    <CollectionColumn Property="@(p => p.Accounts)"
+                      DisplayProperty="@(a => a.Name)"
+                      Title="Accounts" />
+    <CollectionColumn Property="@(p => p.Accounts)"
+                      DisplayProperty="@(a => a.Name)"
+                      FilterProperty="@(a => a.Region)"
+                      SortBy="@(p => p.First)"
+                      Separator="; "
+                      Title="Accounts by region" />
+    <TemplateColumn TItem="Person" Title="Template">
+        <Template Context="row">@row.Last</Template>
+    </TemplateColumn>
+</RadzenFastGrid>
+
+@code {
+    [Parameter] public IEnumerable<Person> Data { get; set; } = Array.Empty<Person>();
+}
