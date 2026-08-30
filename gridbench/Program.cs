@@ -70,6 +70,19 @@ sealed class BenchmarkRenderer : Renderer
         var id = AssignRootComponentId(component);
         await RenderRootComponentAsync(id, parameters);
     });
+
+    // The same, handing back the instance so a benchmark can drive it - opening a popup, say - and
+    // measure the renders that follow.
+    public Task<IComponent> Render(Type type, ParameterView parameters) => Dispatcher.InvokeAsync(async () =>
+    {
+        var component = InstantiateComponent(type);
+        var id = AssignRootComponentId(component);
+        await RenderRootComponentAsync(id, parameters);
+
+        return component;
+    });
+
+    public Task Drive(Func<Task> action) => Dispatcher.InvokeAsync(action);
 }
 
 // ---- Render face-off: same N rows x 5 mixed columns, no paging/virtualization ----
@@ -253,6 +266,12 @@ public class Program
         if (a.Length > 0 && a[0] == "probe")
         {
             foreach (var n in new[] { 200, 1000 }) await Probe.Run(n);
+            return;
+        }
+
+        if (a.Length > 0 && a[0] == "dropdown-probe")
+        {
+            await DropDownProbe.Run(1000);
             return;
         }
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(a);

@@ -58,6 +58,20 @@ sealed class CountingRenderer : Renderer
         var id = AssignRootComponentId(component);
         await RenderRootComponentAsync(id, parameters);
     });
+
+    // The same, handing back the instance so a probe can drive it - opening a popup - and count what
+    // the renders that follow emit.
+    public Task<IComponent> RenderAndReturn(Type type, ParameterView parameters) =>
+        Dispatcher.InvokeAsync(async () =>
+        {
+            var component = InstantiateComponent(type);
+            var id = AssignRootComponentId(component);
+            await RenderRootComponentAsync(id, parameters);
+
+            return component;
+        });
+
+    public Task Drive(Func<Task> action) => Dispatcher.InvokeAsync(action);
 }
 
 static class Probe
