@@ -171,6 +171,13 @@ namespace Radzen.FastGrid
                 skip = 0;
             }
 
+            // Before the LoadData branch, not after: a LoadData grid replaces Data on every load, and a
+            // check-box list built from page one is wrong for every page after it.
+            if (!ReferenceEquals(lastData, Data))
+            {
+                lookups.Clear();
+            }
+
             if (LoadData.HasDelegate)
             {
                 // The handler assigns Data, which sets parameters again. Load once here and thereafter
@@ -193,7 +200,6 @@ namespace Radzen.FastGrid
             }
 
             lastData = Data;
-            lookups.Clear();
 
             // Drop what any previous load produced. Deliberately not RefreshAsync on the ordinary path:
             // that renders, and the render ComponentBase queues after this returns would then be the
@@ -295,7 +301,7 @@ namespace Radzen.FastGrid
 
             // The element type, not the property type: a filter on a list of dates is compared against a
             // date, and Convert.ChangeType would have no idea what to do with the list.
-            var type = Nullable.GetUnderlyingType(column.FilterElementType) ?? column.FilterElementType;
+            var type = Nullable.GetUnderlyingType(column.EffectiveFilterType) ?? column.EffectiveFilterType;
 
             if (type == typeof(string) || type == typeof(object))
             {
@@ -343,11 +349,26 @@ namespace Radzen.FastGrid
             // query and boxes the answers in memory, which is where the boxing belongs.
             var materialized = values is null
                 ? (IEnumerable)Array.Empty<object>()
-                : ((IEnumerable)values).Cast<object>().Where(v => v != null).OrderBy(v => v).ToList();
+                : Ordered(((IEnumerable)values).Cast<object>().Where(v => v != null).ToList());
 
             lookups[column] = materialized;
 
             return materialized;
+        }
+
+        /// <summary>
+        /// Sorts lookup values when they can be sorted. Comparer&lt;object&gt;.Default throws for a type
+        /// that is not IComparable, which a collection of entities with no display member is - and that
+        /// took down the grid's first render rather than merely leaving the list unsorted.
+        /// </summary>
+        static List<object> Ordered(List<object> values)
+        {
+            if (values.Count > 1 && values[0] is IComparable)
+            {
+                values.Sort();
+            }
+
+            return values;
         }
 
         /// <summary>Applies a check-box-list selection. Nothing ticked is no filter, not an empty result.</summary>
@@ -361,7 +382,7 @@ namespace Radzen.FastGrid
             // Typed as the column's element type, not List<object>: the predicate becomes
             // Contains<TElement>(selected, x), and a List<object> there is not an IEnumerable<TElement>,
             // so a provider cannot translate it and the comparison never binds.
-            var type = Nullable.GetUnderlyingType(column.FilterElementType) ?? column.FilterElementType;
+            var type = Nullable.GetUnderlyingType(column.EffectiveFilterType) ?? column.EffectiveFilterType;
             var selected = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!;
 
             foreach (var item in sequence)
@@ -539,6 +560,14 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
+        /// Whether the asynchronous path owns this source, and so whether touching it from the render
+        /// thread would run a query. Cheap for an in-memory source: it is not an IQueryable, so the
+        /// first test short-circuits before the executor is even resolved.
+        /// </summary>
+        bool AsyncOwnsData => Data is IQueryable<TItem> queryable
+            && Executor is { } async && async.IsSupported(queryable);
+
+        /// <summary>
         /// Starts an asynchronous load, or returns null when this source cannot be executed that way -
         /// which is every in-memory source, and every queryable when no executor is registered.
         /// </summary>
@@ -712,6 +741,14 @@ namespace Radzen.FastGrid
                 return loaded;
             }
 
+            // Nothing has loaded yet and the query belongs to the executor. Composing over it here
+            // enumerates it on the render thread - a whole unpaged table pulled synchronously, for rows
+            // the awaited load is about to replace.
+            if (AsyncOwnsData)
+            {
+                return Array.Empty<TItem>();
+            }
+
             var data = Data ?? Enumerable.Empty<TItem>();
 
             if (LoadData.HasDelegate)
@@ -763,6 +800,13 @@ namespace Radzen.FastGrid
                 return counted;
             }
 
+            // Same reason as View: Enumerable.Count() over an unloaded Entity Framework queryable is a
+            // second full table scan, blocking the render thread for a number the load will supply.
+            if (AsyncOwnsData)
+            {
+                return 0;
+            }
+
             // A filtered grid must count what the filter left, which means composing and walking it.
             // Only pay that when something is actually filtered.
             if (AllowFiltering && BuildFilters() is not null)
@@ -800,6 +844,9 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         public void Dispose()
         {
+            // Cancel first: disposing alone leaves an in-flight query running against a component that
+            // is gone, holding its context open until it finishes.
+            loadCts?.Cancel();
             loadCts?.Dispose();
             loadCts = null;
 

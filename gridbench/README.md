@@ -348,6 +348,31 @@ list are laid out and drawn correctly against the real theme. Worth noting the f
 every icon as raw ligature text - `first_page`, `arrow_drop_down` - which was the harness not copying the
 font files next to the stylesheet, not the component. Look twice before believing a visual fault.
 
+### What a code review found that 254 tests did not
+
+Seven faults, each invisible for a specific reason worth naming - the reasons generalise further than
+the faults do.
+
+| Fault | Why nothing caught it |
+| --- | --- |
+| The unloaded query was enumerated **twice** from the render thread - once for the rows, once for the pager's total - pulling an entire unpaged table synchronously while the awaited load was in flight | Every fake executor in the suite returned `Task.FromResult`, so no test ever rendered with the load still outstanding |
+| A column typed as `object` left what was typed in the filter box as a string, and the predicate builder put a string constant where an int belongs: *argument types do not match* | Nothing filtered an `object`-typed or template column |
+| Sorting the check-box-list values threw for a type that is not `IComparable`, taking the grid's whole first render down | Every lookup in the suite happened to be strings or ints |
+| **Every column recompiled its expression on every render** | Razor rebuilds the expression tree per render, so reference equality never holds in markup - and every test builds its fragments by hand, reusing one instance |
+| The check-box-list lookup cache was never cleared on the `LoadData` path, so page one's values were offered on every page | No test combined `LoadData` with a check-box list |
+| `Dispose` disposed the cancellation source without cancelling it, leaving an in-flight query running against a component that is gone | Nothing disposed a grid mid-load |
+| Sequence numbers descended between regions, so the table was torn down and rebuilt whenever the pager appeared | Output is correct either way |
+
+The recompile is the one worth remembering. It is not visible in the markup, not visible in the frame
+count, and not visible to any test that reuses an expression instance - only to one that authors columns
+the way Razor does and weighs what a re-render costs. Measured at **6,207 B per re-render against
+14,511 B**, for five rows and two columns; the gap widens with every column.
+
+The fix leans on a property of the path derivation rather than on comparing trees: a path is only
+derived for a plain member chain, which is exactly the shape that cannot capture anything, so two
+expressions with the same non-null path are interchangeable. Anything computed has no path, is never
+treated as equivalent, and is recompiled.
+
 ### The trap it walked into first
 
 The first version called `StateHasChanged()` from the parameter-set path. `ComponentBase` already
@@ -375,7 +400,7 @@ It is now a test project that runs in CI with nobody watching:
 dotnet test Radzen.Blazor.FastGrid.Tests
 ```
 
-254 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
+267 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
 8 x 5 data in the same run, in two layers:
 
 - **Markup** (`MarkupParityTests`) - the table's `rz-grid-table` / `rz-grid-table-striped`; `rz-data-row`

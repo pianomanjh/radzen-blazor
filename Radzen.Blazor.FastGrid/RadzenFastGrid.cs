@@ -132,11 +132,11 @@ namespace Radzen.FastGrid
 
             if (Paging && PagerPosition.HasFlag(PagerPosition.Top))
             {
-                RenderPager(builder, 40);
+                RenderPager(builder, 10);
             }
 
-            builder.OpenElement(2, "table");
-            builder.AddAttribute(3, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
+            builder.OpenElement(20, "table");
+            builder.AddAttribute(21, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
 
             RenderHead(builder, cols);
             RenderBody(builder, cols);
@@ -145,14 +145,16 @@ namespace Radzen.FastGrid
 
             if (Paging && PagerPosition.HasFlag(PagerPosition.Bottom))
             {
-                RenderPager(builder, 60);
+                RenderPager(builder, 200);
             }
 
             builder.CloseElement();
         }
 
-        // A sequence number identifies a position in the source, so the two pager positions take
-        // separate ranges rather than both writing the same numbers into one region.
+        // A sequence number identifies a position in the source, and the numbers a region writes must
+        // ascend in the order it writes them - the top pager's band therefore sits below the table's,
+        // and the bottom pager's above everything the table emits. They descended before, which the
+        // diff copes with by tearing the table down and rebuilding it whenever the pager appears.
         void RenderPager(RenderTreeBuilder builder, int sequence)
         {
             builder.OpenComponent<RadzenPager>(sequence);
@@ -177,51 +179,51 @@ namespace Radzen.FastGrid
 
         void RenderHead(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
         {
-            builder.OpenElement(4, "thead");
-            builder.AddAttribute(5, "role", "rowgroup");
-            builder.OpenElement(6, "tr");
-            builder.AddAttribute(7, "role", "row");
+            builder.OpenElement(30, "thead");
+            builder.AddAttribute(31, "role", "rowgroup");
+            builder.OpenElement(32, "tr");
+            builder.AddAttribute(33, "role", "row");
 
             for (var i = 0; i < cols.Count; i++)
             {
                 var column = cols[i];
                 var sortable = AllowSorting && column.CanSort;
 
-                builder.OpenElement(8, "th");
-                builder.AddAttribute(9, "role", "columnheader");
-                builder.AddAttribute(10, "scope", "col");
-                builder.AddAttribute(11, "class", sortable
+                builder.OpenElement(34, "th");
+                builder.AddAttribute(35, "role", "columnheader");
+                builder.AddAttribute(36, "scope", "col");
+                builder.AddAttribute(37, "class", sortable
                     ? "rz-unselectable-text rz-sortable-column"
                     : "rz-unselectable-text");
 
                 if (ReferenceEquals(SortColumn, column))
                 {
-                    builder.AddAttribute(12, "aria-sort", SortDescending ? "descending" : "ascending");
+                    builder.AddAttribute(38, "aria-sort", SortDescending ? "descending" : "ascending");
                 }
 
                 // The theme gives th padding:0 and hangs the header padding off a direct child div, so
                 // this wrapper is load-bearing: without it the header row renders shorter than
                 // RadzenDataGrid's. It is per column, not per row, so it costs nothing at scale.
-                builder.OpenElement(13, "div");
+                builder.OpenElement(39, "div");
 
                 if (sortable)
                 {
                     var captured = column;
-                    builder.AddAttribute(14, "onclick",
+                    builder.AddAttribute(40, "onclick",
                         EventCallback.Factory.Create<MouseEventArgs>(this, _ => SortBy(captured)));
                 }
 
-                builder.OpenElement(15, "span");
-                builder.AddAttribute(16, "class", "rz-column-title");
-                builder.OpenElement(17, "span");
-                builder.AddAttribute(18, "class", "rz-column-title-content rz-text-truncate");
-                builder.AddContent(19, column.HeaderText);
+                builder.OpenElement(41, "span");
+                builder.AddAttribute(42, "class", "rz-column-title");
+                builder.OpenElement(43, "span");
+                builder.AddAttribute(44, "class", "rz-column-title-content rz-text-truncate");
+                builder.AddContent(45, column.HeaderText);
                 builder.CloseElement();
 
                 if (ReferenceEquals(SortColumn, column))
                 {
-                    builder.OpenElement(20, "span");
-                    builder.AddAttribute(21, "class", SortDescending
+                    builder.OpenElement(46, "span");
+                    builder.AddAttribute(47, "class", SortDescending
                         // rzi-sort as well as the direction class, which is what RadzenDataGrid emits.
                         // The direction rule wins for both glyph and colour either way, but matching the
                         // class list exactly is what keeps a custom theme's rules applying to both.
@@ -250,28 +252,28 @@ namespace Radzen.FastGrid
         // title wrapper. The theme's th padding hangs off that first div, as it does off the title one.
         void RenderFilterRow(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
         {
-            builder.OpenElement(70, "tr");
-            builder.AddAttribute(71, "role", "row");
+            builder.OpenElement(50, "tr");
+            builder.AddAttribute(51, "role", "row");
 
             for (var i = 0; i < cols.Count; i++)
             {
                 var column = cols[i];
 
-                builder.OpenElement(72, "th");
-                builder.AddAttribute(73, "role", "columnheader");
-                builder.AddAttribute(74, "scope", "col");
-                builder.AddAttribute(75, "class", "rz-unselectable-text");
+                builder.OpenElement(52, "th");
+                builder.AddAttribute(53, "role", "columnheader");
+                builder.AddAttribute(54, "scope", "col");
+                builder.AddAttribute(55, "class", "rz-unselectable-text");
 
                 if (column.CanFilter || column.FilterTemplate is not null)
                 {
-                    builder.OpenElement(76, "div");
-                    builder.AddAttribute(77, "class", "rz-cell-filter");
-                    builder.OpenElement(78, "div");
-                    builder.AddAttribute(79, "class", "rz-cell-filter-content");
+                    builder.OpenElement(56, "div");
+                    builder.AddAttribute(57, "class", "rz-cell-filter");
+                    builder.OpenElement(58, "div");
+                    builder.AddAttribute(59, "class", "rz-cell-filter-content");
 
                     if (column.FilterTemplate is not null)
                     {
-                        builder.AddContent(80, column.FilterTemplate(column));
+                        builder.AddContent(60, column.FilterTemplate(column));
                     }
                     else if (FilterModeOf(column) == FilterMode.CheckBoxList)
                     {
@@ -299,16 +301,16 @@ namespace Radzen.FastGrid
         {
             var captured = column;
 
-            builder.OpenComponent<RadzenDropDown<IEnumerable>>(99);
-            builder.AddAttribute(100, nameof(RadzenDropDown<IEnumerable>.Data), FilterLookup(column));
-            builder.AddAttribute(101, nameof(RadzenDropDown<IEnumerable>.Multiple), true);
-            builder.AddAttribute(102, nameof(RadzenDropDown<IEnumerable>.AllowClear), true);
-            builder.AddAttribute(103, nameof(RadzenDropDown<IEnumerable>.AllowFiltering), true);
-            builder.AddAttribute(104, nameof(RadzenDropDown<IEnumerable>.FilterCaseSensitivity),
+            builder.OpenComponent<RadzenDropDown<IEnumerable>>(80);
+            builder.AddAttribute(81, nameof(RadzenDropDown<IEnumerable>.Data), FilterLookup(column));
+            builder.AddAttribute(82, nameof(RadzenDropDown<IEnumerable>.Multiple), true);
+            builder.AddAttribute(83, nameof(RadzenDropDown<IEnumerable>.AllowClear), true);
+            builder.AddAttribute(84, nameof(RadzenDropDown<IEnumerable>.AllowFiltering), true);
+            builder.AddAttribute(85, nameof(RadzenDropDown<IEnumerable>.FilterCaseSensitivity),
                 FilterCaseSensitivity.CaseInsensitive);
-            builder.AddAttribute(105, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
-            builder.AddAttribute(106, nameof(RadzenDropDown<IEnumerable>.Value), column.CurrentFilterValue);
-            builder.AddAttribute(107, nameof(RadzenDropDown<IEnumerable>.Change),
+            builder.AddAttribute(86, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
+            builder.AddAttribute(87, nameof(RadzenDropDown<IEnumerable>.Value), column.CurrentFilterValue);
+            builder.AddAttribute(88, nameof(RadzenDropDown<IEnumerable>.Change),
                 EventCallback.Factory.Create<object>(this, value => OnFilterSelection(captured, value)));
             builder.CloseComponent();
         }
@@ -317,31 +319,31 @@ namespace Radzen.FastGrid
         {
             var captured = column;
 
-            builder.OpenElement(81, "span");
-            builder.AddAttribute(82, "class", "rz-cell-filter-label");
-            builder.AddAttribute(83, "style", "height:35px; width:100%;");
+            builder.OpenElement(61, "span");
+            builder.AddAttribute(62, "class", "rz-cell-filter-label");
+            builder.AddAttribute(63, "style", "height:35px; width:100%;");
 
-            builder.OpenElement(84, "input");
-            builder.AddAttribute(85, "type", "text");
-            builder.AddAttribute(86, "autocomplete", "off");
-            builder.AddAttribute(87, "class", "rz-textbox");
-            builder.AddAttribute(88, "style", "width: 100%;");
-            builder.AddAttribute(89, "aria-label", column.HeaderText);
-            builder.AddAttribute(90, "value", column.CurrentFilterValue);
-            builder.AddAttribute(91, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
+            builder.OpenElement(64, "input");
+            builder.AddAttribute(65, "type", "text");
+            builder.AddAttribute(66, "autocomplete", "off");
+            builder.AddAttribute(67, "class", "rz-textbox");
+            builder.AddAttribute(68, "style", "width: 100%;");
+            builder.AddAttribute(69, "aria-label", column.HeaderText);
+            builder.AddAttribute(70, "value", column.CurrentFilterValue);
+            builder.AddAttribute(71, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
                 value => OnFilterInput(captured, value), column.CurrentFilterValue?.ToString()));
             builder.CloseElement();
 
             if (column.HasFilter)
             {
-                builder.OpenElement(92, "button");
-                builder.AddAttribute(93, "type", "button");
-                builder.AddAttribute(94, "tabindex", "-1");
-                builder.AddAttribute(95, "class", "notranslate rzi rz-cell-filter-clear");
-                builder.AddAttribute(96, "style", "position:absolute;inset-inline-end:10px;");
-                builder.AddAttribute(97, "onclick",
+                builder.OpenElement(72, "button");
+                builder.AddAttribute(73, "type", "button");
+                builder.AddAttribute(74, "tabindex", "-1");
+                builder.AddAttribute(75, "class", "notranslate rzi rz-cell-filter-clear");
+                builder.AddAttribute(76, "style", "position:absolute;inset-inline-end:10px;");
+                builder.AddAttribute(77, "onclick",
                     EventCallback.Factory.Create<MouseEventArgs>(this, _ => Filter(captured, null)));
-                builder.AddContent(98, "close");
+                builder.AddContent(78, "close");
                 builder.CloseElement();
             }
 
@@ -350,8 +352,8 @@ namespace Radzen.FastGrid
 
         void RenderBody(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
         {
-            builder.OpenElement(22, "tbody");
-            builder.AddAttribute(23, "role", "rowgroup");
+            builder.OpenElement(100, "tbody");
+            builder.AddAttribute(101, "role", "rowgroup");
 
             if (AllowVirtualization)
             {
@@ -382,32 +384,32 @@ namespace Radzen.FastGrid
             var selection = Selection;
             var rowClickable = RowClick.HasDelegate;
 
-            builder.OpenElement(24, "tr");
-            builder.AddAttribute(25, "role", "row");
+            builder.OpenElement(120, "tr");
+            builder.AddAttribute(121, "role", "row");
 
             // No alternating class: rz-grid-table-striped stripes with :nth-child in CSS.
             if (selection is not null && selection.Contains(item))
             {
-                builder.AddAttribute(26, "class", "rz-data-row rz-state-highlight");
-                builder.AddAttribute(27, "aria-selected", "true");
+                builder.AddAttribute(122, "class", "rz-data-row rz-state-highlight");
+                builder.AddAttribute(123, "aria-selected", "true");
             }
             else
             {
-                builder.AddAttribute(26, "class", "rz-data-row");
+                builder.AddAttribute(122, "class", "rz-data-row");
             }
 
             // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
             if (rowClickable)
             {
-                builder.AddAttribute(28, "onclick", RowClickHandler(item));
+                builder.AddAttribute(124, "onclick", RowClickHandler(item));
             }
 
             for (var i = 0; i < cols.Count; i++)
             {
                 var column = cols[i];
 
-                builder.OpenElement(29, "td");
-                builder.AddAttribute(30, "role", "gridcell");
+                builder.OpenElement(125, "td");
+                builder.AddAttribute(126, "role", "gridcell");
 
                 // rz-cell-data belongs on the span, not here: the theme's rules for it are all
                 // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
@@ -415,11 +417,11 @@ namespace Radzen.FastGrid
                 // `.rz-cell-data { padding: ... }` twice.
                 if (!string.IsNullOrEmpty(column.CssClass))
                 {
-                    builder.AddAttribute(31, "class", column.CssClass);
+                    builder.AddAttribute(127, "class", column.CssClass);
                 }
 
-                builder.OpenElement(32, "span");
-                builder.AddAttribute(33, "class", "rz-cell-data");
+                builder.OpenElement(128, "span");
+                builder.AddAttribute(129, "class", "rz-cell-data");
                 column.RenderCell(builder, 34, item);
                 builder.CloseElement();
 
@@ -442,11 +444,11 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            builder.OpenElement(35, "tr");
-            builder.OpenElement(36, "td");
-            builder.AddAttribute(37, "class", "rz-datatable-emptymessage");
-            builder.AddAttribute(38, "colspan", cols.Count);
-            builder.AddContent(39, EmptyTemplate);
+            builder.OpenElement(140, "tr");
+            builder.OpenElement(141, "td");
+            builder.AddAttribute(142, "class", "rz-datatable-emptymessage");
+            builder.AddAttribute(143, "colspan", cols.Count);
+            builder.AddContent(144, EmptyTemplate);
             builder.CloseElement();
             builder.CloseElement();
         }
