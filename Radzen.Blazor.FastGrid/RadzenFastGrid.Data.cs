@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web.Virtualization;
 using Radzen;
 using Radzen.Blazor;
 
@@ -80,6 +81,34 @@ namespace Radzen.FastGrid
         /// <summary>How the columns' filters combine.</summary>
         [Parameter] public LogicalFilterOperator LogicalFilterOperator { get; set; } = LogicalFilterOperator.And;
 
+        /// <summary>
+        /// Whether only the visible rows are rendered. Virtualization and paging solve the same problem
+        /// and this one wins: with it on, <see cref="AllowPaging" /> is ignored and no pager is drawn.
+        /// The grid needs a scrolling ancestor with a bounded height for it to do anything.
+        /// </summary>
+        [Parameter] public bool AllowVirtualization { get; set; }
+
+        /// <summary>
+        /// The row height virtualization assumes, in pixels, for sizing the spacers. The default is the
+        /// height the Radzen themes actually render a row at, measured.
+        /// </summary>
+        [Parameter] public float ItemSize { get; set; } = 37;
+
+        /// <summary>How many rows beyond the viewport to render. Zero leaves Virtualize's own default.</summary>
+        [Parameter] public int VirtualizationOverscanCount { get; set; }
+
+        Virtualize<TItem>? virtualize;
+
+        /// <summary>
+        /// Whether the grid is actually paging. One rule, in one place: virtualization and paging solve
+        /// the same problem, and reading AllowPaging directly anywhere else lets the two disagree - a
+        /// pager under a virtualized body, or a window taken from within a page.
+        /// </summary>
+        internal bool Paging => AllowPaging && !AllowVirtualization;
+
+        /// <summary>The underlying Virtualize component, or null when virtualization is off.</summary>
+        public Virtualize<TItem>? Virtualize => AllowVirtualization ? virtualize : null;
+
         /// <summary>Whether a load is in flight. Only ever true on an asynchronous path.</summary>
         public bool IsLoading { get; private set; }
 
@@ -148,7 +177,9 @@ namespace Radzen.FastGrid
 
                 loadDataInvoked = true;
 
-                return InvokeLoadDataAsync();
+                // While virtualizing the provider owns fetching, and it asks for a window. Loading here
+                // as well would call the handler once with no window at all and throw the answer away.
+                return AllowVirtualization ? Task.CompletedTask : InvokeLoadDataAsync();
             }
 
             if (ReferenceEquals(lastData, Data))
@@ -173,6 +204,48 @@ namespace Radzen.FastGrid
         /// changed in a way the grid cannot see - the usual companion to <see cref="LoadData" />.
         /// </summary>
         public Task Reload() => RefreshAsync();
+
+        /// <summary>
+        /// Serves one scroll window. The whole data path funnels through here when virtualizing: the
+        /// LoadData handler is asked for the window, a supported queryable is counted and materialized
+        /// asynchronously, and anything else is composed in memory.
+        /// </summary>
+        async ValueTask<ItemsProviderResult<TItem>> ProvideRows(ItemsProviderRequest request)
+        {
+            var top = request.Count > 0 ? request.Count : PageSize;
+
+            if (LoadData.HasDelegate)
+            {
+                await InvokeLoadDataAsync(request.StartIndex, top);
+
+                return new ItemsProviderResult<TItem>(Data ?? Enumerable.Empty<TItem>(), Count);
+            }
+
+            if (Data is IQueryable<TItem> queryable && Executor is { } async && async.IsSupported(queryable))
+            {
+                var composed = Composed(queryable);
+                var source = (IQueryable<TItem>)composed;
+
+                try
+                {
+                    // request.CancellationToken already covers a superseded scroll, so a cancelled
+                    // window propagates out to Virtualize rather than being swallowed here.
+                    var window = await async.ToListAsync(source.Skip(request.StartIndex).Take(top),
+                        request.CancellationToken);
+                    var total = await async.CountAsync(source, request.CancellationToken);
+
+                    return new ItemsProviderResult<TItem>(window, total);
+                }
+                catch (OperationCanceledException)
+                {
+                    return new ItemsProviderResult<TItem>(Array.Empty<TItem>(), 0);
+                }
+            }
+
+            var rows = Composed(Data ?? Enumerable.Empty<TItem>());
+
+            return new ItemsProviderResult<TItem>(rows.Skip(request.StartIndex).Take(top), TotalCount());
+        }
 
         /// <summary>
         /// Filters a column by a value, and reloads. Passing null for the operator restores the column's
@@ -248,11 +321,14 @@ namespace Radzen.FastGrid
             var source = Data as IQueryable<TItem> ?? Data?.AsQueryable();
             var values = source is null ? null : column.DistinctValues(source);
 
+            // Note the cast to IEnumerable before Cast<object>. On an IQueryable that overload resolves
+            // to Queryable.Cast, which composes a Cast node into the provider's own tree - Entity
+            // Framework then refuses to translate it ("expression of type SingleQueryingEnumerable<T>
+            // cannot be used for return type IEnumerable<object>"). Enumerating first runs the distinct
+            // query and boxes the answers in memory, which is where the boxing belongs.
             var materialized = values is null
                 ? (IEnumerable)Array.Empty<object>()
-                // Materialized here rather than left lazy: the list box reads it on every render, and
-                // Cast/Where run in memory anyway once the provider has answered the distinct query.
-                : values.Cast<object>().ToList().Where(v => v != null).OrderBy(v => v).ToList();
+                : ((IEnumerable)values).Cast<object>().Where(v => v != null).OrderBy(v => v).ToList();
 
             lookups[column] = materialized;
 
@@ -415,6 +491,13 @@ namespace Radzen.FastGrid
 
         Task RefreshAsync()
         {
+            if (AllowVirtualization)
+            {
+                // Virtualize holds its own copy of the window, so a sort or filter that only re-renders
+                // redraws the same rows: the refetch is what makes the provider compose the new query.
+                return virtualize is null ? Task.CompletedTask : RefreshVirtualizedAsync();
+            }
+
             if (LoadData.HasDelegate)
             {
                 return InvokeLoadDataAsync();
@@ -442,16 +525,27 @@ namespace Radzen.FastGrid
         /// which is every in-memory source, and every queryable when no executor is registered.
         /// </summary>
         Task? BeginAsyncLoad() =>
-            Data is IQueryable<TItem> queryable && Executor is { } async && async.IsSupported(queryable)
+            !AllowVirtualization
+                && Data is IQueryable<TItem> queryable && Executor is { } async && async.IsSupported(queryable)
                 ? LoadPageAsync(async, queryable)
                 : null;
+
+        async Task RefreshVirtualizedAsync()
+        {
+            await virtualize!.RefreshDataAsync();
+
+            // The refetch updates Virtualize's own state but leaves the render it queues to whatever
+            // happens next. A sort or filter re-renders anyway; Reload called from application code does
+            // not, and without this the new rows sit in the component and never reach the screen.
+            StateHasChanged();
+        }
 
         async Task LoadPageAsync(IAsyncQueryExecutor async, IQueryable<TItem> source)
         {
             var token = BeginLoad();
             var filtered = ApplyFilters(source);
             var ordered = SortColumn?.ApplySort(filtered, SortDescending) ?? filtered;
-            var paged = AllowPaging ? ordered.Skip(skip).Take(pageSize) : ordered;
+            var paged = Paging ? ordered.Skip(skip).Take(pageSize) : ordered;
 
             IsLoading = true;
             StateHasChanged();
@@ -463,7 +557,7 @@ namespace Radzen.FastGrid
                 // A page is a subset, so its length says nothing about the total and the total costs a
                 // second round trip. An unpaged query is the whole set, so the list already is the count.
                 // The count is of the filtered set, not the source: the pager counts what is on screen.
-                var count = AllowPaging ? await async.CountAsync(filtered, token) : items.Count;
+                var count = Paging ? await async.CountAsync(filtered, token) : items.Count;
 
                 if (token.IsCancellationRequested)
                 {
@@ -489,12 +583,16 @@ namespace Radzen.FastGrid
             StateHasChanged();
         }
 
-        async Task InvokeLoadDataAsync()
+        Task InvokeLoadDataAsync() => Paging
+            ? InvokeLoadDataAsync(skip, pageSize)
+            : InvokeLoadDataAsync(null, null);
+
+        async Task InvokeLoadDataAsync(int? start, int? count)
         {
             var args = new LoadDataArgs
             {
-                Skip = AllowPaging ? skip : null,
-                Top = AllowPaging ? pageSize : null,
+                Skip = start,
+                Top = count,
                 OrderBy = OrderBy(),
                 Filters = BuildFilters(),
             };
@@ -606,7 +704,7 @@ namespace Radzen.FastGrid
 
             data = Composed(data);
 
-            return AllowPaging ? data.Skip(skip).Take(pageSize) : data;
+            return Paging ? data.Skip(skip).Take(pageSize) : data;
         }
 
         /// <summary>

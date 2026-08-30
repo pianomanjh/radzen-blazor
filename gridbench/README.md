@@ -288,6 +288,47 @@ than worked around: the collection's item type was read only from generic argume
 property was left with none and the predicate was built against the array - `the binary operator Equal
 is not defined for Int32[] and Int32`. `RadzenDataGrid` had the same fault.
 
+### Virtualization
+
+`AllowVirtualization` puts the rows through Blazor's `Virtualize`, with `SpacerElement="tr"` - its
+spacers are `div`s by default, and a `div` inside a `tbody` is hoisted out of the table by the HTML
+parser, taking the rows' sizing with it. `ItemSize` defaults to 37px, which is the row height
+`GeometryParityTests` pins rather than a guess: a wrong one makes the scrollbar lie about how far there
+is to scroll.
+
+Virtualization and paging solve the same problem, so virtualization wins: with it on the pager is not
+drawn and `AllowPaging` is ignored. One `Paging` property is the single rule for that, because reading
+`AllowPaging` in the four places that used to would eventually let them disagree.
+
+Everything funnels through one items provider: a `LoadData` handler is asked for the window, a supported
+queryable is counted and materialized with awaited queries, anything else is composed in memory. A sort
+or filter has to *refetch* rather than re-render, since `Virtualize` holds its own copy of the window.
+
+Two faults here were wasted work rather than wrong output, and only turned up because the tests count
+calls: the grid pre-loaded a page in `OnParametersSetAsync` that the provider then re-fetched, and the
+`LoadData` handler was called once with no window at all before the provider asked for one.
+
+### 31 bytes a row for a branch that was never taken
+
+Extracting the row markup into a `RenderRow` method - so the virtualized and non-virtualized paths could
+share it - cost **+31 KB at 1000 rows, a 21% regression**, with a byte-identical render tree (28,081
+frames either way). The cause is a C# rule rather than anything about Blazor: `RenderRow` contained
+
+```csharp
+if (RowClick.HasDelegate)
+{
+    var captured = item;
+    ... _ => RowClick.InvokeAsync(captured) ...
+}
+```
+
+and a lambda capturing a local makes the compiler allocate that method's display class **on entry**, not
+where the local is declared. Every row paid for a closure the branch never built. Moving the lambda into
+its own method restored 150 KB exactly.
+
+The frame counter said the tree was identical, so only the benchmark could see this - which is why the
+numbers are re-measured after every change rather than at the end.
+
 ### The trap it walked into first
 
 The first version called `StateHasChanged()` from the parameter-set path. `ComponentBase` already
@@ -315,7 +356,7 @@ It is now a test project that runs in CI with nobody watching:
 dotnet test Radzen.Blazor.FastGrid.Tests
 ```
 
-228 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
+250 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
 8 x 5 data in the same run, in two layers:
 
 - **Markup** (`MarkupParityTests`) - the table's `rz-grid-table` / `rz-grid-table-striped`; `rz-data-row`
