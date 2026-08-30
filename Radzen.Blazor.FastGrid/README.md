@@ -163,8 +163,10 @@ time against the same baseline:
 | responsive titles | 151.63 KB | +0.33 KB | 1.39x |
 | sorted by one column | 178.35 KB | **+27 KB** | 1.60x |
 | sorted by two columns | 200.48 KB | **+22 KB** *over one* | 1.09x *over one* |
+| row detail, driven through the API | 151.74 KB | +0.27 KB | 1.02x |
 | cell tooltip | 267.28 KB | **+116 KB** | 1.37x |
 | row click | 461.38 KB | **+310 KB** | 1.21x |
+| row detail with its toggle column | 554.99 KB | **+403 KB** | 1.65x |
 | cell click | 1,633.96 KB | **+1,483 KB** | 2.06x |
 
 The layout, selection, row-styling, template and settings features are free, as designed: a couple of
@@ -182,6 +184,11 @@ Two rows are worth reading carefully rather than at face value:
   sort.
 - **Responsive titles allocate nothing and still cost 39% more time.** A span and a text frame per cell
   is work even when it is not memory.
+- **Row detail has no idle state.** Declaring a `Template` draws a toggle on every row, so the feature
+  costs its 403 KB from the moment it is available rather than when a row is expanded - there is no
+  "switched on but not in use" for it, because a row that can be expanded has to show that it can. The
+  two rows above are the same feature with and without that column, and the difference between them is
+  the whole of it.
 
 The tooltip's 116 KB is the `title` attribute plus deriving each cell's text a second time, since
 `RenderCell` writes into the builder rather than returning a string.
@@ -243,6 +250,39 @@ composing over a queryable in memory, the render that restores the state is the 
 A grid on `LoadData` or the async executor gets one reload after, since the load that produced what is
 on screen ran before the settings existed. A column with no property path - a template column naming no
 member - cannot be identified across a reload and is not persisted.
+
+## Row detail
+
+A `Template` gives each row an expandable detail row beneath it:
+
+```razor
+<RadzenFastGrid Data="@orders" ExpandMode="DataGridExpandMode.Multiple">
+    <Template Context="order">
+        <RadzenFastGrid Data="@order.Lines">...</RadzenFastGrid>
+    </Template>
+    <PropertyColumn Property="@(o => o.Reference)" />
+</RadzenFastGrid>
+```
+
+`ExpandMode` chooses whether expanding a row collapses the last one, `RowExpand` and `RowCollapse`
+report what changed - including the row that single mode closes for you, since a row that leaves the
+screen without an event is a row you still think is expanded - and `ToggleRow` / `IsRowExpanded` drive
+it from code.
+
+**This is the one feature here whose availability is its cost.** Declaring the `Template` draws a
+toggle button on every row, which is 403 KB at 1000 rows - a delegate per row, plus the cell, button
+and spans the theme's toggle needs. It is charged whether or not anything is ever expanded, because a
+row that can be expanded has to show that it can. Nothing is paid while `Template` is null.
+
+`ShowExpandColumn="false"` is the way out where the cost matters: the feature stays, the per-row toggle
+goes, and expansion comes from your own UI through `ToggleRow`. That is +0.27 KB rather than +403.
+
+**Virtualization.** An expanded row is taller than `ItemSize`, so `Virtualize`'s spacers drift and the
+scrollbar stops being proportional. `RadzenDataGrid` has the same problem - it renders its `Template`
+inside the virtualized row too, and never sets `ItemSize` at all, taking Blazor's 50px default against
+its own 37px rows. This grid measures `ItemSize` against the theme, so it is the one giving something
+up; what makes that workable is that `ItemSize` is a parameter here, so a grid combining the two can
+raise it towards the average expanded height.
 
 ## Data
 
