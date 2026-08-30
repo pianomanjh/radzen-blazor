@@ -94,6 +94,35 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ACheckBoxListLookupIsNeverRunFromTheRenderThread()
+        {
+            // The same rule, for the one path that did not follow it. The distinct query behind a
+            // check-box list was composed and enumerated inside BuildRenderTree - a blocking round trip
+            // on the render thread, and on Entity Framework a second operation on the context that the
+            // awaited page load is still using.
+            using var ctx = new TestContext();
+            var source = new WalkCountingQueryable(People.Many(40).AsQueryable());
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(new YieldingExecutor());
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, source);
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
+                p.Add(g => g.ChildContent, Columns.Of(Columns.Property<Person, string>(x => x.First)));
+            });
+
+            // Not one walk from the render itself: every query the grid ran went through the executor.
+            Assert.Equal(0, source.Walks);
+
+            // And the values still arrive - fetched after the render rather than during it.
+            cut.WaitForAssertion(() => Assert.Equal(40,
+                cut.FindComponents<RadzenDropDown<IEnumerable>>()[0].Instance.Data.Cast<object>().Count()));
+        }
+
+        [Fact]
         public void AColumnTypedAsObjectStillFiltersOnItsRealType()
         {
             // The column knows only object, so the text stayed a string and the predicate builder put a

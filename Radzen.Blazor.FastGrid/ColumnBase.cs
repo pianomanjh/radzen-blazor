@@ -16,7 +16,7 @@ namespace Radzen.FastGrid
     /// every cell, which is a large share of what makes the general-purpose grid expensive at scale.
     /// </remarks>
     /// <typeparam name="TItem">The row type.</typeparam>
-    public abstract class ColumnBase<TItem> : ComponentBase
+    public abstract class ColumnBase<TItem> : ComponentBase, IDisposable
     {
         [CascadingParameter] internal RadzenFastGrid<TItem>? Grid { get; set; }
 
@@ -254,6 +254,11 @@ namespace Radzen.FastGrid
                     $"{GetType().Name} must be placed inside a {nameof(RadzenFastGrid<TItem>)}.");
             }
 
+            // Registration cannot be driven from here alone. The renderer skips SetParametersAsync
+            // entirely when a retained component's parameters are all known-immutable and unchanged
+            // (ParameterView.DefinitelyEquals), which is every column whose only parameters are strings -
+            // so a grid that rebuilt its column list per render lost those columns on the second pass.
+            // The column registers once and leaves when it is disposed, as RadzenDataGridColumn does.
             Grid.AddColumn(this);
 
             return base.SetParametersAsync(ParameterView.Empty);
@@ -262,6 +267,31 @@ namespace Radzen.FastGrid
         /// <summary>A column renders nothing itself; the grid draws its header and cells.</summary>
         protected override void BuildRenderTree(RenderTreeBuilder builder)
         {
+        }
+
+        /// <summary>
+        /// A column renders nothing, so its own output can never need refreshing. The grid reads the
+        /// column's state directly and redraws itself; a render pass here would only queue an empty
+        /// frame array for the renderer to diff against the last empty one, once per column per render.
+        /// </summary>
+        protected override bool ShouldRender() => false;
+
+        /// <inheritdoc />
+        public void Dispose()
+        {
+            Dispose(true);
+
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Leaves the grid. A derived column overrides this to release state of its own.</summary>
+        /// <param name="disposing">Whether managed state should be released.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Grid?.RemoveColumn(this);
+            }
         }
     }
 }
