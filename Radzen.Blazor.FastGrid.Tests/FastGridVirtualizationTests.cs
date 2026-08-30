@@ -100,7 +100,7 @@ namespace Radzen.FastGrid.Tests
             var cells = cut.FindAll("tbody tr[role=row]")[0].QuerySelectorAll("td");
 
             Assert.Equal(2, cells.Length);
-            Assert.Equal("rz-cell-data", cells[0].QuerySelector("span")!.ClassName);
+            Assert.Equal("rz-cell-data rz-text-truncate", cells[0].QuerySelector("span")!.ClassName);
         }
 
         [Fact]

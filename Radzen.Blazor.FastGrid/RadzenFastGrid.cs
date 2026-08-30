@@ -25,6 +25,15 @@ namespace Radzen.FastGrid
     {
         readonly List<ColumnBase<TItem>> columns = new();
 
+        // The columns actually drawn, in the order they are drawn, with their sort keys alongside.
+        // Rebuilt once per render pass rather than per row - three render loops read it, and a row
+        // reads it once per cell.
+        readonly List<ColumnBase<TItem>> visibleColumns = new();
+
+        // Scratch for the ordering pass, reused so a grid that declares an OrderIndex does not allocate
+        // a list per render to apply it.
+        readonly List<ColumnBase<TItem>?> placed = new();
+
         /// <summary>The rows to display.</summary>
         [Parameter] public IEnumerable<TItem>? Data { get; set; }
 
@@ -46,8 +55,82 @@ namespace Radzen.FastGrid
         /// <summary>Raised when a row is clicked. No handler means no per-row delegate is allocated.</summary>
         [Parameter] public EventCallback<TItem> RowClick { get; set; }
 
+        /// <summary>Raised when a row is double-clicked. Costs a per-row delegate only when handled.</summary>
+        [Parameter] public EventCallback<TItem> RowDoubleClick { get; set; }
+
+        /// <summary>
+        /// Raised when a cell is clicked. This is a delegate per <em>cell</em> - measured at 296 bytes,
+        /// which at five columns is five times what a row click costs - so it is bound only when handled.
+        /// </summary>
+        [Parameter] public EventCallback<FastGridCellEventArgs<TItem>> CellClick { get; set; }
+
+        /// <summary>Raised when a cell is right-clicked. Per cell, and bound only when handled.</summary>
+        [Parameter] public EventCallback<FastGridCellEventArgs<TItem>> CellContextMenu { get; set; }
+
+        /// <summary>
+        /// Whether each cell carries its value as a <c>title</c>, so a truncated cell reveals itself on
+        /// hover. Off by default: it is an attribute per cell, and the cell's text has to be derived a
+        /// second time to fill it.
+        /// </summary>
+        [Parameter] public bool ShowCellDataAsTooltip { get; set; }
+
+        /// <summary>
+        /// An extra CSS class for a row. Return one of a few constant strings and this costs nothing
+        /// per row; return a freshly built string per row and it costs that string.
+        /// </summary>
+        [Parameter] public Func<TItem, string?>? RowClass { get; set; }
+
+        /// <summary>An inline style for a row, on the same terms as <see cref="RowClass" />.</summary>
+        [Parameter] public Func<TItem, string?>? RowStyle { get; set; }
+
+        /// <summary>Whether one row or several can be selected at once.</summary>
+        [Parameter] public DataGridSelectionMode SelectionMode { get; set; } = DataGridSelectionMode.Single;
+
+        /// <summary>Whether clicking a row selects it.</summary>
+        [Parameter] public bool AllowRowSelectOnRowClick { get; set; } = true;
+
+        /// <summary>
+        /// Raised with the new selection when a row click changes it. The grid renders from
+        /// <see cref="Selection" /> and never writes to it, so use <c>@bind-Selection</c> - or handle
+        /// this - for clicking to have a visible effect.
+        /// </summary>
+        [Parameter] public EventCallback<ICollection<TItem>> SelectionChanged { get; set; }
+
+        /// <summary>Raised with the row a click added to the selection.</summary>
+        [Parameter] public EventCallback<TItem> RowSelect { get; set; }
+
+        /// <summary>Raised with the row a click removed from the selection.</summary>
+        [Parameter] public EventCallback<TItem> RowDeselect { get; set; }
+
+        // Selection is driven from the row click, so the row needs the handler when selection is live
+        // even if nothing is listening to RowClick itself.
+        bool SelectsOnRowClick => AllowRowSelectOnRowClick
+            && (SelectionChanged.HasDelegate || RowSelect.HasDelegate || RowDeselect.HasDelegate);
+
         /// <summary>Extra CSS class for the grid element.</summary>
         [Parameter] public string? CssClass { get; set; }
+
+        /// <summary>Default CSS width for columns that do not set their own.</summary>
+        [Parameter] public string? ColumnWidth { get; set; }
+
+        /// <summary>Whether the header row is drawn.</summary>
+        [Parameter] public bool ShowHeader { get; set; } = true;
+
+        /// <summary>Whether alternating rows are shaded. On by default, as in RadzenDataGrid.</summary>
+        [Parameter] public bool AllowAlternatingRows { get; set; } = true;
+
+        /// <summary>Which grid lines the table draws. Theme default unless set.</summary>
+        [Parameter] public DataGridGridLines GridLines { get; set; } = DataGridGridLines.Default;
+
+        /// <summary>The pager's density.</summary>
+        [Parameter] public Density Density { get; set; } = Density.Default;
+
+        /// <summary>
+        /// Whether each cell repeats its column title, which is what lets a theme stack the table into
+        /// cards on a narrow screen. The titles are constant strings, so this allocates nothing; it does
+        /// add a span per cell, which is render time rather than memory.
+        /// </summary>
+        [Parameter] public bool Responsive { get; set; }
 
         /// <summary>Content shown when there are no rows.</summary>
         [Parameter] public RenderFragment? EmptyTemplate { get; set; }
@@ -81,6 +164,11 @@ namespace Radzen.FastGrid
                 return;
             }
 
+            // Not left for the next RefreshVisibleColumns: Virtualize renders its rows outside the
+            // table's render pass, so this list can be read after a column has gone and before the
+            // table redraws.
+            visibleColumns.Remove(column);
+
             // The sort must not outlive the column it orders by, or the grid keeps ordering by something
             // nothing on screen names and nothing can clear. Nor must the column's check-box-list values,
             // which would hold the column and everything it listed for as long as the grid lives.
@@ -91,6 +179,100 @@ namespace Radzen.FastGrid
             }
 
             lookups.Remove(column);
+        }
+
+        /// <summary>
+        /// Sets the sort a column declared in markup. Called once, as the column registers, before the
+        /// grid has drawn anything - so it publishes the state and does not reload.
+        /// </summary>
+        internal void ApplyDeclaredSort(ColumnBase<TItem> column, SortOrder order)
+        {
+            SortColumn = column;
+            SortDescending = order == SortOrder.Descending;
+        }
+
+        // Rebuilt at the start of each render pass. The common case - every column visible, none
+        // declaring an OrderIndex - skips the ordering pass entirely.
+        void RefreshVisibleColumns()
+        {
+            visibleColumns.Clear();
+
+            var ordered = false;
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.Visible)
+                {
+                    continue;
+                }
+
+                ordered |= column.OrderIndex is not null;
+
+                visibleColumns.Add(column);
+            }
+
+            if (!ordered)
+            {
+                return;
+            }
+
+            // A column that names an index is placed at it, and the rest fill what is left in the order
+            // they were declared. Sorting on a key of "OrderIndex, or where it happens to sit" instead
+            // reads the same for one column and differently for two: OrderIndex="0" on the third column
+            // would leave it behind the first, which is not what naming a position means.
+            placed.Clear();
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                placed.Add(null);
+            }
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                if (column.OrderIndex is not { } index)
+                {
+                    continue;
+                }
+
+                var slot = Math.Clamp(index, 0, placed.Count - 1);
+
+                // Two columns claiming one slot is resolved by declaration order, since this walks in it.
+                // The wrap terminates: there are never more indexed columns than slots.
+                while (placed[slot] is not null)
+                {
+                    slot = (slot + 1) % placed.Count;
+                }
+
+                placed[slot] = column;
+            }
+
+            var next = 0;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                if (column.OrderIndex is not null)
+                {
+                    continue;
+                }
+
+                while (placed[next] is not null)
+                {
+                    next++;
+                }
+
+                placed[next] = column;
+            }
+
+            for (var i = 0; i < placed.Count; i++)
+            {
+                visibleColumns[i] = placed[i]!;
+            }
         }
 
         /// <summary>Sorts by the given column, toggling direction when it is already the sorted one.</summary>
@@ -146,6 +328,8 @@ namespace Radzen.FastGrid
 
         void RenderTable(RenderTreeBuilder builder)
         {
+            RefreshVisibleColumns();
+
             BeginDrawing();
 
             try
@@ -173,9 +357,15 @@ namespace Radzen.FastGrid
             // 22, not 20: the top pager's band now runs to 20, and the numbers a region writes must
             // ascend in the order it writes them.
             builder.OpenElement(22, "table");
-            builder.AddAttribute(23, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
+            builder.AddAttribute(23, "class", TableClass());
 
-            RenderHead(builder);
+            RenderColumnGroup(builder);
+
+            if (ShowHeader)
+            {
+                RenderHead(builder);
+            }
+
             RenderBody(builder);
 
             builder.CloseElement();
@@ -217,8 +407,77 @@ namespace Radzen.FastGrid
                     EventCallback.Factory.Create<int>(this, OnPageSizeChanged));
             }
 
-            builder.AddComponentReferenceCapture(sequence + 10, capture);
+            builder.AddAttribute(sequence + 10, nameof(RadzenPager.Density), Density);
+            builder.AddComponentReferenceCapture(sequence + 11, capture);
             builder.CloseComponent();
+        }
+
+        // Widths live here and nowhere else. A width on every td is a frame per cell; one col per column
+        // is a frame per column, and the browser applies it to the whole column either way. Written only
+        // when some column actually has a width, so a grid that sets none pays nothing for the element.
+        void RenderColumnGroup(RenderTreeBuilder builder)
+        {
+            var any = false;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                if (!string.IsNullOrEmpty(visibleColumns[i].Width ?? ColumnWidth))
+                {
+                    any = true;
+
+                    break;
+                }
+            }
+
+            if (!any)
+            {
+                return;
+            }
+
+            builder.OpenElement(24, "colgroup");
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                builder.OpenElement(25, "col");
+
+                if (column.ColStyle(column.Width ?? ColumnWidth) is { } style)
+                {
+                    builder.AddAttribute(26, "style", style);
+                }
+
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+
+        // Composed per render, not per row, and only when something is off the default - so the ordinary
+        // grid hands the same literal back every time.
+        string TableClass()
+        {
+            var striped = AllowAlternatingRows ? " rz-grid-table-striped" : null;
+            var lines = GridLines switch
+            {
+                DataGridGridLines.Both => " rz-grid-gridlines-both",
+                DataGridGridLines.None => " rz-grid-gridlines-none",
+                DataGridGridLines.Horizontal => " rz-grid-gridlines-horizontal",
+                DataGridGridLines.Vertical => " rz-grid-gridlines-vertical",
+                _ => null,
+            };
+
+            if (striped is not null && lines is null)
+            {
+                return "rz-grid-table rz-grid-table-fixed rz-grid-table-striped";
+            }
+
+            if (striped is null && lines is null)
+            {
+                return "rz-grid-table rz-grid-table-fixed";
+            }
+
+            return "rz-grid-table rz-grid-table-fixed" + striped + lines;
         }
 
         void RenderHead(RenderTreeBuilder builder)
@@ -228,9 +487,9 @@ namespace Radzen.FastGrid
             builder.OpenElement(32, "tr");
             builder.AddAttribute(33, "role", "row");
 
-            for (var i = 0; i < columns.Count; i++)
+            for (var i = 0; i < visibleColumns.Count; i++)
             {
-                var column = columns[i];
+                var column = visibleColumns[i];
                 var sortable = AllowSorting && column.CanSort;
 
                 builder.OpenElement(34, "th");
@@ -243,6 +502,11 @@ namespace Radzen.FastGrid
                 if (ReferenceEquals(SortColumn, column))
                 {
                     builder.AddAttribute(38, "aria-sort", SortDescending ? "descending" : "ascending");
+                }
+
+                if (column.CellStyle is { } headerStyle)
+                {
+                    builder.AddAttribute(48, "style", headerStyle);
                 }
 
                 // The theme gives th padding:0 and hangs the header padding off a direct child div, so
@@ -298,9 +562,9 @@ namespace Radzen.FastGrid
             builder.OpenElement(50, "tr");
             builder.AddAttribute(51, "role", "row");
 
-            for (var i = 0; i < columns.Count; i++)
+            for (var i = 0; i < visibleColumns.Count; i++)
             {
-                var column = columns[i];
+                var column = visibleColumns[i];
 
                 builder.OpenElement(52, "th");
                 builder.AddAttribute(53, "role", "columnheader");
@@ -421,33 +685,45 @@ namespace Radzen.FastGrid
         void RenderRow(RenderTreeBuilder builder, TItem item)
         {
             var selection = Selection;
+            var selected = selection is not null && selection.Contains(item);
 
             builder.OpenElement(120, "tr");
             builder.AddAttribute(121, "role", "row");
 
             // No alternating class: rz-grid-table-striped stripes with :nth-child in CSS.
-            if (selection is not null && selection.Contains(item))
+            builder.AddAttribute(122, "class", RowClassFor(item, selected));
+
+            if (selected)
             {
-                builder.AddAttribute(122, "class", "rz-data-row rz-state-highlight");
                 builder.AddAttribute(123, "aria-selected", "true");
             }
-            else
+
+            if (RowStyle is { } rowStyle && rowStyle(item) is { } style)
             {
-                builder.AddAttribute(122, "class", "rz-data-row");
+                builder.AddAttribute(124, "style", style);
             }
 
             // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
-            if (RowClick.HasDelegate)
+            if (RowClick.HasDelegate || SelectsOnRowClick)
             {
-                builder.AddAttribute(124, "onclick", RowClickHandler(item));
+                builder.AddAttribute(125, "onclick", RowClickHandler(item));
             }
 
-            for (var i = 0; i < columns.Count; i++)
+            if (RowDoubleClick.HasDelegate)
             {
-                var column = columns[i];
+                builder.AddAttribute(126, "ondblclick", RowDoubleClickHandler(item));
+            }
 
-                builder.OpenElement(125, "td");
-                builder.AddAttribute(126, "role", "gridcell");
+            var tooltips = ShowCellDataAsTooltip;
+            var cellClick = CellClick.HasDelegate;
+            var cellContextMenu = CellContextMenu.HasDelegate;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                builder.OpenElement(160, "td");
+                builder.AddAttribute(161, "role", "gridcell");
 
                 // rz-cell-data belongs on the span, not here: the theme's rules for it are all
                 // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
@@ -455,11 +731,51 @@ namespace Radzen.FastGrid
                 // `.rz-cell-data { padding: ... }` twice.
                 if (!string.IsNullOrEmpty(column.CssClass))
                 {
-                    builder.AddAttribute(127, "class", column.CssClass);
+                    builder.AddAttribute(162, "class", column.CssClass);
                 }
 
-                builder.OpenElement(128, "span");
-                builder.AddAttribute(129, "class", "rz-cell-data");
+                // Per cell, so five times a per-row delegate at five columns. Bound only when something
+                // listens - the measured cost of binding these unconditionally is 296 B per cell.
+                if (cellClick)
+                {
+                    builder.AddAttribute(163, "onclick", CellClickHandler(item, column));
+                }
+
+                if (cellContextMenu)
+                {
+                    builder.AddAttribute(164, "oncontextmenu", CellContextMenuHandler(item, column));
+                }
+
+                // Memoized on the column, so this is a reference to the same string on every row, and
+                // null - no attribute at all - for a column that aligns left and bounds nothing.
+                if (column.CellStyle is { } cellStyle)
+                {
+                    builder.AddAttribute(165, "style", cellStyle);
+                }
+
+                // The title a narrow-screen theme shows once the table is stacked into cards. Constant
+                // strings, so it allocates nothing - but it is a span and a text frame per cell, which
+                // is why it is behind a flag rather than always emitted.
+                if (Responsive)
+                {
+                    builder.OpenElement(166, "span");
+                    builder.AddAttribute(167, "class", "rz-column-title");
+                    builder.AddContent(168, column.HeaderText);
+                    builder.CloseElement();
+                }
+
+                builder.OpenElement(169, "span");
+                builder.AddAttribute(170, "class", column.CellClass);
+
+                // The hover affordance for a truncated cell, and the most expensive thing on this list:
+                // an attribute per cell, and the cell's text derived a second time to fill it, since
+                // RenderCell writes into the builder rather than handing a string back. Opt-in for that
+                // reason - a column that wants it everywhere can use a TemplateColumn instead.
+                if (tooltips && column.CellTextOf(item) is { } text)
+                {
+                    builder.AddAttribute(171, "title", text);
+                }
+
                 column.RenderCell(builder, 34, item);
                 builder.CloseElement();
 
@@ -469,11 +785,117 @@ namespace Radzen.FastGrid
             builder.CloseElement();
         }
 
+        // Composing the row's class costs a string per row unless the result is memoized, and a caller
+        // returning one of a handful of constants - which is what a "highlight the overdue ones" rule
+        // does - hits this on every row after the first. ReferenceEquals rather than string equality:
+        // a caller that builds a fresh string per row pays for it, and should not silently look free.
+        string? memoRowClass;
+        bool memoRowSelected;
+        string? memoRowComposed;
+
+        string RowClassFor(TItem item, bool selected)
+        {
+            var extra = RowClass?.Invoke(item);
+
+            if (string.IsNullOrEmpty(extra))
+            {
+                return selected ? "rz-data-row rz-state-highlight" : "rz-data-row";
+            }
+
+            if (ReferenceEquals(memoRowClass, extra) && memoRowSelected == selected)
+            {
+                return memoRowComposed!;
+            }
+
+            memoRowClass = extra;
+            memoRowSelected = selected;
+
+            return memoRowComposed = (selected ? "rz-data-row rz-state-highlight " : "rz-data-row ") + extra;
+        }
+
         // The closure lives here rather than in RenderRow: a lambda capturing a local of RenderRow makes
         // the compiler allocate that method's display class on entry, for every row, whether or not the
         // branch that needs it is taken. Measured at 31 B/row - a fifth of the component's whole budget.
         EventCallback<MouseEventArgs> RowClickHandler(TItem item) =>
-            EventCallback.Factory.Create<MouseEventArgs>(this, _ => RowClick.InvokeAsync(item));
+            EventCallback.Factory.Create<MouseEventArgs>(this, _ => OnRowClick(item));
+
+        EventCallback<MouseEventArgs> RowDoubleClickHandler(TItem item) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this, _ => RowDoubleClick.InvokeAsync(item));
+
+        EventCallback<MouseEventArgs> CellClickHandler(TItem item, ColumnBase<TItem> column) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => CellClick.InvokeAsync(new FastGridCellEventArgs<TItem>(item, column)));
+
+        EventCallback<MouseEventArgs> CellContextMenuHandler(TItem item, ColumnBase<TItem> column) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => CellContextMenu.InvokeAsync(new FastGridCellEventArgs<TItem>(item, column)));
+
+        async Task OnRowClick(TItem item)
+        {
+            if (SelectsOnRowClick)
+            {
+                await SelectRow(item).ConfigureAwait(false);
+            }
+
+            await RowClick.InvokeAsync(item).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Applies a click to the selection and raises what changed. The grid computes the new selection
+        /// rather than writing to <see cref="Selection" />: a component that mutated the collection its
+        /// caller handed it would change state the caller never asked it to change, and a caller reading
+        /// the parameter back would see a different collection than the one it bound.
+        /// </summary>
+        async Task SelectRow(TItem item)
+        {
+            var current = Selection;
+            var selected = current is not null && current.Contains(item);
+
+            List<TItem> next;
+
+            if (SelectionMode == DataGridSelectionMode.Single)
+            {
+                // Clicking the selected row again leaves it selected, as RadzenDataGrid does: single
+                // selection is a choice, and there is no way back to "nothing chosen" by clicking.
+                if (selected)
+                {
+                    return;
+                }
+
+                if (current is not null && RowDeselect.HasDelegate)
+                {
+                    foreach (var previous in current)
+                    {
+                        await RowDeselect.InvokeAsync(previous).ConfigureAwait(false);
+                    }
+                }
+
+                next = new List<TItem> { item };
+
+                await RowSelect.InvokeAsync(item).ConfigureAwait(false);
+            }
+            else
+            {
+                next = current is null ? new List<TItem>() : new List<TItem>(current);
+
+                // Exactly one row changes, and it is the one that was clicked - so which event to raise
+                // is known, rather than something to be worked out by comparing the two collections.
+                if (selected)
+                {
+                    next.Remove(item);
+
+                    await RowDeselect.InvokeAsync(item).ConfigureAwait(false);
+                }
+                else
+                {
+                    next.Add(item);
+
+                    await RowSelect.InvokeAsync(item).ConfigureAwait(false);
+                }
+            }
+
+            await SelectionChanged.InvokeAsync(next).ConfigureAwait(false);
+        }
 
         void RenderEmpty(RenderTreeBuilder builder)
         {
@@ -485,7 +907,7 @@ namespace Radzen.FastGrid
             builder.OpenElement(140, "tr");
             builder.OpenElement(141, "td");
             builder.AddAttribute(142, "class", "rz-datatable-emptymessage");
-            builder.AddAttribute(143, "colspan", columns.Count);
+            builder.AddAttribute(143, "colspan", visibleColumns.Count);
             builder.AddContent(144, EmptyTemplate);
             builder.CloseElement();
             builder.CloseElement();

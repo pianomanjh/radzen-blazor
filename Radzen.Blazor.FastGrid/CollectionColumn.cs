@@ -147,6 +147,9 @@ namespace Radzen.FastGrid
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
             => builder.AddContent(sequence, Text(item));
 
+        /// <inheritdoc />
+        public override string? CellTextOf(TItem item) => Text(item);
+
         string? Text(TItem item) =>
             compiled?.Invoke(item) is { } members
                 ? CellText.Join(members, Separator, show ??= element => CellText.Of(Select(element), Format))

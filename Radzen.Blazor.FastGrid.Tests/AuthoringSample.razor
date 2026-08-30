@@ -23,6 +23,31 @@
     </TemplateColumn>
 </RadzenFastGrid>
 
+@* The layout, chrome, row and selection surface, authored the same way. Razor has to infer TItem for
+   every callback here too - a Func<Person, string> and an EventCallback<ICollection<Person>> both
+   come from the cascaded type parameter, not from anything written on the tag. *@
+<RadzenFastGrid Data="@Data" ColumnWidth="120px" ShowHeader="true" Responsive="true"
+                GridLines="DataGridGridLines.Both" Density="Density.Compact"
+                AllowAlternatingRows="false" ShowCellDataAsTooltip="true"
+                RowClass="@(p => p.Salary > 2500 ? "senior" : null)"
+                RowStyle="@(p => p.Bonus is null ? "opacity:.6" : null)"
+                SelectionMode="DataGridSelectionMode.Multiple"
+                @bind-Selection="@Chosen"
+                RowSelect="@((Person p) => { })" RowDeselect="@((Person p) => { })"
+                RowClick="@((Person p) => { })" RowDoubleClick="@((Person p) => { })"
+                CellClick="@((FastGridCellEventArgs<Person> args) => { })"
+                CellContextMenu="@((FastGridCellEventArgs<Person> args) => { })">
+    <PropertyColumn Property="@(p => p.First)" Title="First" Width="200px" OrderIndex="1" />
+    <PropertyColumn Property="@(p => p.Last)" Title="Last" Visible="false" />
+    <PropertyColumn Property="@(p => p.Id)" Title="Id" OrderIndex="0"
+                    TextAlign="TextAlign.Right" MinWidth="60px" MaxWidth="90px" />
+    <PropertyColumn Property="@(p => p.Salary)" Title="Salary" Format="C"
+                    TextAlign="TextAlign.Right" WhiteSpace="WhiteSpace.Nowrap"
+                    SortOrder="SortOrder.Descending" />
+</RadzenFastGrid>
+
 @code {
     [Parameter] public IEnumerable<Person> Data { get; set; } = Array.Empty<Person>();
+
+    ICollection<Person> Chosen { get; set; } = new List<Person>();
 }

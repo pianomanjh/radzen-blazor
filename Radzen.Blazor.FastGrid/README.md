@@ -29,6 +29,10 @@ It depends on `Radzen.Blazor`, whose theme you are already loading. Add the name
 @using Radzen.FastGrid
 ```
 
+A Radzen app already imports `Radzen` and `Radzen.Blazor`, which is where the enums the grid's
+parameters take live - `TextAlign`, `SortOrder`, `Density` and `DataGridGridLines` in the first,
+`WhiteSpace` in the second.
+
 ```razor
 <RadzenFastGrid Data="@people" AllowSorting="true" AllowFiltering="true"
                 AllowPaging="true" PageSize="20">
@@ -52,6 +56,17 @@ Radzen needs one: `LoadDataArgs.OrderBy`, OData `$orderby`, and `FilterDescripto
 | `PropertyColumn<TItem, TProp>` | One value per cell. `Property`, `Format`, `SortBy`, `FilterBy`, `Title`, `CssClass`, `Sortable`, `Filterable` |
 | `CollectionColumn<TItem, TElement>` | A collection per cell, listed. `Property`, `DisplayProperty`, `FilterProperty`, `Separator`, `SortBy` |
 | `TemplateColumn<TItem>` | Arbitrary content. `Template`, `SortProperty`. Costs ~94 B/cell more than a property column - use it where a cell is not just a value |
+
+Every column also takes the layout parameters, which are per column and cost nothing per row:
+
+| | |
+| --- | --- |
+| `Width`, and the grid's `ColumnWidth` for a default | Written once onto the table's `colgroup`, not onto every cell |
+| `MinWidth`, `MaxWidth`, `TextAlign` | The cell style, composed once per column and shared by every one of its cells |
+| `WhiteSpace` | `Truncate` (the default, and RadzenDataGrid's), `Nowrap` or `Wrap` - the cell span's class, so it is a different literal rather than an extra attribute |
+| `Visible` | Leaves the column out of the layout. It keeps any filter it carries, which is how a grid filters by something it does not show |
+| `OrderIndex` | Puts the column at that position; the rest fill what is left in the order they were declared |
+| `SortOrder` | The sort the grid starts in. Read once, as the column registers - call `SortBy` to re-sort a live grid |
 
 A `PropertyColumn` bound to a collection of **values** lists them without a template:
 
@@ -78,6 +93,40 @@ takes a `SortBy` naming something that can be ordered:
 
 A collection-valued `PropertyColumn` has no such escape: its `SortBy` is typed at the property, which
 is the collection, so its header stays unsortable.
+
+## Rows, selection and events
+
+The grid's own chrome is `ShowHeader`, `AllowAlternatingRows` (on by default), `GridLines`, `Density`
+for the pager, and `Responsive`, which repeats each column's title inside its cells so a narrow-screen
+theme can stack the table into cards.
+
+`RowClass` and `RowStyle` are `Func<TItem, string?>` rather than the event-callback-with-mutable-args
+shape `RadzenDataGrid.RowRender` uses, and deliberately: those args are an allocation per row, and this
+is the same feature without one. Return one of a few constant strings and the composed class is memoized
+against it, so a thousand rows cost one composition.
+
+```razor
+<RadzenFastGrid Data="@orders" RowClass="@(o => o.Overdue ? "overdue" : null)" />
+```
+
+Selection is membership plus events. The grid renders from `Selection` and never writes to it: a click
+computes the new collection and hands it to `SelectionChanged`, so `@bind-Selection` is what makes
+clicking take effect. `SelectionMode` chooses whether a click replaces the selection or toggles a row,
+`AllowRowSelectOnRowClick` turns the whole thing off, and `RowSelect` / `RowDeselect` report the row
+that changed.
+
+```razor
+<RadzenFastGrid Data="@orders" @bind-Selection="@chosen"
+                SelectionMode="DataGridSelectionMode.Multiple" />
+```
+
+Pass a `HashSet<T>` when many rows can be selected: membership is looked up once per row through the
+collection's own `Contains`, so a long `List<T>` is a scan per row.
+
+`RowClick`, `RowDoubleClick`, `CellClick` and `CellContextMenu` are each bound only when something
+listens - an unhandled event costs no attribute and no delegate. That matters most for the cell ones:
+a delegate per cell is five times a delegate per row on a five-column grid. `ShowCellDataAsTooltip`
+puts each cell's value in a `title`, and is off for the same reason.
 
 ## Data
 
@@ -201,10 +250,8 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
 
 - **Editing.** The per-row component and cascading values that inline editing needs are exactly the cost
   this grid exists to avoid. Use `RadzenDataGrid`.
-- **Grouping, column resize, reorder, picking, frozen columns, composite headers.**
-- **`title="<value>"` on cells.** `RadzenDataGrid` emits one so a truncated cell reveals itself on hover.
-  It costs ~61 B/cell - 305 KB at 1000 x 5, against a 150 KB budget - so it would triple the
-  component's allocation for a hover affordance. A `TemplateColumn` can emit it where it is wanted.
+- **Grouping, column resize, reorder, picking, frozen columns, composite headers.** Resize, reorder and
+  frozen columns all want the scroll container below, so that is one decision gating three features.
 - **A scroll container.** No `rz-datatable-scrollable` structure, which is also what carries
   `RadzenDataGrid`'s keyboard navigation.
 - **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
