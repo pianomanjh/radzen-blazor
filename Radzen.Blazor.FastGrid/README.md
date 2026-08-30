@@ -153,12 +153,24 @@ It is **not** a drop-in replacement for `RadzenDropDownDataGrid`. That component
 name it with an expression - so the row type is a type parameter here and the authoring is checked at
 compile time. Everything the popup costs per row is the grid's cost, which is the point.
 
-`Multiple` keeps the popup open while choosing and binds `Value` to a list. Sorting, filtering, paging
-and virtualization are the grid's, and are set through the same parameter names. Without a
-`ValueProperty` the row itself is the value, which is what a drop-down bound to an entity wants.
+`Multiple` keeps the popup open while choosing and binds `Value` to whatever collection its type names -
+a `List<T>`, a `HashSet<T>` or a `T[]`. Sorting, filtering, paging and virtualization are the grid's, and
+are set through the same parameter names; a virtualized popup scrolls inside `PopupHeight`, since
+`Virtualize` needs a bounded ancestor and a popup has none of its own. Without a `ValueProperty` the row
+itself is the value, which is what a drop-down bound to an entity wants.
 
-The grid is built only while the popup is open, and the popup emits the class names the Radzen drop-down
-family emits, so a theme styles it with no extra work.
+It is an `IRadzenFormComponent`, so a `RadzenRequiredValidator` inside a `RadzenTemplateForm` finds it by
+`Name`.
+
+The grid is built on the first open and kept afterwards: a lookup nobody opens costs nothing, and one
+that has been opened keeps the sort, filter and page the user left it on rather than re-querying from
+scratch each time. The popup emits the class names the Radzen drop-down family emits, so a theme styles
+it with no extra work.
+
+A value bound before its rows have loaded - the ordinary order for an asynchronous source - shows as
+itself until the row arrives, and adopts the row when it does. `ValueText` formats that interim label.
+The lookup never walks an `IQueryable` to resolve it: reading the whole table to render one label is
+what this component exists not to do.
 
 ## What it does not do
 
@@ -174,7 +186,9 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
   `RadzenDataGrid`'s keyboard navigation.
 - **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
   so it is filtered through the grid's own filter row rather than a separate search input, and the
-  closed drop-down lists the chosen rows as text rather than as removable chips.
+  closed drop-down lists the chosen rows as text rather than as removable chips. The drop-down is a form
+  component but not a `RadzenFormField` one: the floating label needs focus and value notifications it
+  does not raise.
 
 ## Styling
 

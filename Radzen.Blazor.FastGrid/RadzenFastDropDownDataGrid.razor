@@ -6,16 +6,14 @@
 @typeparam TValue
 @namespace Radzen.FastGrid
 
+@if (Visible)
+{
 <div @ref="element" id="@Id" class="@RootCssClass" style="@Style" tabindex="@(Disabled ? "-1" : $"{TabIndex}")"
      role="combobox" aria-haspopup="grid" aria-expanded="@Open.ToString().ToLowerInvariant()"
      aria-disabled="@Disabled.ToString().ToLowerInvariant()" aria-label="@Label"
      @onclick="@TogglePopup" @onclick:stopPropagation @onkeydown="@OnKeyDown">
 
-    @if (Multiple && SelectedItems.Count > 0)
-    {
-        <span class="rz-dropdown-label rz-inputtext" style="width:100%;">@SelectedText</span>
-    }
-    else if (!Multiple && selected is not null)
+    @if (ShowsSelection)
     {
         <span class="rz-dropdown-label rz-inputtext" style="width:100%;">@SelectedText</span>
     }
@@ -37,10 +35,16 @@
     <div id="@PopupId" class="@PopupCssClass" style="@PopupStyle"
          @onclick:stopPropagation @onkeydown:stopPropagation>
         <div class="rz-lookup-panel" @onkeydown="@CloseOnEscape">
-            @* The grid is only built while the popup is open: a closed drop-down should cost nothing,
-               and its columns should not be registering against a grid nobody can see. *@
-            @if (Open)
+            @* Built on the first open and kept afterwards. A lookup nobody opens costs nothing - its
+               columns are not even registered - but destroying the grid on every close threw away the
+               sort, filter and page the user left it on, and made a LoadData source re-query from
+               scratch each time the popup was reopened. *@
+            @if (built)
             {
+                @* Virtualize needs a scrolling ancestor with a bounded height, and the popup has none:
+                   without this its spacer rows size themselves to the whole row count and run the popup
+                   far off the page. RadzenDropDownDataGrid bounds its own grid for the same reason. *@
+                <div style="@(AllowVirtualization ? $"height:{PopupHeight};overflow:auto;" : null)">
                 <RadzenFastGrid TItem="TItem" @ref="grid"
                                 Data="@Data"
                                 Count="@Count"
@@ -52,12 +56,14 @@
                                 PageSize="@PageSize"
                                 AllowVirtualization="@AllowVirtualization"
                                 ItemSize="@ItemSize"
-                                Selection="@(Multiple ? SelectedItems : null)"
+                                Selection="@SelectedItems"
                                 RowClick="@OnRowClick"
                                 EmptyTemplate="@EmptyTemplate"
                                 CssClass="rz-lookup-panel-grid"
                                 ChildContent="@ChildContent" />
+                </div>
             }
         </div>
     </div>
 </div>
+}

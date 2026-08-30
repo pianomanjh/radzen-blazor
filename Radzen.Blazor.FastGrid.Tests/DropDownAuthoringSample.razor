@@ -1,0 +1,23 @@
+@*
+    The drop-down authored the way the README authors it, and the way a page would: TItem is written
+    once on the component and the columns infer everything. Without [CascadingTypeParameter] on the
+    component this file does not compile - which is exactly what shipped, because every test built its
+    columns through helpers that name their type arguments explicitly.
+*@
+<RadzenFastDropDownDataGrid TItem="Person" TValue="int"
+                            Data="@Data" TextProperty="First" ValueProperty="Id"
+                            @bind-Value="@Chosen">
+    <PropertyColumn Property="@(p => p.First)" Title="First" />
+    <PropertyColumn Property="@(p => p.Customer.Name)" Title="Customer" />
+    <TemplateColumn Title="Template">
+        <Template Context="row">@row.Last</Template>
+    </TemplateColumn>
+</RadzenFastDropDownDataGrid>
+
+@code {
+    [Parameter] public IEnumerable<Person> Data { get; set; } = Array.Empty<Person>();
+
+    [Parameter] public int Chosen { get; set; }
+
+    [Parameter] public EventCallback<int> ChosenChanged { get; set; }
+}

@@ -261,5 +261,260 @@ namespace Radzen.FastGrid.Tests
 
             Assert.NotNull(cut.Find(".rz-multiselect-panel"));
         }
+
+        // --- what a code review found ------------------------------------------------------------
+
+        [Fact]
+        public void AValueBoundBeforeItsRowsArriveResolvesWhenTheyDo()
+        {
+            // The ordinary order for an asynchronous source: the model is known and the rows are still
+            // loading. Adopting only on a value change left such a drop-down on its placeholder for good.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
+            {
+                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.TextProperty, "First");
+                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.Value, 1);
+                p.Add(d => d.Placeholder, "Pick someone");
+            });
+
+            cut.SetParametersAndRender(p => p.Add(d => d.Data, People.Sample()));
+
+            Assert.Equal("Alice", cut.Find(".rz-dropdown-label").TextContent);
+        }
+
+        [Fact]
+        public void AValueWhoseRowIsNotLoadedReadsAsItselfRatherThanAsNothingChosen()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
+            {
+                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.TextProperty, "First");
+                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.Value, 7);
+                p.Add(d => d.Placeholder, "Pick someone");
+            });
+
+            Assert.Empty(cut.FindAll(".rz-placeholder"));
+            Assert.Equal("7", cut.Find(".rz-dropdown-label").TextContent);
+        }
+
+        [Fact]
+        public void AQueryableSourceIsNotScannedToRenderTheLabel()
+        {
+            // The component exists so a lookup does not read the whole table. Resolving the label by
+            // walking Data would have done exactly that, on the render thread, every time Value changed.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var walked = 0;
+            var source = new WalkCounting<Person>(People.Sample().AsQueryable(), () => walked++);
+
+            ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
+            {
+                p.Add(d => d.Data, source);
+                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.TextProperty, "First");
+                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.Value, 1);
+            });
+
+            Assert.Equal(0, walked);
+        }
+
+        // A List<int> is not a HashSet<int> or an int[], however assignable its contents are, and casting
+        // one to the other threw on the first row click. The collection TValue names is what is built.
+        [Fact]
+        public void MultipleBindsToASetWhenTheValueNamesOne()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, HashSet<int>>>(p =>
+            {
+                p.Add(d => d.Data, People.Sample());
+                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.TextProperty, "First");
+                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.Multiple, true);
+            });
+
+            cut.Find(".rz-dropdown").Click();
+            cut.FindAll("tbody tr")[0].Click();
+
+            Assert.Equal(new[] { 3 }, cut.Instance.Value!.ToArray());
+        }
+
+        [Fact]
+        public void MultipleBindsToAnArrayWhenTheValueNamesOne()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, int[]>>(p =>
+            {
+                p.Add(d => d.Data, People.Sample());
+                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.TextProperty, "First");
+                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.Multiple, true);
+            });
+
+            cut.Find(".rz-dropdown").Click();
+            cut.FindAll("tbody tr")[0].Click();
+
+            Assert.Equal(new[] { 3 }, cut.Instance.Value!);
+        }
+
+        [Fact]
+        public void ASingleSelectionIsMarkedInTheGridToo()
+        {
+            // Reopening the lookup should show what is chosen, and a screen reader should get
+            // aria-selected on the row of a role=grid popup.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+
+            Open(cut);
+            ClickRow(cut, 0);
+            Open(cut);
+
+            Assert.Contains("rz-state-highlight", cut.FindAll("tbody tr")[0].ClassName);
+        }
+
+        [Fact]
+        public void ThePopupKeepsItsFilterAcrossACloseAndReopen()
+        {
+            // Destroying the grid on every close threw away the sort, filter and page the user left it
+            // on, and made a LoadData source re-query from scratch each time.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+
+            Open(cut);
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("Bob");
+
+            Assert.Single(cut.FindAll("tbody tr"));
+
+            cut.Find(".rz-lookup-panel").KeyDown("Escape");
+            Open(cut);
+
+            Assert.Single(cut.FindAll("tbody tr"));
+        }
+
+        [Fact]
+        public void TheGridStaysUsableAfterThePopupCloses()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+
+            Open(cut);
+
+            var grid = cut.Instance.Grid;
+
+            cut.Find(".rz-lookup-panel").KeyDown("Escape");
+
+            Assert.Same(grid, cut.Instance.Grid);
+            Assert.Equal(0, cut.Instance.Grid!.CurrentPage);
+        }
+
+        [Fact]
+        public void DismissingThePopupFromThePageClosesIt()
+        {
+            // The script tells the component through the callback the open call registers. Without it
+            // the panel hid while Open stayed true, so the next click closed a popup nobody could see
+            // and the one after reopened it - three clicks to reopen a lookup.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+
+            Open(cut);
+
+            Assert.True(cut.Instance.Open);
+
+            cut.InvokeAsync(() => cut.Instance.OnPopupClose());
+
+            Assert.False(cut.Instance.Open);
+        }
+
+        [Fact]
+        public void AVirtualizedPopupScrollsInsideABoundedHeight()
+        {
+            // Virtualize needs a scrolling ancestor with a bounded height and a popup has none, so its
+            // spacer rows would size themselves to the whole row count and run the popup off the page.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(d => d.AllowVirtualization, true);
+                p.Add(d => d.PopupHeight, "200px");
+            });
+
+            Open(cut);
+
+            var scroller = cut.Find(".rz-lookup-panel > div");
+
+            Assert.Contains("height:200px", scroller.GetAttribute("style"), StringComparison.Ordinal);
+            Assert.Contains("overflow:auto", scroller.GetAttribute("style"), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void ItIsAFormComponentAValidatorCanFind()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(d => d.Name, "Lookup");
+                p.Add(d => d.ValueProperty, "Id");
+            });
+
+            var form = (Radzen.IRadzenFormComponent)cut.Instance;
+
+            Assert.Equal("Lookup", form.Name);
+            Assert.False(form.HasValue);
+
+            Open(cut);
+            ClickRow(cut, 0);
+
+            Assert.True(form.HasValue);
+            Assert.Equal(3, form.GetValue());
+        }
+
+        /// <summary>Counts how many times a queryable is actually enumerated.</summary>
+        sealed class WalkCounting<T> : IQueryable<T>
+        {
+            readonly IQueryable<T> inner;
+            readonly Action walked;
+
+            public WalkCounting(IQueryable<T> inner, Action walked)
+            {
+                this.inner = inner;
+                this.walked = walked;
+            }
+
+            public Type ElementType => inner.ElementType;
+
+            public System.Linq.Expressions.Expression Expression => inner.Expression;
+
+            public IQueryProvider Provider => inner.Provider;
+
+            public IEnumerator<T> GetEnumerator()
+            {
+                walked();
+
+                return inner.GetEnumerator();
+            }
+
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        }
     }
 }
