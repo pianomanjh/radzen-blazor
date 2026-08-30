@@ -264,6 +264,9 @@ namespace Radzen.FastGrid
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
             => builder.AddContent(sequence, cellText?.Invoke(item));
 
+        /// <inheritdoc />
+        public override string? CellTextOf(TItem item) => cellText?.Invoke(item);
+
         /// <summary>
         /// A collection column has nothing to order by: no provider can sort rows by a list, and
         /// <see cref="SortBy" /> here is typed at <typeparamref name="TProp" />, which for such a column

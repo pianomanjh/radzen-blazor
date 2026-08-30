@@ -99,7 +99,15 @@ namespace Radzen.FastGrid.Tests
             string separator = null,
             Expression<Func<TItem, TProp>> sortByPath = null,
             FilterMode? filterMode = null,
-            System.Collections.IEnumerable filterLookupData = null) => (builder, seq) =>
+            System.Collections.IEnumerable filterLookupData = null,
+            string width = null,
+            string minWidth = null,
+            string maxWidth = null,
+            TextAlign? textAlign = null,
+            Radzen.Blazor.WhiteSpace? whiteSpace = null,
+            bool visible = true,
+            int? orderIndex = null,
+            SortOrder? sortOrder = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
@@ -172,6 +180,46 @@ namespace Radzen.FastGrid.Tests
             if (filterLookupData is not null)
             {
                 builder.AddAttribute(seq + 15, nameof(PropertyColumn<TItem, TProp>.FilterLookupData), filterLookupData);
+            }
+
+            if (width is not null)
+            {
+                builder.AddAttribute(seq + 16, nameof(PropertyColumn<TItem, TProp>.Width), width);
+            }
+
+            if (minWidth is not null)
+            {
+                builder.AddAttribute(seq + 17, nameof(PropertyColumn<TItem, TProp>.MinWidth), minWidth);
+            }
+
+            if (maxWidth is not null)
+            {
+                builder.AddAttribute(seq + 18, nameof(PropertyColumn<TItem, TProp>.MaxWidth), maxWidth);
+            }
+
+            if (textAlign is not null)
+            {
+                builder.AddAttribute(seq + 19, nameof(PropertyColumn<TItem, TProp>.TextAlign), textAlign.Value);
+            }
+
+            if (whiteSpace is not null)
+            {
+                builder.AddAttribute(seq + 20, nameof(PropertyColumn<TItem, TProp>.WhiteSpace), whiteSpace.Value);
+            }
+
+            if (!visible)
+            {
+                builder.AddAttribute(seq + 21, nameof(PropertyColumn<TItem, TProp>.Visible), false);
+            }
+
+            if (orderIndex is not null)
+            {
+                builder.AddAttribute(seq + 22, nameof(PropertyColumn<TItem, TProp>.OrderIndex), orderIndex);
+            }
+
+            if (sortOrder is not null)
+            {
+                builder.AddAttribute(seq + 23, nameof(PropertyColumn<TItem, TProp>.SortOrder), sortOrder);
             }
 
             builder.CloseComponent();

@@ -284,7 +284,10 @@ namespace Radzen.FastGrid.Tests
             var span = cell.QuerySelector("span");
 
             Assert.NotNull(span);
-            Assert.Equal("rz-cell-data", span.GetAttribute("class"));
+
+            // rz-text-truncate is the default WhiteSpace, and what RadzenDataGrid emits: the ellipsis
+            // on an over-wide cell comes from this class, not from the td.
+            Assert.Equal("rz-cell-data rz-text-truncate", span.GetAttribute("class"));
             Assert.Equal("Carol", span.TextContent);
         }
 

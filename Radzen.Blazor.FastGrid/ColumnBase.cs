@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
+using Radzen.Blazor;
 
 namespace Radzen.FastGrid
 {
@@ -33,6 +34,154 @@ namespace Radzen.FastGrid
 
         /// <summary>Additional CSS class for the column's cells.</summary>
         [Parameter] public string? CssClass { get; set; }
+
+        /// <summary>Whether the column is drawn. A hidden column keeps any filter it carries.</summary>
+        [Parameter] public bool Visible { get; set; } = true;
+
+        /// <summary>
+        /// Where the column sits among the others, overriding the order it was declared in. Columns
+        /// without one keep their declared position, and the two orders interleave by index.
+        /// </summary>
+        [Parameter] public int? OrderIndex { get; set; }
+
+        /// <summary>
+        /// CSS width of the column - <c>"120px"</c>, <c>"20%"</c>. Written once onto the table's
+        /// <c>colgroup</c> rather than onto every cell, so it costs nothing per row.
+        /// </summary>
+        [Parameter] public string? Width { get; set; }
+
+        /// <summary>CSS <c>min-width</c> for the column's cells. Unlike <see cref="Width" />, a
+        /// <c>col</c> element cannot carry this, so it goes in the cell style.</summary>
+        [Parameter] public string? MinWidth { get; set; }
+
+        /// <summary>CSS <c>max-width</c> for the column's cells.</summary>
+        [Parameter] public string? MaxWidth { get; set; }
+
+        /// <summary>Horizontal alignment of the column's cells and header.</summary>
+        [Parameter] public TextAlign TextAlign { get; set; } = TextAlign.Left;
+
+        /// <summary>How cell text wraps. Truncating adds the ellipsis, as RadzenDataGrid does.</summary>
+        [Parameter] public WhiteSpace WhiteSpace { get; set; } = WhiteSpace.Truncate;
+
+        /// <summary>
+        /// The direction this column is sorted in when the grid first renders. Declaring it on more than
+        /// one column sorts by the last of them, since the grid sorts by one column at a time. Later
+        /// changes are ignored - call <see cref="RadzenFastGrid{TItem}.SortBy" /> to re-sort a live grid.
+        /// </summary>
+        [Parameter] public SortOrder? SortOrder { get; set; }
+
+        // Constant per column, so they are chosen once here rather than composed per cell. Every result
+        // is a literal: the class never allocates at all, and the style only when a width bound is set.
+        static string ClassFor(WhiteSpace whiteSpace) => whiteSpace switch
+        {
+            WhiteSpace.Wrap => "rz-cell-data rz-text-wrap",
+            WhiteSpace.Nowrap => "rz-cell-data rz-text-nowrap",
+            _ => "rz-cell-data rz-text-truncate",
+        };
+
+        static string? StyleFor(TextAlign textAlign) => textAlign switch
+        {
+            TextAlign.Right => "text-align:right",
+            TextAlign.Center => "text-align:center",
+            TextAlign.Justify => "text-align:justify",
+            TextAlign.Start => "text-align:start",
+            TextAlign.End => "text-align:end",
+            _ => null,
+        };
+
+        /// <summary>The class of this column's cell span, carrying its wrapping mode.</summary>
+        internal string CellClass => ClassFor(WhiteSpace);
+
+        string? cellStyle;
+        TextAlign cellStyleAlign;
+        string? cellStyleMin;
+        string? cellStyleMax;
+
+        /// <summary>
+        /// The inline style of this column's cells, or null when it has none - which is the common case,
+        /// and the one that costs no attribute at all. Memoized: a data cell's style is the same on every
+        /// row, so composing it per cell would be the sort of per-row string work this grid exists to
+        /// avoid.
+        /// </summary>
+        internal string? CellStyle
+        {
+            get
+            {
+                if (cellStyle is not null
+                    && cellStyleAlign == TextAlign
+                    && string.Equals(cellStyleMin, MinWidth, StringComparison.Ordinal)
+                    && string.Equals(cellStyleMax, MaxWidth, StringComparison.Ordinal))
+                {
+                    return cellStyle;
+                }
+
+                cellStyleAlign = TextAlign;
+                cellStyleMin = MinWidth;
+                cellStyleMax = MaxWidth;
+
+                var align = StyleFor(TextAlign);
+                var hasMin = !string.IsNullOrEmpty(MinWidth);
+                var hasMax = !string.IsNullOrEmpty(MaxWidth);
+
+                if (!hasMin && !hasMax)
+                {
+                    // The overwhelmingly common shape, and a literal rather than a built string.
+                    return cellStyle = align;
+                }
+
+                var builder = new System.Text.StringBuilder();
+
+                if (align is not null)
+                {
+                    builder.Append(align);
+                }
+
+                if (hasMin)
+                {
+                    Semicolon(builder).Append("min-width:").Append(MinWidth);
+                }
+
+                if (hasMax)
+                {
+                    Semicolon(builder).Append("max-width:").Append(MaxWidth);
+                }
+
+                return cellStyle = builder.ToString();
+            }
+        }
+
+        static System.Text.StringBuilder Semicolon(System.Text.StringBuilder builder)
+        {
+            if (builder.Length > 0)
+            {
+                builder.Append(';');
+            }
+
+            return builder;
+        }
+
+        string? colStyle;
+        string? colStyleWidth;
+
+        /// <summary>
+        /// The style of this column's <c>col</c> element, for the effective width the grid resolved -
+        /// this column's own, or the grid's default. Memoized against that width.
+        /// </summary>
+        internal string? ColStyle(string? width)
+        {
+            if (string.IsNullOrEmpty(width))
+            {
+                return null;
+            }
+
+            if (colStyle is null || !string.Equals(colStyleWidth, width, StringComparison.Ordinal))
+            {
+                colStyleWidth = width;
+                colStyle = "width:" + width;
+            }
+
+            return colStyle;
+        }
 
         /// <summary>Whether the column offers sorting. Ignored when the column has no sortable path.</summary>
         [Parameter] public bool Sortable { get; set; } = true;
@@ -190,20 +339,28 @@ namespace Radzen.FastGrid
             ? Radzen.FilterOperator.Contains
             : Radzen.FilterOperator.Equals;
 
-        bool filterInitialized;
+        bool initialized;
 
         /// <inheritdoc />
         protected override void OnParametersSet()
         {
-            if (!filterInitialized)
+            if (!initialized)
             {
                 // Both parameters may legitimately be null, so the first pass cannot be told from a
                 // no-op by comparing them; it has to be marked.
-                filterInitialized = true;
+                initialized = true;
                 declaredFilterValue = FilterValue;
                 declaredFilterOperator = FilterOperator;
                 CurrentFilterValue = FilterValue;
                 CurrentFilterOperator = FilterOperator ?? DefaultFilterOperator;
+
+                // Only here, and deliberately. A declared sort is the grid's starting state, not a live
+                // binding: honouring later changes would mean re-sorting - and, on the async path,
+                // reloading - from inside the grid's own render pass.
+                if (SortOrder is { } order)
+                {
+                    Grid?.ApplyDeclaredSort(this, order);
+                }
 
                 return;
             }
@@ -235,6 +392,18 @@ namespace Radzen.FastGrid
 
         /// <summary>Writes one cell for <paramref name="item" /> into <paramref name="builder" />.</summary>
         public abstract void RenderCell(RenderTreeBuilder builder, int sequence, TItem item);
+
+        /// <summary>
+        /// The cell's text, for the grid's cell tooltip. Null when the column has no text to give - a
+        /// template column's content is markup, not a string.
+        /// </summary>
+        /// <remarks>
+        /// Deriving the text a second time is the cost of the tooltip: <see cref="RenderCell" /> writes
+        /// into the builder rather than returning a string, and threading one back out of it would put
+        /// an out parameter on the hot path for every caller who does not want the tooltip.
+        /// </remarks>
+        /// <param name="item">The row.</param>
+        public virtual string? CellTextOf(TItem item) => null;
 
         /// <summary>
         /// Applies this column's ordering to <paramref name="source" />. Overridden by columns that know
