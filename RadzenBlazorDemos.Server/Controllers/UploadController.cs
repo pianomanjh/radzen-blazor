@@ -1,8 +1,13 @@
+using System;
+using System.Linq;
 using Microsoft.AspNetCore.Mvc;
 
 namespace RadzenBlazorDemos.Server.Controllers
 {
-    [DisableRequestSizeLimit]
+    // Bounded rather than unbounded: Stream below buffers the whole request body into memory, so
+    // DisableRequestSizeLimit here made one large PUT an out-of-memory. 50 MB is well beyond anything
+    // the upload demos send.
+    [RequestSizeLimit(50 * 1024 * 1024)]
     public class UploadController : Controller
     {
         private readonly IWebHostEnvironment environment;
@@ -11,6 +16,15 @@ namespace RadzenBlazorDemos.Server.Controllers
         {
             this.environment = environment;
         }
+
+        // The extension comes straight from the client's Content-Disposition header, which nothing
+        // sanitises, and wwwroot is served by UseStaticFiles with no authentication - so an .html or
+        // .svg upload came back as a working same-origin URL for whatever markup it carried. Only
+        // raster image extensions are written; SVG is excluded because it can carry script.
+        static readonly string[] AllowedImageExtensions =
+        {
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+        };
 
         [HttpPut("api/upload/stream")]
         public async Task<IActionResult> Stream()
@@ -48,7 +62,14 @@ namespace RadzenBlazorDemos.Server.Controllers
             {
                 DeleteOldFiles();
 
-                var fileName = $"upload-{DateTime.Today:yyyy-MM-dd}-{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
+                var extension = Path.GetExtension(file.FileName);
+
+                if (!AllowedImageExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                {
+                    return BadRequest("Only image files can be uploaded.");
+                }
+
+                var fileName = $"upload-{DateTime.Today:yyyy-MM-dd}-{Guid.NewGuid()}{extension}";
 
                 using (var stream = new FileStream(Path.Combine(environment.WebRootPath, fileName), FileMode.Create))
                 {
