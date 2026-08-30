@@ -136,23 +136,38 @@ Measured on the component, 1000 rows x 5 columns, one feature at a time against 
 
 | | Allocated | Marginal | Time |
 | --- | ---: | ---: | ---: |
-| *bare* | 151.16 KB | - | 1.00x |
-| widths and alignment | 151.47 KB | +0.31 KB | 1.04x |
-| selection (1 row in 4) | 151.22 KB | +0.06 KB | 1.04x |
-| `RowClass` | 151.26 KB | +0.10 KB | 1.00x |
-| responsive titles | 151.22 KB | +0.06 KB | 1.43x |
-| cell tooltip | 266.81 KB | **+116 KB** | 1.42x |
-| row click | 461.30 KB | **+310 KB** | 1.19x |
-| cell click | 1,633.76 KB | **+1,483 KB** | 2.05x |
+| *bare* | 151.30 KB | - | 1.00x |
+| widths and alignment | 151.61 KB | +0.31 KB | 1.04x |
+| selection (1 row in 4) | 151.40 KB | +0.10 KB | 1.03x |
+| `RowClass` | 151.41 KB | +0.11 KB | 1.00x |
+| `Settings` / `SettingsChanged` | 151.41 KB | +0.11 KB | 0.99x |
+| header and footer templates | 152.79 KB | +1.49 KB | 0.99x |
+| footer templates that aggregate | 153.02 KB | +0.23 KB *over the templates* | 1.05x |
+| responsive titles | 151.63 KB | +0.33 KB | 1.39x |
+| sorted by one column | 178.35 KB | **+27 KB** | 1.60x |
+| sorted by two columns | 200.48 KB | **+22 KB** *over one* | 1.09x *over one* |
+| cell tooltip | 267.28 KB | **+116 KB** | 1.37x |
+| row click | 461.38 KB | **+310 KB** | 1.21x |
+| cell click | 1,633.96 KB | **+1,483 KB** | 2.06x |
 
-The layout, selection and row-styling features are free, as designed: a few hundred bytes across a
-whole render, against a 151 KB baseline. What is not free is a delegate, and a delegate per *cell*
-least of all - a cell click costs five times a row click on five columns, and eleven times the whole
-rest of the component. All three of the expensive rows are opt-in and cost nothing until you opt in.
+The layout, selection, row-styling, template and settings features are free, as designed: a couple of
+kilobytes at most across a whole render, against a 151 KB baseline. What is not free is a delegate, and
+a delegate per *cell* least of all - a cell click costs five times a row click on five columns, and
+eleven times the whole rest of the component. Every expensive row is opt-in and costs nothing until you
+opt in.
 
-Responsive titles allocate nothing and still cost 43% more time: a span and a text frame per cell is
-work even when it is not memory. The tooltip's 116 KB is the `title` attribute plus deriving each
-cell's text a second time, since `RenderCell` writes into the builder rather than returning a string.
+Two rows are worth reading carefully rather than at face value:
+
+- **Sorting is what costs, not sorting by two things.** Sorting at all is +27 KB and 60% more time -
+  `OrderBy` over a thousand rows buys a key buffer and does its comparisons whichever grid asked for
+  it. The *second* sort key adds 22 KB and 9% on top of that. Measured against the bare grid instead,
+  multi-column sorting would look like +49 KB and 72%, and almost all of it would belong to the first
+  sort.
+- **Responsive titles allocate nothing and still cost 39% more time.** A span and a text frame per cell
+  is work even when it is not memory.
+
+The tooltip's 116 KB is the `title` attribute plus deriving each cell's text a second time, since
+`RenderCell` writes into the builder rather than returning a string.
 
 ## Sorting by more than one column
 
@@ -167,21 +182,29 @@ Declaring `SortOrder` on several columns composes them in the order they were de
 the current sort as `SortDescriptor`s in precedence order; `SortColumn` and `SortDescending` still
 name the first of them.
 
-## Footers, and the aggregate that is not free
+The second sort key costs 22 KB and 9% more time at 1000 rows, on top of the 27 KB and 60% that
+sorting at all costs. Sorting is the expensive part; sorting by two things is a surcharge on it.
 
-A `FooterTemplate` runs on every render. That is nothing for a label, and O(rows) for the reason most
-footers exist:
+## Footers, and the aggregate in them
+
+A `FooterTemplate` runs on every render, so an aggregate written inline runs on every render too.
+Measured over an in-memory list, that is cheap: five `Sum`s across a thousand rows cost 0.23 KB and
+about 5% - five thousand additions is nothing, and the earlier warning here that it "would dwarf
+everything" was wrong for that case.
+
+Where it is not cheap is a source the grid does not hold in memory. Over an `IQueryable`, the same
+expression is a database round trip per render:
 
 ```razor
-@* Wrong: a full scan per render - and a database round trip per render over an IQueryable *@
+@* Fine over a list. A query per render over an IQueryable *@
 <FooterTemplate>@people.Sum(p => p.Salary)</FooterTemplate>
 
-@* Right: computed when the data changes, rendered from a field *@
+@* Fine over anything: computed when the data changes, rendered from a field *@
 <FooterTemplate>@totalSalary</FooterTemplate>
 ```
 
-Measured: the same five columns with a label in each footer against an aggregate in each. The
-difference is the whole cost of a footer, and it is not the markup.
+The second form is the one to reach for by default, because the cost of the first depends on what
+`Data` happens to be - and that is not visible in the markup that pays it.
 
 ## Remembering what the user changed
 
