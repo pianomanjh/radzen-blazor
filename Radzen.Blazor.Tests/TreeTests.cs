@@ -2,6 +2,7 @@ using Bunit;
 using Xunit;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace Radzen.Blazor.Tests
 {
@@ -223,6 +224,52 @@ namespace Radzen.Blazor.Tests
 
             parent = component.FindAll("[role=treeitem]").First(i => i.GetAttribute("aria-level") == "1");
             Assert.Equal("false", parent.GetAttribute("aria-checked"));
+        }
+
+        // The count-changing edit above is the easy half. A same-count edit - one checked value swapped
+        // for another - changes neither the list reference nor its count, and a render the tree raises
+        // itself never passes through OnParametersSet. Nothing about the memoized set can be inferred
+        // from the outside, so it has to be discarded whenever the tree renders.
+        //
+        // A flat tree, deliberately: expanding a node routes CheckedValues through SetCheckedValues,
+        // which copies it, and the tree then holds a list the caller can no longer mutate at all.
+        [Fact]
+        public async Task Tree_ReflectsSameCountMutation_OnInternalRender()
+        {
+            using var ctx = new TestContext();
+            var laptop = new Product { Name = "Laptop" };
+            var phone = new Product { Name = "Phone" };
+            var keyboard = new Product { Name = "Keyboard" };
+            var checkedValues = new List<object> { laptop, phone };
+
+            var component = ctx.RenderComponent<RadzenTree>(parameters =>
+            {
+                parameters.Add(p => p.AllowCheckBoxes, true);
+                parameters.Add(p => p.CheckedValues, checkedValues);
+                parameters.Add(p => p.Data, new List<Product> { laptop, phone, keyboard });
+                parameters.Add(p => p.ChildContent, builder =>
+                {
+                    builder.OpenComponent<RadzenTreeLevel>(0);
+                    builder.AddAttribute(1, "TextProperty", "Name");
+                    builder.AddAttribute(2, "HasChildren", (object product) => false);
+                    builder.CloseComponent();
+                });
+            });
+
+            string Checked(string text) => component.FindAll("[role=treeitem]")
+                .First(i => i.TextContent.Contains(text)).GetAttribute("aria-checked");
+
+            Assert.Equal("true", Checked("Laptop"));
+            Assert.Equal("false", Checked("Keyboard"));
+
+            // Swap Laptop out for Keyboard: same list, same count, nothing observable changed about it.
+            // The tree raises the render itself, as it does when a caller edits the bound collection
+            // from a handler.
+            checkedValues[0] = keyboard;
+            await component.InvokeAsync(() => component.Instance.ChangeState());
+
+            Assert.Equal("false", Checked("Laptop"));
+            Assert.Equal("true", Checked("Keyboard"));
         }
 
         [Fact]

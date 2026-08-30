@@ -757,13 +757,18 @@ namespace Radzen.Blazor
         }
 
         object? checkedValuesSource;
-        int checkedValuesSetCount = -1;
         HashSet<object?>? checkedValuesSet;
 
         // Membership test shared by every RadzenTreeItem's IsChecked during a render pass. CheckedValues is
-        // memoized as a set so the test is O(1) per node rather than a per-call Cast().Contains() scan. The
-        // set is rebuilt on CheckedValues reassignment (reference check), on a count-changing in-place edit
-        // when CheckedValues is a collection (an automatic backstop), and on every parameter set.
+        // memoized as a set so the test is O(1) per node rather than a per-call Cast().Contains() scan -
+        // and with AllowCheckParents a single node's tri-state already asks this once per descendant.
+        //
+        // The memo lives for exactly one render pass. Nothing about a bound collection can be inferred
+        // from the outside: a caller is free to edit it in place without changing its reference, its
+        // count, or anything else observable, and a render the tree raises itself never passes through
+        // OnParametersSet. So the memo is not validated, it is discarded - at the start of every render,
+        // where it can never outlive the state it was built from. Building it costs one pass over
+        // CheckedValues, against the per-node scans it replaces within that same render.
         internal bool IsValueChecked(object? value)
         {
             var current = CheckedValues;
@@ -772,12 +777,11 @@ namespace Radzen.Blazor
                 return false;
             }
 
-            var count = current is ICollection<object> collection ? collection.Count : -1;
-
-            if (checkedValuesSet == null || !ReferenceEquals(checkedValuesSource, current) || checkedValuesSetCount != count)
+            // SetCheckedValues assigns CheckedValues directly, so a reassignment can also land between two
+            // renders rather than through a parameter set.
+            if (checkedValuesSet == null || !ReferenceEquals(checkedValuesSource, current))
             {
                 checkedValuesSource = current;
-                checkedValuesSetCount = count;
                 checkedValuesSet = new HashSet<object?>(current.Cast<object?>());
             }
 
@@ -785,8 +789,16 @@ namespace Radzen.Blazor
         }
 
         /// <inheritdoc />
+        protected override bool ShouldRender()
+        {
+            checkedValuesSet = null;
+            return base.ShouldRender();
+        }
+
+        /// <inheritdoc />
         protected override void OnParametersSet()
         {
+            // ShouldRender is not consulted for a component's first render; this covers it.
             checkedValuesSet = null;
             base.OnParametersSet();
         }
