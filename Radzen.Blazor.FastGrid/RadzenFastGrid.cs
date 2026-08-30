@@ -136,6 +136,80 @@ namespace Radzen.FastGrid
         [Parameter] public RenderFragment? EmptyTemplate { get; set; }
 
         /// <summary>
+        /// Detail content for an expanded row, drawn in a row of its own beneath it. Setting this is what
+        /// turns row expansion on; nothing about it is paid for while it is null.
+        /// </summary>
+        /// <remarks>
+        /// This is the one feature here whose use is not cheap: the toggle is a delegate per row, which
+        /// is the same 310 bytes a row click costs, and the toggle column is an extra cell per row. Both
+        /// are unavoidable - a row that can be expanded needs something to click.
+        /// </remarks>
+        [Parameter] public RenderFragment<TItem>? Template { get; set; }
+
+        /// <summary>Whether the toggle column is drawn. Without it, expand rows through the API.</summary>
+        [Parameter] public bool ShowExpandColumn { get; set; } = true;
+
+        /// <summary>Whether expanding a row collapses the last one.</summary>
+        [Parameter] public DataGridExpandMode ExpandMode { get; set; } = DataGridExpandMode.Single;
+
+        /// <summary>Raised with the row that was expanded.</summary>
+        [Parameter] public EventCallback<TItem> RowExpand { get; set; }
+
+        /// <summary>Raised with the row that was collapsed.</summary>
+        [Parameter] public EventCallback<TItem> RowCollapse { get; set; }
+
+        // Allocated on the first expand: a grid whose rows are never expanded never holds the set, and
+        // one with no Template never reaches the lookup at all.
+        HashSet<TItem>? expandedRows;
+
+        /// <summary>Whether the given row is expanded.</summary>
+        /// <param name="item">The row.</param>
+        public bool IsRowExpanded(TItem item) => expandedRows is not null && expandedRows.Contains(item);
+
+        /// <summary>Expands or collapses a row, raising the matching event.</summary>
+        /// <param name="item">The row.</param>
+        public async Task ToggleRow(TItem item)
+        {
+            if (item is null)
+            {
+                return;
+            }
+
+            if (IsRowExpanded(item))
+            {
+                expandedRows!.Remove(item);
+
+                await RowCollapse.InvokeAsync(item).ConfigureAwait(false);
+            }
+            else
+            {
+                // Single mode collapses what was open, and says so: a row that leaves the screen without
+                // an event is a row the caller still thinks is expanded.
+                if (ExpandMode == DataGridExpandMode.Single && expandedRows is { Count: > 0 })
+                {
+                    var open = new List<TItem>(expandedRows);
+
+                    expandedRows.Clear();
+
+                    foreach (var previous in open)
+                    {
+                        await RowCollapse.InvokeAsync(previous).ConfigureAwait(false);
+                    }
+                }
+
+                (expandedRows ??= new HashSet<TItem>()).Add(item);
+
+                await RowExpand.InvokeAsync(item).ConfigureAwait(false);
+            }
+
+            StateHasChanged();
+        }
+
+        // Whether the toggle column is drawn at all. Read in four render paths, so it is one expression
+        // rather than four that can drift.
+        bool ExpandColumn => Template is not null && ShowExpandColumn;
+
+        /// <summary>
         /// Whether clicking a second column adds to the sort instead of replacing it. A click then
         /// cycles a column ascending, descending, then out of the sort altogether - which is the only
         /// way to remove one, since there is nowhere else to click.
@@ -612,6 +686,8 @@ namespace Radzen.FastGrid
             builder.OpenElement(183, "tr");
             builder.AddAttribute(184, "role", "row");
 
+            RenderExpandSpacer(builder, 179, "td");
+
             for (var i = 0; i < visibleColumns.Count; i++)
             {
                 var column = visibleColumns[i];
@@ -648,12 +724,46 @@ namespace Radzen.FastGrid
             builder.CloseElement();
         }
 
+        // The filter and footer rows only reserve the toggle column's space. Written once so the three
+        // rows that have to agree on it cannot drift: a row short of a cell puts every column after it
+        // under the wrong header.
+        void RenderExpandSpacer(RenderTreeBuilder builder, int sequence, string element)
+        {
+            if (!ExpandColumn)
+            {
+                return;
+            }
+
+            builder.OpenRegion(sequence);
+            builder.OpenElement(0, element);
+            builder.AddAttribute(1, "class", "rz-col-icon");
+            builder.CloseElement();
+            builder.CloseRegion();
+        }
+
         void RenderHead(RenderTreeBuilder builder)
         {
             builder.OpenElement(30, "thead");
             builder.AddAttribute(31, "role", "rowgroup");
             builder.OpenElement(32, "tr");
             builder.AddAttribute(33, "role", "row");
+
+            // A region, not a bare cell: a tr's attributes and its children share one ascending sequence
+            // space, and there is no number free between the tr's role attribute and the first column
+            // header. A region opens a space of its own, and costs one frame per render.
+            if (ExpandColumn)
+            {
+                builder.OpenRegion(34);
+                builder.OpenElement(0, "th");
+                builder.AddAttribute(1, "role", "columnheader");
+                builder.AddAttribute(2, "class", "rz-col-icon rz-unselectable-text");
+                builder.AddAttribute(3, "scope", "col");
+                builder.OpenElement(4, "span");
+                builder.AddAttribute(5, "class", "rz-column-title");
+                builder.CloseElement();
+                builder.CloseElement();
+                builder.CloseRegion();
+            }
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
@@ -754,6 +864,8 @@ namespace Radzen.FastGrid
         {
             builder.OpenElement(50, "tr");
             builder.AddAttribute(51, "role", "row");
+
+            RenderExpandSpacer(builder, 53, "th");
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
@@ -880,6 +992,10 @@ namespace Radzen.FastGrid
             var selection = Selection;
             var selected = selection is not null && selection.Contains(item);
 
+            // One lookup for the row, read by the toggle and by the detail row below it. Costs nothing
+            // when no Template is set, since the set is never allocated.
+            var expanded = Template is not null && IsRowExpanded(item);
+
             builder.OpenElement(120, "tr");
             builder.AddAttribute(121, "role", "row");
 
@@ -910,6 +1026,36 @@ namespace Radzen.FastGrid
             var tooltips = ShowCellDataAsTooltip;
             var cellClick = CellClick.HasDelegate;
             var cellContextMenu = CellContextMenu.HasDelegate;
+
+            // The toggle. A delegate per row, which is what makes this the one expensive feature on the
+            // list - but only for a grid that sets a Template, and nothing above reaches it otherwise.
+            if (ExpandColumn)
+            {
+                builder.OpenElement(130, "td");
+                builder.AddAttribute(131, "role", "gridcell");
+                builder.AddAttribute(132, "class", "rz-col-icon");
+                builder.OpenElement(133, "span");
+                builder.AddAttribute(134, "class", "rz-column-title");
+                builder.CloseElement();
+
+                builder.OpenElement(135, "button");
+                builder.AddAttribute(136, "type", "button");
+                builder.AddAttribute(137, "tabindex", "-1");
+                builder.AddAttribute(138, "aria-expanded", expanded ? "true" : "false");
+                builder.AddAttribute(139, "class",
+                    "rz-button rz-button-sm rz-button-icon-only rz-variant-text rz-base rz-shade-default");
+                builder.AddAttribute(140, "onclick", ToggleHandler(item));
+                builder.AddEventStopPropagationAttribute(141, "onclick", true);
+
+                builder.OpenElement(142, "span");
+                builder.AddAttribute(143, "class", expanded
+                    ? "notranslate rz-row-toggler rzi-chevron-circle-down"
+                    : "rz-row-toggler rzi-chevron-circle-right");
+                builder.CloseElement();
+
+                builder.CloseElement();
+                builder.CloseElement();
+            }
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
@@ -976,7 +1122,35 @@ namespace Radzen.FastGrid
             }
 
             builder.CloseElement();
+
+            // A row of its own beneath the data row, spanning every column including the toggle. Only
+            // for the rows actually expanded, so this is per expanded row rather than per row.
+            if (expanded)
+            {
+                builder.OpenElement(172, "tr");
+                builder.AddAttribute(173, "role", "row");
+                builder.AddAttribute(174, "class", "rz-expanded-row-content");
+
+                builder.OpenElement(175, "td");
+                builder.AddAttribute(176, "role", "gridcell");
+                builder.AddAttribute(177, "colspan", visibleColumns.Count + (ExpandColumn ? 1 : 0));
+
+                builder.OpenElement(178, "div");
+                builder.AddAttribute(179, "class", "rz-expanded-row-template");
+                builder.AddAttribute(193, "style", "position:sticky");
+                builder.AddContent(194, Template!(item));
+                builder.CloseElement();
+
+                builder.CloseElement();
+                builder.CloseElement();
+            }
         }
+
+        // Held in its own method for the reason RowClickHandler is: a lambda capturing a local of
+        // RenderRow makes the compiler allocate that method's display class on entry, for every row,
+        // whether or not the branch that needs it runs.
+        EventCallback<MouseEventArgs> ToggleHandler(TItem item) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this, _ => ToggleRow(item));
 
         // Composing the row's class costs a string per row unless the result is memoized, and a caller
         // returning one of a handful of constants - which is what a "highlight the overdue ones" rule
@@ -1100,7 +1274,7 @@ namespace Radzen.FastGrid
             builder.OpenElement(140, "tr");
             builder.OpenElement(141, "td");
             builder.AddAttribute(142, "class", "rz-datatable-emptymessage");
-            builder.AddAttribute(143, "colspan", visibleColumns.Count);
+            builder.AddAttribute(143, "colspan", visibleColumns.Count + (ExpandColumn ? 1 : 0));
             builder.AddContent(144, EmptyTemplate);
             builder.CloseElement();
             builder.CloseElement();
