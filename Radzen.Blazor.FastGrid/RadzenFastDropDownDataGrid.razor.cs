@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using System.Linq.Expressions;
+using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.JSInterop;
 using Radzen;
 
@@ -30,9 +32,57 @@ namespace Radzen.FastGrid
     /// </remarks>
     /// <typeparam name="TItem">The row type shown in the popup.</typeparam>
     /// <typeparam name="TValue">The type of <see cref="Value" />.</typeparam>
-    public partial class RadzenFastDropDownDataGrid<TItem, TValue> : IAsyncDisposable
+    [CascadingTypeParameter(nameof(TItem))]
+    public partial class RadzenFastDropDownDataGrid<TItem, TValue> : IRadzenFormComponent, IAsyncDisposable
     {
         [Inject] private IJSRuntime? JSRuntime { get; set; }
+
+        IRadzenForm? form;
+
+        /// <summary>The form this drop-down belongs to, so a validator can find it by name.</summary>
+        [CascadingParameter]
+        public IRadzenForm? Form
+        {
+            get => form;
+            set
+            {
+                form = value;
+                form?.AddComponent(this);
+            }
+        }
+
+        /// <summary>The name a validator addresses this drop-down by.</summary>
+        [Parameter] public string? Name { get; set; }
+
+        /// <summary>The expression <see cref="Value" /> is bound to, which names the field to validate.</summary>
+        [Parameter] public Expression<Func<TValue?>>? ValueExpression { get; set; }
+
+        /// <inheritdoc />
+        public FieldIdentifier FieldIdentifier { get; set; }
+
+        /// <inheritdoc />
+        public bool IsBound => ValueChanged.HasDelegate;
+
+        /// <inheritdoc />
+        public bool HasValue => Multiple
+            ? SelectedItems.Count > 0
+            : selected is not null || Value is not null;
+
+        /// <inheritdoc />
+        public object? GetValue() => Value;
+
+        /// <summary>Moves focus to the drop-down.</summary>
+        public ValueTask FocusAsync() => element.FocusAsync();
+
+        /// <summary>Whether the drop-down is rendered at all.</summary>
+        [Parameter] public bool Visible { get; set; } = true;
+
+        /// <summary>
+        /// The form field this drop-down sits in, when it is inside a RadzenFormField. Not supported
+        /// here: the field's floating label needs notice of focus and value changes that this component
+        /// does not raise.
+        /// </summary>
+        public Radzen.Blazor.IFormFieldContext? FormFieldContext => null;
 
         /// <summary>The rows the popup offers.</summary>
         [Parameter] public IEnumerable<TItem>? Data { get; set; }
@@ -47,6 +97,8 @@ namespace Radzen.FastGrid
         [Parameter] public EventCallback<LoadDataArgs> LoadData { get; set; }
 
         /// <summary>The selected value.</summary>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1721:Property names should not match get methods",
+            Justification = "GetValue is IRadzenFormComponent's own shape, which FormComponent<T> carries too.")]
         [Parameter] public TValue? Value { get; set; }
 
         /// <summary>Raised when <see cref="Value" /> changes.</summary>
@@ -118,14 +170,24 @@ namespace Radzen.FastGrid
         /// <summary>Row height in pixels, when virtualizing.</summary>
         [Parameter] public int ItemSize { get; set; } = 37;
 
+        /// <summary>
+        /// The height of the scrolling area when virtualizing. Virtualize needs a bounded, scrollable
+        /// ancestor, and a popup has none of its own.
+        /// </summary>
+        [Parameter] public string PopupHeight { get; set; } = "285px";
+
         /// <summary>Shown in the popup when there are no rows.</summary>
         [Parameter] public RenderFragment? EmptyTemplate { get; set; }
 
         /// <summary>Whether the popup is open.</summary>
         public bool Open { get; private set; }
 
-        /// <summary>The rows currently chosen. Empty unless <see cref="Multiple" /> is set.</summary>
-        public ICollection<TItem> SelectedItems { get; } = new List<TItem>();
+        /// <summary>
+        /// The rows currently chosen - one of them unless <see cref="Multiple" /> is set. A set, not a
+        /// list: the grid looks membership up once per rendered row, and its own documentation asks for
+        /// one as soon as more than a handful can be chosen.
+        /// </summary>
+        public ICollection<TItem> SelectedItems { get; } = new HashSet<TItem>();
 
         /// <summary>The popup's grid, once it has been opened at least once.</summary>
         public RadzenFastGrid<TItem>? Grid => grid;
@@ -134,7 +196,18 @@ namespace Radzen.FastGrid
         ElementReference element;
         TItem? selected;
         TValue? boundValue;
+        IEnumerable<TItem>? lastData;
         bool valueRead;
+
+        // True from the first open onwards. The grid is built lazily - a lookup nobody opens should
+        // cost nothing on a busy form - but it is kept once built, so the sort, filter and page the user
+        // left it on survive a close, and a LoadData source is not re-queried on every open.
+        bool built;
+
+        // Set when the popup needs positioning, and acted on after the render that fills it. The script
+        // measures the panel to decide whether to open upwards, and StateHasChanged inside an event
+        // handler only queues the batch - so calling it before the await measured an empty panel.
+        bool positionPopup;
 
         string Id { get; } = "rz-fastlookup-" + Guid.NewGuid().ToString("N");
 
@@ -151,7 +224,15 @@ namespace Radzen.FastGrid
         /// <summary>What the closed drop-down reads.</summary>
         string SelectedText => Multiple
             ? string.Join(Separator, SelectedItems.Select(Text))
-            : Text(selected!) ?? string.Empty;
+            : Text(selected!) ?? Unresolved() ?? string.Empty;
+
+        /// <summary>The label for a value whose row has not been loaded.</summary>
+        string? Unresolved() => Value is null ? null
+            : ValueText is { } text ? text(Value)
+            : Convert.ToString(Value, CultureInfo.CurrentCulture);
+
+        /// <summary>Whether the closed drop-down has anything to show.</summary>
+        bool ShowsSelection => Multiple ? SelectedItems.Count > 0 : selected is not null || Value is not null;
 
         string? Text(TItem item) => item is null
             ? null
@@ -163,15 +244,20 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override void OnParametersSet()
         {
-            // Only when the bound value actually changed. Assigning it back from a selection would
-            // otherwise re-read it on the next parameter set and undo a chip the user just removed.
-            if (valueRead && EqualityComparer<TValue?>.Default.Equals(boundValue, Value))
+            // On a Data change as well as a Value change. A value is routinely bound before its rows
+            // arrive - the model is known and the lookup's source is still loading - and adopting only
+            // on a value change left such a drop-down showing its placeholder for good.
+            var valueChanged = !valueRead || !EqualityComparer<TValue?>.Default.Equals(boundValue, Value);
+            var dataChanged = !ReferenceEquals(lastData, Data);
+
+            if (!valueChanged && !dataChanged)
             {
                 return;
             }
 
             valueRead = true;
             boundValue = Value;
+            lastData = Data;
 
             Adopt(Value);
         }
@@ -192,13 +278,28 @@ namespace Radzen.FastGrid
                 return;
             }
 
+            // Only a source that is already in memory. Walking an IQueryable here would run an
+            // unfiltered, unpaged query on the render thread - a scan of the whole table, to render one
+            // label, in the component whose whole purpose is not to read that table. Such a lookup shows
+            // SelectedText until the rows it needs are loaded, and adopts them when they are.
+            if (Data is IQueryable && Data is not ICollection<TItem>)
+            {
+                return;
+            }
+
             if (Multiple && value is System.Collections.IEnumerable many && value is not string)
             {
                 var wanted = many.Cast<object>().ToHashSet();
 
                 foreach (var item in Data)
                 {
-                    if (ValueOf(item) is { } candidate && wanted.Contains(candidate))
+                    if (wanted.Count == 0)
+                    {
+                        // Every wanted row has been found; the rest of the source is not worth walking.
+                        break;
+                    }
+
+                    if (ValueOf(item) is { } candidate && wanted.Remove(candidate))
                     {
                         SelectedItems.Add(item);
                     }
@@ -211,30 +312,80 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
+        /// What the closed drop-down shows for a value whose row is not loaded. The value itself, which
+        /// is better than a placeholder that says nothing is chosen when something is.
+        /// </summary>
+        [Parameter] public Func<TValue, string?>? ValueText { get; set; }
+
+        /// <summary>
         /// The chosen values, as a list of the element type <typeparamref name="TValue" /> asks for.
         /// </summary>
         /// <remarks>
         /// A List&lt;object&gt; is not an IEnumerable&lt;int&gt;, however assignable its contents are, so
         /// binding Multiple to anything but object would have failed the cast on the first selection.
         /// </remarks>
-        object Chosen()
+        object? Chosen()
         {
-            var element = MultipleElementType;
+            var elementType = MultipleElementType;
 
-            if (element is null)
+            if (elementType is null)
             {
+                // TValue says nothing about a sequence - it is object, or the caller bound Multiple to a
+                // scalar. A list of the chosen values is the best answer available.
                 return SelectedItems.Select(ValueOf).ToList();
             }
 
             var typed = (System.Collections.IList)Activator.CreateInstance(
-                typeof(List<>).MakeGenericType(element))!;
+                typeof(List<>).MakeGenericType(elementType))!;
 
             foreach (var item in SelectedItems)
             {
                 typed.Add(ValueOf(item));
             }
 
-            return typed;
+            // The collection TValue actually names, not just a List. A List<int> is not a HashSet<int>
+            // or an int[], however assignable its contents are, and casting one to the other threw on
+            // the first selection.
+            if (typeof(TValue).IsAssignableFrom(typed.GetType()))
+            {
+                return typed;
+            }
+
+            if (typeof(TValue).IsArray)
+            {
+                var array = Array.CreateInstance(elementType, typed.Count);
+
+                typed.CopyTo(array, 0);
+
+                return array;
+            }
+
+            var collection = Activator.CreateInstance<TValue>();
+
+            if (collection is System.Collections.IList list)
+            {
+                foreach (var value in typed)
+                {
+                    list.Add(value);
+                }
+
+                return collection;
+            }
+
+            // A set, or anything else that takes its contents through Add rather than through IList.
+            var add = typeof(TValue).GetMethod("Add", new[] { elementType });
+
+            if (add is null)
+            {
+                return typed;
+            }
+
+            foreach (var value in typed)
+            {
+                add.Invoke(collection, new[] { value });
+            }
+
+            return collection;
         }
 
         // Once per closed generic type: the answer depends only on TValue.
@@ -280,11 +431,22 @@ namespace Radzen.FastGrid
             {
                 selected = item;
 
-                await ClosePopup();
+                // Marked in the grid in single mode as well, so reopening the lookup shows what is
+                // chosen - and a screen reader gets aria-selected on the row of a role=grid popup.
+                SelectedItems.Clear();
+                SelectedItems.Add(item);
             }
 
+            // Published before the popup is closed: closing awaits a JavaScript call, and a circuit that
+            // drops during it would take the selection with it - the label already showing the new row
+            // while the bound value still held the old one.
             await Publish();
             await RowSelect.InvokeAsync(item);
+
+            if (!Multiple)
+            {
+                await ClosePopup();
+            }
         }
 
         async Task Publish()
@@ -293,6 +455,7 @@ namespace Radzen.FastGrid
             // see that as the value it just published rather than as a new one to adopt.
             boundValue = Multiple ? (TValue?)Chosen() : (TValue?)ValueOf(selected!);
 
+
             valueRead = true;
             Value = boundValue;
 
@@ -300,27 +463,29 @@ namespace Radzen.FastGrid
             await Change.InvokeAsync(boundValue);
         }
 
-        async Task TogglePopup()
-        {
-            if (Disabled)
-            {
-                return;
-            }
-
-            Open = !Open;
-
-            // Rendered before the popup is positioned: the script measures the panel, and an empty one
-            // is measured at the wrong height.
-            StateHasChanged();
-
-            if (JSRuntime is not null)
-            {
-                await JSRuntime.InvokeVoidAsync("Radzen.togglePopup", element, PopupId, true);
-            }
-        }
+        Task TogglePopup() => Open ? ClosePopup() : OpenPopup();
 
         /// <summary>Opens the popup.</summary>
-        public Task OpenPopup() => Open ? Task.CompletedTask : TogglePopup();
+        public Task OpenPopup()
+        {
+            if (Disabled || Open)
+            {
+                return Task.CompletedTask;
+            }
+
+            Open = true;
+            built = true;
+
+            // Positioned after the render, not here. StateHasChanged inside an event handler only
+            // queues the batch - the renderer produces it when the handler yields - so calling the
+            // script now would have it measure an empty panel and decide to open downwards off the
+            // bottom of the window where it should have flipped up.
+            positionPopup = true;
+
+            StateHasChanged();
+
+            return Task.CompletedTask;
+        }
 
         /// <summary>Closes the popup.</summary>
         public async Task ClosePopup()
@@ -331,24 +496,91 @@ namespace Radzen.FastGrid
             }
 
             Open = false;
+            positionPopup = false;
 
-            if (JSRuntime is not null)
-            {
-                await JSRuntime.InvokeVoidAsync("Radzen.closePopup", PopupId);
-            }
+            await Interop("Radzen.closePopup", PopupId);
 
             StateHasChanged();
+        }
+
+        /// <inheritdoc />
+        protected override async Task OnAfterRenderAsync(bool firstRender)
+        {
+            if (!positionPopup)
+            {
+                return;
+            }
+
+            positionPopup = false;
+
+            // The reference and the callback name are what let the script tell this component that the
+            // popup was dismissed by a click elsewhere on the page. Without them the panel hid and Open
+            // stayed true, so the next click closed a popup the user could not see and the one after
+            // reopened it - three clicks to reopen a lookup.
+            reference ??= DotNetObjectReference.Create(this);
+
+            await Interop("Radzen.openPopup", element, PopupId, true, null, null, null, reference,
+                nameof(OnPopupClose));
+        }
+
+        /// <summary>Called by the popup script when the popup is dismissed from the page.</summary>
+        [JSInvokable]
+        public void OnPopupClose()
+        {
+            if (!Open)
+            {
+                return;
+            }
+
+            Open = false;
+
+            StateHasChanged();
+        }
+
+        DotNetObjectReference<RadzenFastDropDownDataGrid<TItem, TValue>>? reference;
+
+        /// <summary>
+        /// A popup script call that tolerates a circuit that has already gone. Nothing here is worth
+        /// taking an event handler down for: the popup it addresses is gone with the circuit.
+        /// </summary>
+        async Task Interop(string identifier, params object?[] args)
+        {
+            if (JSRuntime is null)
+            {
+                return;
+            }
+
+            try
+            {
+                await JSRuntime.InvokeVoidAsync(identifier, args);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+            catch (TaskCanceledException)
+            {
+            }
         }
 
         Task CloseOnEscape(KeyboardEventArgs args) =>
             args.Key == "Escape" ? ClosePopup() : Task.CompletedTask;
 
-        Task OnKeyDown(KeyboardEventArgs args) => args.Key switch
+        // Read at render time, so it arms the *next* keydown - which is how RadzenDropDownDataGrid does
+        // it too. Without it Space paged the document down and ArrowDown scrolled it, jumping the form
+        // out from under the popup that had just opened.
+        bool preventKeydown;
+
+        Task OnKeyDown(KeyboardEventArgs args)
         {
-            "Escape" => ClosePopup(),
-            "Enter" or " " or "ArrowDown" => Open ? Task.CompletedTask : TogglePopup(),
-            _ => Task.CompletedTask,
-        };
+            preventKeydown = args.Key is " " or "ArrowDown" or "ArrowUp";
+
+            return args.Key switch
+            {
+                "Escape" => ClosePopup(),
+                "Enter" or " " or "ArrowDown" => OpenPopup(),
+                _ => Task.CompletedTask,
+            };
+        }
 
         /// <summary>
         /// Destroys the popup the script created for this drop-down. Awaited rather than abandoned: a
@@ -358,19 +590,10 @@ namespace Radzen.FastGrid
         {
             GC.SuppressFinalize(this);
 
-            if (JSRuntime is null)
-            {
-                return;
-            }
+            await Interop("Radzen.destroyPopup", PopupId);
 
-            try
-            {
-                await JSRuntime.InvokeVoidAsync("Radzen.destroyPopup", PopupId);
-            }
-            catch (JSDisconnectedException)
-            {
-                // The circuit is already gone, and with it the popup.
-            }
+            reference?.Dispose();
+            reference = null;
         }
     }
 }
