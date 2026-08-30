@@ -67,6 +67,8 @@ Every column also takes the layout parameters, which are per column and cost not
 | `Visible` | Leaves the column out of the layout. It keeps any filter it carries, which is how a grid filters by something it does not show |
 | `OrderIndex` | Puts the column at that position; the rest fill what is left in the order they were declared |
 | `SortOrder` | The sort the grid starts in. Read once, as the column registers - call `SortBy` to re-sort a live grid |
+| `HeaderTemplate` | Replaces the header's text, inside the theme's title spans rather than instead of them |
+| `FooterTemplate`, `FooterCssClass` | Content for the footer cell. The grid draws a footer row when any visible column has one |
 
 A `PropertyColumn` bound to a collection of **values** lists them without a template:
 
@@ -151,6 +153,56 @@ rest of the component. All three of the expensive rows are opt-in and cost nothi
 Responsive titles allocate nothing and still cost 43% more time: a span and a text frame per cell is
 work even when it is not memory. The tooltip's 116 KB is the `title` attribute plus deriving each
 cell's text a second time, since `RenderCell` writes into the builder rather than returning a string.
+
+## Sorting by more than one column
+
+`AllowMultiColumnSorting` makes a header click add to the sort instead of replacing it, and
+`ShowMultiColumnSortingIndex` numbers the sorted headers. A click then cycles a column ascending,
+descending, and out of the sort - which is the only way to remove one, since there is nowhere else to
+click. Without it the grid sorts by one column and a click only toggles direction: there is no
+"unsorted" to cycle back to, because removing the only sort would leave the rows in an order nothing
+on screen explains.
+
+Declaring `SortOrder` on several columns composes them in the order they were declared. `Sorts` gives
+the current sort as `SortDescriptor`s in precedence order; `SortColumn` and `SortDescending` still
+name the first of them.
+
+## Footers, and the aggregate that is not free
+
+A `FooterTemplate` runs on every render. That is nothing for a label, and O(rows) for the reason most
+footers exist:
+
+```razor
+@* Wrong: a full scan per render - and a database round trip per render over an IQueryable *@
+<FooterTemplate>@people.Sum(p => p.Salary)</FooterTemplate>
+
+@* Right: computed when the data changes, rendered from a field *@
+<FooterTemplate>@totalSalary</FooterTemplate>
+```
+
+Measured: the same five columns with a label in each footer against an aggregate in each. The
+difference is the whole cost of a footer, and it is not the markup.
+
+## Remembering what the user changed
+
+`Settings` restores state and `SettingsChanged` reports it, so a grid can come back the way its user
+left it:
+
+```razor
+<RadzenFastGrid Data="@orders" Settings="@stored" SettingsChanged="@(s => stored = s)" />
+```
+
+It carries the sort, the filters and the page - and nothing else, deliberately. Width, order and
+visibility are settings on `RadzenDataGrid` because its user can drag, reorder and pick columns; this
+grid has no such UI, so persisting them would restore only what the markup already said. `SettingsChanged`
+fires whenever the grid reloads, which is every sort, filter and page change, and also a `Reload()`
+called from application code. `CaptureSettings()` gives the same object on demand.
+
+Settings are applied as the grid draws, which is the first moment its columns are known - so on a grid
+composing over a queryable in memory, the render that restores the state is the render that shows it.
+A grid on `LoadData` or the async executor gets one reload after, since the load that produced what is
+on screen ran before the settings existed. A column with no property path - a template column naming no
+member - cannot be identified across a reload and is not persisted.
 
 ## Data
 

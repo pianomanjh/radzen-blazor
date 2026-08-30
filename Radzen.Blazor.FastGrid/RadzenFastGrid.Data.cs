@@ -71,6 +71,23 @@ namespace Radzen.FastGrid
         /// <summary>Whether column filters are applied. Columns still carry their filters when off.</summary>
         [Parameter] public bool AllowFiltering { get; set; }
 
+        /// <summary>
+        /// State to restore - the sort, the filters and the page. Applied when the reference changes, as
+        /// the grid draws, which is the first moment its columns are known.
+        /// </summary>
+        [Parameter] public FastGridSettings? Settings { get; set; }
+
+        /// <summary>
+        /// Raised with the current state whenever the grid reloads, which is every sort, filter and page
+        /// change - and also a <see cref="Reload" /> called from application code, since a reload is a
+        /// reload. Built only when something is listening.
+        /// </summary>
+        [Parameter] public EventCallback<FastGridSettings> SettingsChanged { get; set; }
+
+        FastGridSettings? appliedSettings;
+        bool settingsPending;
+        bool settingsNeedReload;
+
         /// <summary>How string comparisons treat case. The provider decides by default.</summary>
         [Parameter] public FilterCaseSensitivity FilterCaseSensitivity { get; set; }
 
@@ -158,6 +175,14 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override Task OnParametersSetAsync()
         {
+            // Noted here and applied as the table draws: sorts and filters name columns, and no column
+            // has registered yet on the parameter set that precedes the first render.
+            if (!ReferenceEquals(appliedSettings, Settings))
+            {
+                appliedSettings = Settings;
+                settingsPending = Settings is not null;
+            }
+
             var pagingChanged = false;
 
             if (!initialized)
@@ -539,6 +564,16 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override async Task OnAfterRenderAsync(bool firstRender)
         {
+            // A grid composing over a queryable in memory has already drawn the restored state - the
+            // render that applied it composed from it. One that loads its data has not: the load that
+            // produced what is on screen ran before the settings existed.
+            if (settingsNeedReload)
+            {
+                settingsNeedReload = false;
+
+                await RefreshAsync();
+            }
+
             if (ClampPage())
             {
                 await RefreshAsync();
@@ -754,8 +789,137 @@ namespace Radzen.FastGrid
             return RefreshAsync();
         }
 
+        /// <summary>
+        /// Restores stored state. Called as the table draws, so every column has registered and the view
+        /// has not composed yet - the same moment a column's own declared filter and sort take effect.
+        /// </summary>
+        void ApplySettings(FastGridSettings settings)
+        {
+            if (settings.PageSize is { } size and > 0)
+            {
+                declaredPageSize = size;
+                pageSize = size;
+            }
+
+            if (settings.CurrentPage is { } page and >= 0)
+            {
+                skip = page * pageSize;
+            }
+
+            if (settings.Columns is null)
+            {
+                return;
+            }
+
+            sorts.Clear();
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                columns[i].SetFilter(null, null);
+            }
+
+            // Walked in the stored order, not the columns' - it is what records the sort's precedence.
+            foreach (var stored in settings.Columns)
+            {
+                if (stored?.Property is not { Length: > 0 } path)
+                {
+                    continue;
+                }
+
+                var column = ColumnForPath(path);
+
+                if (column is null)
+                {
+                    continue;
+                }
+
+                if (stored.SortOrder is { } order && column.CanSort)
+                {
+                    sorts.Add((column, order == SortOrder.Descending));
+                }
+
+                if (stored.FilterValue is not null)
+                {
+                    column.SetFilter(stored.FilterValue, stored.FilterOperator);
+                }
+            }
+
+            // A grid over a plain queryable composes from this state on the render now under way. One
+            // that loads - LoadData, or an async executor - has to ask again.
+            settingsNeedReload = LoadData.HasDelegate || Executor is not null;
+        }
+
+        ColumnBase<TItem>? ColumnForPath(string path)
+        {
+            for (var i = 0; i < columns.Count; i++)
+            {
+                if (string.Equals(columns[i].PropertyPath, path, StringComparison.Ordinal))
+                {
+                    return columns[i];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>The grid's current state, in the form <see cref="Settings" /> takes.</summary>
+        public FastGridSettings CaptureSettings()
+        {
+            var stored = new List<FastGridColumnSettings>();
+
+            // Sorted columns first and in order, since the list is what carries the precedence.
+            for (var i = 0; i < sorts.Count; i++)
+            {
+                var (column, descending) = sorts[i];
+
+                if (column.PropertyPath is { Length: > 0 } path)
+                {
+                    stored.Add(new FastGridColumnSettings
+                    {
+                        Property = path,
+                        SortOrder = descending ? SortOrder.Descending : SortOrder.Ascending,
+                        FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
+                        FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
+                    });
+                }
+            }
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.HasFilter || SortIndexOf(column) >= 0
+                    || column.PropertyPath is not { Length: > 0 } path)
+                {
+                    continue;
+                }
+
+                stored.Add(new FastGridColumnSettings
+                {
+                    Property = path,
+                    FilterValue = column.CurrentFilterValue,
+                    FilterOperator = column.CurrentFilterOperator,
+                });
+            }
+
+            return new FastGridSettings
+            {
+                Columns = stored,
+                CurrentPage = CurrentPage,
+                PageSize = pageSize,
+            };
+        }
+
         Task RefreshAsync()
         {
+            // Every state change a user can make funnels through here, so this is the one place the
+            // grid has to say so - and it is not the render path, which is what keeps a grid nobody is
+            // persisting from ever building the object.
+            if (SettingsChanged.HasDelegate)
+            {
+                _ = SettingsChanged.InvokeAsync(CaptureSettings());
+            }
+
             if (AllowVirtualization)
             {
                 // A new filter changes how many rows there are, so the cached total goes with it.
@@ -838,7 +1002,7 @@ namespace Radzen.FastGrid
         {
             var token = BeginLoad();
             var filtered = ApplyFilters(source);
-            var ordered = SortColumn?.ApplySort(filtered, SortDescending) ?? filtered;
+            var ordered = ApplySorts(filtered);
             var paged = Paging ? ordered.Skip(skip).Take(pageSize) : ordered;
 
             IsLoading = true;
@@ -932,14 +1096,40 @@ namespace Radzen.FastGrid
         /// </summary>
         string? OrderBy()
         {
-            if (SortColumn?.PropertyPath is not { Length: > 0 } path)
+            if (sorts.Count == 0)
             {
                 return null;
             }
 
-            var property = IsOData() ? path.Replace('.', '/') : path;
+            var odata = IsOData();
+            StringBuilder? builder = null;
+            string? single = null;
 
-            return SortDescending ? property + " desc" : property + " asc";
+            for (var i = 0; i < sorts.Count; i++)
+            {
+                var (column, descending) = sorts[i];
+
+                if (column.PropertyPath is not { Length: > 0 } path)
+                {
+                    continue;
+                }
+
+                var property = odata ? path.Replace('.', '/') : path;
+                var term = descending ? property + " desc" : property + " asc";
+
+                // One sorted column is the ordinary case and costs no builder; the rest join with the
+                // comma both dynamic LINQ and OData $orderby read.
+                if (single is null)
+                {
+                    single = term;
+                }
+                else
+                {
+                    (builder ??= new StringBuilder(single)).Append(',').Append(term);
+                }
+            }
+
+            return builder is not null ? builder.ToString() : single;
         }
 
         /// <summary>
@@ -1062,10 +1252,31 @@ namespace Radzen.FastGrid
                 // translate rather than a parsed string.
                 var queryable = data as IQueryable<TItem> ?? data.AsQueryable();
 
-                data = SortColumn.ApplySort(queryable, SortDescending) ?? data;
+                data = ApplySorts(queryable);
             }
 
             return data;
+        }
+
+        /// <summary>
+        /// Composes every sort onto the query, in order of precedence. A column that cannot order -
+        /// which is what ApplySort returning null means - is skipped rather than allowed to break the
+        /// chain, so one uncomparable column does not cost the sort the caller asked for.
+        /// </summary>
+        IQueryable<TItem> ApplySorts(IQueryable<TItem> source)
+        {
+            IOrderedQueryable<TItem>? ordered = null;
+
+            for (var i = 0; i < sorts.Count; i++)
+            {
+                var (column, descending) = sorts[i];
+
+                ordered = ordered is null
+                    ? column.ApplySort(source, descending) ?? ordered
+                    : column.ApplyThenBy(ordered, descending) ?? ordered;
+            }
+
+            return ordered ?? source;
         }
 
         int TotalCount()

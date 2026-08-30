@@ -135,11 +135,72 @@ namespace Radzen.FastGrid
         /// <summary>Content shown when there are no rows.</summary>
         [Parameter] public RenderFragment? EmptyTemplate { get; set; }
 
-        /// <summary>The column currently sorted, if any.</summary>
-        public ColumnBase<TItem>? SortColumn { get; private set; }
+        /// <summary>
+        /// Whether clicking a second column adds to the sort instead of replacing it. A click then
+        /// cycles a column ascending, descending, then out of the sort altogether - which is the only
+        /// way to remove one, since there is nowhere else to click.
+        /// </summary>
+        [Parameter] public bool AllowMultiColumnSorting { get; set; }
 
-        /// <summary>Whether the current sort is descending.</summary>
-        public bool SortDescending { get; private set; }
+        /// <summary>Whether a sorted header shows its position in the sort.</summary>
+        [Parameter] public bool ShowMultiColumnSortingIndex { get; set; }
+
+        // The sort, in order of precedence. One entry is the overwhelmingly common case and the list
+        // never grows past the column count, so it is walked rather than indexed.
+        readonly List<(ColumnBase<TItem> Column, bool Descending)> sorts = new();
+
+        /// <summary>The column sorted first, if any.</summary>
+        public ColumnBase<TItem>? SortColumn => sorts.Count > 0 ? sorts[0].Column : null;
+
+        /// <summary>Whether the first sort is descending.</summary>
+        public bool SortDescending => sorts.Count > 0 && sorts[0].Descending;
+
+        /// <summary>
+        /// The sort as descriptors, in order of precedence - the form the rest of Radzen speaks, and
+        /// what <c>LoadDataArgs.Sorts</c> carries. Empty when nothing is sorted.
+        /// </summary>
+        public IReadOnlyList<SortDescriptor> Sorts
+        {
+            get
+            {
+                if (sorts.Count == 0)
+                {
+                    return Array.Empty<SortDescriptor>();
+                }
+
+                var descriptors = new List<SortDescriptor>(sorts.Count);
+
+                for (var i = 0; i < sorts.Count; i++)
+                {
+                    var (column, descending) = sorts[i];
+
+                    if (column.PropertyPath is { Length: > 0 } path)
+                    {
+                        descriptors.Add(new SortDescriptor
+                        {
+                            Property = path,
+                            SortOrder = descending ? SortOrder.Descending : SortOrder.Ascending,
+                        });
+                    }
+                }
+
+                return descriptors;
+            }
+        }
+
+        /// <summary>The position of a column in the sort, or -1 when it is not sorted.</summary>
+        internal int SortIndexOf(ColumnBase<TItem> column)
+        {
+            for (var i = 0; i < sorts.Count; i++)
+            {
+                if (ReferenceEquals(sorts[i].Column, column))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
 
         /// <summary>
         /// Registers a column. Called on the column's first parameter set, and idempotent after that:
@@ -172,10 +233,11 @@ namespace Radzen.FastGrid
             // The sort must not outlive the column it orders by, or the grid keeps ordering by something
             // nothing on screen names and nothing can clear. Nor must the column's check-box-list values,
             // which would hold the column and everything it listed for as long as the grid lives.
-            if (ReferenceEquals(SortColumn, column))
+            var sorted = SortIndexOf(column);
+
+            if (sorted >= 0)
             {
-                SortColumn = null;
-                SortDescending = false;
+                sorts.RemoveAt(sorted);
             }
 
             lookups.Remove(column);
@@ -187,8 +249,14 @@ namespace Radzen.FastGrid
         /// </summary>
         internal void ApplyDeclaredSort(ColumnBase<TItem> column, SortOrder order)
         {
-            SortColumn = column;
-            SortDescending = order == SortOrder.Descending;
+            // Sorting by one column at a time means the last declaration wins; sorting by several means
+            // they compose, in the order they were declared, which is the only order markup expresses.
+            if (!AllowMultiColumnSorting)
+            {
+                sorts.Clear();
+            }
+
+            sorts.Add((column, order == SortOrder.Descending));
         }
 
         // Rebuilt at the start of each render pass. The common case - every column visible, none
@@ -276,6 +344,13 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>Sorts by the given column, toggling direction when it is already the sorted one.</summary>
+        /// <remarks>
+        /// With <see cref="AllowMultiColumnSorting" /> a column already in the sort cycles descending and
+        /// then out of it, and any other column is appended. Without it the grid sorts by one column and
+        /// a click only ever toggles direction - there is no "unsorted" to cycle back to, because
+        /// removing the only sort would leave the rows in an order nothing on screen explains.
+        /// </remarks>
+        /// <param name="column">The column to sort by.</param>
         public Task SortBy(ColumnBase<TItem> column)
         {
             if (column is null || !column.CanSort)
@@ -283,8 +358,27 @@ namespace Radzen.FastGrid
                 return Task.CompletedTask;
             }
 
-            SortDescending = ReferenceEquals(SortColumn, column) && !SortDescending;
-            SortColumn = column;
+            var sorted = SortIndexOf(column);
+
+            if (!AllowMultiColumnSorting)
+            {
+                var descending = sorted >= 0 && !sorts[sorted].Descending;
+
+                sorts.Clear();
+                sorts.Add((column, descending));
+            }
+            else if (sorted < 0)
+            {
+                sorts.Add((column, false));
+            }
+            else if (!sorts[sorted].Descending)
+            {
+                sorts[sorted] = (column, true);
+            }
+            else
+            {
+                sorts.RemoveAt(sorted);
+            }
 
             // A sort change moves the whole set, not just the page, so go back to the first page - the
             // row that was on page 3 is not on page 3 any more.
@@ -330,6 +424,15 @@ namespace Radzen.FastGrid
         {
             RefreshVisibleColumns();
 
+            // Here and not in OnParametersSet: stored state names columns by property path, and no
+            // column has registered by then. Defer has run, so by now every one of them has.
+            if (settingsPending)
+            {
+                settingsPending = false;
+
+                ApplySettings(appliedSettings!);
+            }
+
             BeginDrawing();
 
             try
@@ -367,6 +470,7 @@ namespace Radzen.FastGrid
             }
 
             RenderBody(builder);
+            RenderFoot(builder);
 
             builder.CloseElement();
 
@@ -480,6 +584,70 @@ namespace Radzen.FastGrid
             return "rz-grid-table rz-grid-table-fixed" + striped + lines;
         }
 
+        // Drawn only when a visible column asks for it, so a grid with no footer emits no tfoot. Per
+        // column and once per render, whatever the row count - the cost of a footer is whatever the
+        // templates in it do, not the row itself.
+        void RenderFoot(RenderTreeBuilder builder)
+        {
+            var any = false;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                if (visibleColumns[i].FooterTemplate is not null)
+                {
+                    any = true;
+
+                    break;
+                }
+            }
+
+            if (!any)
+            {
+                return;
+            }
+
+            builder.OpenElement(180, "tfoot");
+            builder.AddAttribute(181, "role", "rowgroup");
+            builder.AddAttribute(182, "class", "rz-datatable-tfoot");
+            builder.OpenElement(183, "tr");
+            builder.AddAttribute(184, "role", "row");
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                builder.OpenElement(185, "td");
+                builder.AddAttribute(186, "role", "gridcell");
+                builder.AddAttribute(187, "scope", "col");
+
+                if (!string.IsNullOrEmpty(column.FooterCssClass))
+                {
+                    builder.AddAttribute(188, "class", column.FooterCssClass);
+                }
+
+                if (column.CellStyle is { } footerStyle)
+                {
+                    builder.AddAttribute(189, "style", footerStyle);
+                }
+
+                // The span is written for every column, with or without a template: the theme's footer
+                // padding hangs off it, and a bare td renders a shorter cell beside its neighbours.
+                builder.OpenElement(190, "span");
+                builder.AddAttribute(191, "class", "rz-column-footer");
+
+                if (column.FooterTemplate is { } footerTemplate)
+                {
+                    builder.AddContent(192, footerTemplate(column));
+                }
+
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
         void RenderHead(RenderTreeBuilder builder)
         {
             builder.OpenElement(30, "thead");
@@ -491,6 +659,7 @@ namespace Radzen.FastGrid
             {
                 var column = visibleColumns[i];
                 var sortable = AllowSorting && column.CanSort;
+                var sorted = SortIndexOf(column);
 
                 builder.OpenElement(34, "th");
                 builder.AddAttribute(35, "role", "columnheader");
@@ -499,9 +668,10 @@ namespace Radzen.FastGrid
                     ? "rz-unselectable-text rz-sortable-column"
                     : "rz-unselectable-text");
 
-                if (ReferenceEquals(SortColumn, column))
+                if (sorted >= 0)
                 {
-                    builder.AddAttribute(38, "aria-sort", SortDescending ? "descending" : "ascending");
+                    builder.AddAttribute(38, "aria-sort",
+                        sorts[sorted].Descending ? "descending" : "ascending");
                 }
 
                 if (column.CellStyle is { } headerStyle)
@@ -524,13 +694,36 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(42, "class", "rz-column-title");
                 builder.OpenElement(43, "span");
                 builder.AddAttribute(44, "class", "rz-column-title-content rz-text-truncate");
-                builder.AddContent(45, column.HeaderText);
+
+                // The template replaces the title text, not the wrapper: the theme hangs the header's
+                // truncation and spacing off these two spans, so content placed outside them loses both.
+                if (column.HeaderTemplate is { } headerTemplate)
+                {
+                    builder.AddContent(49, headerTemplate(column));
+                }
+                else
+                {
+                    builder.AddContent(45, column.HeaderText);
+                }
+
                 builder.CloseElement();
 
-                if (ReferenceEquals(SortColumn, column))
+                // The position in the sort, as RadzenDataGrid shows it - a RadzenBadge there, the markup
+                // that badge produces here, since a component per sorted header buys nothing this grid
+                // wants. One is not worth showing: the number only means anything against another.
+                if (sorted >= 0 && ShowMultiColumnSortingIndex && sorts.Count > 1)
+                {
+                    builder.OpenElement(50, "span");
+                    builder.AddAttribute(51, "class",
+                        "rz-badge rz-badge-info rz-variant-filled rz-shade-lighter rz-badge-pill");
+                    builder.AddContent(52, sorted + 1);
+                    builder.CloseElement();
+                }
+
+                if (sorted >= 0)
                 {
                     builder.OpenElement(46, "span");
-                    builder.AddAttribute(47, "class", SortDescending
+                    builder.AddAttribute(47, "class", sorts[sorted].Descending
                         // rzi-sort as well as the direction class, which is what RadzenDataGrid emits.
                         // The direction rule wins for both glyph and colour either way, but matching the
                         // class list exactly is what keeps a custom theme's rules applying to both.

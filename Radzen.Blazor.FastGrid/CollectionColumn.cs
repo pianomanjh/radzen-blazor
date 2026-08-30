@@ -144,6 +144,14 @@ namespace Radzen.FastGrid
         }
 
         /// <inheritdoc />
+        public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending)
+        {
+            var selector = SortBy is null ? null : Unbox(SortBy);
+
+            return selector is null || source is null ? null : Projection.ThenBy(source, selector, descending);
+        }
+
+        /// <inheritdoc />
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
             => builder.AddContent(sequence, Text(item));
 
