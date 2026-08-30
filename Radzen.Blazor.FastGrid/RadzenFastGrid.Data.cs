@@ -99,6 +99,11 @@ namespace Radzen.FastGrid
 
         Virtualize<TItem>? virtualize;
 
+        // The total behind the scrollbar. Scrolling does not change it - only new data, a new filter or
+        // a reload does - so it is counted once per query rather than once per window. Without this an
+        // endless scroll runs a COUNT(*) for every window it fetches.
+        int? virtualTotal;
+
         /// <summary>
         /// Whether the grid is actually paging. One rule, in one place: virtualization and paging solve
         /// the same problem, and reading AllowPaging directly anywhere else lets the two disagree - a
@@ -190,13 +195,15 @@ namespace Radzen.FastGrid
             lastData = Data;
             lookups.Clear();
 
-            // Drop what any previous load produced. Deliberately not RefreshAsync: that renders, and the
-            // render ComponentBase queues after this returns would then be the second of two - a whole
-            // extra pass over every row, measured at +94% allocation before this was split out.
+            // Drop what any previous load produced. Deliberately not RefreshAsync on the ordinary path:
+            // that renders, and the render ComponentBase queues after this returns would then be the
+            // second of two - a whole extra pass over every row, measured at +94% allocation.
             loaded = null;
             loadedCount = null;
 
-            return BeginAsyncLoad() ?? Task.CompletedTask;
+            // Virtualizing is the exception, and has to be: Virtualize is still holding the window it
+            // fetched from the old source, and nothing else will ask it for another.
+            return AllowVirtualization ? RefreshAsync() : BeginAsyncLoad() ?? Task.CompletedTask;
         }
 
         /// <summary>
@@ -232,9 +239,13 @@ namespace Radzen.FastGrid
                     // window propagates out to Virtualize rather than being swallowed here.
                     var window = await async.ToListAsync(source.Skip(request.StartIndex).Take(top),
                         request.CancellationToken);
-                    var total = await async.CountAsync(source, request.CancellationToken);
 
-                    return new ItemsProviderResult<TItem>(window, total);
+                    if (virtualTotal is null)
+                    {
+                        virtualTotal = await async.CountAsync(source, request.CancellationToken);
+                    }
+
+                    return new ItemsProviderResult<TItem>(window, virtualTotal.Value);
                 }
                 catch (OperationCanceledException)
                 {
@@ -244,7 +255,11 @@ namespace Radzen.FastGrid
 
             var rows = Composed(Data ?? Enumerable.Empty<TItem>());
 
-            return new ItemsProviderResult<TItem>(rows.Skip(request.StartIndex).Take(top), TotalCount());
+            // Same reason as the query above: counting a filtered in-memory sequence walks it, and
+            // scrolling must not walk the whole source once per window.
+            virtualTotal ??= TotalCount();
+
+            return new ItemsProviderResult<TItem>(rows.Skip(request.StartIndex).Take(top), virtualTotal.Value);
         }
 
         /// <summary>
@@ -493,6 +508,9 @@ namespace Radzen.FastGrid
         {
             if (AllowVirtualization)
             {
+                // A new filter changes how many rows there are, so the cached total goes with it.
+                virtualTotal = null;
+
                 // Virtualize holds its own copy of the window, so a sort or filter that only re-renders
                 // redraws the same rows: the refetch is what makes the provider compose the new query.
                 return virtualize is null ? Task.CompletedTask : RefreshVirtualizedAsync();

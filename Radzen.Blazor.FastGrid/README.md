@@ -119,6 +119,12 @@ the Radzen themes actually render a row at.
 Virtualization and paging solve the same problem, and virtualization wins: with it on, `AllowPaging` is
 ignored and no pager is drawn.
 
+With an `IQueryable` and the adapter registered, this is endless scroll against the database: each
+window is a `Skip(n).Take(m)` the grid awaits, and the total behind the scrollbar is counted **once per
+query, not once per window** - a sort, a filter, a reload or new data re-counts it, scrolling does not.
+It is a proportional scrollbar rather than a grows-as-you-go one: `Virtualize` needs a total, so there
+is one `COUNT(*)` up front.
+
 ## What it does not do
 
 Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the repository:

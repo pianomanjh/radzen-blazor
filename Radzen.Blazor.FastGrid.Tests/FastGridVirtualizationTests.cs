@@ -229,6 +229,112 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public async Task ScrollingDoesNotRecountTheSource()
+        {
+            // Every window fetched is a scroll. The total behind the scrollbar does not change while
+            // scrolling, so counting per window means a COUNT(*) per scroll against the database - which
+            // is what makes an endless scroll expensive rather than the fetching itself.
+            using var ctx = new TestContext();
+            var executor = new CountingExecutor();
+
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+
+            var cut = Render(ctx, data: People.Many(40).AsQueryable());
+
+            cut.WaitForAssertion(() => Assert.Equal(1, executor.ToListCalls));
+            Assert.Equal(1, executor.CountCalls);
+
+            // Straight at Virtualize rather than through Reload: this is what a scroll does.
+            await cut.InvokeAsync(() => cut.Instance.Virtualize!.RefreshDataAsync());
+            await cut.InvokeAsync(() => cut.Instance.Virtualize!.RefreshDataAsync());
+
+            Assert.Equal(3, executor.ToListCalls);
+            Assert.Equal(1, executor.CountCalls);
+        }
+
+        [Fact]
+        public async Task ReloadingDoesRecountTheSource()
+        {
+            // The other half of the rule: a reload may be a new filter or new data, so the total it
+            // cached is no longer trustworthy.
+            using var ctx = new TestContext();
+            var executor = new CountingExecutor();
+
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+
+            var cut = Render(ctx, data: People.Many(40).AsQueryable());
+
+            cut.WaitForAssertion(() => Assert.Equal(1, executor.CountCalls));
+
+            await cut.InvokeAsync(() => cut.Instance.Reload());
+
+            Assert.Equal(2, executor.CountCalls);
+        }
+
+        [Fact]
+        public void ANewDataSourceRecountsToo()
+        {
+            using var ctx = new TestContext();
+            var executor = new CountingExecutor();
+
+            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+
+            var cut = Render(ctx, data: People.Many(40).AsQueryable());
+
+            cut.WaitForAssertion(() => Assert.Equal(1, executor.CountCalls));
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, People.Many(10).AsQueryable()));
+
+            cut.WaitForAssertion(() => Assert.Equal(2, executor.CountCalls));
+            Assert.Equal(10, cut.FindAll("tbody tr[role=row]").Count);
+        }
+
+        [Fact]
+        public async Task ScrollingDoesNotRewalkAnInMemorySourceForItsTotal()
+        {
+            // Counting a sequence that is not an ICollection means walking it. The same rule as the
+            // query above, and the same cost: a walk of the whole source for every window.
+            using var ctx = new TestContext();
+            var source = new WalkCountingSequence(People.Many(40));
+
+            var cut = Render(ctx, data: source);
+
+            Assert.Equal(40, cut.FindAll("tbody tr[role=row]").Count);
+
+            var afterFirst = source.Walks;
+
+            await cut.InvokeAsync(() => cut.Instance.Virtualize!.RefreshDataAsync());
+
+            // The window the provider returns is lazy, so it is the render that walks it. Counting is
+            // not lazy, and would have walked already.
+            cut.Render();
+
+            Assert.Equal(afterFirst + 1, source.Walks);
+        }
+
+        /// <summary>
+        /// Records how many times it is walked. Deliberately not an <see cref="ICollection{T}" />, which
+        /// LINQ counts without walking - the point is to see the walks.
+        /// </summary>
+        sealed class WalkCountingSequence : IEnumerable<Person>
+        {
+            readonly List<Person> source;
+
+            public WalkCountingSequence(List<Person> source) => this.source = source;
+
+            public int Walks { get; private set; }
+
+            public IEnumerator<Person> GetEnumerator()
+            {
+                Walks++;
+
+                return source.GetEnumerator();
+            }
+
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+
+        [Fact]
         public void TheRowHeightItAssumesIsTheOneTheThemeRenders()
         {
             // 37px is measured, not guessed - it is what GeometryParityTests pins for a body row. A wrong

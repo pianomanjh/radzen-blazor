@@ -304,9 +304,13 @@ Everything funnels through one items provider: a `LoadData` handler is asked for
 queryable is counted and materialized with awaited queries, anything else is composed in memory. A sort
 or filter has to *refetch* rather than re-render, since `Virtualize` holds its own copy of the window.
 
-Two faults here were wasted work rather than wrong output, and only turned up because the tests count
-calls: the grid pre-loaded a page in `OnParametersSetAsync` that the provider then re-fetched, and the
-`LoadData` handler was called once with no window at all before the provider asked for one.
+Four faults here were wasted work rather than wrong output, and only turned up because the tests count
+calls: the grid pre-loaded a page in `OnParametersSetAsync` that the provider then re-fetched; the
+`LoadData` handler was called once with no window at all before the provider asked for one; new data
+assigned to a virtualized grid left `Virtualize` holding the window it fetched from the old source; and
+**the total was counted on every window**, so an endless scroll against Entity Framework ran a
+`COUNT(*)` per scroll. Scrolling does not change how many rows there are - only a sort, a filter, a
+reload or new data does - so it is counted once per query now.
 
 ### 31 bytes a row for a branch that was never taken
 
@@ -371,7 +375,7 @@ It is now a test project that runs in CI with nobody watching:
 dotnet test Radzen.Blazor.FastGrid.Tests
 ```
 
-250 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
+254 tests, of which eleven compare `RadzenDataGrid<T>` and `RadzenFastGrid<T>` rendered from the same
 8 x 5 data in the same run, in two layers:
 
 - **Markup** (`MarkupParityTests`) - the table's `rz-grid-table` / `rz-grid-table-striped`; `rz-data-row`
