@@ -130,17 +130,45 @@ exist for.
 
 Worth recording that the honest test did not go the way it was expected to. The assumption when these
 rows were added was that comparing a switched-on FastGrid against a switched-off RadzenDataGrid
-*flattered* FastGrid. It does the opposite:
+*flattered* FastGrid. It does the opposite. Every feature, both grids, same data and same five columns:
 
-| N=1000 | Allocated | Row detail costs it |
-| --- | ---: | ---: |
-| `RadzenFastGrid` | 151.47 KB -> 555.13 KB | +404 KB |
-| `RadzenDataGrid` | 18,191 KB -> 23,967 KB | +5,775 KB |
+| Feature on both, N=1000 | `RadzenFastGrid` | `RadzenDataGrid` | Gap | Costs RadzenDataGrid |
+| --- | ---: | ---: | ---: | ---: |
+| *nothing* | 151.63 KB | 18,191 KB | 120x | - |
+| row class | 151.77 KB | 19,106 KB | **126x** | +914 KB |
+| responsive titles | 151.70 KB | 18,192 KB | 120x | +0.4 KB |
+| a filter row | 155.21 KB | 21,380 KB | **138x** | +3,189 KB |
+| cell tooltip | 267.22 KB | 18,191 KB | **68x** | +5,243 KB |
+| row click | 461.49 KB | 19,853 KB | **43x** | +1,662 KB |
+| row detail | 555.30 KB | 23,968 KB | **43x** | +5,777 KB |
+| cell click | 1,634 KB | 27,373 KB | **17x** | +9,182 KB |
 
-Row detail is fourteen times more expensive on `RadzenDataGrid`, so with it on both sides the gap
-*widens* from 120x to 43x rather than narrowing to 33x. The unfair comparison was the pessimistic one.
-Which is the argument for the reference rows either way: the direction of the error was not guessable,
-and one of the two numbers had never been measured at all.
+The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
+delegate per row or per cell - and *widens* wherever the feature is markup the other grid pays for per
+row. Row detail is fourteen times more expensive on `RadzenDataGrid` and a filter row is sixteen
+hundred times, so with either on both sides the gap widens rather than narrowing. The unfair comparison
+was the pessimistic one. Which is the argument for the reference rows either way: the direction of the
+error was not guessable, and half these numbers had never been measured at all.
+
+### The reference rows found something in RadzenDataGrid
+
+`ShowCellDataAsTooltip` defaults to **true**, so the baseline row above already has it on, and the
+tooltip reference row - which set it to `true` - measured nothing. That is the exact shape of a
+benchmark that proves nothing, so the row was turned around to measure it *off*: **12,948 KB**, against
+18,191 KB with it on.
+
+**That one default is 5,243 KB, 29% of everything `RadzenDataGrid` allocates rendering a thousand
+rows**, paid by every grid whose author has never heard of the parameter. `RadzenDataGrid.razor:684-690`
+is why: per cell it formats the value into a string it has already rendered once, then allocates a whole
+`Dictionary<string, object>` to carry the single `title` attribute. Five thousand dictionaries and five
+thousand strings at 1000 x 5.
+
+Two separate things follow, and only the first is available to an application today:
+
+- `ShowCellDataAsTooltip="false"` on a `RadzenDataGrid` is a one-line 29% cut.
+- The per-cell dictionary and the double derivation are avoidable inside `RadzenDataGrid` whichever way
+  the default goes. That is work on that component, not on this one, and is recorded here because this
+  is where it surfaced.
 
 ## Marginal cost of each feature on a slim renderer
 
@@ -299,6 +327,37 @@ The values come from a composed `Select(...).Distinct()` - a query, not an enume
 Framework source runs `SELECT DISTINCT` rather than pulling every row across the wire - cached per
 column until the data changes. `FilterLookupData` supplies them instead, for a source too large or too
 remote to ask.
+
+`FilterAsYouType` (default on) and `FilterDelay` (default 500 ms) match `RadzenDataGrid`'s names and
+defaults, and the shape of the binding is worth recording because the first attempt got it wrong.
+Typing adds `oninput` to the filter box; it does not *replace* `onchange`, which is what a blur and an
+Enter raise. Swapping one for the other looks equivalent and is not: it silently removes the only
+event that commits a box the user abandons mid-pause.
+
+Both events then fire for the same typing, so the two meet at one apply point that skips text already
+applied - which is why the column records the *text* that produced its filter rather than trusting the
+value. `"3.0"` and `"3"` are one filter value and two different things to have typed, and an
+unparseable `"3-"` filters by null exactly as an empty box does. Anything that filters by another route
+- descriptors, the clear button, a declared `FilterValue` changing - drops the recorded text, so
+re-typing what was there before still applies. Both of those were mutants that survived the first
+version of the tests and are now covered.
+
+The debounce is a generation counter rather than a `CancellationTokenSource` per keystroke: a
+superseded delay still wakes up, finds itself out of date and returns, and there is no token source to
+own, cancel or dispose. Committing the box supersedes any pending delay, so the abandoned wait cannot
+wake up afterwards and re-apply stale text. It checks disposal at the same point, because typing and
+navigating away inside half a second is ordinary use and leaves a delay running against a component
+that is gone.
+
+The pause saves the query. What saves the *render* is a separate thing, and skipping it would have left
+most of the feature undone: `ComponentBase` re-renders after every event it handles, so a bound
+`oninput` redraws the whole grid on each keystroke to show exactly what is already on screen. Measured
+at three keystrokes with the pause not yet elapsed: **three full renders, nothing applied**. Binding it
+through a non-rendering receiver instead takes that to **zero**, and the render that matters still
+happens, because it comes from the reload the filter triggers rather than from the keystroke.
+`EventCallback.Factory.CreateBinder` cannot carry the receiver - it wraps the delegate, so
+`callback.Target` is a compiler-generated closure rather than the `IHandleEvent` - which is why this one
+box has a binder on `onchange` and a plain callback on `oninput`.
 
 Still no operator menu, no date popup, no numeric range, no enum picker: those are most of
 `RadzenDataGrid`'s filter code and none of its filter engine. `FilterTemplate` replaces the control for

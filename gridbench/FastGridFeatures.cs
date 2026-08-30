@@ -105,6 +105,48 @@ public class FastGridFeatureBench
             new Dictionary<string, object?> { ["Data"] = people, ["Columns"] = SlimBench.RadzenColumnsForComparison }));
     }
 
+    // One reference row per feature this grid charges for, so a commit can say what the same thing
+    // costs the grid it is measured against rather than only what it cost here. Nothing is added for
+    // the features that measured free on this grid: RadzenDataGrid pays for those in its baseline
+    // whether they are used or not, which is the premise the whole component rests on, and a marginal
+    // cost of zero on both sides says nothing about it.
+    async Task Reference(Action<Dictionary<string, object?>> configure)
+    {
+        var parameters = new Dictionary<string, object?>
+        {
+            ["Data"] = people,
+            ["Columns"] = SlimBench.RadzenColumnsForComparison,
+        };
+
+        configure?.Invoke(parameters);
+
+        using var r = new BenchmarkRenderer(services);
+
+        await r.RenderComponent(typeof(RadzenDataGrid<Person>), ParameterView.FromDictionary(parameters));
+    }
+
+    [Benchmark(Description = "= RadzenDataGrid + row click")]
+    public Task ReferenceRowClick() => Reference(p =>
+        p["RowClick"] = EventCallback.Factory.Create<DataGridRowMouseEventArgs<Person>>(new object(), _ => { }));
+
+    [Benchmark(Description = "= RadzenDataGrid + cell click")]
+    public Task ReferenceCellClick() => Reference(p =>
+        p["CellClick"] = EventCallback.Factory.Create<DataGridCellMouseEventArgs<Person>>(new object(), _ => { }));
+
+    // Backwards, and deliberately: RadzenDataGrid's ShowCellDataAsTooltip defaults to *true*, so its
+    // baseline row above is already the tooltip-on measurement and setting the parameter true measures
+    // nothing at all - which is what the first version of this row did. Turning it off is the only way
+    // to learn what it costs that grid, and it is the row that lines up with this grid's bare baseline.
+    [Benchmark(Description = "= RadzenDataGrid, cell tooltip turned off")]
+    public Task ReferenceNoTooltip() => Reference(p => p["ShowCellDataAsTooltip"] = false);
+
+    [Benchmark(Description = "= RadzenDataGrid + row class")]
+    public Task ReferenceRowClass() => Reference(p =>
+        p["RowRender"] = (Action<RowRenderEventArgs<Person>>)(args => args.Attributes["class"] = "senior"));
+
+    [Benchmark(Description = "= RadzenDataGrid + responsive titles")]
+    public Task ReferenceResponsive() => Reference(p => p["Responsive"] = true);
+
     [Benchmark(Description = "= RadzenDataGrid + row detail")]
     public async Task ReferenceDataGridRowDetail()
     {
@@ -260,4 +302,21 @@ public class FastGridFeatureBench
     [Benchmark(Description = "+ settings raised on every reload")]
     public Task Settings() => Render(p =>
         p["SettingsChanged"] = EventCallback.Factory.Create<FastGridSettings>(new object(), _ => { }));
+
+    // Three rows for the filter row, because the question the debounce raises is whether binding a
+    // second event to every filter box is per column or per row. A filter box exists once per column
+    // and nowhere else, so the two filtering rows should be indistinguishable at 1000 rows - and if
+    // they are not, the handler has leaked into the body.
+    [Benchmark(Description = "+ a filter row")]
+    public Task Filtering() => Render(p => p["AllowFiltering"] = true);
+
+    [Benchmark(Description = "+ a filter row, not as you type")]
+    public Task FilteringOnChangeOnly() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["FilterAsYouType"] = false;
+    });
+
+    [Benchmark(Description = "= RadzenDataGrid + a filter row")]
+    public Task ReferenceFiltering() => Reference(p => p["AllowFiltering"] = true);
 }

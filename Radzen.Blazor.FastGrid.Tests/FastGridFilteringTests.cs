@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Xunit;
@@ -546,6 +547,249 @@ namespace Radzen.FastGrid.Tests
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[1].Change("Sen");
 
             Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, FirstNames(cut));
+        }
+        // --- filter as you type ------------------------------------------------------------------
+
+        [Fact]
+        public void TypingFiltersWithoutLeavingTheBox()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), TwoColumns(), p => p.Add(g => g.FilterDelay, 0));
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            // The event is asserted by raising it rather than by reading the attribute back: bUnit does
+            // not put handlers in the DOM under their own names, so a HasAttribute("oninput") check
+            // would be false whether the handler is bound or not, and would pass this test by accident
+            // in the one direction it is meant to catch.
+            input.Input("Carol");
+
+            Assert.Single(cut.FindAll("tbody tr"));
+
+            // oninput on top of onchange, not instead of it: leaving the box still commits it.
+            input.Change("Bob");
+
+            Assert.Equal(new[] { "Bob" }, FirstNames(cut));
+        }
+
+        [Fact]
+        public void FilterAsYouTypeOffKeepsTheChangeEvent()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), TwoColumns(),
+                p => p.Add(g => g.FilterAsYouType, false));
+
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            input.Change("Carol");
+
+            Assert.Single(cut.FindAll("tbody tr"));
+
+            // And nothing is listening to typing, which is the whole of what the flag turns off.
+            Assert.Throws<MissingEventHandlerException>(() => input.Input("Bob"));
+        }
+
+        // The pause is what keeps a five-letter word from being five queries. Only the last keystroke
+        // survives it, which is the whole point of the delay.
+        [Fact]
+        public async Task OnlyThePauseAppliesTheFilter()
+        {
+            using var ctx = new TestContext();
+
+            var reloads = 0;
+            var cut = Render(ctx, People.Sample(), TwoColumns(), p =>
+            {
+                p.Add(g => g.FilterDelay, 40);
+                p.Add(g => g.SettingsChanged, _ => reloads++);
+            });
+
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            input.Input("C");
+            input.Input("Ca");
+            input.Input("Carol");
+
+            // Nothing has applied yet - the grid still shows every row, and has not queried once.
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+            Assert.Equal(0, reloads);
+
+            cut.WaitForAssertion(() => Assert.Single(cut.FindAll("tbody tr")), TimeSpan.FromSeconds(5));
+            Assert.Contains("Carol", cut.Markup);
+
+            // Three keystrokes, one query. Two of the three delays woke up out of date and did nothing.
+            await Task.Delay(150);
+
+            Assert.Equal(1, reloads);
+        }
+
+        // Both events fire for the same typing: input while typing, change on the way out. Without a
+        // guard the blur after a pause would run the query the pause already ran.
+        [Fact]
+        public void LeavingTheBoxAfterThePauseDoesNotFilterTwice()
+        {
+            using var ctx = new TestContext();
+
+            var reloads = 0;
+            var cut = Render(ctx, People.Sample(), TwoColumns(), p =>
+            {
+                p.Add(g => g.FilterDelay, 0);
+                p.Add(g => g.SettingsChanged, _ => reloads++);
+            });
+
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            input.Input("Carol");
+
+            Assert.Equal(1, reloads);
+
+            input.Change("Carol");
+
+            Assert.Equal(1, reloads);
+            Assert.Single(cut.FindAll("tbody tr"));
+        }
+
+        // A box abandoned mid-delay: the pause never came, so the blur is what applies it.
+        [Fact]
+        public void LeavingTheBoxDuringTheDelayAppliesItImmediately()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), TwoColumns(),
+                p => p.Add(g => g.FilterDelay, 30_000));
+
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            input.Input("Carol");
+
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+
+            input.Change("Carol");
+
+            Assert.Single(cut.FindAll("tbody tr"));
+        }
+
+        // The pause saves the query; this is what saves the render. A keystroke that is going to be
+        // superseded must not redraw the grid to show exactly what is already on screen - which a bound
+        // handler does, because ComponentBase renders after every event it receives. Measured before
+        // the non-rendering receiver went in: three keystrokes, three full renders, nothing applied.
+        [Fact]
+        public void TypingDoesNotRedrawTheGridUntilTheFilterApplies()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), TwoColumns(), p => p.Add(g => g.FilterDelay, 30_000));
+            var before = cut.RenderCount;
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            input.Input("C");
+            input.Input("Ca");
+            input.Input("Car");
+
+            Assert.Equal(before, cut.RenderCount);
+
+            // And the render that matters still happens: committing the box redraws it once.
+            input.Change("Carol");
+
+            Assert.Equal(new[] { "Carol" }, FirstNames(cut));
+            Assert.True(cut.RenderCount > before,
+                "committing the filter has to redraw the grid; only the superseded keystrokes are dropped");
+        }
+
+        // Typing and navigating away inside the pause is ordinary use, and it leaves a delay running
+        // against a component that no longer exists. Asserted through the reload rather than through an
+        // exception, because an unobserved one in a dropped task would not fail this test either way.
+        [Fact]
+        public async Task ADelayThatOutlivesTheGridDoesNothingWhenItWakesUp()
+        {
+            var reloads = 0;
+
+            using (var ctx = new TestContext())
+            {
+                var cut = Render(ctx, People.Sample(), TwoColumns(), p =>
+                {
+                    p.Add(g => g.FilterDelay, 60);
+                    p.Add(g => g.SettingsChanged, _ => reloads++);
+                });
+
+                cut.Find("thead tr:nth-child(2) input").Input("Carol");
+            }
+
+            await Task.Delay(400);
+
+            Assert.Equal(0, reloads);
+        }
+
+        // The guard records what was typed, so anything that filters by another route has to drop it.
+        // Without that, clearing a filter and typing the same thing again does nothing: the grid still
+        // believes that text is applied, and stays showing every row.
+        [Fact]
+        public void TypingTheSameThingAgainAfterClearingItFiltersAgain()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), TwoColumns(), p => p.Add(g => g.FilterDelay, 0));
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            input.Input("Carol");
+
+            Assert.Equal(new[] { "Carol" }, FirstNames(cut));
+
+            cut.Find(".rz-cell-filter-clear").Click();
+
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+
+            cut.Find("thead tr:nth-child(2) input").Input("Carol");
+
+            Assert.Equal(new[] { "Carol" }, FirstNames(cut));
+        }
+
+        // The same hole from the other direction: a declared FilterValue changing under the grid also
+        // replaces what the box applied, so the recorded text has to go with it. Otherwise re-typing
+        // what was there before is skipped as already applied, and the declared value stays.
+        [Fact]
+        public void TypingBackWhatADeclaredValueReplacedFiltersAgain()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, int>(x => x.Id)), p => p.Add(g => g.FilterDelay, 0));
+
+            cut.Find("thead tr:nth-child(2) input").Input("Carol");
+
+            Assert.Equal(new[] { "Carol" }, FirstNames(cut));
+
+            cut.SetParametersAndRender(p => p.Add(g => g.ChildContent, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, filterValue: "Dave"),
+                Columns.Property<Person, int>(x => x.Id))));
+
+            Assert.Equal(new[] { "Dave" }, FirstNames(cut));
+
+            cut.Find("thead tr:nth-child(2) input").Input("Carol");
+
+            Assert.Equal(new[] { "Carol" }, FirstNames(cut));
+        }
+
+        // ...and the delay it superseded must not then fire and undo it. This is what the generation
+        // counter is for; without it the abandoned wait wakes up and re-applies stale text.
+        [Fact]
+        public async Task TheSupersededDelayDoesNothingWhenItWakesUp()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), TwoColumns(), p => p.Add(g => g.FilterDelay, 40));
+
+            var input = cut.Find("thead tr:nth-child(2) input");
+
+            input.Input("Carol");
+            input.Change("Bob");
+
+            Assert.Equal(new[] { "Bob" }, FirstNames(cut));
+
+            await Task.Delay(250);
+
+            Assert.Equal(new[] { "Bob" }, FirstNames(cut));
         }
     }
 }

@@ -164,6 +164,8 @@ time against the same baseline:
 | selection (1 row in 4) | 151.40 KB | +0.10 KB | 1.03x |
 | `RowClass` | 151.41 KB | +0.11 KB | 1.00x |
 | `Settings` / `SettingsChanged` | 151.41 KB | +0.11 KB | 0.99x |
+| a filter row | 153.62 KB | +1.99 KB | 0.98x |
+| filtering as you type | 155.21 KB | +1.59 KB *over the filter row* | 1.07x |
 | header and footer templates | 152.79 KB | +1.49 KB | 0.99x |
 | footer templates that aggregate | 153.02 KB | +0.23 KB *over the templates* | 1.05x |
 | responsive titles | 151.63 KB | +0.33 KB | 1.39x |
@@ -209,6 +211,60 @@ Two rows are worth reading carefully rather than at face value:
 
 The tooltip's 116 KB is the `title` attribute plus deriving each cell's text a second time, since
 `RenderCell` writes into the builder rather than returning a string.
+
+The filter row is per column and stays per column: `+1.99 KB` for the row itself and `+1.59 KB` for the
+second event handler that filtering-as-you-type binds to each of the five boxes - about 0.32 KB a box,
+once per render, with the thousand rows below it making no difference. That was the thing worth
+checking, since a handler that had leaked into the body would have shown up here as hundreds of
+kilobytes rather than one and a half.
+
+### Where that leaves it against RadzenDataGrid
+
+Marginal cost says what a feature cost; it does not say whether the grid is still worth using once it
+is paid, and the two can point different ways. So each feature is measured on `RadzenDataGrid` too,
+with the same data and the same five columns, and the ratio below is both grids with that feature on -
+the only comparison that is like for like.
+
+| Feature on both | `RadzenFastGrid` | `RadzenDataGrid` | Gap |
+| --- | ---: | ---: | ---: |
+| *nothing* | 151.63 KB | 18,191 KB | **120x** |
+| row class | 151.77 KB | 19,106 KB | **126x** |
+| responsive titles | 151.70 KB | 18,192 KB | **120x** |
+| a filter row | 155.21 KB | 21,380 KB | **138x** |
+| cell tooltip | 267.22 KB | 18,191 KB | **68x** |
+| row click | 461.49 KB | 19,853 KB | **43x** |
+| row detail | 555.30 KB | 23,968 KB | **43x** |
+| cell click | 1,634 KB | 27,373 KB | **17x** |
+
+The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
+delegate per row or per cell - and it *widens* wherever the feature is markup the other grid pays for
+per row. A filter row costs this grid 2 KB and `RadzenDataGrid` **3,189 KB**; row detail costs it
+404 KB and `RadzenDataGrid` **5,777 KB**. Cell click is the narrowest at 17x and is still 17x.
+
+**The measurement worth taking out of this table has nothing to do with this grid.**
+`RadzenDataGrid.ShowCellDataAsTooltip` defaults to `true`, and turning it off drops its render from
+18,191 KB to **12,948 KB**. That single default is **5,243 KB, or 29% of everything `RadzenDataGrid`
+allocates** to render a thousand rows - paid by every grid that has never heard of the parameter, for a
+`title` attribute on cells that mostly are not truncated. It is one line in a consuming application:
+
+```razor
+<RadzenDataGrid Data="@orders" ShowCellDataAsTooltip="false" />
+```
+
+The mechanism is visible in `RadzenDataGrid.razor:684-690`: per cell, the value is formatted into a
+string with `$"{column.GetValue(Item)}"` and then a whole `Dictionary<string, object>` is allocated to
+carry that one attribute. At 1000 x 5 that is five thousand dictionaries and five thousand strings, on
+top of the value having already been rendered into the cell once. Five megabytes is what that costs,
+and it matches the measurement.
+
+Which also means the parameter is not the only fix available. A single-entry dictionary per cell is
+avoidable whichever way the default goes, and the value is being derived twice; both are changes inside
+`RadzenDataGrid` rather than in the applications using it. That is a separate piece of work from this
+component and is recorded here because this is where it was found.
+
+This was found by accident: the first version of the reference row set the parameter to `true` and
+measured no change, which is what a parameter already at its default looks like and is exactly the
+shape of a benchmark that proves nothing. Checking why is what turned it up.
 
 ## Sorting by more than one column
 
@@ -355,6 +411,16 @@ LINQ or OData form depending on the source) and `Filters` (as descriptors), and 
 - `CheckBoxList` - a multi-select of the column's distinct values, filtering with `In`. The values come
   from a composed `SELECT DISTINCT`, not from enumerating the data, and are cached until the data
   changes. `FilterLookupData` supplies them instead for a source too large or remote to ask.
+
+`FilterAsYouType` (default `true`) filters while the box still has focus, after `FilterDelay`
+milliseconds of no typing (default 500). Turning it off leaves the filter applying when the box is left
+or Enter is pressed, which it also does with the flag on - a box abandoned before the pause still
+filters on the way out, and the pause it superseded does not then fire behind it.
+
+Keystrokes before the pause cost no render at all, not just no query: typing is bound through a
+non-rendering receiver, so a keystroke that is about to be superseded does not redraw a thousand rows
+to show what is already on screen. Measured at three keystrokes: three full renders bound the ordinary
+way, zero bound this way.
 
 `FilterTemplate` replaces the control for a column that needs more. There is deliberately no operator
 menu, date popup, numeric range or enum picker - those are most of `RadzenDataGrid`'s filter code and
