@@ -293,6 +293,25 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(1, source.Walks);
         }
 
+        [Fact]
+        public void ANonGenericCollectionIsAlsoCountedWithoutBeingWalked()
+        {
+            // A source can be an IEnumerable<T> and a non-generic ICollection without being an
+            // ICollection<T>. Count() asks that one too, which is why the grid does not test for it
+            // itself - and if that ever stopped being true, this is where it would show.
+            using var ctx = new TestContext();
+            var source = new CountingLegacyCollection(People.Many(30));
+
+            var cut = Render(ctx, source, p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+            });
+
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+            Assert.Equal(1, source.Walks);
+        }
+
         /// <summary>
         /// Records how many times it is enumerated, so a test can tell composing a view from taking a
         /// total. Deliberately not an <see cref="ICollection{T}" />, which LINQ counts without walking.
@@ -335,6 +354,22 @@ namespace Radzen.FastGrid.Tests
             public void CopyTo(Person[] array, int arrayIndex) => Source.CopyTo(array, arrayIndex);
 
             public bool Remove(Person item) => throw new NotSupportedException();
+        }
+
+        /// <summary>A collection of the pre-generics kind, which LINQ also counts without walking.</summary>
+        sealed class CountingLegacyCollection : CountingSequence, ICollection
+        {
+            public CountingLegacyCollection(List<Person> source) : base(source)
+            {
+            }
+
+            public int Count => Source.Count;
+
+            public bool IsSynchronized => false;
+
+            public object SyncRoot => Source;
+
+            public void CopyTo(Array array, int index) => ((ICollection)Source).CopyTo(array, index);
         }
     }
 }

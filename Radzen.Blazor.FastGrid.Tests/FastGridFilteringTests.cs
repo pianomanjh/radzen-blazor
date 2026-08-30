@@ -484,5 +484,68 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(new[] { "Bob" }, FirstNames(cut));
         }
+
+        // Neither an enum nor a Guid converts from a string through IConvertible, so the framework's own
+        // Convert.ChangeType throws for both - and the filter box, which treats a value it cannot convert
+        // as a half-typed one, quietly cleared the filter instead of applying it. Typing a whole, valid
+        // value into either column has to narrow the grid.
+        [Fact]
+        public void AnEnumColumnFiltersOnWhatIsTyped()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, Grade>(x => x.Grade)));
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[1].Change("Senior");
+
+            Assert.Equal(new[] { "Carol", "Bob" }, FirstNames(cut));
+        }
+
+        [Fact]
+        public void AnEnumColumnIsNotCaseSensitiveAboutTheName()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, Grade>(x => x.Grade)));
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[1].Change("junior");
+
+            Assert.Equal(new[] { "Alice", "Dave" }, FirstNames(cut));
+        }
+
+        [Fact]
+        public void AGuidColumnFiltersOnWhatIsTyped()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, Guid>(x => x.Reference)));
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[1]
+                .Change(People.Reference(4).ToString());
+
+            Assert.Equal(new[] { "Dave" }, FirstNames(cut));
+        }
+
+        [Fact]
+        public void SomethingThatIsNotAValueOfTheColumnsTypeFiltersNothing()
+        {
+            // Half a name is what a filter box looks like while it is being typed into, so it must leave
+            // the grid alone rather than throwing out of the change handler.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, Grade>(x => x.Grade)));
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[1].Change("Sen");
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, FirstNames(cut));
+        }
     }
 }

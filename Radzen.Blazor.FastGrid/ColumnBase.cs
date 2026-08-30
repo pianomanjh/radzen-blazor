@@ -109,9 +109,6 @@ namespace Radzen.FastGrid
         /// </summary>
         public virtual Type FilterElementType => FilterPropertyType;
 
-        Type? resolvedFilterType;
-        string? resolvedFilterTypeFor;
-
         /// <summary>
         /// <see cref="FilterElementType" />, or - when that is <c>object</c> and so says nothing - the
         /// type the column's filter path actually reaches on <typeparamref name="TItem" />.
@@ -133,41 +130,12 @@ namespace Radzen.FastGrid
                     return declared;
                 }
 
-                var path = FilterPropertyPath;
-
-                if (path is null)
-                {
-                    return typeof(object);
-                }
-
-                if (!string.Equals(resolvedFilterTypeFor, path, StringComparison.Ordinal))
-                {
-                    resolvedFilterTypeFor = path;
-                    resolvedFilterType = ResolveMemberType(typeof(TItem), path);
-                }
-
-                return resolvedFilterType ?? typeof(object);
+                // Reached only from the filter row and the filter callbacks, never per row or per cell,
+                // so it is resolved on demand rather than cached behind an invalidation rule.
+                return FilterPropertyPath is { } path
+                    ? PropertyPathResolver.TypeOf(typeof(TItem), path) ?? typeof(object)
+                    : typeof(object);
             }
-        }
-
-        /// <summary>The type at the end of a dotted path, or null when the path does not resolve.</summary>
-        static Type? ResolveMemberType(Type root, string path)
-        {
-            var type = root;
-
-            foreach (var step in path.Split('.'))
-            {
-                var member = type.GetProperty(step);
-
-                if (member is null)
-                {
-                    return null;
-                }
-
-                type = member.PropertyType;
-            }
-
-            return type;
         }
 
         /// <summary>Whether this column can be filtered.</summary>
@@ -190,9 +158,26 @@ namespace Radzen.FastGrid
 
             // A check-box-list filter with nothing ticked is not a filter that matches nothing; it is no
             // filter. Testing for null only would leave the grid empty as soon as the last box is cleared.
-            IEnumerable sequence => sequence.GetEnumerator().MoveNext(),
+            // The selection is a list in every path the grid itself builds, so the count answers without
+            // an enumerator; the general case still has to walk one, and has to dispose it.
+            ICollection collection => collection.Count > 0,
+            IEnumerable sequence => Any(sequence),
             _ => true,
         };
+
+        static bool Any(IEnumerable sequence)
+        {
+            var enumerator = sequence.GetEnumerator();
+
+            try
+            {
+                return enumerator.MoveNext();
+            }
+            finally
+            {
+                (enumerator as IDisposable)?.Dispose();
+            }
+        }
 
         /// <summary>Sets the column's live filter. Called by the grid; does not reload on its own.</summary>
         internal void SetFilter(object? value, FilterOperator? filterOperator)

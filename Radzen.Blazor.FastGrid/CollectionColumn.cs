@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Text;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 
@@ -148,45 +147,21 @@ namespace Radzen.FastGrid
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
             => builder.AddContent(sequence, Text(item));
 
-        string? Text(TItem item)
-        {
-            if (compiled?.Invoke(item) is not { } members)
-            {
-                return null;
-            }
+        string? Text(TItem item) =>
+            compiled?.Invoke(item) is { } members
+                ? CellText.Join(members, Separator, show ??= element => CellText.Of(Select(element), Format))
+                : null;
 
-            using var enumerator = members.GetEnumerator();
+        // Allocated once and never invalidated: it captures nothing but this, so it reads the current
+        // display member and format through the component itself.
+        Func<object?, string?>? show;
 
-            if (!enumerator.MoveNext())
-            {
-                return string.Empty;
-            }
-
-            var first = Show(enumerator.Current);
-
-            if (!enumerator.MoveNext())
-            {
-                return first ?? string.Empty;
-            }
-
-            var builder = new StringBuilder(first).Append(Separator).Append(Show(enumerator.Current));
-
-            while (enumerator.MoveNext())
-            {
-                builder.Append(Separator).Append(Show(enumerator.Current));
-            }
-
-            return builder.ToString();
-        }
-
-        string? Show(TElement element)
-        {
-            var value = member is null ? element : (object?)member(element);
-
-            return Format is { Length: > 0 } f && value is IFormattable formattable
-                ? formattable.ToString(f, CultureInfo.CurrentCulture)
-                : value?.ToString();
-        }
+        /// <summary>
+        /// The member of one element to show, or the element itself when no display member was named.
+        /// The cast is what a non-generic join costs; the alternative is a copy of the loop per column
+        /// type, which is what this shares away.
+        /// </summary>
+        object? Select(object? element) => member is null ? element : member((TElement)element!);
 
         /// <inheritdoc />
         /// <remarks>
@@ -224,13 +199,7 @@ namespace Radzen.FastGrid
         /// </summary>
         static LambdaExpression Unbox(LambdaExpression selector)
         {
-            var body = selector.Body;
-
-            while (body is UnaryExpression unary
-                && (unary.NodeType == ExpressionType.Convert || unary.NodeType == ExpressionType.ConvertChecked))
-            {
-                body = unary.Operand;
-            }
+            var body = PropertyPathResolver.Unwrap(selector.Body);
 
             return body.Type == selector.ReturnType ? selector : Expression.Lambda(body, selector.Parameters);
         }

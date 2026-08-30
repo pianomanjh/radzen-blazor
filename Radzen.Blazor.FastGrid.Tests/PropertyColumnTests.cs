@@ -322,6 +322,71 @@ namespace Radzen.FastGrid.Tests
                 $"expected the boxing route to allocate materially more per cell; typed={typedBytes}, boxing={boxingBytes}");
         }
 
+        // Formatting a value type used to go through a cast to IFormattable, which boxes: 32 bytes per
+        // cell for a decimal, on every row of every currency column, for the life of the grid. The
+        // formatter is built at the value's own type instead, so the interface call is made under a
+        // constraint and the struct never leaves the stack.
+        [Fact]
+        public void FormattedValueTypedCellText_DoesNotBox()
+        {
+            const int iterations = 20000;
+
+            using var ctx = new TestContext();
+            var item = new Person { Salary = 1234.5m };
+
+            var cut = Render(ctx, new[] { item }, Columns.Of(
+                Columns.Property<Person, decimal>(p => p.Salary, format: "C")));
+
+            var column = cut.FindComponent<PropertyColumn<Person, decimal>>().Instance;
+
+            Assert.Equal(item.Salary.ToString("C", CultureInfo.CurrentCulture),
+                cut.Find("tbody td span").TextContent);
+
+            // Weighed against the same text produced through the boxing route. Both allocate the
+            // formatted string; the difference between them is the box.
+            var typedBytes = Allocation.PerCell(column, item, iterations);
+            var boxingBytes = Allocation.PerCell(new FormattingBoxingColumn<Person, decimal>(p => p.Salary, "C"),
+                item, iterations);
+
+            Assert.True(boxingBytes - typedBytes > 8,
+                $"expected the boxing route to allocate materially more per cell; typed={typedBytes}, boxing={boxingBytes}");
+        }
+
+        [Fact]
+        public void FormattedNullableCellText_DoesNotBox()
+        {
+            const int iterations = 20000;
+
+            using var ctx = new TestContext();
+            var item = new Person { Bonus = 250.5m };
+
+            var cut = Render(ctx, new[] { item }, Columns.Of(
+                Columns.Property<Person, decimal?>(p => p.Bonus, format: "C")));
+
+            var column = cut.FindComponent<PropertyColumn<Person, decimal?>>().Instance;
+
+            Assert.Equal(item.Bonus!.Value.ToString("C", CultureInfo.CurrentCulture),
+                cut.Find("tbody td span").TextContent);
+
+            var typedBytes = Allocation.PerCell(column, item, iterations);
+            var boxingBytes = Allocation.PerCell(
+                new FormattingBoxingColumn<Person, decimal?>(p => p.Bonus, "C"), item, iterations);
+
+            Assert.True(boxingBytes - typedBytes > 8,
+                $"expected the boxing route to allocate materially more per cell; typed={typedBytes}, boxing={boxingBytes}");
+        }
+
+        [Fact]
+        public void AFormattedNullReadsAsEmptyRatherThanThrowing()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, new[] { new Person { Bonus = null } }, Columns.Of(
+                Columns.Property<Person, decimal?>(p => p.Bonus, format: "C")));
+
+            Assert.Equal(string.Empty, cut.Find("tbody td span").TextContent);
+        }
+
         [Fact]
         public void ReferenceTypedCellText_AllocatesNothingPerCell()
         {

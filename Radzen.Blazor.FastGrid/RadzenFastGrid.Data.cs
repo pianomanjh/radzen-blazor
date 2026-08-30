@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -234,10 +235,9 @@ namespace Radzen.FastGrid
                 return new ItemsProviderResult<TItem>(Data ?? Enumerable.Empty<TItem>(), Count);
             }
 
-            if (Data is IQueryable<TItem> queryable && Executor is { } async && async.IsSupported(queryable))
+            if (TryGetAsyncSource(out var async, out var queryable))
             {
-                var composed = Composed(queryable);
-                var source = (IQueryable<TItem>)composed;
+                var source = (IQueryable<TItem>)Composed(queryable);
 
                 try
                 {
@@ -300,8 +300,9 @@ namespace Radzen.FastGrid
             }
 
             // The element type, not the property type: a filter on a list of dates is compared against a
-            // date, and Convert.ChangeType would have no idea what to do with the list.
-            var type = Nullable.GetUnderlyingType(column.EffectiveFilterType) ?? column.EffectiveFilterType;
+            // date, and a conversion would have no idea what to do with the list.
+            var declared = column.EffectiveFilterType;
+            var type = Nullable.GetUnderlyingType(declared) ?? declared;
 
             if (type == typeof(string) || type == typeof(object))
             {
@@ -310,9 +311,15 @@ namespace Radzen.FastGrid
 
             try
             {
-                return Filter(column, Convert.ChangeType(text, type, CultureInfo.CurrentCulture));
+                // ConvertType rather than Convert.ChangeType, and Enum.Parse rather than either: neither
+                // an enum nor a Guid converts from a string through IConvertible, so the framework call
+                // throws for both and what was typed silently cleared the filter instead of applying it.
+                return Filter(column, type.IsEnum
+                    ? Enum.Parse(type, text, ignoreCase: true)
+                    : ConvertType.ChangeType(text, declared, CultureInfo.CurrentCulture));
             }
-            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException)
+            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException
+                or ArgumentException)
             {
                 return Filter(column, null);
             }
@@ -354,6 +361,41 @@ namespace Radzen.FastGrid
             lookups[column] = materialized;
 
             return materialized;
+        }
+
+        /// <summary>
+        /// Drops the lookups of columns that have left the set. Their values - and the columns - would
+        /// otherwise be held for as long as the grid lives, and a check-box list over a large column is
+        /// not a small thing to hold.
+        /// </summary>
+        void PruneLookups()
+        {
+            if (lookups.Count == 0)
+            {
+                return;
+            }
+
+            List<ColumnBase<TItem>>? stale = null;
+
+            // The keys are walked with the dictionary's own struct enumerator, so the common answer -
+            // nothing to drop, on every render of every check-box-list grid - allocates nothing.
+            foreach (var column in lookups.Keys)
+            {
+                if (!columns.Contains(column))
+                {
+                    (stale ??= new List<ColumnBase<TItem>>()).Add(column);
+                }
+            }
+
+            if (stale is null)
+            {
+                return;
+            }
+
+            for (var i = 0; i < stale.Count; i++)
+            {
+                lookups.Remove(stale[i]);
+            }
         }
 
         /// <summary>
@@ -505,16 +547,40 @@ namespace Radzen.FastGrid
         /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
         IQueryable<TItem> ApplyFilters(IQueryable<TItem> source)
         {
-            if (!AllowFiltering)
-            {
-                return source;
-            }
-
-            var filters = BuildFilters();
+            var filters = ActiveFilters();
 
             // QueryableExtension builds a typed expression tree from the descriptors - the same one
             // RadzenDataGrid composes - so this still translates to SQL rather than parsing a string.
             return filters is null ? source : source.Where(filters, LogicalFilterOperator, FilterCaseSensitivity);
+        }
+
+        // Drawing the table asks what is filtered more than once: the pager counts, the body enumerates,
+        // and a grid with a pager above and below counts twice. None of it can change while the table is
+        // being written, and rebuilding the descriptors means rebuilding the filter expression tree with
+        // them - so both are computed once for the render and dropped again after. A cache that outlived
+        // the render would have to be invalidated by every path that touches a filter.
+        bool drawing;
+        List<FilterDescriptor>? drawingFilters;
+        IEnumerable<TItem>? drawingComposed;
+        IEnumerable<TItem>? drawingComposedOf;
+
+        List<FilterDescriptor>? ActiveFilters() =>
+            drawing ? drawingFilters : AllowFiltering ? BuildFilters() : null;
+
+        void BeginDrawing()
+        {
+            drawingFilters = AllowFiltering ? BuildFilters() : null;
+            drawingComposed = null;
+            drawingComposedOf = null;
+            drawing = true;
+        }
+
+        void EndDrawing()
+        {
+            drawing = false;
+            drawingFilters = null;
+            drawingComposed = null;
+            drawingComposedOf = null;
         }
 
         /// <summary>Moves to a zero-based page and reloads.</summary>
@@ -560,20 +626,38 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
-        /// Whether the asynchronous path owns this source, and so whether touching it from the render
-        /// thread would run a query. Cheap for an in-memory source: it is not an IQueryable, so the
-        /// first test short-circuits before the executor is even resolved.
+        /// Whether the asynchronous path owns this source - and if so, what will execute it. Cheap for an
+        /// in-memory source: it is not an IQueryable, so the first test short-circuits before the
+        /// executor is even resolved.
         /// </summary>
-        bool AsyncOwnsData => Data is IQueryable<TItem> queryable
-            && Executor is { } async && async.IsSupported(queryable);
+        bool TryGetAsyncSource([NotNullWhen(true)] out IAsyncQueryExecutor? executor,
+            [NotNullWhen(true)] out IQueryable<TItem>? source)
+        {
+            if (Data is IQueryable<TItem> queryable && Executor is { } async && async.IsSupported(queryable))
+            {
+                executor = async;
+                source = queryable;
+
+                return true;
+            }
+
+            executor = null;
+            source = null;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether touching the source from the render thread would run a query.
+        /// </summary>
+        bool AsyncOwnsData => TryGetAsyncSource(out _, out _);
 
         /// <summary>
         /// Starts an asynchronous load, or returns null when this source cannot be executed that way -
         /// which is every in-memory source, and every queryable when no executor is registered.
         /// </summary>
         Task? BeginAsyncLoad() =>
-            !AllowVirtualization
-                && Data is IQueryable<TItem> queryable && Executor is { } async && async.IsSupported(queryable)
+            !AllowVirtualization && TryGetAsyncSource(out var async, out var queryable)
                 ? LoadPageAsync(async, queryable)
                 : null;
 
@@ -768,7 +852,25 @@ namespace Radzen.FastGrid
         /// </summary>
         IEnumerable<TItem> Composed(IEnumerable<TItem> data)
         {
-            var filters = AllowFiltering ? BuildFilters() : null;
+            if (drawing && ReferenceEquals(drawingComposedOf, data))
+            {
+                return drawingComposed!;
+            }
+
+            var composed = Compose(data);
+
+            if (drawing)
+            {
+                drawingComposedOf = data;
+                drawingComposed = composed;
+            }
+
+            return composed;
+        }
+
+        IEnumerable<TItem> Compose(IEnumerable<TItem> data)
+        {
+            var filters = ActiveFilters();
 
             if (filters is not null)
             {
@@ -780,9 +882,9 @@ namespace Radzen.FastGrid
             {
                 // The column applies its own ordering, so it stays a typed expression the provider can
                 // translate rather than a parsed string.
-                data = data is IQueryable<TItem> queryable
-                    ? SortColumn.ApplySort(queryable, SortDescending) ?? data
-                    : SortColumn.ApplySort(data.AsQueryable(), SortDescending) ?? data;
+                var queryable = data as IQueryable<TItem> ?? data.AsQueryable();
+
+                data = SortColumn.ApplySort(queryable, SortDescending) ?? data;
             }
 
             return data;
@@ -809,20 +911,14 @@ namespace Radzen.FastGrid
 
             // A filtered grid must count what the filter left, which means composing and walking it.
             // Only pay that when something is actually filtered.
-            if (AllowFiltering && BuildFilters() is not null)
+            if (ActiveFilters() is not null)
             {
                 return Composed(Data ?? Enumerable.Empty<TItem>()).Count();
             }
 
-            // Count without enumerating where the source can say. Enumerable.Count() already does this
-            // for ICollection<T>, but not for the non-generic ICollection an untyped source may be.
-            return Data switch
-            {
-                null => 0,
-                ICollection<TItem> collection => collection.Count,
-                ICollection collection => collection.Count,
-                _ => Data.Count(),
-            };
+            // Count() asks an ICollection<T> - and a non-generic ICollection - for its count rather than
+            // walking it, so an unfiltered grid over a list pays nothing here.
+            return Data?.Count() ?? 0;
         }
 
         async Task OnPageChanged(PagerEventArgs args)
