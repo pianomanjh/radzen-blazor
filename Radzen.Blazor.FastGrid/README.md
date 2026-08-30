@@ -169,10 +169,11 @@ time against the same baseline:
 | responsive titles | 151.63 KB | +0.33 KB | 1.39x |
 | sorted by one column | 178.35 KB | **+27 KB** | 1.60x |
 | sorted by two columns | 200.48 KB | **+22 KB** *over one* | 1.09x *over one* |
-| row detail, driven through the API | 151.74 KB | +0.27 KB | 1.02x |
+| row detail, driven through the API | 152.06 KB | +0.59 KB | 1.03x |
+| `ItemKey` | 175.01 KB | **+23.5 KB** | 1.03x |
 | cell tooltip | 267.28 KB | **+116 KB** | 1.37x |
 | row click | 461.38 KB | **+310 KB** | 1.21x |
-| row detail with its toggle column | 554.99 KB | **+403 KB** | 1.65x |
+| row detail with its toggle column | 555.13 KB | **+403 KB** | 1.91x |
 | cell click | 1,633.96 KB | **+1,483 KB** | 2.06x |
 
 The layout, selection, row-styling, template and settings features are free, as designed: a couple of
@@ -195,6 +196,16 @@ Two rows are worth reading carefully rather than at face value:
   "switched on but not in use" for it, because a row that can be expanded has to show that it can. The
   two rows above are the same feature with and without that column, and the difference between them is
   the whole of it.
+- **`ItemKey`'s 23.5 KB is the boxing.** A `Func<TItem, object>` over an `int` key boxes once per row,
+  which is 24 bytes a thousand times. A reference-typed key costs nothing here. This is the one feature
+  on the list whose price is paid in the key's type rather than in the grid.
+- **Trimming the toggle's markup saved nothing.** The empty `rz-column-title` span RadzenDataGrid puts
+  in the toggle cell was measured inert and removed, and the allocation did not move: 555.13 KB against
+  554.99 KB with it, which is noise. `RenderTreeBuilder` rents its frame array from a pool, so markup is
+  paid in DOM nodes and render time, not in managed allocation. An earlier note here decomposed the
+  403 KB into "310 for the delegate, 93 for the markup"; the 93 was inferred rather than measured, and
+  this is the measurement that says it was not markup. What the delegate costs is real; what the rest is
+  remains unattributed.
 
 The tooltip's 116 KB is the `title` attribute plus deriving each cell's text a second time, since
 `RenderCell` writes into the builder rather than returning a string.
@@ -276,9 +287,14 @@ screen without an event is a row you still think is expanded - and `ToggleRow` /
 it from code.
 
 **This is the one feature here whose availability is its cost.** Declaring the `Template` draws a
-toggle button on every row, which is 403 KB at 1000 rows - a delegate per row, plus the cell, button
-and spans the theme's toggle needs. It is charged whether or not anything is ever expanded, because a
-row that can be expanded has to show that it can. Nothing is paid while `Template` is null.
+toggle button on every row, which is 403 KB at 1000 rows. It is charged whether or not anything is ever
+expanded, because a row that can be expanded has to show that it can. Nothing is paid while `Template`
+is null.
+
+Most of that is the delegate the toggle needs - 310 KB of it, the same a row click costs. The rest is
+not the markup: the toggle cell was trimmed to the button alone after the geometry check established
+RadzenDataGrid's empty `rz-column-title` span takes no space, and the allocation did not move, because
+`RenderTreeBuilder` rents its frame array from a pool.
 
 `ShowExpandColumn="false"` is the way out where the cost matters: the feature stays, the per-row toggle
 goes, and expansion comes from your own UI through `ToggleRow`. That is +0.27 KB rather than +403.
