@@ -1,0 +1,63 @@
+@using System.Collections.Generic
+@using System.Linq
+@using Microsoft.AspNetCore.Components.Web
+@using Radzen
+@typeparam TItem
+@typeparam TValue
+@namespace Radzen.FastGrid
+
+<div @ref="element" id="@Id" class="@RootCssClass" style="@Style" tabindex="@(Disabled ? "-1" : $"{TabIndex}")"
+     role="combobox" aria-haspopup="grid" aria-expanded="@Open.ToString().ToLowerInvariant()"
+     aria-disabled="@Disabled.ToString().ToLowerInvariant()" aria-label="@Label"
+     @onclick="@TogglePopup" @onclick:stopPropagation @onkeydown="@OnKeyDown">
+
+    @if (Multiple && SelectedItems.Count > 0)
+    {
+        <span class="rz-dropdown-label rz-inputtext" style="width:100%;">@SelectedText</span>
+    }
+    else if (!Multiple && selected is not null)
+    {
+        <span class="rz-dropdown-label rz-inputtext" style="width:100%;">@SelectedText</span>
+    }
+    else if (!string.IsNullOrEmpty(Placeholder))
+    {
+        <span class="rz-dropdown-label rz-inputtext rz-placeholder" style="width:100%;">@Placeholder</span>
+    }
+    else
+    {
+        <span class="rz-dropdown-label rz-inputtext" style="width:100%;">&nbsp;</span>
+    }
+
+    <div class="rz-dropdown-trigger rz-corner-right">
+        <span class="notranslate rz-dropdown-trigger-icon rzi rzi-chevron-down"></span>
+    </div>
+
+    @* Clicks inside the popup must not reach the drop-down's own onclick, or choosing a row would
+       toggle the popup straight back open behind the selection. *@
+    <div id="@PopupId" class="@PopupCssClass" style="@PopupStyle"
+         @onclick:stopPropagation @onkeydown:stopPropagation>
+        <div class="rz-lookup-panel" @onkeydown="@CloseOnEscape">
+            @* The grid is only built while the popup is open: a closed drop-down should cost nothing,
+               and its columns should not be registering against a grid nobody can see. *@
+            @if (Open)
+            {
+                <RadzenFastGrid TItem="TItem" @ref="grid"
+                                Data="@Data"
+                                Count="@Count"
+                                LoadData="@LoadData"
+                                AllowSorting="@AllowSorting"
+                                AllowFiltering="@AllowFiltering"
+                                FilterMode="@FilterMode"
+                                AllowPaging="@AllowPaging"
+                                PageSize="@PageSize"
+                                AllowVirtualization="@AllowVirtualization"
+                                ItemSize="@ItemSize"
+                                Selection="@(Multiple ? SelectedItems : null)"
+                                RowClick="@OnRowClick"
+                                EmptyTemplate="@EmptyTemplate"
+                                CssClass="rz-lookup-panel-grid"
+                                ChildContent="@ChildContent" />
+            }
+        </div>
+    </div>
+</div>

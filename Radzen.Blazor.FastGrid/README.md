@@ -134,6 +134,32 @@ query, not once per window** - a sort, a filter, a reload or new data re-counts 
 It is a proportional scrollbar rather than a grows-as-you-go one: `Virtualize` needs a total, so there
 is one `COUNT(*)` up front.
 
+## Drop-down
+
+`RadzenFastDropDownDataGrid` is a lookup whose popup is a `RadzenFastGrid`, for choosing a row out of a
+large table:
+
+```razor
+<RadzenFastDropDownDataGrid TItem="Customer" TValue="int"
+                            Data="@customers" TextProperty="Name" ValueProperty="Id"
+                            @bind-Value="@order.CustomerId">
+    <PropertyColumn Property="@(c => c.Name)" Title="Customer" />
+    <PropertyColumn Property="@(c => c.City)" Title="City" />
+</RadzenFastDropDownDataGrid>
+```
+
+It is **not** a drop-in replacement for `RadzenDropDownDataGrid`. That component's columns are
+`RadzenDataGridColumn`, which name their property with a string; these are the grid's own columns, which
+name it with an expression - so the row type is a type parameter here and the authoring is checked at
+compile time. Everything the popup costs per row is the grid's cost, which is the point.
+
+`Multiple` keeps the popup open while choosing and binds `Value` to a list. Sorting, filtering, paging
+and virtualization are the grid's, and are set through the same parameter names. Without a
+`ValueProperty` the row itself is the value, which is what a drop-down bound to an entity wants.
+
+The grid is built only while the popup is open, and the popup emits the class names the Radzen drop-down
+family emits, so a theme styles it with no extra work.
+
 ## What it does not do
 
 Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the repository:
@@ -146,6 +172,9 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
   component's allocation for a hover affordance. A `TemplateColumn` can emit it where it is wanted.
 - **A scroll container.** No `rz-datatable-scrollable` structure, which is also what carries
   `RadzenDataGrid`'s keyboard navigation.
+- **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
+  so it is filtered through the grid's own filter row rather than a separate search input, and the
+  closed drop-down lists the chosen rows as text rather than as removable chips.
 
 ## Styling
 
