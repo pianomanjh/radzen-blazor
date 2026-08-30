@@ -451,3 +451,55 @@ these are the differences the parity rules deliberately do not cover:
 | No `<colgroup>`, no `role="presentation"` on the table | Widths match today only because five equal columns under `table-layout: fixed` distribute evenly with or without it. This diverges the moment column widths are supported. |
 | No `rz-text-align-*` class on `th`/`td` | Inert for the default, which the theme resolves to `start` either way. `RadzenFastGrid` has no `TextAlign` concept at all yet. |
 | No `rz-datatable-scrollable`, no `rz-data-grid-data[role="grid"]`, no `rz-has-pager` | Deliberate (spec §6). The scroll container is also what carries `RadzenDataGrid`'s keyboard navigation, so that is not free either. |
+
+## Lookup face-off: RadzenDropDownDataGrid vs RadzenFastDropDownDataGrid
+
+`dotnet run -c Release -- --filter '*DropDownBench*'`, and `dotnet run -c Release -- dropdown-probe`
+for the frame counts behind it. Both bound to the same rows, three columns, ten per page, sorting on,
+filtering off - see below for why off.
+
+Over 1,000 rows (net10.0, `--job` default):
+
+| Method | Mean | Allocated | vs baseline |
+| --- | ---: | ---: | ---: |
+| `Radzen_Closed` | 4,275 us | 177.3 KB | 1.00 |
+| `Fast_Closed` | **4.3 us** | **6.3 KB** | 0.001 / 0.04 |
+| `Radzen_Open` | 4,273 us | 178.4 KB | 1.00 |
+| `Fast_Open` | **151 us** | **39.4 KB** | 0.035 / 0.22 |
+
+At fifty rows the figures are the same to within noise (4,152 / 3.9 / 4,262 / 154 us). They are flat in
+N because paging draws ten rows either way: what this compares is the shape of the render, not the size
+of the source.
+
+### Why
+
+`dropdown-probe`, same configuration:
+
+```
+  RadzenDropDownDataGrid       closed  716 frames  30 td  19 components
+                               opened  716 frames  30 td  19 components  (+0)
+
+  RadzenFastDropDownDataGrid   closed   26 frames   0 td   0 components
+                               opened  419 frames  30 td   7 components  (+393)
+```
+
+Both emit the same thirty cells when open, which is what makes the timing comparison like with like.
+
+The `+0` is the result. `RadzenDropDownDataGrid` renders its popup grid whether or not anyone opens it,
+so a form with twenty lookups has drawn twenty grids before the user touches one. That is also why its
+open and closed timings are identical: opening is free because the work was already done, at load.
+`RadzenFastDropDownDataGrid` builds nothing until the first open, and keeps what it builds afterwards -
+which is not only cheaper but preserves the sort, filter and page the user left the popup on.
+
+### Two corrections to this benchmark's own method
+
+Both were caught before the numbers were quoted, and both would have made the result untrustworthy:
+
+- **Filtering was on for both in the first cut.** It should not have been: `RadzenDropDownDataGrid`
+  never passes `AllowFiltering` to its popup grid - it has a single search box above it instead - while
+  `RadzenFastDropDownDataGrid` filters through the grid's own per-column filter row. That measured a
+  filter row against nothing. It biased *against* the new component, but a comparison that is not like
+  with like is not worth quoting in either direction.
+- **`--job short` produced error bars larger than its means** (+/-5,589 us on a 4,672 us mean). Those
+  numbers were discarded rather than reported. The table above is the default job, whose error is
+  around 2% of the mean.
