@@ -25,6 +25,28 @@ namespace Radzen.FastGrid
         [Parameter] public string? Title { get; set; }
 
         /// <summary>
+        /// Replaces the header's text. It goes inside the theme's title spans, not instead of them, so
+        /// the truncation and spacing the header depends on still apply to whatever is put here.
+        /// </summary>
+        [Parameter] public RenderFragment<ColumnBase<TItem>>? HeaderTemplate { get; set; }
+
+        /// <summary>
+        /// Content for this column's footer cell. The grid draws a footer row when any visible column
+        /// has one, and empty cells for the columns that do not.
+        /// </summary>
+        /// <remarks>
+        /// The template runs on every render. That is nothing for a label, and O(rows) for the reason
+        /// most footers exist - an aggregate. <c>@people.Sum(p =&gt; p.Salary)</c> written here is a full
+        /// scan per render, and a provider round trip per render if the source is an
+        /// <see cref="IQueryable{T}" />. Compute it into a field when the data changes and render the
+        /// field.
+        /// </remarks>
+        [Parameter] public RenderFragment<ColumnBase<TItem>>? FooterTemplate { get; set; }
+
+        /// <summary>Additional CSS class for this column's footer cell.</summary>
+        [Parameter] public string? FooterCssClass { get; set; }
+
+        /// <summary>
         /// The text actually drawn in the header. A derived column overrides this to supply a default
         /// when <see cref="Title" /> is not set; it must not assign to the parameter itself, since a
         /// parameter written from the component keeps its assigned value on the next parameter set and
@@ -416,6 +438,14 @@ namespace Radzen.FastGrid
         /// than a parsed string.
         /// </summary>
         public virtual IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending) => null;
+
+        /// <summary>
+        /// Adds this column's ordering after one already applied, for a grid sorting by more than one
+        /// column. Null when the column cannot be ordered by, exactly as <see cref="ApplySort" />.
+        /// </summary>
+        /// <param name="source">The already-ordered query.</param>
+        /// <param name="descending">Whether to order descending.</param>
+        public virtual IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending) => null;
 
         /// <inheritdoc />
         public override Task SetParametersAsync(ParameterView parameters)

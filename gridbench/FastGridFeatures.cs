@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Linq.Expressions;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
@@ -113,4 +115,85 @@ public class FastGridFeatureBench
     [Benchmark(Description = "+ cell click")]
     public Task CellClick() => Render(p =>
         p["CellClick"] = EventCallback.Factory.Create<FastGridCellEventArgs<Person>>(new object(), _ => { }));
+
+    // Five columns, each with a header and a footer template: per column, so the row count should not
+    // reach it. That is the claim; this is what tests it.
+    static RenderFragment Templated(bool footerAggregate, List<Person> people) => b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+            b.AddAttribute(s++, "HeaderTemplate",
+                (RenderFragment<ColumnBase<Person>>)(column => inner => inner.AddContent(0, title)));
+            b.AddAttribute(s++, "FooterTemplate", (RenderFragment<ColumnBase<Person>>)(column => inner =>
+            {
+                // The trap the README warns about, measured rather than only warned about: an aggregate
+                // written in a footer template is a full scan of the data on every render.
+                inner.AddContent(0, footerAggregate
+                    ? Enumerable.Sum(people, x => x.Salary).ToString(CultureInfo.InvariantCulture)
+                    : title);
+            }));
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id");
+        Column<string>(x => x.Name, "Name");
+        Column<int>(x => x.Age, "Age");
+        Column<DateTime>(x => x.Hired, "Hired");
+        Column<decimal>(x => x.Salary, "Salary");
+    };
+
+    RenderFragment templates;
+    RenderFragment aggregates;
+
+    [Benchmark(Description = "+ header and footer templates")]
+    public Task Templates() => Render(null, templates ??= Templated(false, people));
+
+    [Benchmark(Description = "+ footer templates that aggregate")]
+    public Task FooterAggregate() => Render(null, aggregates ??= Templated(true, people));
+
+    [Benchmark(Description = "+ sorted by two columns")]
+    public Task MultiSort() => Render(p =>
+    {
+        p["AllowSorting"] = true;
+        p["AllowMultiColumnSorting"] = true;
+        p["ShowMultiColumnSortingIndex"] = true;
+    }, MultiSorted);
+
+    // Declared rather than clicked, so the sort is in place for the render being measured.
+    static readonly RenderFragment MultiSorted = b =>
+    {
+        var s = 0;
+
+        b.OpenComponent<PropertyColumn<Person, int>>(s++);
+        b.AddAttribute(s++, "Property", (Expression<Func<Person, int>>)(x => x.Id));
+        b.AddAttribute(s++, "Title", "Id");
+        b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, string>>(s++);
+        b.AddAttribute(s++, "Property", (Expression<Func<Person, string>>)(x => x.Name));
+        b.AddAttribute(s++, "Title", "Name");
+        b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, int>>(s++);
+        b.AddAttribute(s++, "Property", (Expression<Func<Person, int>>)(x => x.Age));
+        b.AddAttribute(s++, "Title", "Age");
+        b.AddAttribute(s++, "SortOrder", SortOrder.Ascending);
+        b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, DateTime>>(s++);
+        b.AddAttribute(s++, "Property", (Expression<Func<Person, DateTime>>)(x => x.Hired));
+        b.AddAttribute(s++, "Title", "Hired");
+        b.CloseComponent();
+        b.OpenComponent<PropertyColumn<Person, decimal>>(s++);
+        b.AddAttribute(s++, "Property", (Expression<Func<Person, decimal>>)(x => x.Salary));
+        b.AddAttribute(s++, "Title", "Salary");
+        b.AddAttribute(s++, "SortOrder", SortOrder.Descending);
+        b.CloseComponent();
+    };
+
+    [Benchmark(Description = "+ settings raised on every reload")]
+    public Task Settings() => Render(p =>
+        p["SettingsChanged"] = EventCallback.Factory.Create<FastGridSettings>(new object(), _ => { }));
 }

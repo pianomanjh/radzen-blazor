@@ -107,7 +107,10 @@ namespace Radzen.FastGrid.Tests
             Radzen.Blazor.WhiteSpace? whiteSpace = null,
             bool visible = true,
             int? orderIndex = null,
-            SortOrder? sortOrder = null) => (builder, seq) =>
+            SortOrder? sortOrder = null,
+            RenderFragment<ColumnBase<TItem>> headerTemplate = null,
+            RenderFragment<ColumnBase<TItem>> footerTemplate = null,
+            string footerCssClass = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
@@ -220,6 +223,21 @@ namespace Radzen.FastGrid.Tests
             if (sortOrder is not null)
             {
                 builder.AddAttribute(seq + 23, nameof(PropertyColumn<TItem, TProp>.SortOrder), sortOrder);
+            }
+
+            if (headerTemplate is not null)
+            {
+                builder.AddAttribute(seq + 24, nameof(PropertyColumn<TItem, TProp>.HeaderTemplate), headerTemplate);
+            }
+
+            if (footerTemplate is not null)
+            {
+                builder.AddAttribute(seq + 25, nameof(PropertyColumn<TItem, TProp>.FooterTemplate), footerTemplate);
+            }
+
+            if (footerCssClass is not null)
+            {
+                builder.AddAttribute(seq + 26, nameof(PropertyColumn<TItem, TProp>.FooterCssClass), footerCssClass);
             }
 
             builder.CloseComponent();

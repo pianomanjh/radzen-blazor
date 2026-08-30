@@ -304,5 +304,13 @@ namespace Radzen.FastGrid
 
             return descending ? source.OrderByDescending(expression) : source.OrderBy(expression);
         }
+
+        /// <inheritdoc />
+        public override IOrderedQueryable<TItem> ApplyThenBy(IOrderedQueryable<TItem> source, bool descending)
+        {
+            var expression = SortBy ?? Property;
+
+            return descending ? source.ThenByDescending(expression) : source.ThenBy(expression);
+        }
     }
 }

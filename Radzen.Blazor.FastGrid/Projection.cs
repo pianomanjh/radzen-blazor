@@ -47,6 +47,19 @@ namespace Radzen.FastGrid
                 .MakeGenericMethod(typeof(T), selector.ReturnType)
                 .Invoke(null, new object[] { source, selector })!;
 
+        static readonly MethodInfo ThenByMethod = typeof(Queryable).GetMethods()
+            .Single(m => m.Name == nameof(Queryable.ThenBy) && m.GetParameters().Length == 2);
+
+        static readonly MethodInfo ThenByDescendingMethod = typeof(Queryable).GetMethods()
+            .Single(m => m.Name == nameof(Queryable.ThenByDescending) && m.GetParameters().Length == 2);
+
+        /// <summary><c>source.ThenBy(selector)</c>, for a key type known at run time.</summary>
+        internal static IOrderedQueryable<T> ThenBy<T>(IOrderedQueryable<T> source, LambdaExpression selector,
+            bool descending) =>
+            (IOrderedQueryable<T>)(descending ? ThenByDescendingMethod : ThenByMethod)
+                .MakeGenericMethod(typeof(T), selector.ReturnType)
+                .Invoke(null, new object[] { source, selector })!;
+
         /// <summary><c>source.SelectMany(selector)</c>, for an element type known at run time.</summary>
         internal static IQueryable SelectMany(IQueryable source, Type itemType, Type elementType,
             LambdaExpression selector) =>

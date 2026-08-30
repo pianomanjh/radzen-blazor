@@ -46,8 +46,30 @@
                     SortOrder="SortOrder.Descending" />
 </RadzenFastGrid>
 
+@* Header and footer templates, sorting by more than one column, and stored state. The footer
+   deliberately renders a field rather than an aggregate expression: written inline it would be a scan
+   of the data on every render. *@
+<RadzenFastGrid Data="@Data" AllowSorting="true"
+                AllowMultiColumnSorting="true" ShowMultiColumnSortingIndex="true"
+                Settings="@Stored" SettingsChanged="@(s => Stored = s)">
+    <PropertyColumn Property="@(p => p.First)" SortOrder="SortOrder.Ascending">
+        <HeaderTemplate>Given <em>name</em></HeaderTemplate>
+        <FooterTemplate>@Total rows</FooterTemplate>
+    </PropertyColumn>
+    <PropertyColumn Property="@(p => p.Salary)" Format="C" Title="Salary"
+                    SortOrder="SortOrder.Descending" FooterCssClass="total">
+        <FooterTemplate>@TotalSalary</FooterTemplate>
+    </PropertyColumn>
+</RadzenFastGrid>
+
 @code {
     [Parameter] public IEnumerable<Person> Data { get; set; } = Array.Empty<Person>();
 
     ICollection<Person> Chosen { get; set; } = new List<Person>();
+
+    FastGridSettings Stored { get; set; }
+
+    int Total { get; set; }
+
+    decimal TotalSalary { get; set; }
 }
