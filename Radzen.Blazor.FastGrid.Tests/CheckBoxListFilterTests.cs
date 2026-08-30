@@ -239,5 +239,42 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(new[] { "Bob" }, CellsOfColumn(cut, 1));
         }
+
+        [Fact]
+        public void ReloadOffersValuesTheSourceHasGained()
+        {
+            // The lookup was dropped only when the Data reference changed, so a list mutated in place -
+            // the case Reload exists for - kept offering the values it had before. The new row appeared
+            // in the body and could not be filtered for.
+            using var ctx = new TestContext();
+            var people = People.Sample();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.First)), data: people);
+
+            Assert.DoesNotContain("Erin", Picker(cut, 0).Data.Cast<object>().Select(v => v.ToString()));
+
+            people.Add(new Person { First = "Erin", Customer = new Company { Name = "Vector" } });
+
+            cut.InvokeAsync(() => cut.Instance.Reload());
+
+            Assert.Contains("Erin", Picker(cut, 0).Data.Cast<object>().Select(v => v.ToString()));
+        }
+
+        [Fact]
+        public void ASortDoesNotThrowAwayTheLookup()
+        {
+            // The distinct values cannot change because the rows were reordered, and re-running the
+            // query on every sort would put a round trip behind a header click.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.First)),
+                extra: p => p.Add(g => g.AllowSorting, true));
+
+            var before = Picker(cut, 0).Data;
+
+            cut.FindAll("thead th")[0].QuerySelector("div")!.Click();
+
+            Assert.Same(before, Picker(cut, 0).Data);
+        }
     }
 }
