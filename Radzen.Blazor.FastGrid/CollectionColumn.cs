@@ -101,9 +101,13 @@ namespace Radzen.FastGrid
 
         void Derive()
         {
-            if (ReferenceEquals(property, Property) && ReferenceEquals(displayProperty, DisplayProperty)
-                && ReferenceEquals(filterProperty, FilterProperty) && ReferenceEquals(sortBy, SortBy)
-                && format == Format)
+            // Equivalent rather than ReferenceEquals, for the same reason as PropertyColumn: Razor
+            // rebuilds every expression tree per render, so reference equality never holds in markup.
+            if (format == Format
+                && PropertyPathResolver.Equivalent(property, Property)
+                && PropertyPathResolver.Equivalent(displayProperty, DisplayProperty)
+                && PropertyPathResolver.Equivalent(filterProperty, FilterProperty)
+                && PropertyPathResolver.Equivalent(sortBy, SortBy))
             {
                 return;
             }

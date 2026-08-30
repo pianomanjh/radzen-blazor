@@ -109,6 +109,67 @@ namespace Radzen.FastGrid
         /// </summary>
         public virtual Type FilterElementType => FilterPropertyType;
 
+        Type? resolvedFilterType;
+        string? resolvedFilterTypeFor;
+
+        /// <summary>
+        /// <see cref="FilterElementType" />, or - when that is <c>object</c> and so says nothing - the
+        /// type the column's filter path actually reaches on <typeparamref name="TItem" />.
+        /// </summary>
+        /// <remarks>
+        /// A column declared as <c>PropertyColumn&lt;T, object&gt;</c>, or a template column with a
+        /// SortProperty, knows only <c>object</c>. Comparing against that leaves what was typed as a
+        /// string, and the predicate builder then puts a string constant where an int belongs:
+        /// "argument types do not match", thrown from the filter box.
+        /// </remarks>
+        public Type EffectiveFilterType
+        {
+            get
+            {
+                var declared = FilterElementType;
+
+                if (declared != typeof(object))
+                {
+                    return declared;
+                }
+
+                var path = FilterPropertyPath;
+
+                if (path is null)
+                {
+                    return typeof(object);
+                }
+
+                if (!string.Equals(resolvedFilterTypeFor, path, StringComparison.Ordinal))
+                {
+                    resolvedFilterTypeFor = path;
+                    resolvedFilterType = ResolveMemberType(typeof(TItem), path);
+                }
+
+                return resolvedFilterType ?? typeof(object);
+            }
+        }
+
+        /// <summary>The type at the end of a dotted path, or null when the path does not resolve.</summary>
+        static Type? ResolveMemberType(Type root, string path)
+        {
+            var type = root;
+
+            foreach (var step in path.Split('.'))
+            {
+                var member = type.GetProperty(step);
+
+                if (member is null)
+                {
+                    return null;
+                }
+
+                type = member.PropertyType;
+            }
+
+            return type;
+        }
+
         /// <summary>Whether this column can be filtered.</summary>
         public virtual bool CanFilter => Filterable && FilterPropertyPath is not null;
 
@@ -140,7 +201,7 @@ namespace Radzen.FastGrid
             CurrentFilterOperator = filterOperator ?? DefaultFilterOperator;
         }
 
-        FilterOperator DefaultFilterOperator => FilterElementType == typeof(string)
+        FilterOperator DefaultFilterOperator => EffectiveFilterType == typeof(string)
             ? Radzen.FilterOperator.Contains
             : Radzen.FilterOperator.Equals;
 
