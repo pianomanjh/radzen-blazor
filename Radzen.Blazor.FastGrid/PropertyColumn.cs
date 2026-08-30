@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Text;
+using System.Reflection;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 
@@ -44,7 +44,7 @@ namespace Radzen.FastGrid
         /// Whether this column is bound to a collection rather than a single value. Its cells list the
         /// members and its filter matches a row when any member matches.
         /// </summary>
-        public bool IsCollection { get; private set; }
+        public bool IsCollection => ElementType is not null;
 
         string? path;
 
@@ -59,8 +59,8 @@ namespace Radzen.FastGrid
 
         string? filterPath;
 
-        // Once per closed generic type, not once per column: GetInterfaces() allocates, and the answer
-        // depends only on TProp. Measured at ~240 B per column when it was computed per instance.
+        // Once per closed generic type, not once per column: the interface walk allocates, and the
+        // answer depends only on TProp. Measured at ~240 B per column when it was computed per instance.
         static readonly Type? ElementType = CollectionElementType(typeof(TProp));
 
         /// <inheritdoc />
@@ -96,52 +96,10 @@ namespace Radzen.FastGrid
             filterBy = FilterBy;
             format = Format;
 
-            // Compile to a Func<TItem, string> rather than reading the value as object. RenderTreeBuilder
-            // has no generic AddContent<T>, so handing it a value type binds the object overload, which
-            // boxes and then stringifies; producing the string directly skips the box.
-            var compiled = Property.Compile();
-
-            // A collection is listed, not stringified: List<string>.ToString() is the type name, which
-            // is why every such column needed a Template that did nothing but string.Join.
-            IsCollection = ElementType is not null;
-
-            if (IsCollection || typeof(TProp) == typeof(object))
-            {
-                var separator = Separator;
-                var formatString = Format is { Length: > 0 } ? Format : null;
-
-                // TProp = object cannot say statically whether the value is a collection, so the value
-                // decides. A typed collection column takes the same path; the test is one type check.
-                cellText = item => compiled(item) switch
-                {
-                    null => null,
-                    string text => Text(text, formatString),
-                    IEnumerable sequence => Join(sequence, separator, formatString),
-                    var value => Text(value, formatString),
-                };
-            }
-            else if (Format is not { Length: > 0 } f)
-            {
-                cellText = item => compiled(item)?.ToString();
-            }
-            else if (typeof(IFormattable).IsAssignableFrom(Nullable.GetUnderlyingType(typeof(TProp)) ?? typeof(TProp)))
-            {
-                // Nullable<T> does not itself implement IFormattable even when T does, so the underlying
-                // type is what decides. Casting to IFormattable boxes, but only on the format path.
-                cellText = item => ((IFormattable?)(object?)compiled(item))?.ToString(f, CultureInfo.CurrentCulture);
-            }
-            else
-            {
-                // TProp is object, or another type that says nothing about the value. Ask the value.
-                cellText = item =>
-                {
-                    var value = compiled(item);
-
-                    return value is IFormattable formattable
-                        ? formattable.ToString(f, CultureInfo.CurrentCulture)
-                        : value?.ToString();
-                };
-            }
+            // Built by a static method rather than inline: the lambdas below capture the compiled getter,
+            // and a lambda capturing a local makes the compiler allocate the enclosing method's display
+            // class on entry - here, on every parameter set of every column, taken branch or not.
+            cellText = BuildCellText(Property.Compile(), Separator, Format is { Length: > 0 } ? Format : null);
 
             var propertyPath = PropertyPathResolver.For(Property);
 
@@ -152,6 +110,80 @@ namespace Radzen.FastGrid
             // of its own, so an explicit sort key is the only one it can offer.
             filterPath = FilterBy is not null ? PropertyPathResolver.For(FilterBy) : propertyPath ?? path;
         }
+
+        /// <summary>
+        /// The cell's text, as a delegate built once per column. Compiled to a
+        /// <c>Func&lt;TItem, string&gt;</c> rather than read as an object: RenderTreeBuilder has no
+        /// generic AddContent, so handing it a value type binds the object overload, which boxes and then
+        /// stringifies. Producing the string directly skips the box.
+        /// </summary>
+        static Func<TItem, string?> BuildCellText(Func<TItem, TProp> get, string separator, string? format)
+        {
+            // A collection is listed, not stringified: List<string>.ToString() is the type name, which is
+            // why every such column needed a Template that did nothing but string.Join. TProp = object
+            // cannot say statically whether the value is a collection, so there the value decides.
+            if (ElementType is not null || typeof(TProp) == typeof(object))
+            {
+                // Built here, not per cell: Join takes how a member is rendered as a delegate, and one
+                // allocated inside the cell delegate would be one allocation per cell.
+                Func<object?, string?> show = value => CellText.Of(value, format);
+
+                return item => get(item) switch
+                {
+                    null => null,
+                    string text => CellText.Of(text, format),
+                    IEnumerable sequence => CellText.Join(sequence, separator, show),
+                    var value => CellText.Of(value, format),
+                };
+            }
+
+            if (format is null)
+            {
+                return item => get(item)?.ToString();
+            }
+
+            // A value type has to be formatted through a delegate typed at the value's own type, or the
+            // cast to IFormattable boxes it - once per cell, for the whole life of the grid. The generic
+            // method below calls the interface under a constraint, which the JIT compiles to a direct
+            // call on the struct. A reference type needs none of this: casting one is free.
+            var underlying = Nullable.GetUnderlyingType(typeof(TProp));
+
+            if (underlying is not null && typeof(IFormattable).IsAssignableFrom(underlying))
+            {
+                return Formatter(NullableFormatterMethod, underlying, get, format);
+            }
+
+            if (typeof(TProp).IsValueType && typeof(IFormattable).IsAssignableFrom(typeof(TProp)))
+            {
+                return Formatter(ValueFormatterMethod, typeof(TProp), get, format);
+            }
+
+            if (typeof(IFormattable).IsAssignableFrom(typeof(TProp)))
+            {
+                return item => ((IFormattable?)(object?)get(item))?.ToString(format, CultureInfo.CurrentCulture);
+            }
+
+            // TProp says nothing about whether the value can be formatted. Ask the value.
+            return item => CellText.Of(get(item), format);
+        }
+
+        static readonly MethodInfo ValueFormatterMethod = typeof(PropertyColumn<TItem, TProp>)
+            .GetMethod(nameof(ValueFormatter), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        static readonly MethodInfo NullableFormatterMethod = typeof(PropertyColumn<TItem, TProp>)
+            .GetMethod(nameof(NullableFormatter), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        static Func<TItem, string?> Formatter(MethodInfo method, Type valueType, Func<TItem, TProp> get,
+            string format) =>
+            (Func<TItem, string?>)method.MakeGenericMethod(valueType).Invoke(null, new object[] { get, format })!;
+
+        static Func<TItem, string?> ValueFormatter<T>(Func<TItem, T> get, string format)
+            where T : struct, IFormattable =>
+            item => get(item).ToString(format, CultureInfo.CurrentCulture);
+
+        static Func<TItem, string?> NullableFormatter<T>(Func<TItem, T?> get, string format)
+            where T : struct, IFormattable =>
+            item => get(item) is { } value ? value.ToString(format, CultureInfo.CurrentCulture) : null;
 
         /// <inheritdoc />
         /// <remarks>
@@ -173,9 +205,9 @@ namespace Radzen.FastGrid
             // TProp is the collection, so the element type is not a type parameter here and SelectMany
             // has to be built by hand. CollectionColumn<TItem, TElement> has it as a parameter and does
             // this as an ordinary generic call.
-            var elements = Projection.SelectMany(source, typeof(TItem), ElementType!, AsSequenceSelector());
-
-            return Projection.Distinct(elements, ElementType!);
+            return Projection
+                .SelectMany(source, typeof(TItem), ElementType!, AsSequenceSelector())
+                .Distinct();
         }
 
         /// <summary>
@@ -216,70 +248,18 @@ namespace Radzen.FastGrid
         /// </summary>
         static Type? CollectionElementType(Type type)
         {
-            // A string is a sequence of characters and would otherwise be listed one letter at a time.
-            // An array needs no case of its own: it implements IEnumerable<T>, which the loop below finds.
-            if (type == typeof(string))
+            // IsEnumerable excludes string, which is a sequence of characters and would otherwise be
+            // listed one letter at a time. An array needs no case of its own: GetElementType has one.
+            if (!QueryableExtension.IsEnumerable(type))
             {
                 return null;
             }
 
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
-            {
-                return type.GetGenericArguments()[0];
-            }
+            var element = PropertyAccess.GetElementType(type);
 
-            foreach (var contract in type.GetInterfaces())
-            {
-                if (contract.IsGenericType && contract.GetGenericTypeDefinition() == typeof(IEnumerable<>))
-                {
-                    return contract.GetGenericArguments()[0];
-                }
-            }
-
-            return typeof(IEnumerable).IsAssignableFrom(type) ? typeof(object) : null;
-        }
-
-        static string? Text(object? value, string? format) =>
-            format is not null && value is IFormattable formattable
-                ? formattable.ToString(format, CultureInfo.CurrentCulture)
-                : value?.ToString();
-
-        /// <summary>
-        /// Lists the members of a sequence. A cell of a collection column allocates a string; that is
-        /// unavoidable and still cheaper than the render fragment a template would have cost.
-        /// </summary>
-        static string Join(IEnumerable sequence, string separator, string? format)
-        {
-            var enumerator = sequence.GetEnumerator();
-
-            try
-            {
-                if (!enumerator.MoveNext())
-                {
-                    return string.Empty;
-                }
-
-                var first = Text(enumerator.Current, format);
-
-                if (!enumerator.MoveNext())
-                {
-                    // One member is the common case for a small collection, and needs no builder.
-                    return first ?? string.Empty;
-                }
-
-                var builder = new StringBuilder(first).Append(separator).Append(Text(enumerator.Current, format));
-
-                while (enumerator.MoveNext())
-                {
-                    builder.Append(separator).Append(Text(enumerator.Current, format));
-                }
-
-                return builder.ToString();
-            }
-            finally
-            {
-                (enumerator as IDisposable)?.Dispose();
-            }
+            // GetElementType answers with the type itself when it finds no IEnumerable<T> to read an
+            // element type from - a non-generic IEnumerable, whose members are only known as objects.
+            return element == type ? typeof(object) : element;
         }
 
         /// <inheritdoc />

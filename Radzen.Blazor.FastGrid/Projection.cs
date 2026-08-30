@@ -17,9 +17,6 @@ namespace Radzen.FastGrid
                 && m.GetParameters()[1].ParameterType.GetGenericArguments()[0]
                     .GetGenericArguments().Length == 2);
 
-        static readonly MethodInfo DistinctMethod = typeof(Queryable).GetMethods()
-            .Single(m => m.Name == nameof(Queryable.Distinct) && m.GetParameters().Length == 1);
-
         static readonly MethodInfo SelectManyMethod = typeof(Queryable).GetMethods()
             .Single(m => m.Name == nameof(Queryable.SelectMany)
                 && m.GetParameters().Length == 2
@@ -33,12 +30,9 @@ namespace Radzen.FastGrid
                 .MakeGenericMethod(selector.Parameters[0].Type, selector.ReturnType)
                 .Invoke(null, new object[] { source, selector })!;
 
-            return Distinct(projected, selector.ReturnType);
+            // QueryableExtension.Distinct, which composes the same call over source.ElementType.
+            return projected.Distinct();
         }
-
-        /// <summary><c>source.Distinct()</c>, for an element type known at run time.</summary>
-        internal static IQueryable Distinct(IQueryable source, Type elementType) =>
-            (IQueryable)DistinctMethod.MakeGenericMethod(elementType).Invoke(null, new object[] { source })!;
 
         static readonly MethodInfo OrderByMethod = typeof(Queryable).GetMethods()
             .Single(m => m.Name == nameof(Queryable.OrderBy) && m.GetParameters().Length == 2);

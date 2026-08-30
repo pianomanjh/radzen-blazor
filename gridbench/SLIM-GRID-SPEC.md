@@ -55,6 +55,15 @@ Target: under ~1,000 KB for a realistic configuration. Anything above that means
    That was 21% of this component's allocation until it was moved into its own method.
 4. **Free features are in, not out.** Selection, row-style callbacks and responsive column titles measured
    at *zero* marginal allocation. There is no performance argument for omitting them.
+5. **A generic value must never be widened to reach an interface.** `((IFormattable)(object)value)` boxes
+   every value type it touches — 32 B per cell for a `decimal`, on every row of every formatted column.
+   The formatter is built once per column by a generic method constrained to `struct, IFormattable`, so
+   the interface call is made under a constraint and the struct stays on the stack. Same rule, same
+   reason, as compiling the cell to `Func<TItem, string>` rather than reading the value as an object.
+6. **Deriving a string to compare two things allocates; comparing the things does not.** Razor rebuilds
+   every column's expression trees on every render, so each one is compared against the last to avoid
+   recompiling. Deriving both property paths to compare them cost a list and a joined string per
+   expression per column per render; walking the two member chains together costs nothing.
 
 ## 4. Column model
 

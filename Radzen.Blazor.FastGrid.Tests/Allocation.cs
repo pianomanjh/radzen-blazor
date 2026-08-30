@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq.Expressions;
 using Microsoft.AspNetCore.Components.Rendering;
 
@@ -54,5 +55,25 @@ namespace Radzen.FastGrid.Tests
 
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
             => builder.AddContent(sequence, (object)compiled(item));
+    }
+
+    /// <summary>
+    /// The formatted cell written the naive way: cast the value to IFormattable, which boxes a struct.
+    /// The yardstick for the formatted path, as BoxingColumn is for the unformatted one.
+    /// </summary>
+    sealed class FormattingBoxingColumn<TItem, TProp> : ColumnBase<TItem>
+    {
+        readonly Func<TItem, TProp> compiled;
+        readonly string format;
+
+        public FormattingBoxingColumn(Expression<Func<TItem, TProp>> property, string format)
+        {
+            compiled = property.Compile();
+            this.format = format;
+        }
+
+        public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
+            => builder.AddContent(sequence,
+                ((IFormattable)(object)compiled(item))?.ToString(format, CultureInfo.CurrentCulture));
     }
 }

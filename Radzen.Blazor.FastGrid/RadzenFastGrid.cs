@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using System.Threading.Tasks;
@@ -36,7 +35,11 @@ namespace Radzen.FastGrid
         /// <summary>Whether column headers offer sorting.</summary>
         [Parameter] public bool AllowSorting { get; set; }
 
-        /// <summary>Rows currently selected. Membership is looked up per row, which costs no allocation.</summary>
+        /// <summary>
+        /// Rows currently selected. Membership is looked up per row, which costs no allocation - but the
+        /// lookup is the collection's own, so a list of many selected rows is a scan per row. Pass a
+        /// <see cref="HashSet{T}" /> when more than a handful can be selected at once.
+        /// </summary>
         [Parameter] public ICollection<TItem>? Selection { get; set; }
 
         /// <summary>Raised when a row is clicked. No handler means no per-row delegate is allocated.</summary>
@@ -94,37 +97,61 @@ namespace Radzen.FastGrid
             builder.OpenComponent<CascadingValue<RadzenFastGrid<TItem>>>(0);
             builder.AddAttribute(1, "Value", this);
             builder.AddAttribute(2, "IsFixed", true);
-            builder.AddAttribute(3, "ChildContent", (RenderFragment)(inner =>
-            {
-                // The columns register while the renderer walks them ...
-                inner.AddContent(0, ChildContent);
-
-                // ... and Defer runs after, so the table below sees a populated column list.
-                inner.OpenComponent<Defer>(1);
-                inner.AddAttribute(2, "ChildContent", (RenderFragment)(deferred =>
-                {
-                    // Everything above has registered by now, so close the window before drawing.
-                    collectingColumns = false;
-
-                    // A column can leave the set between renders. The sort must not outlive it, or the
-                    // grid keeps ordering by a column nothing on screen names and nothing can clear.
-                    if (SortColumn is not null && !columns.Contains(SortColumn))
-                    {
-                        SortColumn = null;
-                        SortDescending = false;
-                    }
-
-                    RenderTable(deferred);
-                }));
-                inner.CloseComponent();
-            }));
+            builder.AddAttribute(3, "ChildContent", cascaded ??= RenderCascaded);
             builder.CloseComponent();
+        }
+
+        // Held rather than written inline: a lambda in the render path is a delegate allocated on every
+        // render, and these two capture nothing but the component itself.
+        RenderFragment? cascaded;
+        RenderFragment? deferred;
+
+        void RenderCascaded(RenderTreeBuilder builder)
+        {
+            // The columns register while the renderer walks them ...
+            builder.AddContent(0, ChildContent);
+
+            // ... and Defer runs after, so the table below sees a populated column list.
+            builder.OpenComponent<Defer>(1);
+            builder.AddAttribute(2, "ChildContent", deferred ??= RenderDeferred);
+            builder.CloseComponent();
+        }
+
+        void RenderDeferred(RenderTreeBuilder builder)
+        {
+            // Everything above has registered by now, so close the window before drawing.
+            collectingColumns = false;
+
+            // A column can leave the set between renders. The sort must not outlive it, or the grid
+            // keeps ordering by a column nothing on screen names and nothing can clear - and neither
+            // must a check-box list's values, which would hold the column and its values for good.
+            if (SortColumn is not null && !columns.Contains(SortColumn))
+            {
+                SortColumn = null;
+                SortDescending = false;
+            }
+
+            PruneLookups();
+
+            RenderTable(builder);
         }
 
         void RenderTable(RenderTreeBuilder builder)
         {
-            var cols = columns;
+            BeginDrawing();
 
+            try
+            {
+                RenderGrid(builder);
+            }
+            finally
+            {
+                EndDrawing();
+            }
+        }
+
+        void RenderGrid(RenderTreeBuilder builder)
+        {
             builder.OpenElement(0, "div");
             builder.AddAttribute(1, "class", string.IsNullOrEmpty(CssClass)
                 ? "rz-data-grid rz-datatable"
@@ -138,8 +165,8 @@ namespace Radzen.FastGrid
             builder.OpenElement(20, "table");
             builder.AddAttribute(21, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
 
-            RenderHead(builder, cols);
-            RenderBody(builder, cols);
+            RenderHead(builder);
+            RenderBody(builder);
 
             builder.CloseElement();
 
@@ -177,16 +204,16 @@ namespace Radzen.FastGrid
             builder.CloseComponent();
         }
 
-        void RenderHead(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        void RenderHead(RenderTreeBuilder builder)
         {
             builder.OpenElement(30, "thead");
             builder.AddAttribute(31, "role", "rowgroup");
             builder.OpenElement(32, "tr");
             builder.AddAttribute(33, "role", "row");
 
-            for (var i = 0; i < cols.Count; i++)
+            for (var i = 0; i < columns.Count; i++)
             {
-                var column = cols[i];
+                var column = columns[i];
                 var sortable = AllowSorting && column.CanSort;
 
                 builder.OpenElement(34, "th");
@@ -208,9 +235,8 @@ namespace Radzen.FastGrid
 
                 if (sortable)
                 {
-                    var captured = column;
                     builder.AddAttribute(40, "onclick",
-                        EventCallback.Factory.Create<MouseEventArgs>(this, _ => SortBy(captured)));
+                        EventCallback.Factory.Create<MouseEventArgs>(this, _ => SortBy(column)));
                 }
 
                 builder.OpenElement(41, "span");
@@ -241,7 +267,7 @@ namespace Radzen.FastGrid
 
             if (AllowFiltering)
             {
-                RenderFilterRow(builder, cols);
+                RenderFilterRow(builder);
             }
 
             builder.CloseElement();
@@ -250,14 +276,14 @@ namespace Radzen.FastGrid
         // Matches RadzenDataGrid's filter row exactly: a second header row whose th holds
         // div.rz-cell-filter > div.rz-cell-filter-content > span.rz-cell-filter-label directly, with no
         // title wrapper. The theme's th padding hangs off that first div, as it does off the title one.
-        void RenderFilterRow(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        void RenderFilterRow(RenderTreeBuilder builder)
         {
             builder.OpenElement(50, "tr");
             builder.AddAttribute(51, "role", "row");
 
-            for (var i = 0; i < cols.Count; i++)
+            for (var i = 0; i < columns.Count; i++)
             {
-                var column = cols[i];
+                var column = columns[i];
 
                 builder.OpenElement(52, "th");
                 builder.AddAttribute(53, "role", "columnheader");
@@ -299,8 +325,6 @@ namespace Radzen.FastGrid
         // toggle button or an apply step of its own.
         void RenderFilterList(RenderTreeBuilder builder, ColumnBase<TItem> column)
         {
-            var captured = column;
-
             builder.OpenComponent<RadzenDropDown<IEnumerable>>(80);
             builder.AddAttribute(81, nameof(RadzenDropDown<IEnumerable>.Data), FilterLookup(column));
             builder.AddAttribute(82, nameof(RadzenDropDown<IEnumerable>.Multiple), true);
@@ -311,14 +335,12 @@ namespace Radzen.FastGrid
             builder.AddAttribute(86, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
             builder.AddAttribute(87, nameof(RadzenDropDown<IEnumerable>.Value), column.CurrentFilterValue);
             builder.AddAttribute(88, nameof(RadzenDropDown<IEnumerable>.Change),
-                EventCallback.Factory.Create<object>(this, value => OnFilterSelection(captured, value)));
+                EventCallback.Factory.Create<object>(this, value => OnFilterSelection(column, value)));
             builder.CloseComponent();
         }
 
         void RenderFilterInput(RenderTreeBuilder builder, ColumnBase<TItem> column)
         {
-            var captured = column;
-
             builder.OpenElement(61, "span");
             builder.AddAttribute(62, "class", "rz-cell-filter-label");
             builder.AddAttribute(63, "style", "height:35px; width:100%;");
@@ -331,7 +353,7 @@ namespace Radzen.FastGrid
             builder.AddAttribute(69, "aria-label", column.HeaderText);
             builder.AddAttribute(70, "value", column.CurrentFilterValue);
             builder.AddAttribute(71, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
-                value => OnFilterInput(captured, value), column.CurrentFilterValue?.ToString()));
+                value => OnFilterInput(column, value), column.CurrentFilterValue?.ToString()));
             builder.CloseElement();
 
             if (column.HasFilter)
@@ -342,7 +364,7 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(75, "class", "notranslate rzi rz-cell-filter-clear");
                 builder.AddAttribute(76, "style", "position:absolute;inset-inline-end:10px;");
                 builder.AddAttribute(77, "onclick",
-                    EventCallback.Factory.Create<MouseEventArgs>(this, _ => Filter(captured, null)));
+                    EventCallback.Factory.Create<MouseEventArgs>(this, _ => Filter(column, null)));
                 builder.AddContent(78, "close");
                 builder.CloseElement();
             }
@@ -350,14 +372,14 @@ namespace Radzen.FastGrid
             builder.CloseElement();
         }
 
-        void RenderBody(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        void RenderBody(RenderTreeBuilder builder)
         {
             builder.OpenElement(100, "tbody");
             builder.AddAttribute(101, "role", "rowgroup");
 
             if (AllowVirtualization)
             {
-                RenderVirtualizedRows(builder, cols);
+                RenderVirtualizedRows(builder);
             }
             else
             {
@@ -367,22 +389,21 @@ namespace Radzen.FastGrid
                 {
                     any = true;
 
-                    RenderRow(builder, cols, item);
+                    RenderRow(builder, item);
                 }
 
                 if (!any)
                 {
-                    RenderEmpty(builder, cols);
+                    RenderEmpty(builder);
                 }
             }
 
             builder.CloseElement();
         }
 
-        void RenderRow(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols, TItem item)
+        void RenderRow(RenderTreeBuilder builder, TItem item)
         {
             var selection = Selection;
-            var rowClickable = RowClick.HasDelegate;
 
             builder.OpenElement(120, "tr");
             builder.AddAttribute(121, "role", "row");
@@ -399,14 +420,14 @@ namespace Radzen.FastGrid
             }
 
             // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
-            if (rowClickable)
+            if (RowClick.HasDelegate)
             {
                 builder.AddAttribute(124, "onclick", RowClickHandler(item));
             }
 
-            for (var i = 0; i < cols.Count; i++)
+            for (var i = 0; i < columns.Count; i++)
             {
-                var column = cols[i];
+                var column = columns[i];
 
                 builder.OpenElement(125, "td");
                 builder.AddAttribute(126, "role", "gridcell");
@@ -437,7 +458,7 @@ namespace Radzen.FastGrid
         EventCallback<MouseEventArgs> RowClickHandler(TItem item) =>
             EventCallback.Factory.Create<MouseEventArgs>(this, _ => RowClick.InvokeAsync(item));
 
-        void RenderEmpty(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        void RenderEmpty(RenderTreeBuilder builder)
         {
             if (EmptyTemplate is null)
             {
@@ -447,7 +468,7 @@ namespace Radzen.FastGrid
             builder.OpenElement(140, "tr");
             builder.OpenElement(141, "td");
             builder.AddAttribute(142, "class", "rz-datatable-emptymessage");
-            builder.AddAttribute(143, "colspan", cols.Count);
+            builder.AddAttribute(143, "colspan", columns.Count);
             builder.AddContent(144, EmptyTemplate);
             builder.CloseElement();
             builder.CloseElement();
@@ -455,11 +476,11 @@ namespace Radzen.FastGrid
 
         // Virtualize renders a fragment per visible row, which is a delegate the inline path does not
         // pay - but only for the rows on screen, which is the whole point. The cells stay inline.
-        void RenderVirtualizedRows(RenderTreeBuilder builder, List<ColumnBase<TItem>> cols)
+        void RenderVirtualizedRows(RenderTreeBuilder builder)
         {
             builder.OpenComponent<Virtualize<TItem>>(110);
             builder.AddAttribute(111, nameof(Virtualize<TItem>.ItemsProvider),
-                new ItemsProviderDelegate<TItem>(ProvideRows));
+                provideRows ??= ProvideRows);
 
             // The spacers Virtualize puts above and below the window are divs by default, which is not
             // valid inside a tbody; the rendered rows would be laid out as though the table had none.
@@ -471,11 +492,17 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(114, nameof(Virtualize<TItem>.OverscanCount), VirtualizationOverscanCount);
             }
 
-            builder.AddAttribute(115, nameof(Virtualize<TItem>.ChildContent), (RenderFragment<TItem>)(item =>
-                rows => RenderRow(rows, cols, item)));
+            builder.AddAttribute(115, nameof(Virtualize<TItem>.ChildContent),
+                virtualRow ??= item => rows => RenderRow(rows, item));
 
-            builder.AddComponentReferenceCapture(116, component => virtualize = (Virtualize<TItem>)component);
+            builder.AddComponentReferenceCapture(116, captureVirtualize ??= CaptureVirtualize);
             builder.CloseComponent();
         }
+
+        ItemsProviderDelegate<TItem>? provideRows;
+        RenderFragment<TItem>? virtualRow;
+        Action<object>? captureVirtualize;
+
+        void CaptureVirtualize(object component) => virtualize = (Virtualize<TItem>)component;
     }
 }
