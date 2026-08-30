@@ -24,7 +24,6 @@ namespace Radzen.FastGrid
     public partial class RadzenFastGrid<TItem> : ComponentBase
     {
         readonly List<ColumnBase<TItem>> columns = new();
-        bool collectingColumns;
 
         /// <summary>The rows to display.</summary>
         [Parameter] public IEnumerable<TItem>? Data { get; set; }
@@ -57,16 +56,39 @@ namespace Radzen.FastGrid
         /// <summary>Whether the current sort is descending.</summary>
         public bool SortDescending { get; private set; }
 
+        /// <summary>
+        /// Registers a column. Called on the column's first parameter set, and idempotent after that:
+        /// the list is never rebuilt, because the renderer does not re-set the parameters of a column
+        /// whose parameters have not changed, and a rebuilt list would silently lose it.
+        /// </summary>
         internal void AddColumn(ColumnBase<TItem> column)
         {
-            // Only while a collection pass is open. A column sets its parameters whenever the renderer
-            // walks it, which is not only during collection; without this window the list would gain a
-            // duplicate every time that happened, and the column count would depend on how many
-            // registrations landed between the clear below and the table being drawn.
-            if (collectingColumns)
+            if (!columns.Contains(column))
             {
                 columns.Add(column);
             }
+        }
+
+        /// <summary>
+        /// Unregisters a column, when the renderer disposes one that has left the markup.
+        /// </summary>
+        internal void RemoveColumn(ColumnBase<TItem> column)
+        {
+            if (!columns.Remove(column))
+            {
+                return;
+            }
+
+            // The sort must not outlive the column it orders by, or the grid keeps ordering by something
+            // nothing on screen names and nothing can clear. Nor must the column's check-box-list values,
+            // which would hold the column and everything it listed for as long as the grid lives.
+            if (ReferenceEquals(SortColumn, column))
+            {
+                SortColumn = null;
+                SortDescending = false;
+            }
+
+            lookups.Remove(column);
         }
 
         /// <summary>Sorts by the given column, toggling direction when it is already the sorted one.</summary>
@@ -90,10 +112,6 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override void BuildRenderTree(RenderTreeBuilder builder)
         {
-            columns.Clear();
-
-            collectingColumns = true;
-
             builder.OpenComponent<CascadingValue<RadzenFastGrid<TItem>>>(0);
             builder.AddAttribute(1, "Value", this);
             builder.AddAttribute(2, "IsFixed", true);
@@ -117,24 +135,10 @@ namespace Radzen.FastGrid
             builder.CloseComponent();
         }
 
-        void RenderDeferred(RenderTreeBuilder builder)
-        {
-            // Everything above has registered by now, so close the window before drawing.
-            collectingColumns = false;
-
-            // A column can leave the set between renders. The sort must not outlive it, or the grid
-            // keeps ordering by a column nothing on screen names and nothing can clear - and neither
-            // must a check-box list's values, which would hold the column and its values for good.
-            if (SortColumn is not null && !columns.Contains(SortColumn))
-            {
-                SortColumn = null;
-                SortDescending = false;
-            }
-
-            PruneLookups();
-
-            RenderTable(builder);
-        }
+        // Deferred so that a column added to the markup registers before the table that reads the list
+        // is written. A column that was already there needs no pass of its own: it stays registered
+        // until the renderer disposes it.
+        void RenderDeferred(RenderTreeBuilder builder) => RenderTable(builder);
 
         void RenderTable(RenderTreeBuilder builder)
         {

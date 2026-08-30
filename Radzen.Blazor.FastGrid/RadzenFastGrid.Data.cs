@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -346,6 +347,18 @@ namespace Radzen.FastGrid
                 return cached;
             }
 
+            // The same rule View() and TotalCount() follow: a source the executor owns is not touched
+            // from the render thread. Running the distinct query here is a blocking round trip inside
+            // BuildRenderTree, and on Entity Framework a second operation on a context that the awaited
+            // page load is still using. The values are fetched after the render instead, and the column
+            // offers nothing until they arrive.
+            if (AsyncOwnsData)
+            {
+                pendingLookups.Add(column);
+
+                return Array.Empty<object>();
+            }
+
             var source = Data as IQueryable<TItem> ?? Data?.AsQueryable();
             var values = source is null ? null : column.DistinctValues(source);
 
@@ -363,40 +376,85 @@ namespace Radzen.FastGrid
             return materialized;
         }
 
+        readonly HashSet<ColumnBase<TItem>> pendingLookups = new();
+
         /// <summary>
-        /// Drops the lookups of columns that have left the set. Their values - and the columns - would
-        /// otherwise be held for as long as the grid lives, and a check-box list over a large column is
-        /// not a small thing to hold.
+        /// Fetches the check-box-list values of any column that asked for them during the render, using
+        /// the executor rather than the render thread. Runs after the render, so the queries it starts
+        /// cannot overlap the page load that the same render was drawn without.
         /// </summary>
-        void PruneLookups()
+        async Task LoadLookupsAsync()
         {
-            if (lookups.Count == 0)
+            if (pendingLookups.Count == 0 || !TryGetAsyncSource(out var async, out var queryable))
             {
                 return;
             }
 
-            List<ColumnBase<TItem>>? stale = null;
+            var wanted = pendingLookups.ToList();
 
-            // The keys are walked with the dictionary's own struct enumerator, so the common answer -
-            // nothing to drop, on every render of every check-box-list grid - allocates nothing.
-            foreach (var column in lookups.Keys)
+            pendingLookups.Clear();
+
+            var token = loadCts?.Token ?? CancellationToken.None;
+            var loaded = false;
+
+            foreach (var column in wanted)
             {
-                if (!columns.Contains(column))
+                if (lookups.ContainsKey(column) || column.DistinctValues(queryable) is not { } values)
                 {
-                    (stale ??= new List<ColumnBase<TItem>>()).Add(column);
+                    continue;
+                }
+
+                try
+                {
+                    lookups[column] = Ordered(await ToObjectListAsync(async, values, token));
+                    loaded = true;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Superseded by a newer load, which will ask again on its own render.
+                    return;
                 }
             }
 
-            if (stale is null)
+            if (loaded)
             {
-                return;
-            }
-
-            for (var i = 0; i < stale.Count; i++)
-            {
-                lookups.Remove(stale[i]);
+                StateHasChanged();
             }
         }
+
+        static readonly MethodInfo ToObjectListMethod = typeof(RadzenFastGrid<TItem>)
+            .GetMethod(nameof(ToObjectListOfAsync), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        /// <summary>
+        /// Awaits a distinct query whose element type is only known at run time. The executor's
+        /// ToListAsync is generic, and the values are boxed after it returns rather than by composing a
+        /// Cast into the provider's tree - which is what Entity Framework refuses to translate.
+        /// </summary>
+        static Task<List<object>> ToObjectListAsync(IAsyncQueryExecutor async, IQueryable values,
+            CancellationToken token) =>
+            (Task<List<object>>)ToObjectListMethod
+                .MakeGenericMethod(values.ElementType)
+                .Invoke(null, new object[] { async, values, token })!;
+
+        static async Task<List<object>> ToObjectListOfAsync<TValue>(IAsyncQueryExecutor async,
+            IQueryable values, CancellationToken token)
+        {
+            var items = await async.ToListAsync((IQueryable<TValue>)values, token);
+            var boxed = new List<object>(items.Count);
+
+            for (var i = 0; i < items.Count; i++)
+            {
+                if (items[i] is { } value)
+                {
+                    boxed.Add(value);
+                }
+            }
+
+            return boxed;
+        }
+
+        /// <inheritdoc />
+        protected override Task OnAfterRenderAsync(bool firstRender) => LoadLookupsAsync();
 
         /// <summary>
         /// Sorts lookup values when they can be sorted. Comparer&lt;object&gt;.Default throws for a type
