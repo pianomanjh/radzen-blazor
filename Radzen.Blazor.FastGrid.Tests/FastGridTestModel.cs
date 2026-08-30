@@ -39,6 +39,12 @@ namespace Radzen.FastGrid.Tests
 
         /// <summary>A Guid, which does not either.</summary>
         public Guid Reference { get; set; }
+
+        /// <summary>
+        /// Declared as object and holding values of more than one type, which is what a lookup has to
+        /// cope with: the first value being comparable says nothing about the rest.
+        /// </summary>
+        public object Mixed { get; set; }
     }
 
     public enum Grade
@@ -276,28 +282,28 @@ namespace Radzen.FastGrid.Tests
         {
             new Person
             {
-                Grade = Grade.Senior, Reference = Reference(3), Id = 3, First = "Carol", Last = "Adams", Salary = 4000m, Bonus = 250.5m,
+                Grade = Grade.Senior, Reference = Reference(3), Id = 3, First = "Carol", Mixed = 3, Last = "Adams", Salary = 4000m, Bonus = 250.5m,
                 Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" },
                 Regions = new() { "North", "West" }, Codes = new[] { 10, 20 },
                 Accounts = new() { new() { Name = "Acme", Region = "North", Size = 10 }, new() { Name = "Globex", Region = "West", Size = 20 } }
             },
             new Person
             {
-                Grade = Grade.Junior, Reference = Reference(1), Id = 1, First = "Alice", Last = "Draper", Salary = 2000m, Bonus = null,
+                Grade = Grade.Junior, Reference = Reference(1), Id = 1, First = "Alice", Mixed = "n/a", Last = "Draper", Salary = 2000m, Bonus = null,
                 Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" },
                 Regions = new() { "South" }, Codes = new[] { 20 },
                 Accounts = new() { new() { Name = "Initech", Region = "South", Size = 30 } }
             },
             new Person
             {
-                Grade = Grade.Junior, Reference = Reference(4), Id = 4, First = "Dave", Last = "Bell", Salary = 1000m, Bonus = 10m,
+                Grade = Grade.Junior, Reference = Reference(4), Id = 4, First = "Dave", Mixed = 4, Last = "Bell", Salary = 1000m, Bonus = 10m,
                 Hired = new DateTime(2018, 11, 30), Customer = new Company { Name = "Xray" },
                 Regions = new(), Codes = System.Array.Empty<int>(),
                 Accounts = new()
             },
             new Person
             {
-                Grade = Grade.Senior, Reference = Reference(2), Id = 2, First = "Bob", Last = "Cook", Salary = 3000m, Bonus = 99.25m,
+                Grade = Grade.Senior, Reference = Reference(2), Id = 2, First = "Bob", Mixed = 2, Last = "Cook", Salary = 3000m, Bonus = 99.25m,
                 Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" },
                 Regions = new() { "North", "East", "South" }, Codes = new[] { 30 },
                 Accounts = new() { new() { Name = "Acme", Region = "East", Size = 10 }, new() { Name = "Umbrella", Region = "North", Size = 40 } }

@@ -556,9 +556,21 @@ namespace Radzen.FastGrid
         /// </summary>
         static List<object> Ordered(List<object> values)
         {
-            if (values.Count > 1 && values[0] is IComparable)
+            if (values.Count < 2 || values[0] is not IComparable)
+            {
+                return values;
+            }
+
+            try
             {
                 values.Sort();
+            }
+            catch (InvalidOperationException)
+            {
+                // The first value being comparable says nothing about the rest. A column declared as
+                // object can hold 1 and "n/a" at once, and Int32.CompareTo(object) throws - wrapped by
+                // List.Sort as "failed to compare two elements", out of the middle of a render. An
+                // unsorted list is a worse list, not a broken grid.
             }
 
             return values;

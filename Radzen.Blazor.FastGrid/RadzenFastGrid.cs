@@ -508,12 +508,21 @@ namespace Radzen.FastGrid
             builder.AddAttribute(115, nameof(Virtualize<TItem>.ChildContent),
                 virtualRow ??= item => rows => RenderRow(rows, item));
 
+            // Virtualize owns the body while it is on, so the empty row the inline path writes is
+            // unreachable - without this an empty virtualized grid showed a header over nothing.
+            if (EmptyTemplate is not null)
+            {
+                builder.AddAttribute(117, nameof(Virtualize<TItem>.EmptyContent),
+                    virtualEmpty ??= RenderEmpty);
+            }
+
             builder.AddComponentReferenceCapture(116, captureVirtualize ??= CaptureVirtualize);
             builder.CloseComponent();
         }
 
         ItemsProviderDelegate<TItem>? provideRows;
         RenderFragment<TItem>? virtualRow;
+        RenderFragment? virtualEmpty;
         Action<object>? captureVirtualize;
 
         void CaptureVirtualize(object component) => virtualize = (Virtualize<TItem>)component;

@@ -68,7 +68,16 @@ For a collection of **objects**, `CollectionColumn` names the member to show, an
 Razor infers the element type from `Property`, so neither type parameter is written. `FilterProperty`
 defaults to `DisplayProperty`. A row matches when **any** member matches.
 
-Neither is sortable without an explicit `SortBy`: no provider can order rows by a collection.
+Neither is sortable by the collection itself - no provider can order rows by a list. `CollectionColumn`
+takes a `SortBy` naming something that can be ordered:
+
+```razor
+<CollectionColumn Property="@(p => p.Accounts)" DisplayProperty="@(a => a.Name)"
+                  SortBy="@(p => p.Accounts.Count)" />
+```
+
+A collection-valued `PropertyColumn` has no such escape: its `SortBy` is typed at the property, which
+is the collection, so its header stays unsortable.
 
 ## Data
 
