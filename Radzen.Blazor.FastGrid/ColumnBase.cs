@@ -355,11 +355,20 @@ namespace Radzen.FastGrid
             }
         }
 
+        /// <summary>
+        /// The text in the filter box that produced <see cref="CurrentFilterValue" />, or null when the
+        /// filter came from anywhere else. The typed value cannot stand in for it: "3.0" and "3" are one
+        /// value and two different things to have typed, and an unparseable "3-" filters by null the
+        /// same as an empty box.
+        /// </summary>
+        internal string? AppliedFilterText { get; set; }
+
         /// <summary>Sets the column's live filter. Called by the grid; does not reload on its own.</summary>
         internal void SetFilter(object? value, FilterOperator? filterOperator)
         {
             CurrentFilterValue = value;
             CurrentFilterOperator = filterOperator ?? DefaultFilterOperator;
+            AppliedFilterText = null;
         }
 
         FilterOperator DefaultFilterOperator => EffectiveFilterType == typeof(string)
@@ -399,6 +408,7 @@ namespace Radzen.FastGrid
             {
                 declaredFilterValue = FilterValue;
                 CurrentFilterValue = FilterValue;
+                AppliedFilterText = null;
             }
 
             if (declaredFilterOperator != FilterOperator)

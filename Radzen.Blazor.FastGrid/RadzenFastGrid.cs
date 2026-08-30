@@ -950,20 +950,39 @@ namespace Radzen.FastGrid
             builder.AddAttribute(68, "style", "width: 100%;");
             builder.AddAttribute(69, "aria-label", column.HeaderText);
             builder.AddAttribute(70, "value", column.CurrentFilterValue);
+
+            // onchange is bound whether or not the filter applies as you type, because it is what a
+            // blur and an Enter raise. Typing adds oninput on top of it rather than replacing it, so
+            // turning the feature on cannot cost the box the event that commits it.
             builder.AddAttribute(71, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
-                value => OnFilterInput(column, value), column.CurrentFilterValue?.ToString()));
+                value => OnFilterCommitted(column, value), column.CurrentFilterValue?.ToString()));
+
+            if (FilterAsYouType)
+            {
+                // Not a binder, and not the component as receiver. A keystroke that is going to be
+                // superseded must not redraw a thousand rows to show the same thing: measured, three
+                // keystrokes into a bound box cost three full renders before the pause even ended,
+                // which is most of what the pause exists to avoid. The non-rendering receiver drops
+                // them; the render that matters comes from the reload the filter actually triggers.
+                // CreateBinder cannot carry it - it wraps the delegate, so the receiver is lost - and
+                // the box needs no binder anyway: the value attribute above already tracks the filter.
+                builder.AddAttribute(72, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this,
+                    this.AsNonRenderingEventHandler<ChangeEventArgs>(
+                        args => OnFilterTyped(column, args.Value as string))));
+            }
+
             builder.CloseElement();
 
             if (column.HasFilter)
             {
-                builder.OpenElement(72, "button");
-                builder.AddAttribute(73, "type", "button");
-                builder.AddAttribute(74, "tabindex", "-1");
-                builder.AddAttribute(75, "class", "notranslate rzi rz-cell-filter-clear");
-                builder.AddAttribute(76, "style", "position:absolute;inset-inline-end:10px;");
-                builder.AddAttribute(77, "onclick",
+                builder.OpenElement(73, "button");
+                builder.AddAttribute(74, "type", "button");
+                builder.AddAttribute(75, "tabindex", "-1");
+                builder.AddAttribute(76, "class", "notranslate rzi rz-cell-filter-clear");
+                builder.AddAttribute(77, "style", "position:absolute;inset-inline-end:10px;");
+                builder.AddAttribute(78, "onclick",
                     EventCallback.Factory.Create<MouseEventArgs>(this, _ => Filter(column, null)));
-                builder.AddContent(78, "close");
+                builder.AddContent(79, "close");
                 builder.CloseElement();
             }
 

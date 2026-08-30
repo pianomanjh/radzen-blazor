@@ -92,6 +92,78 @@ namespace Radzen.FastGrid
         [Parameter] public FilterCaseSensitivity FilterCaseSensitivity { get; set; }
 
         /// <summary>
+        /// Whether a filter applies as the user types rather than when the box loses focus. On by
+        /// default, as in RadzenDataGrid.
+        /// </summary>
+        [Parameter] public bool FilterAsYouType { get; set; } = true;
+
+        /// <summary>
+        /// How long typing must pause before the filter applies, in milliseconds. Zero applies on every
+        /// keystroke, which over a queryable is a query per keystroke.
+        /// </summary>
+        [Parameter] public int FilterDelay { get; set; } = 500;
+
+        // Set by Dispose, read by the filter delay - the one thing here that can still be running after
+        // the component is gone.
+        volatile bool disposed;
+
+        // A generation counter rather than a CancellationTokenSource per keystroke: the superseded delay
+        // still runs, but it finds itself out of date and does nothing, and there is no token source to
+        // own, cancel or dispose. A timer that fires and returns costs less than the lifetime rules.
+        int filterGeneration;
+
+        /// <summary>
+        /// Applies a filter after the typing pause, unless another keystroke arrives first.
+        /// </summary>
+        async Task OnFilterTyped(ColumnBase<TItem> column, string? text)
+        {
+            var generation = Interlocked.Increment(ref filterGeneration);
+
+            if (FilterDelay > 0)
+            {
+                await Task.Delay(FilterDelay).ConfigureAwait(false);
+
+                // Read after the wait, not captured before it: what matters is whether anything was
+                // typed while this one was waiting. Disposal is checked here too: a delay outlives the
+                // component that started it whenever the user types and navigates away inside it, and
+                // reloading a grid that is gone is the one way this can touch a torn-down renderer.
+                if (generation != Volatile.Read(ref filterGeneration) || disposed)
+                {
+                    return;
+                }
+            }
+
+            await InvokeAsync(() => ApplyTypedFilter(column, text)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Applies what the box holds now. Raised by a blur or an Enter, so it also stands in for the
+        /// pause that never came - a box abandoned mid-delay still filters on the way out.
+        /// </summary>
+        Task OnFilterCommitted(ColumnBase<TItem> column, string? text)
+        {
+            // Supersede any waiting delay: whatever it was going to apply, this is applying now.
+            Interlocked.Increment(ref filterGeneration);
+
+            return ApplyTypedFilter(column, text);
+        }
+
+        /// <summary>
+        /// The one place the two filter events meet, and the only one that reloads. Both fire for the
+        /// same keystrokes - typing raises input, leaving the box raises change - so without this the
+        /// blur after a pause would run the query the pause already ran.
+        /// </summary>
+        Task ApplyTypedFilter(ColumnBase<TItem> column, string? text)
+        {
+            if (string.Equals(column.AppliedFilterText, text, StringComparison.Ordinal))
+            {
+                return Task.CompletedTask;
+            }
+
+            return OnFilterInput(column, text);
+        }
+
+        /// <summary>
         /// How filters are presented. <c>Simple</c> is a text box per column; <c>CheckBoxList</c> is a
         /// multi-select of the column's distinct values. A column can override it.
         /// </summary>
@@ -344,9 +416,23 @@ namespace Radzen.FastGrid
         /// </summary>
         Task OnFilterInput(ColumnBase<TItem> column, string? text)
         {
+            var task = Filter(column, FilterValueFrom(column, text));
+
+            // Filter routes through SetFilter, which clears this; recording the text afterwards is what
+            // says the box's contents are what is applied. Anything that filters by another route -
+            // descriptors, the clear button, a declared value - leaves it cleared, so the next thing
+            // typed applies even if it repeats what was typed before.
+            column.AppliedFilterText = text;
+
+            return task;
+        }
+
+        /// <summary>The value a column filters by for the given text, or null if the text is not one.</summary>
+        static object? FilterValueFrom(ColumnBase<TItem> column, string? text)
+        {
             if (string.IsNullOrEmpty(text))
             {
-                return Filter(column, null);
+                return null;
             }
 
             // The element type, not the property type: a filter on a list of dates is compared against a
@@ -356,7 +442,7 @@ namespace Radzen.FastGrid
 
             if (type == typeof(string) || type == typeof(object))
             {
-                return Filter(column, text);
+                return text;
             }
 
             try
@@ -364,14 +450,14 @@ namespace Radzen.FastGrid
                 // ConvertType rather than Convert.ChangeType, and Enum.Parse rather than either: neither
                 // an enum nor a Guid converts from a string through IConvertible, so the framework call
                 // throws for both and what was typed silently cleared the filter instead of applying it.
-                return Filter(column, type.IsEnum
+                return type.IsEnum
                     ? Enum.Parse(type, text, ignoreCase: true)
-                    : ConvertType.ChangeType(text, declared, CultureInfo.CurrentCulture));
+                    : ConvertType.ChangeType(text, declared, CultureInfo.CurrentCulture);
             }
             catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException
                 or ArgumentException)
             {
-                return Filter(column, null);
+                return null;
             }
         }
 
@@ -1342,6 +1428,9 @@ namespace Radzen.FastGrid
             {
                 return;
             }
+
+            // Before cancelling, so a filter delay that wakes up during teardown sees it.
+            disposed = true;
 
             // Cancel first: disposing alone leaves an in-flight query running against a component that
             // is gone, holding its context open until it finishes.
