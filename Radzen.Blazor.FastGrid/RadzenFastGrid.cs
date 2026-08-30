@@ -163,11 +163,13 @@ namespace Radzen.FastGrid
 
             if (Paging && PagerPosition.HasFlag(PagerPosition.Top))
             {
-                RenderPager(builder, 10);
+                RenderPager(builder, 10, captureTopPager ??= p => topPager = (RadzenPager)p);
             }
 
-            builder.OpenElement(20, "table");
-            builder.AddAttribute(21, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
+            // 22, not 20: the top pager's band now runs to 20, and the numbers a region writes must
+            // ascend in the order it writes them.
+            builder.OpenElement(22, "table");
+            builder.AddAttribute(23, "class", "rz-grid-table rz-grid-table-fixed rz-grid-table-striped");
 
             RenderHead(builder);
             RenderBody(builder);
@@ -176,7 +178,7 @@ namespace Radzen.FastGrid
 
             if (Paging && PagerPosition.HasFlag(PagerPosition.Bottom))
             {
-                RenderPager(builder, 200);
+                RenderPager(builder, 200, captureBottomPager ??= p => bottomPager = (RadzenPager)p);
             }
 
             builder.CloseElement();
@@ -186,7 +188,13 @@ namespace Radzen.FastGrid
         // ascend in the order it writes them - the top pager's band therefore sits below the table's,
         // and the bottom pager's above everything the table emits. They descended before, which the
         // diff copes with by tearing the table down and rebuilding it whenever the pager appears.
-        void RenderPager(RenderTreeBuilder builder, int sequence)
+        Action<object>? captureTopPager;
+        Action<object>? captureBottomPager;
+
+        // The reference is captured because RadzenPager keeps its own page offset and offers no
+        // parameter to set it: the grid has to put it back when something other than the pager itself
+        // moves the page.
+        void RenderPager(RenderTreeBuilder builder, int sequence, Action<object> capture)
         {
             builder.OpenComponent<RadzenPager>(sequence);
             builder.AddAttribute(sequence + 1, nameof(RadzenPager.Count), TotalCount());
@@ -205,6 +213,7 @@ namespace Radzen.FastGrid
                     EventCallback.Factory.Create<int>(this, OnPageSizeChanged));
             }
 
+            builder.AddComponentReferenceCapture(sequence + 10, capture);
             builder.CloseComponent();
         }
 

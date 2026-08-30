@@ -2,7 +2,9 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using Bunit;
+using Radzen.Blazor;
 using Microsoft.AspNetCore.Components;
 using Xunit;
 
@@ -310,6 +312,230 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(4, cut.FindAll("tbody tr").Count);
             Assert.Equal(1, source.Walks);
+        }
+
+        // RadzenPager keeps its own offset and has no CurrentPage parameter to be told through, so
+        // everything that sends the grid back to page one left the pager highlighting the old page -
+        // and paging onward from it, so Next from a reset grid jumped two pages.
+        [Fact]
+        public void SortingPutsThePagerBackOnTheFirstPage()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Many(100), p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 10);
+                p.Add(g => g.AllowSorting, true);
+            });
+
+            cut.InvokeAsync(() => cut.Instance.GoToPage(3));
+
+            Assert.Equal(3, cut.Instance.CurrentPage);
+            Assert.Equal(3, cut.FindComponent<RadzenPager>().Instance.CurrentPage);
+
+            cut.FindAll("thead th")[0].QuerySelector("div")!.Click();
+
+            Assert.Equal(0, cut.Instance.CurrentPage);
+            Assert.Equal(0, cut.FindComponent<RadzenPager>().Instance.CurrentPage);
+        }
+
+        [Fact]
+        public void FilteringPutsThePagerBackOnTheFirstPage()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Many(100), p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 10);
+                p.Add(g => g.AllowFiltering, true);
+            });
+
+            cut.InvokeAsync(() => cut.Instance.GoToPage(3));
+
+            Assert.Equal(3, cut.FindComponent<RadzenPager>().Instance.CurrentPage);
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("First1");
+
+            Assert.Equal(0, cut.Instance.CurrentPage);
+            Assert.Equal(0, cut.FindComponent<RadzenPager>().Instance.CurrentPage);
+        }
+
+        [Fact]
+        public void APageThatOutlivesItsRowsIsBroughtBackIntoRange()
+        {
+            // Parked on page 6 of 30 rows, then handed 5. Without a clamp the grid renders an empty
+            // table while the pager reports rows that exist.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Many(30), p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+            });
+
+            cut.InvokeAsync(() => cut.Instance.GoToPage(5));
+
+            Assert.Equal(5, cut.Instance.CurrentPage);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, People.Many(5)));
+
+            Assert.Equal(1, cut.Instance.CurrentPage);
+            Assert.Equal(1, cut.FindAll("tbody tr").Count);
+        }
+
+        [Fact]
+        public void AnEmptiedSourceGoesBackToTheFirstPage()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Many(30), p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+            });
+
+            cut.InvokeAsync(() => cut.Instance.GoToPage(5));
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, new List<Person>()));
+
+            Assert.Equal(0, cut.Instance.CurrentPage);
+        }
+
+        [Fact]
+        public void APageSizeSetFromOutsideChangesWhatIsShown()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Many(30), p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+            });
+
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.PageSize, 10));
+
+            Assert.Equal(10, cut.FindAll("tbody tr").Count);
+        }
+
+        // Filtering and sorting composed onto the bound provider but paging and counting did not: View()
+        // and TotalCount() are typed IEnumerable<TItem>, so Skip/Take/Count bound LINQ to Objects even
+        // over an IQueryable. A database source was streaming every filtered row across the wire to be
+        // skipped in memory, and scanning again to be counted.
+        [Fact]
+        public void ThePageIsComposedOntoTheProvider()
+        {
+            using var ctx = new TestContext();
+            var source = new RecordingQueryable<Person>(People.Many(30));
+
+            var cut = Render(ctx, source, p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+            });
+
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+
+            Assert.Contains(source.Executed, e =>
+                e.Contains("Skip(", StringComparison.Ordinal) && e.Contains("Take(", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void TheTotalIsCountedByTheProvider()
+        {
+            using var ctx = new TestContext();
+            var source = new RecordingQueryable<Person>(People.Many(30));
+
+            Render(ctx, source, p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+                p.Add(g => g.ShowPagingSummary, true);
+            });
+
+            Assert.Contains(source.Executed, e => e.Contains("Count(", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void AFilteredPageComposesTheFilterAndThePageTogether()
+        {
+            using var ctx = new TestContext();
+            var source = new RecordingQueryable<Person>(People.Many(30));
+
+            var cut = Render(ctx, source, p =>
+            {
+                p.Add(g => g.AllowPaging, true);
+                p.Add(g => g.PageSize, 4);
+                p.Add(g => g.AllowFiltering, true);
+            });
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("First1");
+
+            Assert.Contains(source.Executed, e =>
+                e.Contains("Where(", StringComparison.Ordinal) && e.Contains("Skip(", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Records the expression tree its provider is asked to run, so a test can tell an operator that
+        /// reached the provider from one that was applied to the rows after they arrived.
+        /// </summary>
+        public sealed class RecordingQueryable<T> : IQueryable<T>, IQueryProvider
+        {
+            readonly IQueryable<T> inner;
+            readonly List<string> log;
+
+            public RecordingQueryable(IEnumerable<T> source)
+                : this(source.AsQueryable(), new List<string>())
+            {
+            }
+
+            RecordingQueryable(IQueryable<T> inner, List<string> log)
+            {
+                this.inner = inner;
+                this.log = log;
+            }
+
+            public IReadOnlyList<string> Executed => log;
+
+            public Type ElementType => inner.ElementType;
+
+            public Expression Expression => inner.Expression;
+
+            public IQueryProvider Provider => this;
+
+            public IEnumerator<T> GetEnumerator()
+            {
+                log.Add(inner.Expression.ToString());
+
+                return inner.GetEnumerator();
+            }
+
+            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+            // Left unwrapped: nothing under test reads back through a projection of another element type.
+            public IQueryable CreateQuery(Expression expression) => inner.Provider.CreateQuery(expression);
+
+            public IQueryable<TElement> CreateQuery<TElement>(Expression expression) =>
+                new RecordingQueryable<TElement>(inner.Provider.CreateQuery<TElement>(expression), log);
+
+            public object CreateQueryObject(Expression expression) => CreateQuery(expression);
+
+            public object Execute(Expression expression)
+            {
+                log.Add(expression.ToString());
+
+                return inner.Provider.Execute(expression);
+            }
+
+            public TResult Execute<TResult>(Expression expression)
+            {
+                log.Add(expression.ToString());
+
+                return inner.Provider.Execute<TResult>(expression);
+            }
         }
 
         /// <summary>

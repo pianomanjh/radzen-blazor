@@ -158,6 +158,8 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override Task OnParametersSetAsync()
         {
+            var pagingChanged = false;
+
             if (!initialized)
             {
                 initialized = true;
@@ -167,15 +169,21 @@ namespace Radzen.FastGrid
             else if (declaredPageSize != PageSize)
             {
                 // The page size was changed from the outside rather than through the pager, so the
-                // current offset means something different now. Start again from the first page.
+                // current offset means something different now. Start again from the first page - and
+                // refetch, because the pager raised no event and both branches below short-circuit on
+                // state that has not changed. Without this the grid served ten rows on a page of
+                // twenty-five, and the pager counted pages nobody could reach.
                 declaredPageSize = PageSize;
                 pageSize = PageSize;
                 skip = 0;
+                pagingChanged = true;
             }
+
+            var dataChanged = !ReferenceEquals(lastData, Data);
 
             // Before the LoadData branch, not after: a LoadData grid replaces Data on every load, and a
             // check-box list built from page one is wrong for every page after it.
-            if (!ReferenceEquals(lastData, Data))
+            if (dataChanged)
             {
                 lookups.Clear();
             }
@@ -186,7 +194,7 @@ namespace Radzen.FastGrid
                 // only when something the handler cares about changes - a sort, a page, or Reload().
                 if (loadDataInvoked)
                 {
-                    return Task.CompletedTask;
+                    return pagingChanged ? RefreshAsync() : Task.CompletedTask;
                 }
 
                 loadDataInvoked = true;
@@ -196,7 +204,7 @@ namespace Radzen.FastGrid
                 return AllowVirtualization ? Task.CompletedTask : InvokeLoadDataAsync();
             }
 
-            if (ReferenceEquals(lastData, Data))
+            if (!dataChanged && !pagingChanged)
             {
                 return Task.CompletedTask;
             }
@@ -218,7 +226,15 @@ namespace Radzen.FastGrid
         /// Re-reads the data for the current page and sort. Call this after the underlying source has
         /// changed in a way the grid cannot see - the usual companion to <see cref="LoadData" />.
         /// </summary>
-        public Task Reload() => RefreshAsync();
+        public Task Reload()
+        {
+            // The source may have changed in ways the grid cannot see - which is what this is for -
+            // including gaining values a check-box list should now offer. A sort or a filter cannot
+            // change them, so only this drops them.
+            lookups.Clear();
+
+            return RefreshAsync();
+        }
 
         /// <summary>
         /// Serves one scroll window. The whole data path funnels through here when virtualizing: the
@@ -254,8 +270,12 @@ namespace Radzen.FastGrid
 
                     return new ItemsProviderResult<TItem>(window, virtualTotal.Value);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested)
                 {
+                    // Only a superseded scroll is an empty answer. A cancellation carrying any other
+                    // token - a disposed context, a command timeout, application shutdown - is a
+                    // failure, and Virtualize would apply this as a real result: a grid with no rows,
+                    // no scrollbar and no error.
                     return new ItemsProviderResult<TItem>(Array.Empty<TItem>(), 0);
                 }
             }
@@ -266,7 +286,11 @@ namespace Radzen.FastGrid
             // scrolling must not walk the whole source once per window.
             virtualTotal ??= TotalCount();
 
-            return new ItemsProviderResult<TItem>(rows.Skip(request.StartIndex).Take(top), virtualTotal.Value);
+            // Materialized, not handed over lazily: Virtualize keeps the result and re-enumerates it on
+            // every render, so a deferred filter-and-sort would be re-run over the whole source each
+            // time rather than over the window.
+            return new ItemsProviderResult<TItem>(Page(rows, request.StartIndex, top).ToList(),
+                virtualTotal.Value);
         }
 
         /// <summary>
@@ -453,8 +477,77 @@ namespace Radzen.FastGrid
             return boxed;
         }
 
+        internal RadzenPager? topPager;
+        internal RadzenPager? bottomPager;
+
+        /// <summary>
+        /// Puts the pager back on the page the grid is actually showing. RadzenPager keeps its own
+        /// offset and has no CurrentPage parameter to be told through, so every path that sends the grid
+        /// back to page one - a sort, a filter, ClearFilters, ApplyFilters, GoToPage - left the pager
+        /// highlighting the old page and paging onward from it.
+        /// </summary>
+        void SyncPagers()
+        {
+            var page = pageSize > 0 ? skip / pageSize : 0;
+
+            SyncPager(topPager, page);
+            SyncPager(bottomPager, page);
+        }
+
+        static void SyncPager(RadzenPager? pager, int page)
+        {
+            if (pager is null || pager.CurrentPage == page)
+            {
+                return;
+            }
+
+            pager.SetCurrentPage(page);
+            pager.ChangeState();
+        }
+
+        /// <summary>
+        /// Brings the offset back into range when the source has shrunk under it, so a grid parked on
+        /// page five of a list that now has one page shows that page rather than nothing at all.
+        /// </summary>
+        bool ClampPage()
+        {
+            if (!Paging || pageSize <= 0 || skip == 0)
+            {
+                return false;
+            }
+
+            // Nothing has loaded yet, so the total the grid can see is a placeholder rather than a
+            // shorter source. Clamping to it would send every asynchronous grid back to page one.
+            if (AsyncOwnsData && loadedCount is null)
+            {
+                return false;
+            }
+
+            var total = TotalCount();
+            var last = total == 0 ? 0 : (total - 1) / pageSize * pageSize;
+
+            if (skip <= last)
+            {
+                return false;
+            }
+
+            skip = last;
+
+            return true;
+        }
+
         /// <inheritdoc />
-        protected override Task OnAfterRenderAsync(bool firstRender) => LoadLookupsAsync();
+        protected override async Task OnAfterRenderAsync(bool firstRender)
+        {
+            if (ClampPage())
+            {
+                await RefreshAsync();
+            }
+
+            SyncPagers();
+
+            await LoadLookupsAsync();
+        }
 
         /// <summary>
         /// Sorts lookup values when they can be sorted. Comparer&lt;object&gt;.Default throws for a type
@@ -901,8 +994,23 @@ namespace Radzen.FastGrid
 
             data = Composed(data);
 
-            return Paging ? data.Skip(skip).Take(pageSize) : data;
+            return Paging ? Page(data, skip, pageSize) : data;
         }
+
+        /// <summary>
+        /// One page of a sequence. Composed onto the provider when the source is a queryable, so a
+        /// database source is asked for the page - the alternative is streaming every filtered row
+        /// across the wire and skipping to page three in memory. Filtering and sorting already compose;
+        /// paging binding LINQ to Objects made them the only two that did.
+        /// </summary>
+        static IEnumerable<TItem> Page(IEnumerable<TItem> data, int start, int count) =>
+            data is IQueryable<TItem> queryable
+                ? queryable.Skip(start).Take(count)
+                : data.Skip(start).Take(count);
+
+        /// <summary>The same rule for counting: a provider answers with COUNT rather than a scan.</summary>
+        static int Total(IEnumerable<TItem> data) =>
+            data is IQueryable<TItem> queryable ? queryable.Count() : data.Count();
 
         /// <summary>
         /// Filters and sorts, without paging. Nothing is wrapped in a queryable unless something is
@@ -971,12 +1079,12 @@ namespace Radzen.FastGrid
             // Only pay that when something is actually filtered.
             if (ActiveFilters() is not null)
             {
-                return Composed(Data ?? Enumerable.Empty<TItem>()).Count();
+                return Total(Composed(Data ?? Enumerable.Empty<TItem>()));
             }
 
             // Count() asks an ICollection<T> - and a non-generic ICollection - for its count rather than
             // walking it, so an unfiltered grid over a list pays nothing here.
-            return Data?.Count() ?? 0;
+            return Data is null ? 0 : Total(Data);
         }
 
         async Task OnPageChanged(PagerEventArgs args)

@@ -63,6 +63,29 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void APageSizeSetFromOutsideAsksTheHandlerAgain()
+        {
+            // The handler owns the page, so a page size it was never told about leaves it serving ten
+            // rows onto a page the grid and the pager both believe holds twenty-five.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(h => h.AllowPaging, true);
+                p.Add(h => h.PageSize, 10);
+            });
+
+            Assert.Equal(10, calls[^1].Top);
+            Assert.Equal(10, cut.FindAll("tbody tr").Count);
+
+            cut.SetParametersAndRender(p => p.Add(h => h.PageSize, 25));
+
+            Assert.Equal(25, calls[^1].Top);
+            Assert.Equal(0, calls[^1].Skip);
+            Assert.Equal(25, cut.FindAll("tbody tr").Count);
+        }
+
+        [Fact]
         public void TheHandlerAssigningDataDoesNotReinvokeIt()
         {
             // The handler sets Data, which sets the grid's parameters again. Reloading on that would
