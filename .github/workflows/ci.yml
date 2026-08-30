@@ -25,5 +25,15 @@ jobs:
     
     - name: Build
       run: dotnet build Radzen.Blazor/Radzen.Blazor.csproj
+    # The two packable libraries built alongside it. Neither was compiled by any job, so a breaking
+    # change to IAsyncQueryExecutor - which the adapter implements - left CI green while the package
+    # that makes the feature reachable no longer built.
+    - name: Build FastGrid
+      run: dotnet build Radzen.Blazor.FastGrid/Radzen.Blazor.FastGrid.csproj
+    - name: Build Entity Framework adapter
+      run: dotnet build Radzen.Blazor.EntityFrameworkAdapter/Radzen.Blazor.EntityFrameworkAdapter.csproj
     - name: Test
       run: dotnet test Radzen.Blazor.Tests/Radzen.Blazor.Tests.csproj
+    # Everything except the rendered-geometry check, which needs Chromium and has its own workflow.
+    - name: Test FastGrid
+      run: dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj --filter "FullyQualifiedName!~GeometryParityTests"

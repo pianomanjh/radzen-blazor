@@ -1,3 +1,4 @@
+using System;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 
@@ -19,6 +20,10 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         protected override void BuildRenderTree(RenderTreeBuilder builder)
-            => builder.AddContent(0, ChildContent);
+        {
+            ArgumentNullException.ThrowIfNull(builder);
+
+            builder.AddContent(0, ChildContent);
+        }
     }
 }
