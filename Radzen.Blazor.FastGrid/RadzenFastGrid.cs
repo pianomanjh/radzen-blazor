@@ -39,6 +39,8 @@ namespace Radzen.FastGrid
         /// lookup is the collection's own, so a list of many selected rows is a scan per row. Pass a
         /// <see cref="HashSet{T}" /> when more than a handful can be selected at once.
         /// </summary>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227:Collection properties should be read only",
+            Justification = "A Blazor parameter is assigned by the renderer and must have a setter.")]
         [Parameter] public ICollection<TItem>? Selection { get; set; }
 
         /// <summary>Raised when a row is clicked. No handler means no per-row delegate is allocated.</summary>
@@ -112,6 +114,8 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override void BuildRenderTree(RenderTreeBuilder builder)
         {
+            ArgumentNullException.ThrowIfNull(builder);
+
             builder.OpenComponent<CascadingValue<RadzenFastGrid<TItem>>>(0);
             builder.AddAttribute(1, "Value", this);
             builder.AddAttribute(2, "IsFixed", true);

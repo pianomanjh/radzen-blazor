@@ -22,7 +22,7 @@ namespace Radzen.FastGrid
         /// path renders normally but cannot sort server-side, round-trip through <c>LoadData</c>, or
         /// persist in settings.
         /// </summary>
-        public static string? For<TItem, TProp>(Expression<Func<TItem, TProp>> expression) =>
+        public static string? For<TItem, TProp>(Expression<Func<TItem, TProp>>? expression) =>
             For((LambdaExpression?)expression);
 
         /// <summary>

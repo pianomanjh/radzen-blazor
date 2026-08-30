@@ -1,9 +1,11 @@
 # Styling parity between RadzenFastGrid and RadzenDataGrid: markup contract plus rendered geometry
 # measured through Chromium against the real theme stylesheet.
 #
-# Kept separate from ci.yml on purpose. RadzenFastGrid is a prototype that is not in any solution, and
-# this job needs a browser, so it should not be able to fail the main build. It runs only when the
-# prototype or its check changes.
+# Kept separate from ci.yml on purpose: this job needs a browser, and a missing Chromium should not be
+# able to fail the main build. It watches Radzen.Blazor as well as the grid, because every rule it
+# checks is anchored against RadzenDataGrid rendered over the same data in the same run, and the theme
+# it measures against is generated from Radzen.Blazor/themes at build time - the CSS itself is
+# gitignored, so a path filter naming it could never fire.
 
 name: FastGrid styling parity
 
@@ -12,13 +14,15 @@ on:
     paths:
       - 'Radzen.Blazor.FastGrid/**'
       - 'Radzen.Blazor.FastGrid.Tests/**'
-      - 'Radzen.Blazor/wwwroot/css/**'
+      - 'Radzen.Blazor/**'
+      - 'Radzen.Blazor.EntityFrameworkAdapter/**'
       - '.github/workflows/fastgrid-parity.yml'
   pull_request:
     paths:
       - 'Radzen.Blazor.FastGrid/**'
       - 'Radzen.Blazor.FastGrid.Tests/**'
-      - 'Radzen.Blazor/wwwroot/css/**'
+      - 'Radzen.Blazor/**'
+      - 'Radzen.Blazor.EntityFrameworkAdapter/**'
       - '.github/workflows/fastgrid-parity.yml'
   workflow_dispatch:
 

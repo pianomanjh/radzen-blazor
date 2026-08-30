@@ -1118,13 +1118,25 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         public void Dispose()
         {
+            Dispose(true);
+
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Releases the grid's in-flight load.</summary>
+        /// <param name="disposing">Whether managed state should be released.</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposing)
+            {
+                return;
+            }
+
             // Cancel first: disposing alone leaves an in-flight query running against a component that
             // is gone, holding its context open until it finishes.
             loadCts?.Cancel();
             loadCts?.Dispose();
             loadCts = null;
-
-            GC.SuppressFinalize(this);
         }
     }
 }

@@ -2,10 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Nullable>disable</Nullable>
-    <IsPackable>false</IsPackable>
     <RootNamespace>Radzen.FastGrid.Tests</RootNamespace>
-    <NoWarn>$(NoWarn);CA1707;CA1861;CA1034;CA1062;CA1812;CA1002;CA2227;CA1819</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
