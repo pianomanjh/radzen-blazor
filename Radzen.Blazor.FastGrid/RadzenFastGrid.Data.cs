@@ -380,7 +380,7 @@ namespace Radzen.FastGrid
 
                     // Names a member of the collection's element, so the predicate becomes
                     // Customers.Any(c => c.Name ...) rather than a comparison against the collection.
-                    FilterProperty = string.IsNullOrEmpty(column.FilterProperty) ? null : column.FilterProperty,
+                    FilterProperty = column.FilterMemberPath,
                     FilterValue = column.CurrentFilterValue,
                     FilterOperator = column.CurrentFilterOperator,
                     Type = column.FilterPropertyType,

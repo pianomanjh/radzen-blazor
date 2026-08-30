@@ -38,6 +38,12 @@ namespace Radzen.FastGrid.Tests
     public class Company
     {
         public string Name { get; set; }
+
+        /// <summary>A second member, so a test can filter on one and display the other.</summary>
+        public string Region { get; set; }
+
+        /// <summary>A value-typed member, which a selector returning object wraps in a Convert.</summary>
+        public int Size { get; set; }
     }
 
     /// <summary>
@@ -75,8 +81,7 @@ namespace Radzen.FastGrid.Tests
             string separator = null,
             Expression<Func<TItem, TProp>> sortByPath = null,
             FilterMode? filterMode = null,
-            System.Collections.IEnumerable filterLookupData = null,
-            string filterProperty = null) => (builder, seq) =>
+            System.Collections.IEnumerable filterLookupData = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
@@ -151,9 +156,67 @@ namespace Radzen.FastGrid.Tests
                 builder.AddAttribute(seq + 15, nameof(PropertyColumn<TItem, TProp>.FilterLookupData), filterLookupData);
             }
 
+            builder.CloseComponent();
+        };
+
+        public static Action<RenderTreeBuilder, int> Collection<TItem, TElement>(
+            Expression<Func<TItem, IEnumerable<TElement>>> property,
+            Expression<Func<TElement, object>> displayProperty = null,
+            Expression<Func<TElement, object>> filterProperty = null,
+            Expression<Func<TItem, object>> sortBy = null,
+            string title = null,
+            string format = null,
+            string separator = null,
+            FilterMode? filterMode = null,
+            bool filterable = true,
+            object filterValue = null) => (builder, seq) =>
+        {
+            builder.OpenComponent<CollectionColumn<TItem, TElement>>(seq);
+            builder.AddAttribute(seq + 1, nameof(CollectionColumn<TItem, TElement>.Property), property);
+
+            if (displayProperty is not null)
+            {
+                builder.AddAttribute(seq + 2, nameof(CollectionColumn<TItem, TElement>.DisplayProperty), displayProperty);
+            }
+
             if (filterProperty is not null)
             {
-                builder.AddAttribute(seq + 16, nameof(PropertyColumn<TItem, TProp>.FilterProperty), filterProperty);
+                builder.AddAttribute(seq + 3, nameof(CollectionColumn<TItem, TElement>.FilterProperty), filterProperty);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 4, nameof(CollectionColumn<TItem, TElement>.SortBy), sortBy);
+            }
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(CollectionColumn<TItem, TElement>.Title), title);
+            }
+
+            if (format is not null)
+            {
+                builder.AddAttribute(seq + 6, nameof(CollectionColumn<TItem, TElement>.Format), format);
+            }
+
+            if (separator is not null)
+            {
+                builder.AddAttribute(seq + 7, nameof(CollectionColumn<TItem, TElement>.Separator), separator);
+            }
+
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(CollectionColumn<TItem, TElement>.FilterMode), filterMode);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 9, nameof(CollectionColumn<TItem, TElement>.Filterable), false);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 10, nameof(CollectionColumn<TItem, TElement>.FilterValue), filterValue);
             }
 
             builder.CloseComponent();
@@ -204,14 +267,14 @@ namespace Radzen.FastGrid.Tests
                 Id = 3, First = "Carol", Last = "Adams", Salary = 4000m, Bonus = 250.5m,
                 Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" },
                 Regions = new() { "North", "West" }, Codes = new[] { 10, 20 },
-                Accounts = new() { new() { Name = "Acme" }, new() { Name = "Globex" } }
+                Accounts = new() { new() { Name = "Acme", Region = "North", Size = 10 }, new() { Name = "Globex", Region = "West", Size = 20 } }
             },
             new Person
             {
                 Id = 1, First = "Alice", Last = "Draper", Salary = 2000m, Bonus = null,
                 Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" },
                 Regions = new() { "South" }, Codes = new[] { 20 },
-                Accounts = new() { new() { Name = "Initech" } }
+                Accounts = new() { new() { Name = "Initech", Region = "South", Size = 30 } }
             },
             new Person
             {
@@ -225,7 +288,7 @@ namespace Radzen.FastGrid.Tests
                 Id = 2, First = "Bob", Last = "Cook", Salary = 3000m, Bonus = 99.25m,
                 Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" },
                 Regions = new() { "North", "East", "South" }, Codes = new[] { 30 },
-                Accounts = new() { new() { Name = "Acme" }, new() { Name = "Umbrella" } }
+                Accounts = new() { new() { Name = "Acme", Region = "East", Size = 10 }, new() { Name = "Umbrella", Region = "North", Size = 40 } }
             },
         };
 
@@ -241,7 +304,7 @@ namespace Radzen.FastGrid.Tests
                 Customer = new Company { Name = "Company" + i },
                 Regions = new() { "Region" + i },
                 Codes = new[] { i },
-                Accounts = new() { new Company { Name = "Account" + i } },
+                Accounts = new() { new Company { Name = "Account" + i, Region = "Region" + i } },
             })
             .ToList();
     }

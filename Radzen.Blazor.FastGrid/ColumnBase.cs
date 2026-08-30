@@ -53,12 +53,12 @@ namespace Radzen.FastGrid
         [Parameter] public FilterOperator? FilterOperator { get; set; }
 
         /// <summary>
-        /// A member of the collection's element to filter on, for a column bound to a collection of
-        /// objects: <c>Property="@(r =&gt; r.Customers)" FilterProperty="Name"</c> matches a row when any
-        /// customer's name matches. A string rather than an expression because the element type is not a
-        /// type parameter of the column, so there is nothing to write the lambda against.
+        /// The member of a collection's element that the filter compares, as a dotted path, or null when
+        /// the filter compares the element itself. Derived from a column's own expressions rather than
+        /// authored; it is what <c>FilterDescriptor.FilterProperty</c> carries, which is what turns a
+        /// comparison into <c>Accounts.Any(a =&gt; a.Name ...)</c>.
         /// </summary>
-        [Parameter] public string? FilterProperty { get; set; }
+        public virtual string? FilterMemberPath => null;
 
         /// <summary>
         /// How this column's filter is presented, overriding the grid's <c>FilterMode</c>.
