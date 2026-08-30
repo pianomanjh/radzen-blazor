@@ -110,6 +110,18 @@ namespace Radzen.FastGrid
         /// <summary>Extra CSS class for the grid element.</summary>
         [Parameter] public string? CssClass { get; set; }
 
+        /// <summary>
+        /// A key for each row, as QuickGrid's <c>ItemKey</c> does - typically the row's primary key.
+        /// </summary>
+        /// <remarks>
+        /// Without one the diff matches rows by position, so re-sorting rewrites the text of every cell
+        /// in place. With one it matches them by identity and moves the rows instead, which is fewer DOM
+        /// mutations for a re-sort and none at all for a row that did not change. It is not free: the
+        /// renderer builds a dictionary of the keys, and a value-typed key boxes once per row. Worth it
+        /// where rows are reordered, not where they only scroll.
+        /// </remarks>
+        [Parameter] public Func<TItem, object>? ItemKey { get; set; }
+
         /// <summary>Default CSS width for columns that do not set their own.</summary>
         [Parameter] public string? ColumnWidth { get; set; }
 
@@ -999,6 +1011,12 @@ namespace Radzen.FastGrid
             builder.OpenElement(120, "tr");
             builder.AddAttribute(121, "role", "row");
 
+            // Set on the tr, before its children: SetKey applies to the element most recently opened.
+            if (ItemKey is { } key)
+            {
+                builder.SetKey(key(item));
+            }
+
             // No alternating class: rz-grid-table-striped stripes with :nth-child in CSS.
             builder.AddAttribute(122, "class", RowClassFor(item, selected));
 
@@ -1034,10 +1052,6 @@ namespace Radzen.FastGrid
                 builder.OpenElement(130, "td");
                 builder.AddAttribute(131, "role", "gridcell");
                 builder.AddAttribute(132, "class", "rz-col-icon");
-                builder.OpenElement(133, "span");
-                builder.AddAttribute(134, "class", "rz-column-title");
-                builder.CloseElement();
-
                 builder.OpenElement(135, "button");
                 builder.AddAttribute(136, "type", "button");
                 builder.AddAttribute(137, "tabindex", "-1");

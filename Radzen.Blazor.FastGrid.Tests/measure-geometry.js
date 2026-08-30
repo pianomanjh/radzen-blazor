@@ -97,6 +97,7 @@ async function main() {
         const report = await page.evaluate(() => {
             const round = value => Math.round(value * 100) / 100;
             const height = element => (element ? round(element.getBoundingClientRect().height) : null);
+            const width = element => (element ? round(element.getBoundingClientRect().width) : null);
 
             return {
                 // Custom properties only the Radzen theme defines. If these resolve, the stylesheet did not
@@ -115,6 +116,27 @@ async function main() {
                         return th ? getComputedStyle(th).padding : null;
                     })(),
                     rowCount: pane.querySelectorAll('tbody tr').length,
+
+                    // Null on the panes with no row detail, which is what tells the tests which pane
+                    // they are looking at without another dataset attribute to keep in step.
+                    toggleCell: height(pane.querySelector('tbody td.rz-col-icon')),
+                    dataRow: height(pane.querySelector('tbody tr')),
+
+                    // Width as well as height for the toggle cell: an empty element with horizontal
+                    // padding takes width without taking height, so a height-only check would call it
+                    // inert and it would not be.
+                    toggleCellWidth: width(pane.querySelector('tbody td.rz-col-icon')),
+
+                    // The cell itself is inside a table-layout:fixed table, so its box says nothing
+                    // about what it contains. The button's does: anything in the cell taking space
+                    // moves it.
+                    toggleButtonLeft: (() => {
+                        const cell = pane.querySelector('tbody td.rz-col-icon');
+                        const button = cell && cell.querySelector('button');
+                        if (!button) { return null; }
+                        return round(button.getBoundingClientRect().left - cell.getBoundingClientRect().left);
+                    })(),
+                    toggleButtonWidth: width(pane.querySelector('tbody td.rz-col-icon button')),
                 })),
             };
         });
