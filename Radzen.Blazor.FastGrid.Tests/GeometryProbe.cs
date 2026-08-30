@@ -24,8 +24,34 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         [JsonPropertyName("rowCount")] public int RowCount { get; set; }
 
-        public override string ToString() => string.Create(CultureInfo.InvariantCulture,
-            $"{Grid}: header {HeaderCell}px, body {BodyCell}px, table {Table}px ({RowCount} rows)");
+        /// <summary>The row-detail toggle cell, or null on a pane with no row detail.</summary>
+        [JsonPropertyName("toggleCell")] public double? ToggleCell { get; set; }
+
+        /// <summary>The first body row, which is what a toggle cell taller than its neighbours moves.</summary>
+        [JsonPropertyName("dataRow")] public double? DataRow { get; set; }
+
+        /// <summary>The toggle cell's width - what an empty element with horizontal padding changes.</summary>
+        [JsonPropertyName("toggleCellWidth")] public double? ToggleCellWidth { get; set; }
+
+        /// <summary>
+        /// The toggle button's offset inside its cell, and its width. The cell sits in a
+        /// table-layout:fixed table so its own box cannot reveal its contents; the button's can, because
+        /// anything in the cell that takes space moves it.
+        /// </summary>
+        [JsonPropertyName("toggleButtonLeft")] public double? ToggleButtonLeft { get; set; }
+
+        [JsonPropertyName("toggleButtonWidth")] public double? ToggleButtonWidth { get; set; }
+
+        public override string ToString()
+        {
+            var text = string.Create(CultureInfo.InvariantCulture,
+                $"{Grid}: header {HeaderCell}px, body {BodyCell}px, table {Table}px ({RowCount} rows)");
+
+            return ToggleCell is null
+                ? text
+                : text + string.Create(CultureInfo.InvariantCulture,
+                    $", toggle {ToggleCell}x{ToggleCellWidth}px, row {DataRow}px, button +{ToggleButtonLeft}x{ToggleButtonWidth}px");
+        }
     }
 
     /// <summary>One stylesheet request the page made, and how it came back.</summary>

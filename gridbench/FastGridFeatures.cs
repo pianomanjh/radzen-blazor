@@ -227,6 +227,9 @@ public class FastGridFeatureBench
         p["ShowExpandColumn"] = false;
     });
 
+    [Benchmark(Description = "+ ItemKey")]
+    public Task ItemKeyed() => Render(p => p["ItemKey"] = (Func<Person, object>)(x => x.Id));
+
     [Benchmark(Description = "+ settings raised on every reload")]
     public Task Settings() => Render(p =>
         p["SettingsChanged"] = EventCallback.Factory.Create<FastGridSettings>(new object(), _ => { }));

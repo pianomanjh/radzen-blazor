@@ -125,6 +125,12 @@ that changed.
 Pass a `HashSet<T>` when many rows can be selected: membership is looked up once per row through the
 collection's own `Contains`, so a long `List<T>` is a scan per row.
 
+`ItemKey` gives each row a `@key`, as QuickGrid's does - typically the row's primary key. Without one
+the diff matches rows by position, so a re-sort rewrites the text of every cell in place; with one it
+matches by identity and moves the rows. Not free - the renderer builds a dictionary of the keys, and a
+value-typed key boxes once per row - so it is worth it where rows are reordered, not where they only
+scroll.
+
 `RowClick`, `RowDoubleClick`, `CellClick` and `CellContextMenu` are each bound only when something
 listens - an unhandled event costs no attribute and no delegate. That matters most for the cell ones:
 a delegate per cell is five times a delegate per row on a five-column grid. `ShowCellDataAsTooltip`

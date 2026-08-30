@@ -89,6 +89,22 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(g => g.AllowSorting, true);
                     p.Add(g => g.ChildContent, FastGridColumns);
                 }).Markup;
+
+                // The same two grids again with row detail on. Collapsed, deliberately: the question is
+                // what the toggle cell does to an ordinary row, and an expanded row is a different one.
+                DataGridDetailMarkup = ctx.RenderComponent<RadzenDataGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.Columns, DataGridColumns);
+                    p.Add(g => g.Template, Detail);
+                }).Markup;
+
+                FastGridDetailMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.ChildContent, FastGridColumns);
+                    p.Add(g => g.Template, Detail);
+                }).Markup;
             }
 
             var parser = new HtmlParser();
@@ -107,6 +123,18 @@ namespace Radzen.Blazor.FastGrid.Tests
         public string DataGridMarkup { get; }
 
         public string FastGridMarkup { get; }
+
+        public string DataGridDetailMarkup { get; }
+
+        public string FastGridDetailMarkup { get; }
+
+        /// <summary>Names of the two panes rendered with row detail.</summary>
+        public const string DataGridDetail = "RadzenDataGrid detail";
+
+        public const string FastGridDetail = "RadzenFastGrid detail";
+
+        static readonly RenderFragment<Person> Detail =
+            person => builder => builder.AddContent(0, person.Name);
 
         /// <summary>The reference grid: whatever it does is, by definition, the target.</summary>
         public Grid DataGrid { get; }
@@ -194,6 +222,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 </head><body>
 <div class=""pane"" data-grid=""{DataGrid.Name}"">{DataGridMarkup}</div>
 <div class=""pane"" data-grid=""{FastGrid.Name}"">{FastGridMarkup}</div>
+<div class=""pane"" data-grid=""{DataGridDetail}"">{DataGridDetailMarkup}</div>
+<div class=""pane"" data-grid=""{FastGridDetail}"">{FastGridDetailMarkup}</div>
 </body></html>";
 
             File.WriteAllText(pagePath, page);

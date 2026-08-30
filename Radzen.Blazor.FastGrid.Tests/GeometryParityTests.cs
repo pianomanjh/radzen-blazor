@@ -127,6 +127,47 @@ namespace Radzen.Blazor.FastGrid.Tests
             }
         }
 
+        // Row detail is the one feature whose markup was copied from RadzenDataGrid rather than derived
+        // from the theme, so what the theme actually needs from the toggle cell had to be measured.
+        //
+        // The cell's own box cannot answer that. It sits in a table-layout:fixed table and fills the row
+        // height, so it measures 37x32 whatever is inside it - a 40px element added to it did not move it
+        // by a pixel. The button's offset inside the cell is the measurement that sees the contents:
+        // anything taking space pushes it. That is what established the empty rz-column-title span
+        // RadzenDataGrid puts here takes no space at all, and what will catch it if that changes.
+        [Theory]
+        [InlineData("toggle cell")]
+        [InlineData("toggle cell width")]
+        [InlineData("toggle button offset")]
+        [InlineData("toggle button width")]
+        [InlineData("data row")]
+        [InlineData("body cell")]
+        [InlineData("table")]
+        public void Fast_grid_row_detail_height_matches_the_data_grid(string what)
+        {
+            var report = fixtures.Geometry;
+            var reference = Height(report[GridParityFixture.DataGridDetail], what);
+            var actual = Height(report[GridParityFixture.FastGridDetail], what);
+
+            ParityAssert.True(reference.HasValue && actual.HasValue,
+                $"both grids render a measurable {what} with row detail on",
+                "a null toggle-cell height means the expand column is not there at all, which is the first thing that would break",
+                "a height for both grids",
+                $"{GridParityFixture.DataGridDetail}: {Format(reference)}, {GridParityFixture.FastGridDetail}: {Format(actual)}",
+                report.Describe());
+
+            var delta = Math.Abs(actual.Value - reference.Value);
+
+            ParityAssert.True(delta <= ParityTolerance,
+                $"RadzenFastGrid {what} height matches RadzenDataGrid with row detail on",
+                "the toggle cell's contents were copied from RadzenDataGrid without knowing which of them the theme needs. If one of them can be dropped, this stays green and the component gets cheaper; if it cannot, this is what says so",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"{reference.Value}px (RadzenDataGrid), within {ParityTolerance}px"),
+                string.Create(CultureInfo.InvariantCulture,
+                    $"{actual.Value}px (RadzenFastGrid), off by {Math.Round(delta, 2)}px"),
+                report.Describe());
+        }
+
         [Fact]
         public void The_theme_puts_no_padding_on_the_header_cell_itself()
         {
@@ -153,6 +194,11 @@ namespace Radzen.Blazor.FastGrid.Tests
             "header cell" => geometry.HeaderCell,
             "body cell" => geometry.BodyCell,
             "table" => geometry.Table,
+            "toggle cell" => geometry.ToggleCell,
+            "toggle cell width" => geometry.ToggleCellWidth,
+            "toggle button offset" => geometry.ToggleButtonLeft,
+            "toggle button width" => geometry.ToggleButtonWidth,
+            "data row" => geometry.DataRow,
             _ => throw new ArgumentOutOfRangeException(nameof(what), what, "unknown measurement"),
         };
 

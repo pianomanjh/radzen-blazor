@@ -183,6 +183,21 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(new[] { "Carol" }, collapsed);
         }
 
+        // The toggle cell carries no empty rz-column-title span, unlike RadzenDataGrid's. The geometry
+        // check is what established it takes no space - the button sits at the same offset inside the
+        // cell either way - so this pins the markup that measurement licensed.
+        [Fact]
+        public void TheToggleCellHoldsOnlyTheButton()
+        {
+            using var ctx = Context();
+
+            var cut = Render(ctx, p => p.Add(g => g.Template, Detail));
+            var cell = cut.Find("tbody td.rz-col-icon");
+
+            Assert.Equal(1, cell.Children.Length);
+            Assert.Equal("BUTTON", cell.Children[0].TagName);
+        }
+
         [Fact]
         public void TheEmptyMessageSpansTheToggleColumnToo()
         {

@@ -153,6 +153,45 @@ namespace Radzen.FastGrid.Tests
             Assert.All(rows, row => Assert.Equal("rz-data-row flagged", row.ClassName));
         }
 
+        // --- row identity ------------------------------------------------------------------------
+
+        // Without a key the diff matches rows by position; with one it matches them by identity. The
+        // rendered markup is the same either way - what changes is how the renderer gets there - so what
+        // is assertable is that the grid still renders correctly through a reorder.
+        [Fact]
+        public void ItemKeySurvivesAReorder()
+        {
+            using var ctx = Context();
+
+            var people = People.Sample();
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, people);
+                p.Add(g => g.ChildContent, TwoColumns);
+                p.Add(g => g.ItemKey, (Func<Person, object>)(person => person.Id));
+            });
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" },
+                cut.FindAll("tbody tr td:first-child").Select(c => c.TextContent).ToArray());
+
+            people.Reverse();
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, people.ToList()));
+
+            Assert.Equal(new[] { "Bob", "Dave", "Alice", "Carol" },
+                cut.FindAll("tbody tr td:first-child").Select(c => c.TextContent).ToArray());
+        }
+
+        [Fact]
+        public void NoItemKeyStillRenders()
+        {
+            using var ctx = Context();
+
+            var cut = Render(ctx);
+
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+        }
+
         // --- selection -------------------------------------------------------------------------
 
         [Fact]
