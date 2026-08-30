@@ -213,10 +213,20 @@ Same harness, same 5-column data, `--job short`:
 
 | N=1000 | Time | Allocated | vs RadzenDataGrid |
 | --- | --- | --- | --- |
-| `RadzenDataGrid` (with PR #8) | 17,916 us | 18,189 KB | 1x |
-| `SlimGrid` prototype | 1,196 us | 266 KB | 68x leaner |
-| **`RadzenFastGrid`** | **1,079 us** | **149 KB** | **122x leaner** |
-| QuickGrid | 2,429 us | 370 KB | 49x leaner |
+| `RadzenDataGrid` (with PR #8) | 17,790 us | 18,189 KB | 1x |
+| `SlimGrid` prototype | 1,280 us | 266 KB | 68x leaner |
+| **`RadzenFastGrid`** | **1,178 us** | **151 KB** | **120x leaner** |
+| QuickGrid | 2,342 us | 370 KB | 49x leaner |
+
+Re-measured after the layout, chrome, row and selection features landed. The component's own cost
+against the commit before them, on the same machine in the same session: **+0.72 KB at 1000 rows and
++0.84 KB at 200**. Constant rather than per-row, which is what it should be - it is the two lists the
+grid now keeps to hold its drawn columns and to order them, allocated once per component and not
+touched per row. Time is unchanged: 1,129 us to 1,178 us at 1000 rows against a 60 us standard
+deviation, and 348.9 us to 348.5 us at 200.
+
+The 149 KB this table used to carry came from an earlier session; the same build measured 150.44 KB
+here. Sessions drift, so a regression is only worth reading against a baseline taken beside it.
 
 It is leaner than the prototype it came from, because the prototype used Radzen's compiled
 `Func<T,object>` getters and paid a box per cell; `PropertyColumn<T,TProp>` compiles to `Func<T,string>`
@@ -446,7 +456,7 @@ these are the differences the parity rules deliberately do not cover:
 
 | Divergence | Consequence |
 | --- | --- |
-| No `title="<value>"` on the cell span | **Decided, not overlooked.** `RadzenDataGrid` emits one, so a cell truncated to an ellipsis still reveals its full value on hover; `RadzenFastGrid` truncates identically and shows nothing. A real loss, and invisible to a geometry check. It costs ~61 B/cell - 305 KB at 1000 x 5, against a 149 KB budget - so paying it everywhere would triple the component's allocation for a hover affordance. A `TemplateColumn` can emit it for the one column that needs it. |
+| `title="<value>"` on the cell span is opt-in | `RadzenDataGrid` always emits one, so a cell truncated to an ellipsis reveals its full value on hover. `RadzenFastGrid` does it behind `ShowCellDataAsTooltip`. Measured on the component at **+116 KB** at 1000 x 5 - about 23 B/cell, against the ~61 B/cell this table predicted from the prototype, so +77% rather than the tripling it forecast. Still off by default, since it is an attribute per cell plus deriving each cell's text a second time; a `TemplateColumn` remains the way to have it on one column only. |
 | No `rz-text-truncate` on the cell span | Inert: `.rz-grid-table td .rz-cell-data` already sets `overflow/text-overflow/white-space`. Verified: identical computed styles. |
 | No `<colgroup>`, no `role="presentation"` on the table | Widths match today only because five equal columns under `table-layout: fixed` distribute evenly with or without it. This diverges the moment column widths are supported. |
 | No `rz-text-align-*` class on `th`/`td` | Inert for the default, which the theme resolves to `start` either way. `RadzenFastGrid` has no `TextAlign` concept at all yet. |
