@@ -531,6 +531,44 @@ itself until the row arrives, and adopts the row when it does. `ValueText` forma
 The lookup never walks an `IQueryable` to resolve it: reading the whole table to render one label is
 what this component exists not to do.
 
+## Filtering and sorting a list is not filtering and sorting a query
+
+The grid takes an `IEnumerable<TItem>` or an `IQueryable<TItem>`, and until recently it composed both
+the same way: wrap whatever arrived in a queryable, hand it an expression tree, let LINQ sort it out.
+For a real provider that is exactly right - the expression is the point, and Entity Framework turns it
+into SQL. For a `List<T>` it is the expensive way round. `EnumerableQuery` **rewrites and recompiles the
+expression tree every time the result is enumerated**, and a grid enumerates on every render.
+
+Measured at 1000 rows, filtering alone:
+
+| | Time | Allocated |
+| --- | ---: | ---: |
+| `list.AsQueryable().Where(expression)` | 1,117 us | 11.80 KB |
+| `list.Where(delegate)` | **38 us** | **0.07 KB** |
+| `list.Where(expression.Compile())`, compiling each time | 292 us | 4.36 KB |
+
+The whole bare render is 1,800 us, so an in-memory grid was spending most of a second render deciding
+which rows to draw. So a source that is already in memory is now composed with **delegates**, and only a
+real queryable gets expression trees:
+
+| | Before | After |
+| --- | ---: | ---: |
+| a filter that actually filters | 1,842 us / 83.4 KB | **911 us / 77.0 KB** |
+| sorted by one column | 2,516 us / 178.9 KB | **2,046 us / 173.1 KB** |
+| sorted by two columns | 2,836 us / 200.9 KB | **2,204 us / 193.4 KB** |
+| the same filter over an `IQueryable` | 1,742 us | 1,815 us *(unchanged, as intended)* |
+
+Composed rather than compiled, note - `Expression.Compile()` is the 292 us row above, and under Native
+AOT it cannot emit code at all and falls back to the interpreter. A closure over the column's getter
+needs neither. The getter itself is compiled once per column, on first use, so a grid over a queryable
+never pays for one.
+
+Two implementations of sixteen filter operators is a real risk of divergence, so nothing here is taken
+on trust: every operator is checked through all three builders - reflective, expression, delegate - over
+the same rows, and the grid is checked route against route as a whole. A column that cannot compose in
+memory, such as a template column filtering by a string path, sends the **whole** composition back to
+the expression route rather than half of it.
+
 ## Render hooks, and what a per-cell one costs
 
 `CellRender`, `HeaderCellRender` and `FooterCellRender` are handed each cell before it is drawn, and

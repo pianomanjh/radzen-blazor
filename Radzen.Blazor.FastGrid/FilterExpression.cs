@@ -296,24 +296,188 @@ namespace Radzen.FastGrid
             }
         }
 
+        /// <summary>
+        /// The same filter as <see cref="For" />, composed as a delegate over the column's compiled
+        /// getter rather than as an expression tree.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// For a source that is already a list, the expression tree is the expensive way round. Handing
+        /// one to <c>Queryable.Where</c> over a <c>List&lt;T&gt;</c> wraps it in an
+        /// <c>EnumerableQuery</c>, which rewrites and recompiles the tree <em>every time the result is
+        /// enumerated</em>. Measured at 1000 rows: 1,117 us and 11.8 KB that way, 38 us and 0.07 KB
+        /// through a delegate - and the whole bare render is 1,800 us, so an in-memory grid was paying
+        /// most of a second render just to filter.
+        /// </para>
+        /// <para>
+        /// Composed rather than compiled, too: <c>Expression.Compile()</c> costs about 250 us here, and
+        /// under Native AOT it cannot emit code at all and falls back to the interpreter. Closures need
+        /// neither.
+        /// </para>
+        /// <para>
+        /// Two implementations of sixteen operators is a real risk of divergence, so they are checked
+        /// against each other row for row in <c>FilterExpressionParityTests</c>, the same way both are
+        /// checked against the reflective builder they replaced.
+        /// </para>
+        /// </remarks>
+        internal static Func<TItem, bool>? PredicateFor(Func<TItem, TProp> selector,
+            FilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity)
+        {
+            if (filterOperator is FilterOperator.IsNull or FilterOperator.IsNotNull)
+            {
+                if (!IsNullable)
+                {
+                    var constant = filterOperator is FilterOperator.IsNotNull;
+
+                    return _ => constant;
+                }
+
+                return filterOperator is FilterOperator.IsNull
+                    ? item => selector(item) is null
+                    : item => selector(item) is not null;
+            }
+
+            if (typeof(TProp) == typeof(string))
+            {
+                return TextPredicate((Func<TItem, string?>)(object)selector, filterOperator, value,
+                    caseSensitivity);
+            }
+
+            if (filterOperator is FilterOperator.IsEmpty or FilterOperator.IsNotEmpty)
+            {
+                return null;
+            }
+
+            if (filterOperator is FilterOperator.In or FilterOperator.NotIn)
+            {
+                return InPredicate(selector, value, filterOperator is FilterOperator.NotIn);
+            }
+
+            return ComparisonPredicate(selector, filterOperator, value);
+        }
+
+        static Func<TItem, bool>? TextPredicate(Func<TItem, string?> selector,
+            FilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity)
+        {
+            var text = value as string ?? value?.ToString();
+
+            // Length rather than IsNullOrEmpty, and the difference is the point: the expression builder
+            // compares the raw property to string.Empty, so a null is *not* empty. IsNullOrEmpty would
+            // quietly disagree with it for exactly the rows this operator exists to sort out.
+            if (filterOperator is FilterOperator.IsEmpty)
+            {
+                return item => selector(item)?.Length == 0;
+            }
+
+            if (filterOperator is FilterOperator.IsNotEmpty)
+            {
+                return item => selector(item)?.Length != 0;
+            }
+
+            if (filterOperator is FilterOperator.In or FilterOperator.NotIn)
+            {
+                return InPredicate((Func<TItem, TProp>)(object)selector, value,
+                    filterOperator is FilterOperator.NotIn);
+            }
+
+            // OrdinalIgnoreCase, matching what the expression builder emits for an in-memory source -
+            // which is the only kind that reaches this at all.
+            var comparison = caseSensitivity == FilterCaseSensitivity.CaseInsensitive
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            // A null string is the empty string to every operator but IsNull, as it is over there.
+            return filterOperator switch
+            {
+                FilterOperator.Equals => item => (selector(item) ?? "").Equals(text, comparison),
+                FilterOperator.NotEquals => item => !(selector(item) ?? "").Equals(text, comparison),
+                FilterOperator.Contains => item => (selector(item) ?? "").Contains(text ?? "", comparison),
+                FilterOperator.DoesNotContain =>
+                    item => !(selector(item) ?? "").Contains(text ?? "", comparison),
+                FilterOperator.StartsWith => item => (selector(item) ?? "").StartsWith(text ?? "", comparison),
+                FilterOperator.EndsWith => item => (selector(item) ?? "").EndsWith(text ?? "", comparison),
+                _ => null,
+            };
+        }
+
+        static Func<TItem, bool>? ComparisonPredicate(Func<TItem, TProp> selector,
+            FilterOperator filterOperator, object? value)
+        {
+            if (Coerce(value) is not { } constant)
+            {
+                return null;
+            }
+
+            var key = (TProp?)constant.Value;
+
+            return filterOperator switch
+            {
+                FilterOperator.Equals => item => EqualityComparer<TProp>.Default.Equals(selector(item), key!),
+                FilterOperator.NotEquals =>
+                    item => !EqualityComparer<TProp>.Default.Equals(selector(item), key!),
+                FilterOperator.Contains or FilterOperator.DoesNotContain
+                    or FilterOperator.StartsWith or FilterOperator.EndsWith => null,
+                _ => OrderedPredicate(selector, filterOperator, key),
+            };
+        }
+
+        /// <summary>
+        /// An ordering comparison, with the null handling a lifted operator has rather than the one
+        /// <see cref="Comparer{T}" /> has: over a nullable column, <c>x &lt; 3</c> is false for a row
+        /// whose value is missing, where the comparer would sort it below everything.
+        /// </summary>
+        static Func<TItem, bool>? OrderedPredicate(Func<TItem, TProp> selector,
+            FilterOperator filterOperator, TProp? key)
+        {
+            if (key is null)
+            {
+                return null;
+            }
+
+            var comparer = Comparer<TProp>.Default;
+
+            return filterOperator switch
+            {
+                FilterOperator.LessThan =>
+                    item => selector(item) is { } v && comparer.Compare(v, key) < 0,
+                FilterOperator.LessThanOrEquals =>
+                    item => selector(item) is { } v && comparer.Compare(v, key) <= 0,
+                FilterOperator.GreaterThan =>
+                    item => selector(item) is { } v && comparer.Compare(v, key) > 0,
+                FilterOperator.GreaterThanOrEquals =>
+                    item => selector(item) is { } v && comparer.Compare(v, key) >= 0,
+                _ => null,
+            };
+        }
+
+        static Func<TItem, bool> InPredicate(Func<TItem, TProp> selector, object? value, bool negate)
+        {
+            if (value is not IEnumerable sequence || value is string)
+            {
+                return _ => true;
+            }
+
+            var values = Listed(sequence);
+
+            return negate
+                ? item => !values.Contains(selector(item))
+                : item => values.Contains(selector(item));
+        }
+
         static readonly MethodInfo ListContains =
             MethodOf(() => default(List<TProp>)!.Contains(default!));
 
-        static Expression? In(Expression property, object? value, bool negate)
+        /// <summary>The sequence as a list of the column's own type, dropping what will not convert.</summary>
+        /// <remarks>
+        /// A null in the list is dropped rather than matched: it is what an untouched check box puts
+        /// there, not a request to match rows whose value is missing.
+        /// </remarks>
+        static List<TProp> Listed(IEnumerable sequence)
         {
-            // Not a sequence, so there is nothing to be in. QueryableExtension answers true here rather
-            // than null - the filter is not expressible, so it narrows nothing.
-            if (value is not IEnumerable sequence || value is string)
-            {
-                return Expression.Constant(true);
-            }
-
             var values = new List<TProp>();
 
             foreach (var item in sequence)
             {
-                // A null in the list is dropped rather than matched: it is what an untouched check box
-                // puts there, not a request to match rows whose value is missing.
                 if (item is null)
                 {
                     continue;
@@ -328,6 +492,20 @@ namespace Radzen.FastGrid
                     values.Add((TProp)converted);
                 }
             }
+
+            return values;
+        }
+
+        static Expression? In(Expression property, object? value, bool negate)
+        {
+            // Not a sequence, so there is nothing to be in. QueryableExtension answers true here rather
+            // than null - the filter is not expressible, so it narrows nothing.
+            if (value is not IEnumerable sequence || value is string)
+            {
+                return Expression.Constant(true);
+            }
+
+            var values = Listed(sequence);
 
             var constant = Expression.Constant(values, typeof(List<TProp>));
             var contains = (Expression)Expression.Call(constant, ListContains, NotNull(property));

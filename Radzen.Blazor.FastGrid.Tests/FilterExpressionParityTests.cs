@@ -84,14 +84,32 @@ namespace Radzen.FastGrid.Tests
         static IQueryable<Person> Source(bool inMemory) =>
             inMemory ? People.AsQueryable() : new NotEnumerableQuery<Person>(People.AsQueryable());
 
+        /// <summary>The rows the delegate builder keeps, which only ever runs over an in-memory source.</summary>
+        static int[] Composed<TProp>(Expression<Func<Person, TProp>> selector, FilterOperator op,
+            object value, FilterCaseSensitivity sensitivity)
+        {
+            var predicate = FilterExpression<Person, TProp>.PredicateFor(selector.Compile(), op, value,
+                sensitivity);
+
+            Assert.NotNull(predicate);
+
+            return People.Where(predicate).Select(p => p.Id).OrderBy(id => id).ToArray();
+        }
+
         static void Same<TProp>(Expression<Func<Person, TProp>> selector, string path, FilterOperator op,
             object value, FilterCaseSensitivity sensitivity = FilterCaseSensitivity.Default,
             bool inMemory = true)
         {
             var expected = Reflective(path, op, value, typeof(TProp), sensitivity, inMemory);
-            var actual = Typed(selector, op, value, sensitivity, inMemory);
 
-            Assert.Equal(expected, actual);
+            Assert.Equal(expected, Typed(selector, op, value, sensitivity, inMemory));
+
+            // The delegate builder is only ever used over an in-memory source, so it is only compared
+            // where the expression builder is answering for one too. Three builders, one answer.
+            if (inMemory)
+            {
+                Assert.Equal(expected, Composed(selector, op, value, sensitivity));
+            }
         }
 
         // --- strings ----------------------------------------------------------------------------

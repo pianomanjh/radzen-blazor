@@ -521,6 +521,29 @@ namespace Radzen.FastGrid
         public virtual Expression<Func<TItem, bool>>? ApplyFilter(FilterCaseSensitivity caseSensitivity,
             bool inMemory) => null;
 
+        /// <summary>
+        /// The same filter as <see cref="ApplyFilter" />, as a delegate, or null when the column cannot
+        /// compose one.
+        /// </summary>
+        /// <remarks>
+        /// Only for a source that is already in memory, and worth having for exactly that: handing an
+        /// expression tree to <c>Queryable.Where</c> over a list wraps it in an <c>EnumerableQuery</c>,
+        /// which rewrites and recompiles the tree every time the result is enumerated. Measured at
+        /// 1000 rows that is 1,117 us against 38 us.
+        /// </remarks>
+        public virtual Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity) => null;
+
+        /// <summary>
+        /// Orders an in-memory sequence by this column, or returns null when it cannot order - the same
+        /// contract as <see cref="ApplySort" />, which the grid already skips over.
+        /// </summary>
+        public virtual IOrderedEnumerable<TItem>? ApplySortInMemory(System.Collections.Generic.IEnumerable<TItem> source,
+            bool descending) => null;
+
+        /// <summary>Adds this column to an in-memory ordering already begun.</summary>
+        public virtual IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
+            bool descending) => null;
+
         /// <inheritdoc />
         public override Task SetParametersAsync(ParameterView parameters)
         {
