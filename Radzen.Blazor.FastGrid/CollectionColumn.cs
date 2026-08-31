@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
@@ -137,21 +138,31 @@ namespace Radzen.FastGrid
         public override IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending)
         {
             // The boxing conversion is stripped first, so the ordering is by the key's own type and a
-            // provider sees ORDER BY that column rather than an untranslatable convert to object.
-            // The sort key's type is only known once the boxing conversion is stripped, so ordering by
-            // it closes a generic method at run time. A column that cannot order returns null, which the
-            // grid already skips rather than breaking the sort chain over.
-            var selector = SortBy is null || !DynamicCode.Supported ? null : Unbox(SortBy);
+            // provider sees ORDER BY that column rather than an untranslatable convert to object. That
+            // type is only known once it is stripped, which is what makes this the one ordering in the
+            // component that closes a generic method at run time.
+            //
+            // The guard wraps the call rather than deciding a local above it: the analyzer follows
+            // control flow, not the reasoning behind a null. Under Native AOT this column simply cannot
+            // order, and returning null is what the grid already treats as "cannot order" - it skips the
+            // column rather than breaking the rest of the sort chain over it.
+            if (SortBy is null || source is null || !DynamicCode.Supported)
+            {
+                return null;
+            }
 
-            return selector is null || source is null ? null : Projection.OrderBy(source, selector, descending);
+            return Projection.OrderBy(source, Unbox(SortBy), descending);
         }
 
         /// <inheritdoc />
         public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending)
         {
-            var selector = SortBy is null || !DynamicCode.Supported ? null : Unbox(SortBy);
+            if (SortBy is null || source is null || !DynamicCode.Supported)
+            {
+                return null;
+            }
 
-            return selector is null || source is null ? null : Projection.ThenBy(source, selector, descending);
+            return Projection.ThenBy(source, Unbox(SortBy), descending);
         }
 
         /// <inheritdoc />
@@ -197,9 +208,17 @@ namespace Radzen.FastGrid
             var elements = source.SelectMany(Property);
             var selector = MemberSelector(FilterProperty ?? DisplayProperty);
 
-            return selector is null
-                ? elements.Distinct()
-                : Projection.SelectDistinct(elements, selector);
+            // Queryable.Distinct by name rather than as an extension: Radzen's non-generic
+            // Distinct(this IQueryable) would otherwise win overload resolution and lose TElement.
+            //
+            // Only the projection onto a display member needs a type known at run time. Distinct over
+            // the elements themselves is typed at TElement and stays available everywhere.
+            if (selector is null)
+            {
+                return Queryable.Distinct(elements);
+            }
+
+            return DynamicCode.Supported ? Projection.SelectDistinct(elements, selector) : null;
         }
 
         /// <summary>
@@ -216,6 +235,7 @@ namespace Radzen.FastGrid
         /// than the delegate's return type. Both have to be unwrapped, or the member looks like
         /// <c>object</c> and everything derived from its type is wrong.
         /// </summary>
+        [RequiresDynamicCode("Retypes a lambda to a type only known at run time.")]
         static LambdaExpression Unbox(LambdaExpression selector)
         {
             var body = PropertyPathResolver.Unwrap(selector.Body);
