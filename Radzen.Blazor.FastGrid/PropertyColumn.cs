@@ -222,6 +222,13 @@ namespace Radzen.FastGrid
                 return null;
             }
 
+            // A non-collection column projects through its own typed expression below; only the
+            // collection branch has to close SelectMany over an element type known at run time.
+            if (IsCollection && !DynamicCode.Supported)
+            {
+                return null;
+            }
+
             // FilterBy, not Property: the values offered have to be the ones the filter compares, or
             // the list shows one column's values and every choice filters another column by them.
             var selector = FilterBy ?? Property;
@@ -295,6 +302,31 @@ namespace Radzen.FastGrid
             // GetElementType answers with the type itself when it finds no IEnumerable<T> to read an
             // element type from - a non-generic IEnumerable, whose members are only known as objects.
             return element == type ? typeof(object) : element;
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Declines - and leaves the grid to build the predicate by reflection - in the three cases
+        /// where <typeparamref name="TProp" /> is not the type being compared:
+        /// <list type="bullet">
+        /// <item>a collection-valued column, whose filter compares an <em>element</em> whose type is not
+        /// a parameter here. <see cref="CollectionColumn{TItem, TElement}" /> has it as one;</item>
+        /// <item>a column declared as <c>object</c>, where the real type is only reachable through the
+        /// property path - the case this class already documents as worth giving a real type;</item>
+        /// <item>a filter aimed at a member of a collection's element, which is the same problem.</item>
+        /// </list>
+        /// </remarks>
+        public override Expression<Func<TItem, bool>>? ApplyFilter(FilterCaseSensitivity caseSensitivity,
+            bool inMemory)
+        {
+            if (IsCollection || typeof(TProp) == typeof(object)
+                || FilterMemberPath is not null || (FilterBy ?? Property) is not { } selector)
+            {
+                return null;
+            }
+
+            return FilterExpression<TItem, TProp>.For(selector, CurrentFilterOperator, CurrentFilterValue,
+                caseSensitivity, inMemory);
         }
 
         /// <inheritdoc />

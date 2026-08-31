@@ -138,7 +138,10 @@ namespace Radzen.FastGrid
         {
             // The boxing conversion is stripped first, so the ordering is by the key's own type and a
             // provider sees ORDER BY that column rather than an untranslatable convert to object.
-            var selector = SortBy is null ? null : Unbox(SortBy);
+            // The sort key's type is only known once the boxing conversion is stripped, so ordering by
+            // it closes a generic method at run time. A column that cannot order returns null, which the
+            // grid already skips rather than breaking the sort chain over.
+            var selector = SortBy is null || !DynamicCode.Supported ? null : Unbox(SortBy);
 
             return selector is null || source is null ? null : Projection.OrderBy(source, selector, descending);
         }
@@ -146,7 +149,7 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending)
         {
-            var selector = SortBy is null ? null : Unbox(SortBy);
+            var selector = SortBy is null || !DynamicCode.Supported ? null : Unbox(SortBy);
 
             return selector is null || source is null ? null : Projection.ThenBy(source, selector, descending);
         }
@@ -183,7 +186,10 @@ namespace Radzen.FastGrid
         /// </remarks>
         public override IQueryable? DistinctValues(IQueryable<TItem> source)
         {
-            if (source is null || Property is null)
+            // The projection onto the display member is typed at run time, and Distinct composes over
+            // the runtime element type. A null here leaves the check-box list to its FilterLookupData,
+            // which is the supported way to offer values without scanning for them.
+            if (source is null || Property is null || !DynamicCode.Supported)
             {
                 return null;
             }
