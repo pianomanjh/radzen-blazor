@@ -139,6 +139,11 @@ namespace Radzen.FastGrid
             // and sorts by Last still filters on what the reader can see. A computed column has no path
             // of its own, so an explicit sort key is the only one it can offer.
             filterPath = FilterBy is not null ? PropertyPathResolver.For(FilterBy) : propertyPath ?? path;
+
+            // The compiled getters are derived state like everything else here, and stale ones would
+            // filter and sort by the expression the column used to have.
+            filterGetter = null;
+            sortGetter = null;
         }
 
         /// <summary>
@@ -346,6 +351,53 @@ namespace Radzen.FastGrid
 
             return FilterExpression<TItem, TProp>.For(selector, CurrentFilterOperator, CurrentFilterValue,
                 caseSensitivity, inMemory);
+        }
+
+        // Compiled on first use rather than in Derive: a grid over a queryable never needs either, and
+        // a compile is about 250 us - and, under Native AOT, an interpreted lambda rather than emitted
+        // code. Cleared with the rest of the derived state when the expressions change.
+        Func<TItem, TProp>? filterGetter;
+        Func<TItem, TProp>? sortGetter;
+
+        /// <inheritdoc />
+        public override Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity)
+        {
+            if (IsCollection || typeof(TProp) == typeof(object)
+                || FilterMemberPath is not null || (FilterBy ?? Property) is not { } selector)
+            {
+                return null;
+            }
+
+            return FilterExpression<TItem, TProp>.PredicateFor(filterGetter ??= selector.Compile(),
+                CurrentFilterOperator, CurrentFilterValue, caseSensitivity);
+        }
+
+        /// <inheritdoc />
+        public override IOrderedEnumerable<TItem>? ApplySortInMemory(IEnumerable<TItem> source,
+            bool descending)
+        {
+            if (!CanSort || (SortBy ?? Property) is not { } selector)
+            {
+                return null;
+            }
+
+            sortGetter ??= selector.Compile();
+
+            return descending ? source.OrderByDescending(sortGetter) : source.OrderBy(sortGetter);
+        }
+
+        /// <inheritdoc />
+        public override IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
+            bool descending)
+        {
+            if (!CanSort || (SortBy ?? Property) is not { } selector)
+            {
+                return null;
+            }
+
+            sortGetter ??= selector.Compile();
+
+            return descending ? source.ThenByDescending(sortGetter) : source.ThenBy(sortGetter);
         }
 
         /// <inheritdoc />

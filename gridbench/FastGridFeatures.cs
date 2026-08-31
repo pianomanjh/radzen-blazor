@@ -75,6 +75,33 @@ public class FastGridFeatureBench
     static readonly RenderFragment Plain = Columns(geometry: false);
     static readonly RenderFragment Sized = Columns(geometry: true);
 
+    // The same five columns with a filter value declared on one of them, so the grid actually filters
+    // rather than only drawing somewhere to type.
+    static readonly RenderFragment FilteredColumns = b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title, object filterValue)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+
+            if (filterValue is not null)
+            {
+                b.AddAttribute(s++, "FilterValue", filterValue);
+            }
+
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id", null);
+        Column<string>(x => x.Name, "Name", "5");
+        Column<int>(x => x.Age, "Age", null);
+        Column<DateTime>(x => x.Hired, "Hired", null);
+        Column<decimal>(x => x.Salary, "Salary", null);
+    };
+
     async Task Render(Action<Dictionary<string, object?>> configure, RenderFragment columns = null)
     {
         var parameters = new Dictionary<string, object?>
@@ -327,6 +354,25 @@ public class FastGridFeatureBench
 
     [Benchmark(Description = "= RadzenDataGrid + a column picker")]
     public Task ReferenceColumnPicking() => Reference(p => p["AllowColumnPicking"] = true);
+
+    // The benchmarks above draw a filter row without filtering by it. These filter. The difference
+    // matters more than it looks: over a plain List<T> the grid wraps the source in an EnumerableQuery,
+    // which rewrites and recompiles the expression tree every time the result is enumerated.
+    [Benchmark(Description = "+ a filter that actually filters")]
+    public Task FilteringApplied() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ChildContent"] = FilteredColumns;
+    });
+
+    // The same over an IQueryable rather than a List, which is the shape an EF-backed grid has.
+    [Benchmark(Description = "+ a filter that actually filters, over a queryable")]
+    public Task FilteringAppliedQueryable() => Render(p =>
+    {
+        p["Data"] = people.AsQueryable();
+        p["AllowFiltering"] = true;
+        p["ChildContent"] = FilteredColumns;
+    });
 
     // The one hook on this component that runs per cell rather than per row or per column, so the
     // question these two answer together is what the seam itself costs before a handler does anything:
