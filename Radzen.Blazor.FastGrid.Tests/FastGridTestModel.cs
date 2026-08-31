@@ -110,7 +110,9 @@ namespace Radzen.FastGrid.Tests
             SortOrder? sortOrder = null,
             RenderFragment<ColumnBase<TItem>> headerTemplate = null,
             RenderFragment<ColumnBase<TItem>> footerTemplate = null,
-            string footerCssClass = null) => (builder, seq) =>
+            string footerCssClass = null,
+            bool pickable = true,
+            string columnPickerTitle = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
@@ -238,6 +240,16 @@ namespace Radzen.FastGrid.Tests
             if (footerCssClass is not null)
             {
                 builder.AddAttribute(seq + 26, nameof(PropertyColumn<TItem, TProp>.FooterCssClass), footerCssClass);
+            }
+
+            if (!pickable)
+            {
+                builder.AddAttribute(seq + 40, nameof(PropertyColumn<TItem, TProp>.Pickable), false);
+            }
+
+            if (columnPickerTitle is not null)
+            {
+                builder.AddAttribute(seq + 41, nameof(PropertyColumn<TItem, TProp>.ColumnPickerTitle), columnPickerTitle);
             }
 
             builder.CloseComponent();

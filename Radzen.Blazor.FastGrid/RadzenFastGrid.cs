@@ -228,6 +228,42 @@ namespace Radzen.FastGrid
         /// </summary>
         [Parameter] public bool AllowMultiColumnSorting { get; set; }
 
+        /// <summary>
+        /// Whether a control above the grid lets the user choose which columns are drawn. Off by
+        /// default; it costs one branch per render when off, and one drop-down when on.
+        /// </summary>
+        [Parameter] public bool AllowColumnPicking { get; set; }
+
+        /// <summary>Whether the picker offers a select-all entry.</summary>
+        [Parameter] public bool AllowPickAllColumns { get; set; } = true;
+
+        /// <summary>Whether the picker offers a filter box, for a grid with many columns.</summary>
+        [Parameter] public bool ColumnsPickerAllowFiltering { get; set; }
+
+        /// <summary>How many column names the picker lists before it summarises the count instead.</summary>
+        [Parameter] public int ColumnsPickerMaxSelectedLabels { get; set; } = 3;
+
+        /// <summary>Raised with the columns that are drawn, whenever the picker changes them.</summary>
+        [Parameter] public EventCallback<IEnumerable<ColumnBase<TItem>>> PickedColumnsChanged { get; set; }
+
+        /// <summary>The picker's placeholder.</summary>
+        [Parameter] public string ColumnsText { get; set; } = "Columns";
+
+        /// <summary>The picker's select-all label.</summary>
+        [Parameter] public string AllColumnsText { get; set; } = "All";
+
+        /// <summary>What the picker says instead of listing names once there are too many.</summary>
+        [Parameter] public string ColumnsShowingText { get; set; } = "columns showing";
+
+        /// <summary>The picker's accessible name.</summary>
+        [Parameter] public string SelectVisibleColumnsAriaLabel { get; set; } = "Select visible columns";
+
+        // The columns the picker offers and the subset currently drawn. Both are rebuilt from the
+        // registered columns each time the picker is drawn, so a column added or removed after the first
+        // render is offered or dropped without anything else having to notice.
+        readonly List<ColumnBase<TItem>> pickable = new();
+        readonly List<object> picked = new();
+
         /// <summary>Whether a sorted header shows its position in the sort.</summary>
         [Parameter] public bool ShowMultiColumnSortingIndex { get; set; }
 
@@ -357,7 +393,7 @@ namespace Radzen.FastGrid
             {
                 var column = columns[i];
 
-                if (!column.Visible)
+                if (!column.IsVisible)
                 {
                     continue;
                 }
@@ -508,8 +544,11 @@ namespace Radzen.FastGrid
 
         void RenderTable(RenderTreeBuilder builder)
         {
-            RefreshVisibleColumns();
-
+            // Before the columns are gathered, not after: stored settings can hide a column, and the
+            // drawn list is computed from what they leave. Applying them second showed the pre-settings
+            // columns for one render, and on a grid over a plain queryable there is no reload behind it
+            // to put that right.
+            //
             // Here and not in OnParametersSet: stored state names columns by property path, and no
             // column has registered by then. Defer has run, so by now every one of them has.
             if (settingsPending)
@@ -518,6 +557,8 @@ namespace Radzen.FastGrid
 
                 ApplySettings(appliedSettings!);
             }
+
+            RefreshVisibleColumns();
 
             BeginDrawing();
 
@@ -537,6 +578,11 @@ namespace Radzen.FastGrid
             builder.AddAttribute(1, "class", string.IsNullOrEmpty(CssClass)
                 ? "rz-data-grid rz-datatable"
                 : "rz-data-grid rz-datatable " + CssClass);
+
+            if (AllowColumnPicking)
+            {
+                RenderColumnPicker(builder);
+            }
 
             if (Paging && PagerPosition.HasFlag(PagerPosition.Top))
             {
@@ -600,6 +646,121 @@ namespace Radzen.FastGrid
             builder.AddAttribute(sequence + 10, nameof(RadzenPager.Density), Density);
             builder.AddComponentReferenceCapture(sequence + 11, capture);
             builder.CloseComponent();
+        }
+
+        // The picker: one drop-down above the table, in RadzenDataGrid's own wrapper elements so the
+        // themes style it unchanged. Sequence 700+ because it sits before everything else the grid
+        // draws and must not collide with the pager beside it.
+        //
+        // RadzenDropDown in Multiple mode already draws a checkbox per item with a select-all and an
+        // optional filter box, which is the whole control - the same reasoning as the check-box-list
+        // filter, and the reason picking costs a drop-down rather than a popup of the grid's own.
+        void RenderColumnPicker(RenderTreeBuilder builder)
+        {
+            RefreshPickable();
+
+            builder.OpenElement(700, "div");
+            builder.AddAttribute(701, "class", "rz-group-header");
+            builder.OpenElement(702, "div");
+            builder.AddAttribute(703, "class", "rz-column-picker");
+
+            builder.OpenComponent<RadzenDropDown<IEnumerable<object>>>(704);
+            builder.AddAttribute(705, nameof(RadzenDropDown<IEnumerable<object>>.Data), pickable);
+            builder.AddAttribute(706, nameof(RadzenDropDown<IEnumerable<object>>.Multiple), true);
+            builder.AddAttribute(707, nameof(RadzenDropDown<IEnumerable<object>>.TextProperty),
+                nameof(ColumnBase<TItem>.PickerTitle));
+            builder.AddAttribute(708, nameof(RadzenDropDown<IEnumerable<object>>.AllowSelectAll), AllowPickAllColumns);
+            builder.AddAttribute(709, nameof(RadzenDropDown<IEnumerable<object>>.SelectAllText), AllColumnsText);
+            builder.AddAttribute(710, nameof(RadzenDropDown<IEnumerable<object>>.SelectedItemsText), ColumnsShowingText);
+            builder.AddAttribute(711, nameof(RadzenDropDown<IEnumerable<object>>.MaxSelectedLabels), ColumnsPickerMaxSelectedLabels);
+            builder.AddAttribute(712, nameof(RadzenDropDown<IEnumerable<object>>.Placeholder), ColumnsText);
+            builder.AddAttribute(713, nameof(RadzenDropDown<IEnumerable<object>>.AllowFiltering), ColumnsPickerAllowFiltering);
+            builder.AddAttribute(714, nameof(RadzenDropDown<IEnumerable<object>>.FilterCaseSensitivity),
+                FilterCaseSensitivity.CaseInsensitive);
+            builder.AddAttribute(715, nameof(RadzenDropDown<IEnumerable<object>>.Value), picked);
+            builder.AddAttribute(716, nameof(RadzenDropDown<IEnumerable<object>>.Change),
+                EventCallback.Factory.Create<object>(this, OnColumnsPicked));
+            builder.AddAttribute(717, nameof(RadzenDropDown<IEnumerable<object>>.InputAttributes),
+                pickerInputAttributes ??= new Dictionary<string, object> { ["aria-label"] = SelectVisibleColumnsAriaLabel });
+            builder.CloseComponent();
+
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        Dictionary<string, object>? pickerInputAttributes;
+
+        // Rebuilt rather than kept in step by hand: a column can register or go at any render, and a
+        // list that only grew would offer a column that no longer exists.
+        void RefreshPickable()
+        {
+            pickable.Clear();
+            picked.Clear();
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.Pickable)
+                {
+                    continue;
+                }
+
+                pickable.Add(column);
+
+                if (column.IsVisible)
+                {
+                    picked.Add(column);
+                }
+            }
+        }
+
+        async Task OnColumnsPicked(object value)
+        {
+            // A set rather than a scan per column: the picker on a wide grid is the one place this could
+            // be quadratic, and it costs one small allocation on an event a user raises by hand.
+            var chosen = new HashSet<object>();
+
+            if (value is IEnumerable<object> selection)
+            {
+                foreach (var column in selection)
+                {
+                    chosen.Add(column);
+                }
+            }
+
+            // Only the pickable columns are told. A column the picker never offered - Pickable="false" -
+            // keeps whatever the markup said, rather than being hidden by its absence from the list.
+            for (var i = 0; i < pickable.Count; i++)
+            {
+                pickable[i].SetPicked(chosen.Contains(pickable[i]));
+            }
+
+            RefreshPickable();
+
+            if (PickedColumnsChanged.HasDelegate)
+            {
+                await PickedColumnsChanged.InvokeAsync(VisibleColumnsPicked()).ConfigureAwait(false);
+            }
+
+            // Through the same funnel as every other user-driven change, so a grid persisting settings
+            // stores the new visibility without the picker knowing anything about settings.
+            await RefreshAsync().ConfigureAwait(false);
+        }
+
+        List<ColumnBase<TItem>> VisibleColumnsPicked()
+        {
+            var chosen = new List<ColumnBase<TItem>>(pickable.Count);
+
+            for (var i = 0; i < pickable.Count; i++)
+            {
+                if (pickable[i].IsVisible)
+                {
+                    chosen.Add(pickable[i]);
+                }
+            }
+
+            return chosen;
         }
 
         // Widths live here and nowhere else. A width on every td is a frame per cell; one col per column

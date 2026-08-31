@@ -928,12 +928,25 @@ namespace Radzen.FastGrid
                 {
                     column.SetFilter(stored.FilterValue, stored.FilterOperator);
                 }
+
+                // Only when something recorded a choice. A null leaves the markup's Visible standing,
+                // which is what a grid with no picker stores for every column.
+                if (stored.Visible is { } visible)
+                {
+                    column.SetPicked(visible);
+                }
             }
 
             // A grid over a plain queryable composes from this state on the render now under way. One
             // that loads - LoadData, or an async executor - has to ask again.
             settingsNeedReload = LoadData.HasDelegate || Executor is not null;
         }
+
+        // Null unless the grid actually has a picker and this column is in it. Recording visibility for
+        // a column nothing can change would store the markup back to itself, and would then override a
+        // later edit to that markup on the next load.
+        bool? RecordedVisibility(ColumnBase<TItem> column) =>
+            AllowColumnPicking && column.Pickable ? column.IsVisible : null;
 
         ColumnBase<TItem>? ColumnForPath(string path)
         {
@@ -966,6 +979,7 @@ namespace Radzen.FastGrid
                         SortOrder = descending ? SortOrder.Descending : SortOrder.Ascending,
                         FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
                         FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
+                        Visible = RecordedVisibility(column),
                     });
                 }
             }
@@ -974,7 +988,9 @@ namespace Radzen.FastGrid
             {
                 var column = columns[i];
 
-                if (!column.HasFilter || SortIndexOf(column) >= 0
+                var visibility = RecordedVisibility(column);
+
+                if ((!column.HasFilter && visibility is null) || SortIndexOf(column) >= 0
                     || column.PropertyPath is not { Length: > 0 } path)
                 {
                     continue;
@@ -983,8 +999,9 @@ namespace Radzen.FastGrid
                 stored.Add(new FastGridColumnSettings
                 {
                     Property = path,
-                    FilterValue = column.CurrentFilterValue,
-                    FilterOperator = column.CurrentFilterOperator,
+                    FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
+                    FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
+                    Visible = visibility,
                 });
             }
 

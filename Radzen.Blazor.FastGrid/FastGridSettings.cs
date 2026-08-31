@@ -7,10 +7,11 @@ namespace Radzen.FastGrid
     /// be stored and handed back.
     /// </summary>
     /// <remarks>
-    /// Sort, filters and page - and nothing else, deliberately. Width, order and visibility are settings
-    /// on a RadzenDataGrid because its user can drag, reorder and pick columns; this grid has no such UI,
-    /// so persisting them would restore only what the markup already said. When those features arrive the
-    /// type grows with them.
+    /// Sort, filters, page - and column visibility once <c>AllowColumnPicking</c> is on, because that is
+    /// the point at which a user can change it and storing it records a choice rather than repeating the
+    /// markup. Width and order are still absent for that reason: nothing in this grid lets a user drag or
+    /// resize a column, so persisting them would restore only what the markup already said. When those
+    /// features arrive the type grows with them.
     /// </remarks>
     public class FastGridSettings
     {
@@ -43,5 +44,12 @@ namespace Radzen.FastGrid
 
         /// <summary>How the filter value is compared.</summary>
         public FilterOperator? FilterOperator { get; set; }
+
+        /// <summary>
+        /// Whether the column is drawn, or null when nothing recorded a choice - which is the case for
+        /// every column on a grid without a column picker, and for a column the picker does not offer.
+        /// Null restores nothing, so the markup's own <c>Visible</c> stands.
+        /// </summary>
+        public bool? Visible { get; set; }
     }
 }

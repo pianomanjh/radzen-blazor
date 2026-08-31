@@ -60,6 +60,40 @@ namespace Radzen.FastGrid
         /// <summary>Whether the column is drawn. A hidden column keeps any filter it carries.</summary>
         [Parameter] public bool Visible { get; set; } = true;
 
+        /// <summary>Whether the column picker offers this column. Ignored unless the grid allows picking.</summary>
+        [Parameter] public bool Pickable { get; set; } = true;
+
+        /// <summary>
+        /// What the column picker calls this column, when its <see cref="Title" /> is not what should
+        /// appear there.
+        /// </summary>
+        [Parameter] public string? ColumnPickerTitle { get; set; }
+
+        /// <summary>
+        /// The name the picker actually shows: <see cref="ColumnPickerTitle" />, else <see cref="Title" />,
+        /// else the property path, so a column that names neither is still identifiable in the list.
+        /// </summary>
+        /// <remarks>
+        /// Separate from the parameter rather than a fallback inside its getter, because a component
+        /// parameter has to be an auto-property (BL0007) and this package builds warnings as errors.
+        /// It is public because the picker names it through <c>TextProperty</c>, which reads it by name.
+        /// </remarks>
+        public string PickerTitle => ColumnPickerTitle ?? Title ?? PropertyPath ?? string.Empty;
+
+        bool declaredVisible = true;
+
+        // What the picker last said, or null while nothing has said anything. Kept apart from Visible for
+        // the same reason the filter's applied text is: the parameter is the markup's word and a component
+        // must not assign to it, so the runtime override lives beside it and yields whenever the
+        // declaration changes underneath.
+        bool? pickedVisible;
+
+        /// <summary>Whether the column is drawn right now - the picker's answer if it has one.</summary>
+        internal bool IsVisible => pickedVisible ?? Visible;
+
+        /// <summary>Records what the picker chose. Called by the grid; does not redraw on its own.</summary>
+        internal void SetPicked(bool visible) => pickedVisible = visible;
+
         /// <summary>
         /// Where the column sits among the others, overriding the order it was declared in. Columns
         /// without one keep their declared position, and the two orders interleave by index.
@@ -385,6 +419,7 @@ namespace Radzen.FastGrid
                 // Both parameters may legitimately be null, so the first pass cannot be told from a
                 // no-op by comparing them; it has to be marked.
                 initialized = true;
+                declaredVisible = Visible;
                 declaredFilterValue = FilterValue;
                 declaredFilterOperator = FilterOperator;
                 CurrentFilterValue = FilterValue;
@@ -404,6 +439,15 @@ namespace Radzen.FastGrid
             // The declared value is the authority whenever it changes, and the grid's own filtering owns
             // it in between. Tracking what was declared separately keeps this out of the parameter
             // itself, which a component must not assign to.
+            // The declaration wins whenever it changes, and takes the picker's override with it - the
+            // same rule the filter value follows, for the same reason: markup that says Visible="false"
+            // is not asking to be overruled by what someone ticked before.
+            if (declaredVisible != Visible)
+            {
+                declaredVisible = Visible;
+                pickedVisible = null;
+            }
+
             if (!Equals(declaredFilterValue, FilterValue))
             {
                 declaredFilterValue = FilterValue;
