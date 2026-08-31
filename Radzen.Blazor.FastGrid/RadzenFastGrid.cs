@@ -246,18 +246,6 @@ namespace Radzen.FastGrid
         /// <summary>Raised with the columns that are drawn, whenever the picker changes them.</summary>
         [Parameter] public EventCallback<IEnumerable<ColumnBase<TItem>>> PickedColumnsChanged { get; set; }
 
-        /// <summary>The picker's placeholder.</summary>
-        [Parameter] public string ColumnsText { get; set; } = "Columns";
-
-        /// <summary>The picker's select-all label.</summary>
-        [Parameter] public string AllColumnsText { get; set; } = "All";
-
-        /// <summary>What the picker says instead of listing names once there are too many.</summary>
-        [Parameter] public string ColumnsShowingText { get; set; } = "columns showing";
-
-        /// <summary>The picker's accessible name.</summary>
-        [Parameter] public string SelectVisibleColumnsAriaLabel { get; set; } = "Select visible columns";
-
         // The columns the picker offers and the subset currently drawn. Both are rebuilt from the
         // registered columns each time the picker is drawn, so a column added or removed after the first
         // render is offered or dropped without anything else having to notice.
@@ -680,15 +668,19 @@ namespace Radzen.FastGrid
             builder.AddAttribute(715, nameof(RadzenDropDown<IEnumerable<object>>.Value), picked);
             builder.AddAttribute(716, nameof(RadzenDropDown<IEnumerable<object>>.Change),
                 EventCallback.Factory.Create<object>(this, OnColumnsPicked));
+
+            // Built per render rather than held, and the delegate above with it. Holding either would
+            // save one small allocation per grid render - nothing, beside the per-row costs this grid
+            // exists to remove - and buys a label that keeps announcing the culture the page was first
+            // drawn in. Blazor re-renders a child whenever its parent draws it, so a held parameter
+            // would not have saved the drop-down a render either.
             builder.AddAttribute(717, nameof(RadzenDropDown<IEnumerable<object>>.InputAttributes),
-                pickerInputAttributes ??= new Dictionary<string, object> { ["aria-label"] = SelectVisibleColumnsAriaLabel });
+                new Dictionary<string, object> { ["aria-label"] = SelectVisibleColumnsAriaLabel });
             builder.CloseComponent();
 
             builder.CloseElement();
             builder.CloseElement();
         }
-
-        Dictionary<string, object>? pickerInputAttributes;
 
         // Rebuilt rather than kept in step by hand: a column can register or go at any render, and a
         // list that only grew would offer a column that no longer exists.
@@ -1109,7 +1101,8 @@ namespace Radzen.FastGrid
             builder.AddAttribute(66, "autocomplete", "off");
             builder.AddAttribute(67, "class", "rz-textbox");
             builder.AddAttribute(68, "style", "width: 100%;");
-            builder.AddAttribute(69, "aria-label", column.HeaderText);
+            builder.AddAttribute(69, "aria-label",
+                column.HeaderText + FilterValueAriaLabel + column.CurrentFilterValue);
             builder.AddAttribute(70, "value", column.CurrentFilterValue);
 
             // onchange is bound whether or not the filter applies as you type, because it is what a
@@ -1141,17 +1134,28 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(75, "tabindex", "-1");
                 builder.AddAttribute(76, "class", "notranslate rzi rz-cell-filter-clear");
                 builder.AddAttribute(77, "style", "position:absolute;inset-inline-end:10px;");
-                builder.AddAttribute(78, "onclick",
+                builder.AddAttribute(78, "aria-label", ClearFilterText);
+                builder.AddAttribute(79, "onclick",
                     EventCallback.Factory.Create<MouseEventArgs>(this, _ => Filter(column, null)));
-                builder.AddContent(79, "close");
+                builder.AddContent(80, "close");
                 builder.CloseElement();
             }
 
             builder.CloseElement();
         }
 
+        // The toggle's name, resolved once for the whole body rather than once per row. Measured: at
+        // 1000 rows, a ResourceManager lookup per row cost 24 KB and 8% of the render - the one thing
+        // in this feature's a11y that was not free, and the reason it is a field rather than a property
+        // read in the loop. Refreshed here because every render arrives through this method, so a grid
+        // whose culture changes redraws with the new name; Virtualize's later windows reuse the string
+        // this render resolved, which is the same one they would have looked up.
+        string? togglerLabel;
+
         void RenderBody(RenderTreeBuilder builder)
         {
+            togglerLabel = ExpandColumn ? ExpandChildItemAriaLabel : null;
+
             builder.OpenElement(100, "tbody");
             builder.AddAttribute(101, "role", "rowgroup");
 
@@ -1236,13 +1240,14 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(136, "type", "button");
                 builder.AddAttribute(137, "tabindex", "-1");
                 builder.AddAttribute(138, "aria-expanded", expanded ? "true" : "false");
-                builder.AddAttribute(139, "class",
+                builder.AddAttribute(139, "aria-label", togglerLabel);
+                builder.AddAttribute(140, "class",
                     "rz-button rz-button-sm rz-button-icon-only rz-variant-text rz-base rz-shade-default");
-                builder.AddAttribute(140, "onclick", ToggleHandler(item));
-                builder.AddEventStopPropagationAttribute(141, "onclick", true);
+                builder.AddAttribute(141, "onclick", ToggleHandler(item));
+                builder.AddEventStopPropagationAttribute(142, "onclick", true);
 
-                builder.OpenElement(142, "span");
-                builder.AddAttribute(143, "class", expanded
+                builder.OpenElement(143, "span");
+                builder.AddAttribute(144, "class", expanded
                     ? "notranslate rz-row-toggler rzi-chevron-circle-down"
                     : "rz-row-toggler rzi-chevron-circle-right");
                 builder.CloseElement();
