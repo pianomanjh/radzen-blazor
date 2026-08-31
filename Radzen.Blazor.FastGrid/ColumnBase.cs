@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -500,6 +501,25 @@ namespace Radzen.FastGrid
         /// <param name="source">The already-ordered query.</param>
         /// <param name="descending">Whether to order descending.</param>
         public virtual IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending) => null;
+
+        /// <summary>
+        /// The predicate this column's current filter composes, or null when the column cannot compose
+        /// one and the grid should fall back to building it from the column's path by reflection.
+        /// </summary>
+        /// <remarks>
+        /// The same reasoning as <see cref="ApplySort" />, and it matters more here: only the column
+        /// knows the filtered property's type as a type rather than as a <see cref="Type" />, and that
+        /// is the difference between an ordinary generic call and one closed by
+        /// <c>MakeGenericMethod</c> - which an ahead-of-time compiler cannot see through. A column that
+        /// composes its own filter is a column that works under AOT.
+        /// </remarks>
+        /// <param name="caseSensitivity">Whether string comparisons ignore case.</param>
+        /// <param name="inMemory">
+        /// Whether the source is LINQ to Objects, which decides how case-insensitive strings compare -
+        /// a provider cannot translate the <see cref="StringComparison" /> overloads.
+        /// </param>
+        public virtual Expression<Func<TItem, bool>>? ApplyFilter(FilterCaseSensitivity caseSensitivity,
+            bool inMemory) => null;
 
         /// <inheritdoc />
         public override Task SetParametersAsync(ParameterView parameters)

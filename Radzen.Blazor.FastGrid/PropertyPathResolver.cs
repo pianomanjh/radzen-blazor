@@ -68,7 +68,13 @@ namespace Radzen.FastGrid
         /// resolve. The inverse of <see cref="For(LambdaExpression)" />, and deliberately next to it:
         /// a producer and a consumer of the same string that disagree fail silently.
         /// </summary>
-        public static Type? TypeOf(Type root, string path) => PropertyAccess.GetPropertyType(root, path);
+        /// <remarks>
+        /// The one direction that has to walk members by name, so it is the one that needs reflection.
+        /// A null answer means "unknown", which every caller already copes with - a column whose filter
+        /// type cannot be resolved is one that declines to filter rather than one that filters wrongly.
+        /// </remarks>
+        public static Type? TypeOf(Type root, string path) =>
+            DynamicCode.Supported ? PropertyAccess.GetPropertyType(root, path) : null;
 
         /// <summary>
         /// Whether two authored expressions mean the same thing. Reference equality is not enough:

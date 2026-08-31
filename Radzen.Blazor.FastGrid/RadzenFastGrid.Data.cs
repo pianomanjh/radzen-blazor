@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -566,10 +567,20 @@ namespace Radzen.FastGrid
         /// Cast into the provider's tree - which is what Entity Framework refuses to translate.
         /// </summary>
         static Task<List<object>> ToObjectListAsync(IAsyncQueryExecutor async, IQueryable values,
-            CancellationToken token) =>
-            (Task<List<object>>)ToObjectListMethod
+            CancellationToken token)
+        {
+            // Unreachable with the switch off: the only caller asks a column for its distinct values,
+            // and a column that would need this returns null there instead. Stated rather than assumed,
+            // because a future caller that did not know that would otherwise fail obscurely.
+            if (!DynamicCode.Supported)
+            {
+                throw DynamicCode.Unavailable("Awaiting a distinct query over a run-time element type");
+            }
+
+            return (Task<List<object>>)ToObjectListMethod
                 .MakeGenericMethod(values.ElementType)
                 .Invoke(null, new object[] { async, values, token })!;
+        }
 
         static async Task<List<object>> ToObjectListOfAsync<TValue>(IAsyncQueryExecutor async,
             IQueryable values, CancellationToken token)
@@ -705,11 +716,18 @@ namespace Radzen.FastGrid
                 return Filter(column, null, Radzen.FilterOperator.In);
             }
 
-            // Typed as the column's element type, not List<object>: the predicate becomes
-            // Contains<TElement>(selected, x), and a List<object> there is not an IEnumerable<TElement>,
-            // so a provider cannot translate it and the comparison never binds.
+            // Typed as the column's element type, not List<object>: the reflective builder puts this
+            // list straight into Contains<TElement>(selected, x), and a List<object> there is not an
+            // IEnumerable<TElement> - so a provider cannot translate it and the comparison never binds.
+            //
+            // A column that composes its own predicate does not care, because it retypes the values
+            // against the type parameter it already has. So with the switch off - where closing List<>
+            // over a run-time type is exactly what is unavailable - the untyped list is enough, and the
+            // only columns that would have needed the typed one have already declined to filter.
             var type = Nullable.GetUnderlyingType(column.EffectiveFilterType) ?? column.EffectiveFilterType;
-            var selected = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!;
+            var selected = DynamicCode.Supported
+                ? (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!
+                : new List<object>();
 
             foreach (var item in sequence)
             {
@@ -812,31 +830,116 @@ namespace Radzen.FastGrid
                     continue;
                 }
 
-                (filters ??= new List<FilterDescriptor>()).Add(new FilterDescriptor
-                {
-                    Property = column.FilterPropertyPath,
-
-                    // Names a member of the collection's element, so the predicate becomes
-                    // Customers.Any(c => c.Name ...) rather than a comparison against the collection.
-                    FilterProperty = column.FilterMemberPath,
-                    FilterValue = column.CurrentFilterValue,
-                    FilterOperator = column.CurrentFilterOperator,
-                    Type = column.FilterPropertyType,
-                });
+                (filters ??= new List<FilterDescriptor>()).Add(DescriptorFor(column));
             }
 
             return filters;
         }
 
         /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
+        /// <remarks>
+        /// Each column is asked for its own predicate first. A column that knows the filtered property's
+        /// type as a type parameter composes one directly, which is both what a provider translates and
+        /// what an ahead-of-time compiler can see through; only the columns that decline - a template
+        /// column filtering by a path, a collection column, a column declared as <c>object</c> - are
+        /// handed to <c>QueryableExtension</c>, which finds their members by reflection.
+        /// </remarks>
+        [SuppressMessage("Maintainability", "CA1508:Avoid dead conditional code",
+            Justification = "ApplyFilter is virtual; the analyzer resolves it to the base implementation, which is the one that always returns null.")]
         IQueryable<TItem> ApplyFilters(IQueryable<TItem> source)
         {
-            var filters = ActiveFilters();
+            if (!AllowFiltering && !drawing)
+            {
+                return source;
+            }
 
-            // QueryableExtension builds a typed expression tree from the descriptors - the same one
-            // RadzenDataGrid composes - so this still translates to SQL rather than parsing a string.
-            return filters is null ? source : source.Where(filters, LogicalFilterOperator, FilterCaseSensitivity);
+            // What QueryableExtension itself checks to decide whether OrdinalIgnoreCase comparisons are
+            // available, so the two builders agree about a given source.
+            var inMemory = source is EnumerableQuery;
+
+            // Or is the case where the two groups cannot be applied separately, so it is the only case
+            // that needs every descriptor kept in case they have to be applied together. And - the
+            // default, and what a filter row produces - never does.
+            var either = LogicalFilterOperator == LogicalFilterOperator.Or;
+
+            Expression<Func<TItem, bool>>? predicate = null;
+            List<FilterDescriptor>? declined = null;
+            List<FilterDescriptor>? all = null;
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.HasFilter)
+                {
+                    continue;
+                }
+
+                var descriptor = either ? DescriptorFor(column) : null;
+
+                if (either)
+                {
+                    (all ??= new List<FilterDescriptor>()).Add(descriptor!);
+                }
+
+                if (column.ApplyFilter(FilterCaseSensitivity, inMemory) is { } composed)
+                {
+                    predicate = predicate is null
+                        ? composed
+                        : FilterPredicate.Join(predicate, composed, LogicalFilterOperator);
+                }
+                else
+                {
+                    (declined ??= new List<FilterDescriptor>()).Add(descriptor ?? DescriptorFor(column));
+                }
+            }
+
+            if (declined is null)
+            {
+                return predicate is null ? source : source.Where(predicate);
+            }
+
+            if (predicate is null)
+            {
+                return Reflective(source, declined);
+            }
+
+            // Two Wheres are an And between the groups, which is right for And and wrong for Or: a row
+            // that matched only a declining column would be dropped by the second Where. So a mixed Or
+            // goes through the reflective builder whole rather than being composed wrongly - one
+            // builder, one answer. It costs that grid its AOT-cleanliness, which it had already lost to
+            // the column that declined.
+            return either
+                ? Reflective(source, all!)
+                : Reflective(source.Where(predicate), declined);
         }
+
+        /// <summary>
+        /// The one call in this component that reaches a property by name. Reserved for the columns that
+        /// cannot compose their own predicate, and reachable only while dynamic filtering is enabled.
+        /// </summary>
+        IQueryable<TItem> Reflective(IQueryable<TItem> source, List<FilterDescriptor> filters)
+        {
+            if (!DynamicCode.Supported)
+            {
+                throw DynamicCode.Unavailable(
+                    $"Filtering '{filters[0].Property}' through the column's property path");
+            }
+
+            return source.Where(filters, LogicalFilterOperator, FilterCaseSensitivity);
+        }
+
+        static FilterDescriptor DescriptorFor(ColumnBase<TItem> column) => new()
+        {
+            Property = column.FilterPropertyPath,
+
+            // Names a member of the collection's element, so the predicate becomes
+            // Customers.Any(c => c.Name ...) rather than a comparison against the collection.
+            FilterProperty = column.FilterMemberPath,
+            FilterValue = column.CurrentFilterValue,
+            FilterOperator = column.CurrentFilterOperator,
+            Type = column.FilterPropertyType,
+        };
 
         // Drawing the table asks what is filtered more than once: the pager counts, the body enumerates,
         // and a grid with a pager above and below counts twice. None of it can change while the table is
@@ -1254,6 +1357,13 @@ namespace Radzen.FastGrid
                 Type = f.Type,
             }).ToList();
 
+            // The string form a LoadData handler receives, which is built by walking the descriptors'
+            // property paths. There is no typed equivalent: the point of it is to be a string.
+            if (!DynamicCode.Supported)
+            {
+                return null;
+            }
+
             var text = IsOData()
                 ? composites.ToODataFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity)
                 : composites.ToFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity);
@@ -1341,12 +1451,9 @@ namespace Radzen.FastGrid
 
         IEnumerable<TItem> Compose(IEnumerable<TItem> data)
         {
-            var filters = ActiveFilters();
-
-            if (filters is not null)
+            if (AllowFiltering && ActiveFilters() is not null)
             {
-                data = (data as IQueryable<TItem> ?? data.AsQueryable())
-                    .Where(filters, LogicalFilterOperator, FilterCaseSensitivity);
+                data = ApplyFilters(data as IQueryable<TItem> ?? data.AsQueryable());
             }
 
             if (SortColumn is not null)
