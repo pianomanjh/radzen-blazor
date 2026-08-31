@@ -295,6 +295,12 @@ what the server is told.
 A computed key sorts but has no path, so there is nothing to send a server or to persist - the same rule
 every other computed sort key follows.
 
+Written inline in markup, a `FastGridSort` is a new instance on every render, which is fine: it holds
+delegates rather than compiling anything, and the column reads it live rather than caching it. That is
+deliberate - a cache would need invalidating, the invalidation would fire every render, and it would
+take the column's compiled display expression with it. Measured, getting that wrong costs 14,433 B a
+render against 4,895 B, which is what the allocation test in `ReviewRegressionTests` weighs.
+
 ## Sorting by more than one column
 
 `AllowMultiColumnSorting` makes a header click add to the sort instead of replacing it, and
