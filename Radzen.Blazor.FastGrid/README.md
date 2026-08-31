@@ -3,13 +3,14 @@
 A read-only data grid for [Radzen.Blazor](https://blazor.radzen.com), for large row counts. Same theme,
 same markup contract, roughly a hundredth of the allocation.
 
-At 1000 rows x 5 columns, rendering identical output:
+At 1000 rows x 5 columns, rendering identical output, all three in one run - `RadzenDataGrid` measured
+with PR #8 merged, which is the leanest it gets:
 
 | | Time | Allocated |
 | --- | ---: | ---: |
-| `RadzenDataGrid` | 17,790 us | 18,189 KB |
-| **`RadzenFastGrid`** | **1,178 us** | **151 KB** |
-| Blazor `QuickGrid` | 2,342 us | 370 KB |
+| `RadzenDataGrid` | 34,737 us | 13,652 KB |
+| **`RadzenFastGrid`** | **1,771 us** | **152 KB** |
+| Blazor `QuickGrid` | 3,409 us | 370 KB |
 
 It gets there by not doing three things a general-purpose grid has to: no component per row, no cascading
 value per row, no render fragment per cell. Those are what inline editing needs, and this grid does not
@@ -159,25 +160,28 @@ time against the same baseline:
 
 | | Allocated | Marginal | Time |
 | --- | ---: | ---: | ---: |
-| *bare* | 151.30 KB | - | 1.00x |
-| widths and alignment | 151.61 KB | +0.31 KB | 1.04x |
-| selection (1 row in 4) | 151.40 KB | +0.10 KB | 1.03x |
-| `RowClass` | 151.41 KB | +0.11 KB | 1.00x |
-| `Settings` / `SettingsChanged` | 151.41 KB | +0.11 KB | 0.99x |
-| a filter row | 153.62 KB | +1.99 KB | 0.98x |
-| a column picker | 173.89 KB | **+22.2 KB** | 1.21x |
-| filtering as you type | 155.21 KB | +1.59 KB *over the filter row* | 1.07x |
-| header and footer templates | 152.79 KB | +1.49 KB | 0.99x |
-| footer templates that aggregate | 153.02 KB | +0.23 KB *over the templates* | 1.05x |
-| responsive titles | 151.63 KB | +0.33 KB | 1.39x |
-| sorted by one column | 178.35 KB | **+27 KB** | 1.60x |
-| sorted by two columns | 200.48 KB | **+22 KB** *over one* | 1.09x *over one* |
-| row detail, driven through the API | 152.06 KB | +0.59 KB | 1.03x |
-| `ItemKey` | 175.01 KB | **+23.5 KB** | 1.03x |
-| cell tooltip | 267.28 KB | **+116 KB** | 1.37x |
-| row click | 461.38 KB | **+310 KB** | 1.21x |
-| row detail with its toggle column | 555.13 KB | **+403 KB** | 1.91x |
-| cell click | 1,633.96 KB | **+1,483 KB** | 2.06x |
+| *bare* | 151.78 KB | - | 1.00x |
+| widths and alignment | 152.13 KB | +0.35 KB | 1.11x |
+| selection (1 row in 4) | 151.89 KB | +0.11 KB | 1.06x |
+| `RowClass` | 151.88 KB | +0.10 KB | 0.98x |
+| `Settings` / `SettingsChanged` | 151.85 KB | +0.07 KB | 1.00x |
+| a filter row | 154.34 KB | +2.56 KB | 1.01x |
+| a column picker | 174.02 KB | **+22.2 KB** | 1.04x |
+| filtering as you type | 155.66 KB | +1.32 KB *over the filter row* | 1.04x |
+| header and footer templates | 153.34 KB | +1.56 KB | 1.00x |
+| footer templates that aggregate | 153.54 KB | +0.20 KB *over the templates* | 1.05x |
+| responsive titles | 151.95 KB | +0.17 KB | 1.40x |
+| sorted by one column | 178.88 KB | **+27.1 KB** | 1.50x |
+| sorted by two columns | 200.86 KB | **+22 KB** *over one* | 1.05x *over one* |
+| row detail, driven through the API | 152.13 KB | +0.35 KB | 1.02x |
+| `ItemKey` | 175.28 KB | **+23.5 KB** | 1.05x |
+| cell tooltip | 267.63 KB | **+115.9 KB** | 1.45x |
+| row click | 461.88 KB | **+310 KB** | 1.51x |
+| row detail with its toggle column | 555.44 KB | **+404 KB** | 2.17x |
+| cell click | 1,634.30 KB | **+1,483 KB** | 3.09x |
+
+Every row is from one run, so the marginals are comparable with each other; the time ratios move a few
+points between runs on a shared machine, the allocation figures barely at all.
 
 The layout, selection, row-styling, template and settings features are free, as designed: a couple of
 kilobytes at most across a whole render, against a 151 KB baseline. What is not free is a delegate, and
@@ -187,15 +191,15 @@ opt in.
 
 Two rows are worth reading carefully rather than at face value:
 
-- **Sorting is what costs, not sorting by two things.** Sorting at all is +27 KB and 60% more time -
+- **Sorting is what costs, not sorting by two things.** Sorting at all is +27 KB and 50% more time -
   `OrderBy` over a thousand rows buys a key buffer and does its comparisons whichever grid asked for
-  it. The *second* sort key adds 22 KB and 9% on top of that. Measured against the bare grid instead,
-  multi-column sorting would look like +49 KB and 72%, and almost all of it would belong to the first
+  it. The *second* sort key adds 22 KB and 5% on top of that. Measured against the bare grid instead,
+  multi-column sorting would look like +49 KB and 57%, and almost all of it would belong to the first
   sort.
-- **Responsive titles allocate nothing and still cost 39% more time.** A span and a text frame per cell
+- **Responsive titles allocate nothing and still cost 40% more time.** A span and a text frame per cell
   is work even when it is not memory.
 - **Row detail has no idle state.** Declaring a `Template` draws a toggle on every row, so the feature
-  costs its 403 KB from the moment it is available rather than when a row is expanded - there is no
+  costs its 404 KB from the moment it is available rather than when a row is expanded - there is no
   "switched on but not in use" for it, because a row that can be expanded has to show that it can. The
   two rows above are the same feature with and without that column, and the difference between them is
   the whole of it.
@@ -206,18 +210,19 @@ Two rows are worth reading carefully rather than at face value:
   in the toggle cell was measured inert and removed, and the allocation did not move: 555.13 KB against
   554.99 KB with it, which is noise. `RenderTreeBuilder` rents its frame array from a pool, so markup is
   paid in DOM nodes and render time, not in managed allocation. An earlier note here decomposed the
-  403 KB into "310 for the delegate, 93 for the markup"; the 93 was inferred rather than measured, and
+  404 KB into "310 for the delegate, 93 for the markup"; the 93 was inferred rather than measured, and
   this is the measurement that says it was not markup. What the delegate costs is real; what the rest is
   remains unattributed.
 
 The tooltip's 116 KB is the `title` attribute plus deriving each cell's text a second time, since
 `RenderCell` writes into the builder rather than returning a string.
 
-The filter row is per column and stays per column: `+1.99 KB` for the row itself and `+1.59 KB` for the
-second event handler that filtering-as-you-type binds to each of the five boxes - about 0.32 KB a box,
+The filter row is per column and stays per column: `+2.56 KB` for the row itself and `+1.32 KB` for the
+second event handler that filtering-as-you-type binds to each of the five boxes - about 0.26 KB a box,
 once per render, with the thousand rows below it making no difference. That was the thing worth
 checking, since a handler that had leaked into the body would have shown up here as hundreds of
-kilobytes rather than one and a half.
+kilobytes rather than one and a half. `+0.41 KB` of the row's own cost is the accessible name each box
+now carries, measured by taking it back out again; it is five string joins per render, not per row.
 
 ### Where that leaves it against RadzenDataGrid
 
@@ -232,14 +237,14 @@ comparison is against the best version of the thing being compared to.
 
 | Feature on both | `RadzenFastGrid` | `RadzenDataGrid` | Gap | Costs RadzenDataGrid |
 | --- | ---: | ---: | ---: | ---: |
-| *nothing* | 151.52 KB | 13,652 KB | 90x | - |
-| cell tooltip | 267.22 KB | 13,652 KB | **51x** | +0 KB |
-| row class | 151.70 KB | 14,566 KB | 96x | +914 KB |
-| row click | 461.42 KB | 15,313 KB | **33x** | +1,661 KB |
-| a filter row | 154.97 KB | 16,837 KB | **109x** | +3,186 KB |
-| a column picker | 173.89 KB | 16,093 KB | **93x** | +2,442 KB |
-| responsive titles | 151.62 KB | 18,333 KB | **121x** | +4,682 KB |
-| row detail | 555.15 KB | 19,428 KB | **35x** | +5,776 KB |
+| *nothing* | 151.78 KB | 13,652 KB | 90x | - |
+| cell tooltip | 267.63 KB | 13,652 KB | **51x** | +0 KB |
+| row class | 151.88 KB | 14,566 KB | 96x | +914 KB |
+| row click | 461.88 KB | 15,313 KB | **33x** | +1,661 KB |
+| a filter row | 155.66 KB | 16,838 KB | **108x** | +3,186 KB |
+| a column picker | 174.02 KB | 16,093 KB | **93x** | +2,441 KB |
+| responsive titles | 151.95 KB | 18,333 KB | **121x** | +4,681 KB |
+| row detail | 555.44 KB | 19,427 KB | **35x** | +5,775 KB |
 | cell click | 1,634 KB | 22,832 KB | **14x** | +9,180 KB |
 
 The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
@@ -336,7 +341,7 @@ screen without an event is a row you still think is expanded - and `ToggleRow` /
 it from code.
 
 **This is the one feature here whose availability is its cost.** Declaring the `Template` draws a
-toggle button on every row, which is 403 KB at 1000 rows. It is charged whether or not anything is ever
+toggle button on every row, which is 404 KB at 1000 rows. It is charged whether or not anything is ever
 expanded, because a row that can be expanded has to show that it can. Nothing is paid while `Template`
 is null.
 
@@ -345,17 +350,17 @@ not the markup: the toggle cell was trimmed to the button alone after the geomet
 RadzenDataGrid's empty `rz-column-title` span takes no space, and the allocation did not move, because
 `RenderTreeBuilder` rents its frame array from a pool.
 
-Against the same feature on `RadzenDataGrid`, which is the comparison that decides whether 403 KB is a
+Against the same feature on `RadzenDataGrid`, which is the comparison that decides whether 404 KB is a
 lot:
 
 | | Allocated | Row detail costs it |
 | --- | ---: | ---: |
-| `RadzenFastGrid` | 151.47 KB -> 555.13 KB | **+404 KB** |
-| `RadzenDataGrid` | 18,191 KB -> 23,967 KB | **+5,775 KB** |
+| `RadzenFastGrid` | 151.78 KB -> 555.44 KB | **+404 KB** |
+| `RadzenDataGrid` | 13,652 KB -> 19,427 KB | **+5,775 KB** |
 
 Row detail costs `RadzenDataGrid` fourteen times what it costs this grid, because there it is a
 component per row that can be expanded rather than a cell and a delegate. With the feature on both
-sides this grid is **43x leaner** - further ahead than the 120x-to-33x drop against a `RadzenDataGrid`
+sides this grid is **35x leaner** - further ahead than the 90x-to-25x drop against a `RadzenDataGrid`
 with the feature switched off suggests, because that comparison charges one grid for the feature and
 not the other.
 
@@ -525,6 +530,44 @@ A value bound before its rows have loaded - the ordinary order for an asynchrono
 itself until the row arrives, and adopts the row when it does. `ValueText` formats that interim label.
 The lookup never walks an `IQueryable` to resolve it: reading the whole table to render one label is
 what this component exists not to do.
+
+## Language, and the two buttons that had no name
+
+Every string the grid puts on screen is a parameter with a localized default, resolved through Radzen's
+own `Localizer`: a custom `ILocalizer` in the container first, then the consuming application's own
+`RadzenStrings` resources, then the ones shipped with `Radzen.Blazor`. `UICulture` names the culture, or
+a `DefaultUICulture` cascaded from an ancestor does, exactly as every other Radzen component reads it.
+
+The keys are `RadzenDataGrid`'s own, deliberately - `DataGrid_ClearFilterText`,
+`DataGrid_FilterValueAriaLabel`, `DataGrid_ExpandChildItemAriaLabel`, `DataGrid_ColumnsText`,
+`DataGrid_AllColumnsText`, `DataGrid_ColumnsShowingText`, `DataGrid_SelectVisibleColumnsAriaLabel`. All
+seven are already translated into the five cultures Radzen ships, so this grid speaks German, Spanish,
+French, Italian and Japanese with nothing added to any resource file, and an application that has
+already overridden one of them for `RadzenDataGrid` gets the same override here. Each is also a
+parameter - `ClearFilterText`, `ColumnsText` and so on - for a grid that wants its own wording.
+
+Most of what this fixed is not translation. Two of the grid's controls are icon-only buttons, and
+neither had an accessible name:
+
+- **the clear-filter button**, whose content is the ligature `close`, which is what a screen reader
+  read out;
+- **the row-detail toggle**, which had no name at all and announced as nothing.
+
+Both now carry one, and the toggle carries the *same* name in both states - `aria-expanded` is what says
+which way it will go, and a button that renames itself under the user is the thing to avoid. The filter
+box's own name is the column's title, the phrase, and the current value joined, so it is heard as
+"First filter value Ada" rather than as a bare title shared by five identical boxes.
+
+The one thing here that was not free was found by measuring rather than by reading. The obvious way to
+write the toggle's name is to read the localized property in the row loop, and that is a
+`ResourceManager` lookup per row: at 1000 rows it cost **24 KB and 8% of the render**, which the row
+detail figures in the table above would have carried silently. Resolved once for the whole body instead,
+row detail measures 555.44 KB against the 555.13 KB recorded before any of this - noise. The filter
+row's names are per column and stay per column, `+0.41 KB` for all five, measured by taking them back
+out again.
+
+The lesson generalises past this component: a localized string is a dictionary lookup wearing a
+property's clothes, and a property in a per-row loop is a per-row cost whatever it looks like.
 
 ## What it does not do
 
