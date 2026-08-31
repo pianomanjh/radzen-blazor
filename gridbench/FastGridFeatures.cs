@@ -327,4 +327,14 @@ public class FastGridFeatureBench
 
     [Benchmark(Description = "= RadzenDataGrid + a column picker")]
     public Task ReferenceColumnPicking() => Reference(p => p["AllowColumnPicking"] = true);
+
+    // What grouping costs the grid that has it, to size what building it here would have to beat.
+    // Grouped by Age, which at 1000 rows is 45 groups of ~22 - a realistic shape rather than one
+    // group of everything or a thousand groups of one.
+    [Benchmark(Description = "= RadzenDataGrid + grouped by one column")]
+    public Task ReferenceGrouping() => Reference(p =>
+    {
+        p["AllowGrouping"] = true;
+        p["Groups"] = new System.Collections.ObjectModel.ObservableCollection<GroupDescriptor> { new() { Property = nameof(Person.Age) } };
+    });
 }
