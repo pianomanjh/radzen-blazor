@@ -225,46 +225,37 @@ is paid, and the two can point different ways. So each feature is measured on `R
 with the same data and the same five columns, and the ratio below is both grids with that feature on -
 the only comparison that is like for like.
 
-| Feature on both | `RadzenFastGrid` | `RadzenDataGrid` | Gap |
-| --- | ---: | ---: | ---: |
-| *nothing* | 151.63 KB | 18,191 KB | **120x** |
-| row class | 151.77 KB | 19,106 KB | **126x** |
-| responsive titles | 151.70 KB | 18,192 KB | **120x** |
-| a filter row | 155.21 KB | 21,380 KB | **138x** |
-| cell tooltip | 267.22 KB | 18,191 KB | **68x** |
-| row click | 461.49 KB | 19,853 KB | **43x** |
-| row detail | 555.30 KB | 23,968 KB | **43x** |
-| cell click | 1,634 KB | 27,373 KB | **17x** |
+Measured against `RadzenDataGrid` **with PR #8 merged**, which took its baseline from 18,191 KB to
+13,652 KB. Every ratio here is smaller than it was before that landed, and deliberately so: the honest
+comparison is against the best version of the thing being compared to.
+
+| Feature on both | `RadzenFastGrid` | `RadzenDataGrid` | Gap | Costs RadzenDataGrid |
+| --- | ---: | ---: | ---: | ---: |
+| *nothing* | 151.52 KB | 13,652 KB | 90x | - |
+| cell tooltip | 267.22 KB | 13,652 KB | **51x** | +0 KB |
+| row class | 151.70 KB | 14,566 KB | 96x | +914 KB |
+| row click | 461.42 KB | 15,313 KB | **33x** | +1,661 KB |
+| a filter row | 154.97 KB | 16,837 KB | **109x** | +3,186 KB |
+| responsive titles | 151.62 KB | 18,333 KB | **121x** | +4,682 KB |
+| row detail | 555.15 KB | 19,428 KB | **35x** | +5,776 KB |
+| cell click | 1,634 KB | 22,832 KB | **14x** | +9,180 KB |
 
 The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
-delegate per row or per cell - and it *widens* wherever the feature is markup the other grid pays for
-per row. A filter row costs this grid 2 KB and `RadzenDataGrid` **3,189 KB**; row detail costs it
-404 KB and `RadzenDataGrid` **5,777 KB**. Cell click is the narrowest at 17x and is still 17x.
+delegate per row or per cell - and widens wherever the feature is markup the other grid pays for per
+row. Cell click is the narrowest at 14x and is still 14x.
 
-**The measurement worth taking out of this table has nothing to do with this grid.**
-`RadzenDataGrid.ShowCellDataAsTooltip` defaults to `true`, and turning it off drops its render from
-18,191 KB to **12,948 KB**. That single default is **5,243 KB, or 29% of everything `RadzenDataGrid`
-allocates** to render a thousand rows - paid by every grid that has never heard of the parameter, for a
-`title` attribute on cells that mostly are not truncated. It is one line in a consuming application:
+Two rows changed meaning when PR #8 landed, and both are worth reading rather than skimming:
 
-```razor
-<RadzenDataGrid Data="@orders" ShowCellDataAsTooltip="false" />
-```
-
-The mechanism is visible in `RadzenDataGrid.razor:684-690`: per cell, the value is formatted into a
-string with `$"{column.GetValue(Item)}"` and then a whole `Dictionary<string, object>` is allocated to
-carry that one attribute. At 1000 x 5 that is five thousand dictionaries and five thousand strings, on
-top of the value having already been rendered into the cell once. Five megabytes is what that costs,
-and it matches the measurement.
-
-Which also means the parameter is not the only fix available. A single-entry dictionary per cell is
-avoidable whichever way the default goes, and the value is being derived twice; both are changes inside
-`RadzenDataGrid` rather than in the applications using it. That is a separate piece of work from this
-component and is recorded here because this is where it was found.
-
-This was found by accident: the first version of the reference row set the parameter to `true` and
-measured no change, which is what a parameter already at its default looks like and is exactly the
-shape of a benchmark that proves nothing. Checking why is what turned it up.
+- **The cell tooltip now costs `RadzenDataGrid` nothing**, where it used to cost 5,243 KB - 29% of
+  everything the grid allocated - because `ShowCellDataAsTooltip` defaults to true and each cell built a
+  `Dictionary` to carry one `title` attribute. That was found here, fixed there, and the gap on this row
+  closed from 68x to 51x as a result. This table is the reason it was found at all.
+- **Responsive titles now cost `RadzenDataGrid` 4,682 KB**, where the same measurement against the
+  pre-#8 grid said +0.4 KB. The feature has not changed; only the baseline under it has. That is a real,
+  deterministic 4.7 MB and it is not yet explained - the likeliest candidate is `RenderTreeBuilder`
+  frame-array growth crossing a bucket that the tooltip's frames used to keep it past anyway, but that is
+  a hypothesis and it has not been measured. **Recorded here as an open question rather than a finding**,
+  and it is a question about `RadzenDataGrid`, not about this component.
 
 ## Sorting by more than one column
 
