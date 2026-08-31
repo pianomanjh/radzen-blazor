@@ -180,7 +180,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
 
             var cut = Render(ctx, Columns.Of(
-                Columns.Collection<Person, Company>(x => x.Accounts, a => a.Name, sortBy: x => x.Id),
+                Columns.Collection<Person, Company>(x => x.Accounts, a => a.Name, sortBy: FastGridSort<Person>.By(x => x.Id)),
                 Columns.Property<Person, string>(x => x.First)),
                 p => p.Add(g => g.AllowSorting, true));
 
@@ -286,7 +286,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
 
             var cut = Render(ctx, Columns.Of(
-                Columns.Collection<Person, Company>(x => x.Accounts, a => a.Name, sortBy: x => x.First),
+                Columns.Collection<Person, Company>(x => x.Accounts, a => a.Name, sortBy: FastGridSort<Person>.By(x => x.First)),
                 Columns.Property<Person, string>(x => x.First)),
                 p => p.Add(g => g.AllowSorting, true));
 

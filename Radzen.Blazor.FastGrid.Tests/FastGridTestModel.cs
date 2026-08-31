@@ -259,7 +259,7 @@ namespace Radzen.FastGrid.Tests
             Expression<Func<TItem, IEnumerable<TElement>>> property,
             Expression<Func<TElement, object>> displayProperty = null,
             Expression<Func<TElement, object>> filterProperty = null,
-            Expression<Func<TItem, object>> sortBy = null,
+            FastGridSort<TItem> sortBy = null,
             string title = null,
             string format = null,
             string separator = null,
@@ -322,7 +322,8 @@ namespace Radzen.FastGrid.Tests
             RenderFragment<TItem> template,
             string title = null,
             string sortProperty = null,
-            bool sortable = true) => (builder, seq) =>
+            bool sortable = true,
+            FastGridSort<TItem> sortBy = null) => (builder, seq) =>
         {
             builder.OpenComponent<TemplateColumn<TItem>>(seq);
 
@@ -339,6 +340,11 @@ namespace Radzen.FastGrid.Tests
             if (sortProperty is not null)
             {
                 builder.AddAttribute(seq + 3, nameof(TemplateColumn<TItem>.SortProperty), sortProperty);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(TemplateColumn<TItem>.SortBy), sortBy);
             }
 
             if (!sortable)

@@ -55,12 +55,12 @@ namespace Radzen.FastGrid
         /// <summary>
         /// What to sort by. A collection cannot be ordered, so a column without this is not sortable.
         /// </summary>
-        [Parameter] public Expression<Func<TItem, object?>>? SortBy { get; set; }
+        [Parameter] public FastGridSort<TItem>? SortBy { get; set; }
 
         Expression<Func<TItem, IEnumerable<TElement>>>? property;
         Expression<Func<TElement, object?>>? displayProperty;
         Expression<Func<TElement, object?>>? filterProperty;
-        Expression<Func<TItem, object?>>? sortBy;
+        FastGridSort<TItem>? sortBy;
         string? format;
 
         Func<TItem, IEnumerable<TElement>>? compiled;
@@ -107,7 +107,7 @@ namespace Radzen.FastGrid
                 && PropertyPathResolver.Equivalent(property, Property)
                 && PropertyPathResolver.Equivalent(displayProperty, DisplayProperty)
                 && PropertyPathResolver.Equivalent(filterProperty, FilterProperty)
-                && PropertyPathResolver.Equivalent(sortBy, SortBy))
+                && ReferenceEquals(sortBy, SortBy))
             {
                 return;
             }
@@ -122,7 +122,7 @@ namespace Radzen.FastGrid
             member = DisplayProperty?.Compile();
 
             collectionPath = Property is null ? null : PropertyPathResolver.For(Property);
-            sortPath = SortBy is null ? null : PropertyPathResolver.For(SortBy);
+            sortPath = SortBy?.Path;
 
             // Filtering follows what the reader sees unless told otherwise.
             var filterMember = FilterProperty ?? DisplayProperty;
@@ -132,38 +132,23 @@ namespace Radzen.FastGrid
         }
 
         /// <inheritdoc />
-        public override bool CanSort => Sortable && sortPath is not null;
+        public override bool CanSort => Sortable && SortBy is not null;
 
         /// <inheritdoc />
         public override IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending)
-        {
-            // The boxing conversion is stripped first, so the ordering is by the key's own type and a
-            // provider sees ORDER BY that column rather than an untranslatable convert to object. That
-            // type is only known once it is stripped, which is what makes this the one ordering in the
-            // component that closes a generic method at run time.
-            //
-            // The guard wraps the call rather than deciding a local above it: the analyzer follows
-            // control flow, not the reasoning behind a null. Under Native AOT this column simply cannot
-            // order, and returning null is what the grid already treats as "cannot order" - it skips the
-            // column rather than breaking the rest of the sort chain over it.
-            if (SortBy is null || source is null || !DynamicCode.Supported)
-            {
-                return null;
-            }
-
-            return Projection.OrderBy(source, Unbox(SortBy), descending);
-        }
+            => SortBy?.Apply(source, descending);
 
         /// <inheritdoc />
-        public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending)
-        {
-            if (SortBy is null || source is null || !DynamicCode.Supported)
-            {
-                return null;
-            }
+        public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source,
+            bool descending) => SortBy?.ApplyThen(source, descending);
 
-            return Projection.ThenBy(source, Unbox(SortBy), descending);
-        }
+        /// <inheritdoc />
+        public override IOrderedEnumerable<TItem>? ApplySortInMemory(IEnumerable<TItem> source,
+            bool descending) => SortBy?.Apply(source, descending);
+
+        /// <inheritdoc />
+        public override IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
+            bool descending) => SortBy?.ApplyThen(source, descending);
 
         /// <inheritdoc />
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)

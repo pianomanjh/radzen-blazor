@@ -1454,6 +1454,8 @@ namespace Radzen.FastGrid
             var filtering = AllowFiltering && ActiveFilters() is not null;
             var sorting = SortColumn is not null;
 
+            ComposedInMemory = false;
+
             if (!filtering && !sorting)
             {
                 return data;
@@ -1469,6 +1471,8 @@ namespace Radzen.FastGrid
             {
                 if (ComposeInMemory(data, filtering, sorting) is { } composed)
                 {
+                    ComposedInMemory = true;
+
                     return composed;
                 }
 
@@ -1486,6 +1490,19 @@ namespace Radzen.FastGrid
             // translate rather than a parsed string.
             return sorting ? ApplySorts(queryable) : queryable;
         }
+
+        /// <summary>
+        /// Whether the last composition took the delegate route rather than wrapping the source in a
+        /// queryable.
+        /// </summary>
+        /// <remarks>
+        /// Exposed for the tests, and only to them, because the fast path is invisible in the rows: a
+        /// column that declines to compose in memory sends the whole thing to the expression route,
+        /// which produces the same answer and costs about 1.1 ms per render at 1000 rows. Without this
+        /// a column could quietly stop overriding <c>ApplySortInMemory</c> and every test would still
+        /// pass.
+        /// </remarks>
+        internal bool ComposedInMemory { get; private set; }
 
         /// <summary>
         /// Filters and sorts an in-memory sequence without wrapping it in a queryable, or returns null

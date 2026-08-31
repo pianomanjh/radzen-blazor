@@ -15,10 +15,11 @@
     <CollectionColumn Property="@(p => p.Accounts)"
                       DisplayProperty="@(a => a.Name)"
                       FilterProperty="@(a => a.Region)"
-                      SortBy="@(p => p.First)"
+                      SortBy="@(FastGridSort<Person>.By(p => p.First))"
                       Separator="; "
                       Title="Accounts by region" />
-    <TemplateColumn TItem="Person" Title="Template">
+    <TemplateColumn TItem="Person" Title="Template"
+                    SortBy="@(FastGridSort<Person>.By(p => p.Last))">
         <Template Context="row">@row.Last</Template>
     </TemplateColumn>
 </RadzenFastGrid>
