@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
@@ -15,7 +16,11 @@ namespace Radzen.FastGrid
     /// </summary>
     /// <typeparam name="TItem">The row type.</typeparam>
     /// <typeparam name="TProp">The property type.</typeparam>
-    public sealed class PropertyColumn<TItem, TProp> : ColumnBase<TItem>
+    public sealed class PropertyColumn<TItem,
+        // The column asks TProp whether it is a collection, which means asking for its interfaces. The
+        // annotation is what tells a trimmer to keep them; without it the question is answered wrongly
+        // rather than not at all, and a collection column would quietly render as its ToString.
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] TProp> : ColumnBase<TItem>
     {
         Expression<Func<TItem, TProp>>? property;
         Expression<Func<TItem, TProp>>? sortBy;
@@ -173,14 +178,21 @@ namespace Radzen.FastGrid
             // call on the struct. A reference type needs none of this: casting one is free.
             var underlying = Nullable.GetUnderlyingType(typeof(TProp));
 
-            if (underlying is not null && typeof(IFormattable).IsAssignableFrom(underlying))
+            // Closing that generic method over the value's type is the only part of this that needs code
+            // generated at run time. Under Native AOT the fall-through below still formats correctly -
+            // it just boxes to reach IFormattable, which is what this whole branch exists to avoid, so
+            // it is a cost paid per cell rather than a feature lost.
+            if (DynamicCode.Supported)
             {
-                return Formatter(NullableFormatterMethod, underlying, get, format);
-            }
+                if (underlying is not null && typeof(IFormattable).IsAssignableFrom(underlying))
+                {
+                    return Formatter(NullableFormatterMethod, underlying, get, format);
+                }
 
-            if (typeof(TProp).IsValueType && typeof(IFormattable).IsAssignableFrom(typeof(TProp)))
-            {
-                return Formatter(ValueFormatterMethod, typeof(TProp), get, format);
+                if (typeof(TProp).IsValueType && typeof(IFormattable).IsAssignableFrom(typeof(TProp)))
+                {
+                    return Formatter(ValueFormatterMethod, typeof(TProp), get, format);
+                }
             }
 
             if (typeof(IFormattable).IsAssignableFrom(typeof(TProp)))
@@ -235,7 +247,12 @@ namespace Radzen.FastGrid
 
             if (!IsCollection)
             {
-                return source.Select(selector).Distinct();
+                // Queryable.Distinct by its full name, not the extension-method form. Radzen's own
+                // Distinct(this IQueryable) is non-generic, C# prefers a non-generic candidate to a
+                // generic one, and it therefore won - so this typed projection was going through the
+                // reflective distinct and composing Cast nodes a provider then had to translate. Naming
+                // the generic one keeps the element type, and keeps this off the reflective path.
+                return Queryable.Distinct(source.Select(selector));
             }
 
             // TProp is the collection, so the element type is not a type parameter here and SelectMany
@@ -251,6 +268,7 @@ namespace Radzen.FastGrid
         /// SelectMany's signature demands - a lambda returning <c>List&lt;T&gt;</c> is not the same
         /// delegate type, however assignable the values are.
         /// </summary>
+        [RequiresDynamicCode("Closes IEnumerable<> and Func<,> over an element type known at run time.")]
         static LambdaExpression AsSequenceSelector(Expression<Func<TItem, TProp>> selector)
         {
             var sequenceType = typeof(IEnumerable<>).MakeGenericType(ElementType!);
@@ -288,7 +306,8 @@ namespace Radzen.FastGrid
         /// <summary>
         /// The element type of a collection-valued property, or null when the property is a single value.
         /// </summary>
-        static Type? CollectionElementType(Type type)
+        static Type? CollectionElementType(
+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] Type type)
         {
             // IsEnumerable excludes string, which is a sequence of characters and would otherwise be
             // listed one letter at a time. An array needs no case of its own: GetElementType has one.
