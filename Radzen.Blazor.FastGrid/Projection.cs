@@ -30,9 +30,6 @@ namespace Radzen.FastGrid
         static MethodInfo DefinitionOf<T>(Expression<Func<IQueryable<T>, object>> call) =>
             Definition(call.Body);
 
-        static MethodInfo DefinitionOfOrdered<T>(Expression<Func<IOrderedQueryable<T>, object>> call) =>
-            Definition(call.Body);
-
         // The lambda is declared as returning object, and whether the compiler wraps the call in a
         // Convert to say so depends on what it returns: a boxing conversion gets one, a reference
         // conversion does not always. Both shapes have to be unwrapped, which is the same lesson the
@@ -45,16 +42,6 @@ namespace Radzen.FastGrid
 
         static readonly MethodInfo SelectManyMethod =
             DefinitionOf<object>(q => q.SelectMany(x => new object[0]));
-
-        static readonly MethodInfo OrderByMethod = DefinitionOf<object>(q => q.OrderBy(x => x));
-
-        static readonly MethodInfo OrderByDescendingMethod =
-            DefinitionOf<object>(q => q.OrderByDescending(x => x));
-
-        static readonly MethodInfo ThenByMethod = DefinitionOfOrdered<object>(q => q.ThenBy(x => x));
-
-        static readonly MethodInfo ThenByDescendingMethod =
-            DefinitionOfOrdered<object>(q => q.ThenByDescending(x => x));
 
         /// <summary><c>source.Select(selector).Distinct()</c>, for a selector typed at run time.</summary>
         [RequiresDynamicCode(Reason)]
@@ -69,22 +56,6 @@ namespace Radzen.FastGrid
             // non-generic one is what is wanted here: the element type is not a type parameter.
             return projected.Distinct();
         }
-
-        /// <summary><c>source.OrderBy(selector)</c>, for a key type known at run time.</summary>
-        [RequiresDynamicCode(Reason)]
-        internal static IOrderedQueryable<T> OrderBy<T>(IQueryable<T> source, LambdaExpression selector,
-            bool descending) =>
-            (IOrderedQueryable<T>)(descending ? OrderByDescendingMethod : OrderByMethod)
-                .MakeGenericMethod(typeof(T), selector.ReturnType)
-                .Invoke(null, new object[] { source, selector })!;
-
-        /// <summary><c>source.ThenBy(selector)</c>, for a key type known at run time.</summary>
-        [RequiresDynamicCode(Reason)]
-        internal static IOrderedQueryable<T> ThenBy<T>(IOrderedQueryable<T> source, LambdaExpression selector,
-            bool descending) =>
-            (IOrderedQueryable<T>)(descending ? ThenByDescendingMethod : ThenByMethod)
-                .MakeGenericMethod(typeof(T), selector.ReturnType)
-                .Invoke(null, new object[] { source, selector })!;
 
         /// <summary><c>source.SelectMany(selector)</c>, for an element type known at run time.</summary>
         [RequiresDynamicCode(Reason)]

@@ -56,6 +56,7 @@ Radzen needs one: `LoadDataArgs.OrderBy`, OData `$orderby`, and `FilterDescripto
 | --- | --- |
 | `PropertyColumn<TItem, TProp>` | One value per cell. `Property`, `Format`, `SortBy`, `FilterBy`, `Title`, `CssClass`, `Sortable`, `Filterable` |
 | `CollectionColumn<TItem, TElement>` | A collection per cell, listed. `Property`, `DisplayProperty`, `FilterProperty`, `Separator`, `SortBy` |
+| `TemplateColumn<TItem>` | A template per cell. `Template`, `SortBy`, `SortProperty`, `Title` |
 | `TemplateColumn<TItem>` | Arbitrary content. `Template`, `SortProperty`. Costs ~94 B/cell more than a property column - use it where a cell is not just a value |
 
 Every column also takes the layout parameters, which are per column and cost nothing per row:
@@ -91,7 +92,7 @@ takes a `SortBy` naming something that can be ordered:
 
 ```razor
 <CollectionColumn Property="@(p => p.Accounts)" DisplayProperty="@(a => a.Name)"
-                  SortBy="@(p => p.Accounts.Count)" />
+                  SortBy="@(FastGridSort<Person>.By(p => p.Accounts.Count))" />
 ```
 
 A collection-valued `PropertyColumn` has no such escape: its `SortBy` is typed at the property, which
@@ -263,6 +264,36 @@ Two rows changed meaning when PR #8 landed, and both are worth reading rather th
   frame-array growth crossing a bucket that the tooltip's frames used to keep it past anyway, but that is
   a hypothesis and it has not been measured. **Recorded here as an open question rather than a finding**,
   and it is a question about `RadzenDataGrid`, not about this component.
+
+## Sorting a column that is not typed at its key
+
+`PropertyColumn` sorts by `TProp`, which it already has. The other two columns do not: a template
+column has no expression at all, and a collection column's key belongs to the row rather than to the
+element it is generic over. Both say it with `FastGridSort<TItem>`:
+
+```razor
+<TemplateColumn TItem="Order" Title="Customer"
+                SortBy="@(FastGridSort<Order>.By(o => o.Customer.Name))">
+    <Template Context="order"><b>@order.Customer.Name</b></Template>
+</TemplateColumn>
+```
+
+`By` is generic, so the key's type is captured where it is still known, and every ordering afterwards is
+an ordinary generic call - which is what a provider translates, what a trimmer follows, and what an
+ahead-of-time compiler can emit. The sort builds both routes: an expression for a queryable and a
+delegate for a source already in memory, the delegate compiled on first use so a queryable-backed grid
+never pays for one.
+
+**This is what made a template column able to sort at all.** It previously offered `SortProperty`, a
+string path, and that never sorted anything the grid sorted itself: the header was clickable, the sort
+was recorded, the indicator was drawn, and the rows did not move. The path only ever reached a
+`LoadData` handler as its `OrderBy`, where a server did the sorting. `SortProperty` still does exactly
+that and nothing more, so a `LoadData` grid needs no change; a grid that sorts its own rows needs
+`SortBy`. Setting both is the sensible thing for a grid that does both, and then `SortBy`'s own path is
+what the server is told.
+
+A computed key sorts but has no path, so there is nothing to send a server or to persist - the same rule
+every other computed sort key follows.
 
 ## Sorting by more than one column
 
@@ -681,13 +712,12 @@ carries `Expression<Func<TItem, TProp>>` composes its own sorting and filtering 
 calls, and a trimmer can follow those. The reflective alternative - reach a property by name, close a
 generic method over a type discovered at run time - is exactly what it cannot.
 
-Four features still reach a member by name, and are the ones to avoid in an application published with
-Native AOT:
+Three features still reach a member by name, and are the ones to avoid in an application published with
+Native AOT. Sorting used to be a fourth, and `FastGridSort<TItem>` is what took it off the list:
 
 | | Why | Under Native AOT |
 | --- | --- | --- |
 | a template column filtering by `SortProperty` | the path is a string | filters through the reflective builder |
-| `CollectionColumn` sorting by `SortBy` | the key type is erased to `object` in the markup | the column declines to sort |
 | a check-box-list filter's distinct scan | projects onto a member typed at run time | supply `FilterLookupData` instead |
 | `RadzenFastDropDownDataGrid`'s value and text properties | named as strings | not AOT-clean |
 
