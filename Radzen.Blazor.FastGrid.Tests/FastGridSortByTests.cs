@@ -167,6 +167,33 @@ namespace Radzen.FastGrid.Tests
             Assert.Null(cut.FindAll("thead th")[1].QuerySelector("div").GetAttribute("onclick"));
         }
 
+        // The sort is read live rather than cached alongside the compiled expressions, because it
+        // compiles nothing. A cache would have to be invalidated, and a FastGridSort written inline in
+        // markup is a new instance every render - so the invalidation would fire every render and take
+        // the compiles with it.
+        [Fact]
+        public void ChangingTheSortChangesThePathItReports()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, int>(x => x.Id, title: "Id"),
+                Columns.Collection<Person, Company>(x => x.Accounts, a => a.Name,
+                    sortBy: FastGridSort<Person>.By(p => p.Salary))));
+
+            var column = cut.FindComponent<CollectionColumn<Person, Company>>().Instance;
+
+            Assert.Equal(nameof(Person.Salary), column.PropertyPath);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.ChildContent, Columns.Of(
+                Columns.Property<Person, int>(x => x.Id, title: "Id"),
+                Columns.Collection<Person, Company>(x => x.Accounts, a => a.Name,
+                    sortBy: FastGridSort<Person>.By(p => p.Hired)))));
+
+            Assert.Equal(nameof(Person.Hired),
+                cut.FindComponent<CollectionColumn<Person, Company>>().Instance.PropertyPath);
+        }
+
         // The two routes have to agree, as everywhere else: a list is ordered by a delegate and a
         // queryable by an expression, and the same sort has to mean the same thing to both.
         [Fact]

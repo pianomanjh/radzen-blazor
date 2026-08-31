@@ -543,6 +543,12 @@ namespace Radzen.FastGrid.Tests
                     (Expression<Func<Person, IEnumerable<Company>>>)(x => x.Accounts));
                 b.AddAttribute(2, nameof(CollectionColumn<Person, Company>.DisplayProperty),
                     (Expression<Func<Company, object?>>)(a => a.Name));
+
+                // Built here, as markup builds it: a FastGridSort written inline is a new instance on
+                // every render, so a column that let its sort decide whether to re-derive would
+                // recompile everything else along with it.
+                b.AddAttribute(3, nameof(CollectionColumn<Person, Company>.SortBy),
+                    FastGridSort<Person>.By(x => x.Salary));
                 b.CloseComponent();
             }));
             builder.CloseComponent();

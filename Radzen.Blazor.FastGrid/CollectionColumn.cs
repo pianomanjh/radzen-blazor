@@ -60,18 +60,16 @@ namespace Radzen.FastGrid
         Expression<Func<TItem, IEnumerable<TElement>>>? property;
         Expression<Func<TElement, object?>>? displayProperty;
         Expression<Func<TElement, object?>>? filterProperty;
-        FastGridSort<TItem>? sortBy;
         string? format;
 
         Func<TItem, IEnumerable<TElement>>? compiled;
         Func<TElement, object?>? member;
-        string? sortPath;
         string? collectionPath;
         string? memberPath;
         Type memberType = typeof(TElement);
 
         /// <inheritdoc />
-        public override string? PropertyPath => sortPath;
+        public override string? PropertyPath => SortBy?.Path;
 
         /// <inheritdoc />
         public override string? FilterPropertyPath => collectionPath;
@@ -103,11 +101,16 @@ namespace Radzen.FastGrid
         {
             // Equivalent rather than ReferenceEquals, for the same reason as PropertyColumn: Razor
             // rebuilds every expression tree per render, so reference equality never holds in markup.
+            //
+            // SortBy is deliberately not among these. What this guard protects is the compiling below,
+            // and the sort compiles nothing here - it carries its own delegates and its own path. A
+            // FastGridSort written inline in markup is a new instance every render, so letting it decide
+            // whether to re-derive would recompile the display expression on every render of every such
+            // column: measured at 14,433 B a render against 4,895 B.
             if (format == Format
                 && PropertyPathResolver.Equivalent(property, Property)
                 && PropertyPathResolver.Equivalent(displayProperty, DisplayProperty)
-                && PropertyPathResolver.Equivalent(filterProperty, FilterProperty)
-                && ReferenceEquals(sortBy, SortBy))
+                && PropertyPathResolver.Equivalent(filterProperty, FilterProperty))
             {
                 return;
             }
@@ -115,14 +118,12 @@ namespace Radzen.FastGrid
             property = Property;
             displayProperty = DisplayProperty;
             filterProperty = FilterProperty;
-            sortBy = SortBy;
             format = Format;
 
             compiled = Property?.Compile();
             member = DisplayProperty?.Compile();
 
             collectionPath = Property is null ? null : PropertyPathResolver.For(Property);
-            sortPath = SortBy?.Path;
 
             // Filtering follows what the reader sees unless told otherwise.
             var filterMember = FilterProperty ?? DisplayProperty;
