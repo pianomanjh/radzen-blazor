@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Xunit;
@@ -28,7 +29,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(d => d.Data, data ?? People.Sample());
                 p.Add(d => d.ChildContent, Columns);
-                p.Add(d => d.TextProperty, "First");
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
                 extra?.Invoke(p);
             });
         }
@@ -75,7 +76,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, p =>
             {
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Change, EventCallback.Factory.Create<object?>(new object(), v => changed = v));
             });
 
@@ -110,7 +111,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, p =>
             {
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Value, 1);
             });
 
@@ -125,7 +126,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, p =>
             {
                 p.Add(d => d.Multiple, true);
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
             });
 
             Open(cut);
@@ -152,8 +153,8 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(d => d.Data, People.Sample());
                 p.Add(d => d.ChildContent, Columns);
-                p.Add(d => d.TextProperty, "First");
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Multiple, true);
                 p.Add(d => d.ValueChanged,
                     EventCallback.Factory.Create<IEnumerable<int>?>(new object(), v => bound = v));
@@ -173,7 +174,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, p =>
             {
                 p.Add(d => d.Multiple, true);
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
             });
 
             Open(cut);
@@ -275,8 +276,8 @@ namespace Radzen.FastGrid.Tests
             var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
             {
                 p.Add(d => d.ChildContent, Columns);
-                p.Add(d => d.TextProperty, "First");
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Value, 1);
                 p.Add(d => d.Placeholder, "Pick someone");
             });
@@ -295,8 +296,8 @@ namespace Radzen.FastGrid.Tests
             var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
             {
                 p.Add(d => d.ChildContent, Columns);
-                p.Add(d => d.TextProperty, "First");
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Value, 7);
                 p.Add(d => d.Placeholder, "Pick someone");
             });
@@ -320,8 +321,8 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(d => d.Data, source);
                 p.Add(d => d.ChildContent, Columns);
-                p.Add(d => d.TextProperty, "First");
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Value, 1);
             });
 
@@ -340,8 +341,8 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(d => d.Data, People.Sample());
                 p.Add(d => d.ChildContent, Columns);
-                p.Add(d => d.TextProperty, "First");
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Multiple, true);
             });
 
@@ -361,8 +362,8 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(d => d.Data, People.Sample());
                 p.Add(d => d.ChildContent, Columns);
-                p.Add(d => d.TextProperty, "First");
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
                 p.Add(d => d.Multiple, true);
             });
 
@@ -474,7 +475,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, p =>
             {
                 p.Add(d => d.Name, "Lookup");
-                p.Add(d => d.ValueProperty, "Id");
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
             });
 
             var form = (Radzen.IRadzenFormComponent)cut.Instance;

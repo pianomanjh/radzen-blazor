@@ -5,7 +5,7 @@
     columns through helpers that name their type arguments explicitly.
 *@
 <RadzenFastDropDownDataGrid TItem="Person" TValue="int"
-                            Data="@Data" TextProperty="First" ValueProperty="Id"
+                            Data="@Data" TextProperty="@(x => x.First)" ValueProperty="@(x => x.Id)"
                             @bind-Value="@Chosen">
     <PropertyColumn Property="@(p => p.First)" Title="First" />
     <PropertyColumn Property="@(p => p.Customer.Name)" Title="Customer" />
