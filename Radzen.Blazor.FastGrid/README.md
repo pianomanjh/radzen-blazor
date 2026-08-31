@@ -660,13 +660,21 @@ property's clothes, and a property in a per-row loop is a per-row cost whatever 
 ## Trimming and Native AOT
 
 The path an ordinary grid takes - typed columns, a filter row, sorting, paging, selection, formatting -
-publishes trimmed with **no trim warnings**, and `Radzen.Blazor.FastGrid.TrimTest` is a real Blazor
-WebAssembly application that proves it on every CI run. It publishes with `PublishTrimmed`, `TrimMode`
-`link` and warnings as errors, and then the published application is **driven in a browser**: sort a
-string column, sort a numeric one, filter, check the answers. Publishing without a warning only says
-the linker had no objection; a trimmed member goes missing when something reaches for it, which is at
-run time, so the second half is the half that means anything. The linker is doing real work in that
-run - `Radzen.Blazor` goes from 4,487 KB to 1,621 KB.
+publishes with **no trim warnings**, both trimmed and ahead-of-time compiled, and
+`Radzen.Blazor.FastGrid.TrimTest` is a real Blazor WebAssembly application that proves it. It publishes
+with `PublishTrimmed`, `TrimMode` `link` and warnings as errors, and then the published application is
+**driven in a browser**: sort a string column, sort a numeric one, filter, check the answers.
+Publishing without a warning only says the linker had no objection; a trimmed member goes missing when
+something reaches for it, which is at run time, so the second half is the half that means anything.
+
+Both halves were run against `RunAOTCompilation=true` as well - the whole application compiled to
+WebAssembly ahead of time, a 26 MB native runtime rather than the 2.9 MB interpreted one, confirmed by
+which file the browser actually fetched - and the grid renders, sorts and filters there too. CI runs
+the trimmed configuration rather than the AOT one only because AOT-compiling the framework takes about
+twenty minutes; the warnings the two produce are the same set.
+
+The linker is doing real work in these runs rather than passing the build through: `Radzen.Blazor` goes
+from 4,487 KB to 1,621 KB, and this grid from 131 KB to 104 KB.
 
 That is not an accident of this component being small. It is what the typed design buys: a column that
 carries `Expression<Func<TItem, TProp>>` composes its own sorting and filtering out of ordinary generic
