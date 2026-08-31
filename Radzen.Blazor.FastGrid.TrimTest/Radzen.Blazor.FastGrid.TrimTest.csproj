@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Radzen.Blazor.FastGrid.TrimTest</RootNamespace>
+    <Nullable>enable</Nullable>
+
+    <!-- The point of the project: publish it trimmed and find out. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>link</TrimMode>
+
+    <!-- A trim warning here is a regression, not a note. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- IL2104 says an assembly was not marked trimmable, which Radzen.Blazor is not; that is the
+         library's own support matrix rather than something this test can assert about. CA2007 is
+         ConfigureAwait, which does not apply in a browser. -->
+    <NoWarn>IL2104;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.*-*" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.*-*" PrivateAssets="all" />
+    <ProjectReference Include="..\Radzen.Blazor.FastGrid\Radzen.Blazor.FastGrid.csproj" />
+  </ItemGroup>
+
+</Project>

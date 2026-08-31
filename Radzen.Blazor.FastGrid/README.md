@@ -657,6 +657,43 @@ out again.
 The lesson generalises past this component: a localized string is a dictionary lookup wearing a
 property's clothes, and a property in a per-row loop is a per-row cost whatever it looks like.
 
+## Trimming and Native AOT
+
+The path an ordinary grid takes - typed columns, a filter row, sorting, paging, selection, formatting -
+publishes trimmed with **no trim warnings**, and `Radzen.Blazor.FastGrid.TrimTest` is a real Blazor
+WebAssembly application that proves it on every CI run. It publishes with `PublishTrimmed`, `TrimMode`
+`link` and warnings as errors, and then the published application is **driven in a browser**: sort a
+string column, sort a numeric one, filter, check the answers. Publishing without a warning only says
+the linker had no objection; a trimmed member goes missing when something reaches for it, which is at
+run time, so the second half is the half that means anything. The linker is doing real work in that
+run - `Radzen.Blazor` goes from 4,487 KB to 1,621 KB.
+
+That is not an accident of this component being small. It is what the typed design buys: a column that
+carries `Expression<Func<TItem, TProp>>` composes its own sorting and filtering out of ordinary generic
+calls, and a trimmer can follow those. The reflective alternative - reach a property by name, close a
+generic method over a type discovered at run time - is exactly what it cannot.
+
+Four features still reach a member by name, and are the ones to avoid in an application published with
+Native AOT:
+
+| | Why | Under Native AOT |
+| --- | --- | --- |
+| a template column filtering by `SortProperty` | the path is a string | filters through the reflective builder |
+| `CollectionColumn` sorting by `SortBy` | the key type is erased to `object` in the markup | the column declines to sort |
+| a check-box-list filter's distinct scan | projects onto a member typed at run time | supply `FilterLookupData` instead |
+| `RadzenFastDropDownDataGrid`'s value and text properties | named as strings | not AOT-clean |
+
+`DynamicCode.Supported` is what decides, and it is `RuntimeFeature.IsDynamicCodeSupported` and nothing
+else - false under Native AOT, true wherever a lambda can still be compiled. Where a feature can
+degrade it does, returning null the same way a column that cannot sort already did; where it cannot,
+the exception says which column and what to use instead.
+
+One thing worth knowing if you go looking: `FeatureGuard` cannot guard `RequiresUnreferencedCode`. The
+analyzer rejects every candidate offered for it, including `RuntimeFeature.IsDynamicCodeSupported`
+itself, and the reason is sound - a switch read at run time cannot promise the trimmer anything at
+build time, because the trimmer finished before then. Trim warnings are removed by not calling
+reflective code. Everything above is the shape that requirement forces.
+
 ## What it does not do
 
 Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the repository:
