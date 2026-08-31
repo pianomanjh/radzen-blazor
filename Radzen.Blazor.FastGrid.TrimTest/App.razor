@@ -1,0 +1,49 @@
+@using Radzen
+@using Radzen.FastGrid
+
+@*
+    Everything on the mainstream path: typed columns, a filter row, sorting, paging, selection and a
+    format string. If this publishes trimmed without a warning, the path an ordinary grid takes is
+    trimmable - which is a stronger statement than a clean analyzer run over the library alone, because
+    the linker sees what is actually reachable.
+
+    Deliberately absent: the four features that reach a member by name - a template column filtering by
+    a string path, a collection column, the check-box-list distinct scan, and the drop-down. Those are
+    known to need reflection, and including them here would assert something untrue.
+*@
+<RadzenFastGrid TItem="DataItem" Data="@data" AllowFiltering="true" AllowSorting="true"
+                AllowPaging="true" PageSize="5" Selection="@selection" SelectionChanged="@(s => selection = s)">
+    <ChildContent>
+        <PropertyColumn TItem="DataItem" TProp="string" Property="@(x => x.Name)" Title="Name" />
+        <PropertyColumn TItem="DataItem" TProp="int" Property="@(x => x.Value)" Title="Value" />
+        <PropertyColumn TItem="DataItem" TProp="string" Property="@(x => x.Category)" Title="Category" />
+        <PropertyColumn TItem="DataItem" TProp="bool" Property="@(x => x.Active)" Title="Active" />
+        <PropertyColumn TItem="DataItem" TProp="DateTime" Property="@(x => x.Created)" Title="Created"
+                        Format="d" />
+        <PropertyColumn TItem="DataItem" TProp="decimal?" Property="@(x => x.Bonus)" Title="Bonus"
+                        Format="C2" />
+    </ChildContent>
+</RadzenFastGrid>
+
+@code {
+    ICollection<DataItem>? selection;
+
+    readonly DataItem[] data =
+    [
+        new() { Name = "Alice", Value = 42, Category = "A", Active = true, Created = new DateTime(2024, 1, 15), Bonus = 1.5m },
+        new() { Name = "Bob", Value = 87, Category = "B", Active = false, Created = new DateTime(2024, 3, 22) },
+        new() { Name = "Charlie", Value = 15, Category = "A", Active = true, Created = new DateTime(2024, 5, 10), Bonus = 3m },
+        new() { Name = "Diana", Value = 63, Category = "C", Active = true, Created = new DateTime(2024, 7, 4) },
+        new() { Name = "Eve", Value = 29, Category = "B", Active = false, Created = new DateTime(2024, 8, 18), Bonus = 9m },
+    ];
+
+    class DataItem
+    {
+        public string Name { get; set; } = "";
+        public int Value { get; set; }
+        public string Category { get; set; } = "";
+        public bool Active { get; set; }
+        public DateTime Created { get; set; }
+        public decimal? Bonus { get; set; }
+    }
+}
