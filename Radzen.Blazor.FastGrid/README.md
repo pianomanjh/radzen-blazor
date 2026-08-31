@@ -694,6 +694,33 @@ out again.
 The lesson generalises past this component: a localized string is a dictionary lookup wearing a
 property's clothes, and a property in a per-row loop is a per-row cost whatever it looks like.
 
+## The drop-down reads its members through expressions too
+
+`RadzenFastDropDownDataGrid`'s `TextProperty` and `ValueProperty` took a property **name**. Reading a
+member that way means splitting the path, looking the property up by name, and invoking it
+reflectively - and the drop-down does it **per row**, because matching a bound value to its row is a
+scan of the source. Measured over 1000 rows:
+
+| | Time | Allocated |
+| --- | ---: | ---: |
+| scan reading the member by name | 224.6 us | 58.62 KB |
+| scan through a delegate compiled once | **22.9 us** | **35.16 KB** |
+| a nested path, by name | 483.0 us | 148.46 KB |
+| a nested path, through a delegate | **32.8 us** | **46.88 KB** |
+
+Ten times for a plain member and fifteen for a nested one, and the nested case was also allocating the
+split array on every row. Both parameters now take an expression:
+
+```razor
+<RadzenFastDropDownDataGrid TItem="Order" TValue="int" Data="@orders"
+                            TextProperty="@(o => o.Customer.Name)" ValueProperty="@(o => o.Id)"
+                            @bind-Value="@chosen" />
+```
+
+The reader is compiled on first use and kept until the expression changes, compared the way the columns
+compare theirs - Razor rebuilds the expression every render, so reference equality would never hold for
+one written in markup.
+
 ## Trimming and Native AOT
 
 The path an ordinary grid takes - typed columns, a filter row, sorting, paging, selection, formatting -
@@ -718,14 +745,14 @@ carries `Expression<Func<TItem, TProp>>` composes its own sorting and filtering 
 calls, and a trimmer can follow those. The reflective alternative - reach a property by name, close a
 generic method over a type discovered at run time - is exactly what it cannot.
 
-Three features still reach a member by name, and are the ones to avoid in an application published with
-Native AOT. Sorting used to be a fourth, and `FastGridSort<TItem>` is what took it off the list:
+Two features still reach a member by name, and are the ones to avoid in an application published with
+Native AOT. Sorting and the drop-down's value and text members used to be there too; typed expressions
+took both off the list:
 
 | | Why | Under Native AOT |
 | --- | --- | --- |
 | a template column filtering by `SortProperty` | the path is a string | filters through the reflective builder |
 | a check-box-list filter's distinct scan | projects onto a member typed at run time | supply `FilterLookupData` instead |
-| `RadzenFastDropDownDataGrid`'s value and text properties | named as strings | not AOT-clean |
 
 `DynamicCode.Supported` is what decides, and it is `RuntimeFeature.IsDynamicCodeSupported` and nothing
 else - false under Native AOT, true wherever a lambda can still be compiled. Where a feature can
