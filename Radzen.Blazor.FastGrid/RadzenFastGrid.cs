@@ -83,6 +83,41 @@ namespace Radzen.FastGrid
         /// <summary>An inline style for a row, on the same terms as <see cref="RowClass" />.</summary>
         [Parameter] public Func<TItem, string?>? RowStyle { get; set; }
 
+        /// <summary>
+        /// Called for every body cell before it is drawn, to add HTML attributes to it.
+        /// </summary>
+        /// <remarks>
+        /// The one hook on this component that is per cell rather than per row or per column, so it is
+        /// also the one to think twice about: setting it costs an arguments object for every cell of
+        /// every row, and whatever the handler itself allocates. Unset it costs a null check hoisted out
+        /// of the row loop. A class or style that depends only on the row is cheaper through
+        /// <see cref="RowClass" />; one that depends only on the column, through the column's own
+        /// <c>CssClass</c>.
+        /// </remarks>
+        [Parameter] public Action<FastGridCellRenderEventArgs<TItem>>? CellRender { get; set; }
+
+        /// <summary>
+        /// Called for every header cell before it is drawn, to add HTML attributes to it. Per column,
+        /// so it costs the same whether the grid holds ten rows or a million.
+        /// </summary>
+        [Parameter] public Action<FastGridCellRenderEventArgs<TItem>>? HeaderCellRender { get; set; }
+
+        /// <summary>
+        /// Called for every footer cell before it is drawn, to add HTML attributes to it. Per column,
+        /// and only for a grid that draws a footer at all.
+        /// </summary>
+        [Parameter] public Action<FastGridCellRenderEventArgs<TItem>>? FooterCellRender { get; set; }
+
+        /// <summary>
+        /// Whether the grid covers itself with a loading indicator while one of its own asynchronous
+        /// loads is in flight. Nothing to wire up: the grid already knows, through
+        /// <see cref="IsLoading" />.
+        /// </summary>
+        [Parameter] public bool ShowLoadingIndicator { get; set; } = true;
+
+        /// <summary>What the loading indicator shows. A spinner matching RadzenDataGrid's without one.</summary>
+        [Parameter] public RenderFragment? LoadingTemplate { get; set; }
+
         /// <summary>Whether one row or several can be selected at once.</summary>
         [Parameter] public DataGridSelectionMode SelectionMode { get; set; } = DataGridSelectionMode.Single;
 
@@ -173,6 +208,25 @@ namespace Radzen.FastGrid
         // Allocated on the first expand: a grid whose rows are never expanded never holds the set, and
         // one with no Template never reaches the lookup at all.
         HashSet<TItem>? expandedRows;
+
+        // One arguments object for every cell of every render, pointed at each cell in turn. Measured:
+        // allocating one per cell costs 195 KB at 1000 x 5 before the handler does anything, and the
+        // dictionary behind it another 1,300 - which would have made this hook as expensive as a cell
+        // click, the most expensive thing this component offers. The header and footer hooks share it
+        // because those rows are drawn either side of the body, never inside it.
+        //
+        // What it costs instead is a rule: the arguments describe the cell being drawn and nothing else,
+        // so a handler must read them rather than keep them. Documented on the type.
+        FastGridCellRenderEventArgs<TItem>? cellRenderArgs;
+
+        FastGridCellRenderEventArgs<TItem> CellRenderArgs(TItem? item, ColumnBase<TItem> column)
+        {
+            cellRenderArgs ??= new FastGridCellRenderEventArgs<TItem>();
+
+            cellRenderArgs.Reset(item, column);
+
+            return cellRenderArgs;
+        }
 
         /// <summary>Whether the given row is expanded.</summary>
         /// <param name="item">The row.</param>
@@ -599,6 +653,41 @@ namespace Radzen.FastGrid
                 RenderPager(builder, 200, captureBottomPager ??= p => bottomPager = (RadzenPager)p);
             }
 
+            if (ShowLoadingIndicator && IsLoading)
+            {
+                RenderLoading(builder);
+            }
+
+            builder.CloseElement();
+        }
+
+        // The scrim and the spinner RadzenDataGrid draws, in the elements its themes already style.
+        // Both are positioned against the nearest positioned ancestor, which in both grids is the outer
+        // .rz-datatable - so this covers the pagers as well as the table, exactly as it does there.
+        //
+        // Drawn from IsLoading, which the grid maintains for its own asynchronous loads, rather than
+        // from a parameter the application has to keep in step. RadzenDataGrid needs IsLoading passed
+        // in; here there is nothing to pass, and nothing to forget to reset on the failure path.
+        void RenderLoading(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(210, "div");
+            builder.AddAttribute(211, "class", "rz-datatable-loading");
+            builder.CloseElement();
+
+            builder.OpenElement(212, "div");
+            builder.AddAttribute(213, "class", "rz-datatable-loading-content");
+
+            if (LoadingTemplate is { } loadingTemplate)
+            {
+                builder.AddContent(214, loadingTemplate);
+            }
+            else
+            {
+                builder.OpenElement(215, "i");
+                builder.AddAttribute(216, "class", "notranslate rzi-circle-o-notch");
+                builder.CloseElement();
+            }
+
             builder.CloseElement();
         }
 
@@ -871,6 +960,18 @@ namespace Radzen.FastGrid
                     builder.AddAttribute(189, "style", footerStyle);
                 }
 
+                if (FooterCellRender is { } footerCellRender)
+                {
+                    var args = CellRenderArgs(default, column);
+
+                    footerCellRender(args);
+
+                    if (args.Written is { } written)
+                    {
+                        builder.AddMultipleAttributes(178, written);
+                    }
+                }
+
                 // The span is written for every column, with or without a template: the theme's footer
                 // padding hangs off it, and a bare td renders a shorter cell beside its neighbours.
                 builder.OpenElement(190, "span");
@@ -952,6 +1053,18 @@ namespace Radzen.FastGrid
                 if (column.CellStyle is { } headerStyle)
                 {
                     builder.AddAttribute(48, "style", headerStyle);
+                }
+
+                if (HeaderCellRender is { } headerCellRender)
+                {
+                    var args = CellRenderArgs(default, column);
+
+                    headerCellRender(args);
+
+                    if (args.Written is { } written)
+                    {
+                        builder.AddMultipleAttributes(33, written);
+                    }
                 }
 
                 // The theme gives th padding:0 and hangs the header padding off a direct child div, so
@@ -1229,6 +1342,10 @@ namespace Radzen.FastGrid
             var cellClick = CellClick.HasDelegate;
             var cellContextMenu = CellContextMenu.HasDelegate;
 
+            // Read once for the row rather than per cell, on the same reasoning as the two above: an
+            // unset hook has to cost a null check, not a property access times five columns.
+            var cellRender = CellRender;
+
             // The toggle. A delegate per row, which is what makes this the one expensive feature on the
             // list - but only for a grid that sets a Template, and nothing above reaches it otherwise.
             if (ExpandColumn)
@@ -1260,8 +1377,8 @@ namespace Radzen.FastGrid
             {
                 var column = visibleColumns[i];
 
-                builder.OpenElement(160, "td");
-                builder.AddAttribute(161, "role", "gridcell");
+                builder.OpenElement(145, "td");
+                builder.AddAttribute(146, "role", "gridcell");
 
                 // rz-cell-data belongs on the span, not here: the theme's rules for it are all
                 // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
@@ -1269,26 +1386,46 @@ namespace Radzen.FastGrid
                 // `.rz-cell-data { padding: ... }` twice.
                 if (!string.IsNullOrEmpty(column.CssClass))
                 {
-                    builder.AddAttribute(162, "class", column.CssClass);
+                    builder.AddAttribute(147, "class", column.CssClass);
                 }
 
                 // Per cell, so five times a per-row delegate at five columns. Bound only when something
                 // listens - the measured cost of binding these unconditionally is 296 B per cell.
                 if (cellClick)
                 {
-                    builder.AddAttribute(163, "onclick", CellClickHandler(item, column));
+                    builder.AddAttribute(148, "onclick", CellClickHandler(item, column));
                 }
 
                 if (cellContextMenu)
                 {
-                    builder.AddAttribute(164, "oncontextmenu", CellContextMenuHandler(item, column));
+                    builder.AddAttribute(149, "oncontextmenu", CellContextMenuHandler(item, column));
                 }
 
                 // Memoized on the column, so this is a reference to the same string on every row, and
                 // null - no attribute at all - for a column that aligns left and bounds nothing.
                 if (column.CellStyle is { } cellStyle)
                 {
-                    builder.AddAttribute(165, "style", cellStyle);
+                    builder.AddAttribute(150, "style", cellStyle);
+                }
+
+                // Last of the td's attributes, so a handler can override any of them - which is the
+                // point of a render hook, and matches where RadzenDataGrid splats its own.
+                if (cellRender is not null)
+                {
+                    var args = CellRenderArgs(item, column);
+
+                    cellRender(args);
+
+                    if (args.Written is { } written)
+                    {
+                        // AddMultipleAttributes rather than a loop of AddAttribute, and the difference
+                        // is not style: the renderer only resolves duplicate attribute names on an
+                        // element this was called for. Writing the pairs by hand instead is 56 bytes a
+                        // cell cheaper - it avoids boxing the dictionary's enumerator - and silently
+                        // costs the hook the ability to override an attribute the grid wrote, which is
+                        // half of what a render hook is for. Measured at 274 KB per 1000 x 5; paid.
+                        builder.AddMultipleAttributes(151, written);
+                    }
                 }
 
                 // The title a narrow-screen theme shows once the table is stacked into cards. Constant
@@ -1296,14 +1433,14 @@ namespace Radzen.FastGrid
                 // is why it is behind a flag rather than always emitted.
                 if (Responsive)
                 {
-                    builder.OpenElement(166, "span");
-                    builder.AddAttribute(167, "class", "rz-column-title");
-                    builder.AddContent(168, column.HeaderText);
+                    builder.OpenElement(152, "span");
+                    builder.AddAttribute(153, "class", "rz-column-title");
+                    builder.AddContent(154, column.HeaderText);
                     builder.CloseElement();
                 }
 
-                builder.OpenElement(169, "span");
-                builder.AddAttribute(170, "class", column.CellClass);
+                builder.OpenElement(155, "span");
+                builder.AddAttribute(156, "class", column.CellClass);
 
                 // The hover affordance for a truncated cell, and the most expensive thing on this list:
                 // an attribute per cell, and the cell's text derived a second time to fill it, since
@@ -1311,7 +1448,7 @@ namespace Radzen.FastGrid
                 // reason - a column that wants it everywhere can use a TemplateColumn instead.
                 if (tooltips && column.CellTextOf(item) is { } text)
                 {
-                    builder.AddAttribute(171, "title", text);
+                    builder.AddAttribute(157, "title", text);
                 }
 
                 column.RenderCell(builder, 34, item);

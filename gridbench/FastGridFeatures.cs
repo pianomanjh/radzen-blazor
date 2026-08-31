@@ -328,6 +328,25 @@ public class FastGridFeatureBench
     [Benchmark(Description = "= RadzenDataGrid + a column picker")]
     public Task ReferenceColumnPicking() => Reference(p => p["AllowColumnPicking"] = true);
 
+    // The one hook on this component that runs per cell rather than per row or per column, so the
+    // question these two answer together is what the seam itself costs before a handler does anything:
+    // the no-op measures the arguments object and the null check, the writing one adds the dictionary
+    // and the splat. A grid that never sets it is the row above, and pays neither.
+    [Benchmark(Description = "+ CellRender that adds nothing")]
+    public Task CellRenderNoOp() => Render(p =>
+        p["CellRender"] = (Action<FastGridCellRenderEventArgs<Person>>)(_ => { }));
+
+    [Benchmark(Description = "+ CellRender that writes one attribute")]
+    public Task CellRenderWriting() => Render(p =>
+        p["CellRender"] = (Action<FastGridCellRenderEventArgs<Person>>)(args =>
+            args.Attributes["data-row"] = "x"));
+
+    // Per column rather than per cell, which is the claim worth checking at a thousand rows.
+    [Benchmark(Description = "+ HeaderCellRender that writes one attribute")]
+    public Task HeaderCellRenderWriting() => Render(p =>
+        p["HeaderCellRender"] = (Action<FastGridCellRenderEventArgs<Person>>)(args =>
+            args.Attributes["data-col"] = "x"));
+
     // What grouping costs the grid that has it, to size what building it here would have to beat.
     // Grouped by Age, which at 1000 rows is 45 groups of ~22 - a realistic shape rather than one
     // group of everything or a thousand groups of one.

@@ -531,6 +531,56 @@ itself until the row arrives, and adopts the row when it does. `ValueText` forma
 The lookup never walks an `IQueryable` to resolve it: reading the whole table to render one label is
 what this component exists not to do.
 
+## Render hooks, and what a per-cell one costs
+
+`CellRender`, `HeaderCellRender` and `FooterCellRender` are handed each cell before it is drawn, and
+whatever they write onto `Attributes` lands on the element. They are RadzenDataGrid's hooks in
+everything but the column type, which here is `ColumnBase<TItem>`.
+
+The attributes are written after the grid's own, so a hook can override any of them - which is half of
+what a render hook is for, and the reason the grid uses `AddMultipleAttributes` rather than writing the
+pairs itself. The renderer only resolves duplicate attribute names on an element that method was called
+for; a hand-written loop is 56 bytes a cell cheaper and silently loses the override.
+
+**`CellRender` is the only hook on this component that runs per cell**, and that is the whole of what
+makes it expensive. Measured at 1000 x 5:
+
+| | Allocated | Marginal |
+| --- | ---: | ---: |
+| *bare* | 151.82 KB | - |
+| `CellRender` that adds nothing | 151.94 KB | +0.12 KB |
+| `CellRender` that writes one attribute | 425.80 KB | **+274 KB** |
+| `HeaderCellRender` that writes one attribute | 152.87 KB | +1.05 KB |
+
+The first row is the interesting one, and it did not start there. Written the obvious way - an arguments
+object per cell, its dictionary allocated with it - the same no-op hook cost **+195 KB**, and writing one
+attribute cost **+1,524 KB**, which would have made it the most expensive feature this component offers,
+level with a cell click. One arguments object reused for every cell of the render takes the no-op to
+nothing and the writing case to a fifth of that.
+
+What that buys is a rule, stated on the type and worth stating here: **the arguments describe the cell
+being drawn and nothing else.** Read them inside the handler; do not keep them, or the dictionary they
+hand you, past the end of the call. Writing to `Attributes` is always safe - the grid reads it into the
+render tree before the handler is called again - and every cell starts from an empty set whatever the
+last one did.
+
+The 274 KB that remains is `AddMultipleAttributes` boxing an enumerator per cell, and the override
+semantics above are what it is spent on. If a hook only needs a class or a style, the cheaper doors are
+still open: `RowClass` and `RowStyle` for something that depends on the row, the column's own `CssClass`
+for something that depends on the column. Neither is per cell.
+
+## While it is loading
+
+`ShowLoadingIndicator` covers the grid with RadzenDataGrid's own scrim and spinner while an asynchronous
+load is in flight, and `LoadingTemplate` replaces the spinner with something of your own.
+
+There is nothing to wire up. RadzenDataGrid needs `IsLoading=@isLoading` passed in and reset on every
+path the load can leave by, including the one that throws; this grid owns the load, so it already knows,
+and the indicator reads the same `IsLoading` the component exposes. There is no flag to forget to clear.
+
+It costs one branch per render when nothing is loading, and two elements when something is. The rows stay
+in the tree underneath rather than being replaced, so a reload does not blank the grid it is reloading.
+
 ## Language, and the two buttons that had no name
 
 Every string the grid puts on screen is a parameter with a localized default, resolved through Radzen's
