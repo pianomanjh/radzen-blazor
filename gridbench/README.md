@@ -139,6 +139,7 @@ rows were added was that comparing a switched-on FastGrid against a switched-off
 | row class | 151.70 KB | 14,566 KB | 96x | +914 KB |
 | row click | 461.42 KB | 15,313 KB | **33x** | +1,661 KB |
 | a filter row | 154.97 KB | 16,837 KB | **109x** | +3,186 KB |
+| a column picker | 173.89 KB | 16,093 KB | **93x** | +2,442 KB |
 | responsive titles | 151.62 KB | 18,333 KB | **121x** | +4,682 KB |
 | row detail | 555.15 KB | 19,428 KB | **35x** | +5,776 KB |
 | cell click | 1,634 KB | 22,832 KB | **14x** | +9,180 KB |

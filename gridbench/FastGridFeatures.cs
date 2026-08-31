@@ -319,4 +319,12 @@ public class FastGridFeatureBench
 
     [Benchmark(Description = "= RadzenDataGrid + a filter row")]
     public Task ReferenceFiltering() => Reference(p => p["AllowFiltering"] = true);
+
+    // The picker is one drop-down above the table. The question is whether it stays that way at a
+    // thousand rows, or whether anything about it turns out to be per row.
+    [Benchmark(Description = "+ a column picker")]
+    public Task ColumnPicking() => Render(p => p["AllowColumnPicking"] = true);
+
+    [Benchmark(Description = "= RadzenDataGrid + a column picker")]
+    public Task ReferenceColumnPicking() => Reference(p => p["AllowColumnPicking"] = true);
 }

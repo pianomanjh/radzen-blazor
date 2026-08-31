@@ -165,6 +165,7 @@ time against the same baseline:
 | `RowClass` | 151.41 KB | +0.11 KB | 1.00x |
 | `Settings` / `SettingsChanged` | 151.41 KB | +0.11 KB | 0.99x |
 | a filter row | 153.62 KB | +1.99 KB | 0.98x |
+| a column picker | 173.89 KB | **+22.2 KB** | 1.21x |
 | filtering as you type | 155.21 KB | +1.59 KB *over the filter row* | 1.07x |
 | header and footer templates | 152.79 KB | +1.49 KB | 0.99x |
 | footer templates that aggregate | 153.02 KB | +0.23 KB *over the templates* | 1.05x |
@@ -236,6 +237,7 @@ comparison is against the best version of the thing being compared to.
 | row class | 151.70 KB | 14,566 KB | 96x | +914 KB |
 | row click | 461.42 KB | 15,313 KB | **33x** | +1,661 KB |
 | a filter row | 154.97 KB | 16,837 KB | **109x** | +3,186 KB |
+| a column picker | 173.89 KB | 16,093 KB | **93x** | +2,442 KB |
 | responsive titles | 151.62 KB | 18,333 KB | **121x** | +4,682 KB |
 | row detail | 555.15 KB | 19,428 KB | **35x** | +5,776 KB |
 | cell click | 1,634 KB | 22,832 KB | **14x** | +9,180 KB |
@@ -420,6 +422,34 @@ none of its filter engine.
 The grid exposes `Filters` as `FilterDescriptor`s and accepts them back through `ApplyFilters`, which is
 what `RadzenDataFilter` speaks.
 
+## Choosing which columns are drawn
+
+`AllowColumnPicking` puts a drop-down above the grid listing the columns, ticked for the ones on screen.
+It is `RadzenDropDown` in `Multiple` mode inside RadzenDataGrid's own `rz-group-header` /
+`rz-column-picker` wrappers, so the themes style it unchanged and it needs no popup of the grid's own.
+
+`Pickable="false"` keeps a column out of the list - and out of the picker's reach, so it goes on being
+drawn whatever else is ticked. `ColumnPickerTitle` names a column in the list when its `Title` is not
+what belongs there; without one the list falls back to `Title`, then to the property path.
+`PickedColumnsChanged` reports what is drawn after each change, and `AllowPickAllColumns`,
+`ColumnsPickerAllowFiltering` and `ColumnsPickerMaxSelectedLabels` shape the control itself.
+
+The picker costs **+22.2 KB** at 1000 x 5, which is the largest of the cheap features and wants saying
+plainly: it is a whole `RadzenDropDown`, popup and item list included, and that is what a drop-down
+weighs. It is constant rather than per row by construction - `RenderColumnPicker` is called once from
+`RenderGrid` and nothing in it reaches a row - and it is only paid when `AllowColumnPicking` is on. The
+same control costs `RadzenDataGrid` **+2,442 KB**, so with a picker on both the gap widens from 90x to
+93x.
+
+What the picker chooses is an override, not an assignment: a column's `Visible` parameter is the
+markup's word and the grid never writes to it. The override yields whenever the declaration changes
+underneath - markup that starts saying `Visible="false"` is not asking to be overruled by an old tick -
+which is the same rule a declared `FilterValue` follows.
+
+Visibility joins sort, filters and page in `FastGridSettings`, but **only while the picker is on**. A
+grid without one records `null` for every column, because storing a visibility nothing can change would
+write the markup back to itself and then overrule a later edit to it on the next load.
+
 ## Virtualization
 
 `AllowVirtualization` renders only the rows in view, through Blazor's `Virtualize`. The grid needs a
@@ -502,8 +532,8 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
 
 - **Editing.** The per-row component and cascading values that inline editing needs are exactly the cost
   this grid exists to avoid. Use `RadzenDataGrid`.
-- **Grouping, column resize, reorder, picking, frozen columns, composite headers.** Resize, reorder and
-  frozen columns all want the scroll container below, so that is one decision gating three features.
+- **Grouping, column resize, reorder, frozen columns, composite headers.** Resize, reorder and frozen
+  columns all want the scroll container below, so that is one decision gating three features.
 - **A scroll container.** No `rz-datatable-scrollable` structure, which is also what carries
   `RadzenDataGrid`'s keyboard navigation.
 - **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
