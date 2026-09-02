@@ -74,6 +74,13 @@ namespace Radzen.FastGrid.Tests
             });
 
             Assert.Equal("rz-data-grid rz-datatable", cut.Find("div").GetAttribute("class"));
+
+            // The container the rows scroll in, and the only element carrying role=grid - the row,
+            // rowgroup and gridcell roles below it are meaningless without a grid ancestor.
+            var data = cut.Find("div.rz-data-grid > div.rz-data-grid-data");
+
+            Assert.Equal("grid", data.GetAttribute("role"));
+            Assert.Equal("presentation", data.QuerySelector("table")!.GetAttribute("role"));
             Assert.Equal("rz-grid-table rz-grid-table-fixed rz-grid-table-striped",
                 cut.Find("table").GetAttribute("class"));
             Assert.Equal("rz-data-row", cut.Find("tbody tr").GetAttribute("class"));
