@@ -27,13 +27,19 @@ which is why `Radzen.Blazor.EntityFrameworkAdapter` no longer exists: the built-
 | sorting, filtering, paging, virtualization, column picking, settings, templates, `ItemKey` | see `README.md` |
 | row click, cell click, cell context menu, row detail - **all four together** | **+16 KB** |
 | column resize | +4.1 KB |
+| column reorder | +6.7 KB |
 | the scroll container and `role="grid"` | 0 |
+
+Resize and reorder re-measured together in one run, against a 153.3 KB bare grid: resize 158.3 KB,
+reorder 160.0 KB, both at once 162.3 KB. They are additive because they are the same kind of cost -
+a handle and a pair of callbacks per *header*. Against `RadzenDataGrid` with reorder on both sides,
+which allocates 13,184 KB for it, that is **82x**.
 
 Against `RadzenDataGrid` with the same feature on both sides, the narrowest row is cell click at
 **132x** and row detail is **109x**. Nothing in the grid charges a delegate per row any more.
 
-**Not built**: editing, grouping, column reorder, frozen columns, composite headers, keyboard
-navigation. §10 has what is still open.
+**Not built**: editing, grouping, frozen columns, composite headers, keyboard navigation. §10 has what
+is still open.
 
 ## 1. Why a separate component
 
@@ -336,7 +342,15 @@ Each layer below caught real faults the previous one missed. Use all of them.
   to overflow rather than pushing the page sideways. That container is now emitted always, costs
   nothing measurable, and carries the `role="grid"` the grid had never emitted - the `row`, `rowgroup`
   and `gridcell` roles below it had no grid ancestor. **Column reorder and frozen columns were gated on
-  the same decision and are now unblocked**; neither is built.
+  the same decision**; reorder is now built, frozen columns are not.
+- ~~Column reorder~~ - **done**, and it needed nothing the scroll container had not already settled.
+  A drag writes a `reorderedIndex` beside the column's declared `OrderIndex`, and the placement pass
+  that `OrderIndex` already drove does the rest: the feature is a way to *set* an order the grid could
+  always draw. The one thing it could not copy from `RadzenDataGrid` is how a move is recorded -
+  upstream removes the column from its own list and re-inserts it, which cannot work here because that
+  list is rebuilt from column registration. Every visible column is given its index outright instead,
+  which survives a re-registration and a round trip through the settings. Costs +6.7 KB and no
+  measurable time.
 - **Delegated clicks are off under virtualization**, and that is a scope choice rather than a gap. A
   virtualized grid renders a window of some tens of rows, so the per-cell delegates cost tens of
   kilobytes there rather than 1,483, and `Virtualize` hands its `ChildContent` an item with no position,
@@ -363,9 +377,9 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 **Unblocked by the scroll container, not built:**
 
-- **Column reorder** and **frozen columns**. Both wanted the container that resize needed, and it is
-  now there. Frozen columns additionally want `.rz-frozen-cell` positioning, which the theme already
-  carries and `Radzen.Blazor.js` already maintains through `updateFrozenColumnPositions`.
+- **Frozen columns.** They wanted the container that resize needed, and it is now there. They
+  additionally want `.rz-frozen-cell` positioning, which the theme already carries and
+  `Radzen.Blazor.js` already maintains through `updateFrozenColumnPositions`.
 - **Keyboard navigation.** `RadzenDataGrid` hangs it off `.rz-data-grid-data` with `tabindex` and a
   keydown handler; that element now exists here. It would be one delegate per grid, not per row, so
   the budget is not the obstacle - the roving-focus model is.

@@ -355,6 +355,22 @@ public class FastGridFeatureBench
     [Benchmark(Description = "= RadzenDataGrid + column resize")]
     public Task ReferenceColumnResize() => Reference(p => p["AllowColumnResize"] = true);
 
+    // Reorder is resize's sibling: a handle and a pair of callbacks per header, never per row. These
+    // two rows are what says so - if either drifts towards the row-click rows, something has leaked
+    // into the body.
+    [Benchmark(Description = "+ column reorder")]
+    public Task ColumnReorder() => Render(p => p["AllowColumnReorder"] = true);
+
+    [Benchmark(Description = "= RadzenDataGrid + column reorder")]
+    public Task ReferenceColumnReorder() => Reference(p => p["AllowColumnReorder"] = true);
+
+    [Benchmark(Description = "+ column resize and reorder")]
+    public Task ColumnResizeAndReorder() => Render(p =>
+    {
+        p["AllowColumnResize"] = true;
+        p["AllowColumnReorder"] = true;
+    });
+
     [Benchmark(Description = "+ a column picker")]
     public Task ColumnPicking() => Render(p => p["AllowColumnPicking"] = true);
 

@@ -440,7 +440,7 @@ namespace Radzen.FastGrid
                     continue;
                 }
 
-                ordered |= column.OrderIndex is not null;
+                ordered |= column.EffectiveOrderIndex is not null;
 
                 visibleColumns.Add(column);
             }
@@ -465,7 +465,7 @@ namespace Radzen.FastGrid
             {
                 var column = visibleColumns[i];
 
-                if (column.OrderIndex is not { } index)
+                if (column.EffectiveOrderIndex is not { } index)
                 {
                     continue;
                 }
@@ -488,7 +488,7 @@ namespace Radzen.FastGrid
             {
                 var column = visibleColumns[i];
 
-                if (column.OrderIndex is not null)
+                if (column.EffectiveOrderIndex is not null)
                 {
                     continue;
                 }
@@ -620,6 +620,14 @@ namespace Radzen.FastGrid
             builder.AddAttribute(1, "class", string.IsNullOrEmpty(CssClass)
                 ? "rz-data-grid rz-datatable"
                 : "rz-data-grid rz-datatable " + CssClass);
+
+            // The reorder script attaches its pointer tracking to the grid rather than to the header,
+            // so a drag that wanders off the row it started on keeps following the pointer. That is the
+            // only thing the root's id is for, so a grid that does not reorder does not have one.
+            if (AllowColumnReorder)
+            {
+                builder.AddAttribute(2, "id", ElementId);
+            }
 
             if (AllowColumnPicking)
             {
@@ -1067,6 +1075,20 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(36, "scope", "col");
                 var resizable = AllowColumnResize && column.Resizable;
 
+                // Both halves of the drop, and neither exists unless the grid reorders. The mouseup is
+                // per header rather than per cell, so it is in resize's league rather than row click's.
+                //
+                // On the th, not on the padding div: a drop has to count anywhere on the header, and the
+                // touch path resolves the header it landed on by this attribute.
+                if (AllowColumnReorder)
+                {
+                    var dropIndex = i;
+
+                    builder.AddAttribute(61, "data-column-index", dropIndex);
+                    builder.AddAttribute(62, "onmouseup", EventCallback.Factory.Create<MouseEventArgs>(
+                        this, _ => EndColumnReorder(dropIndex)));
+                }
+
                 // rz-resizable-column is what gives the th position:relative, and the handle below is
                 // absolutely positioned against it. Added only when there is a handle to contain.
                 builder.AddAttribute(37, "class", (sortable, resizable) switch
@@ -1113,6 +1135,28 @@ namespace Radzen.FastGrid
                 {
                     builder.AddAttribute(40, "onclick",
                         EventCallback.Factory.Create<MouseEventArgs>(this, _ => SortBy(column)));
+                }
+
+                // The grab handle, a child of the header's padding div and a sibling of the title span.
+                // That level is load-bearing: the script resolves the header it is dragging as this
+                // element's parentNode.parentNode, so one level out clones the wrong element and one
+                // level in clones the title instead of the header.
+                if (AllowColumnReorder && column.Reorderable)
+                {
+                    var dragIndex = i;
+
+                    builder.OpenElement(63, "span");
+                    builder.AddAttribute(64, "class", "rz-column-drag");
+                    builder.AddAttribute(65, "id", ColumnElementIds(dragIndex).Drag);
+                    builder.AddAttribute(66, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(
+                        this, _ => StartColumnReorder(dragIndex)));
+                    builder.AddEventPreventDefaultAttribute(67, "onmousedown", true);
+
+                    // The handle sits inside the header's click target, so picking a column up must not
+                    // also sort it - the same reason the resize handle stops its click.
+                    builder.AddEventStopPropagationAttribute(68, "onclick", true);
+                    builder.AddEventPreventDefaultAttribute(69, "onclick", true);
+                    builder.CloseElement();
                 }
 
                 builder.OpenElement(41, "span");
