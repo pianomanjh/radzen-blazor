@@ -631,10 +631,23 @@ namespace Radzen.FastGrid
                 RenderPager(builder, 10, captureTopPager ??= p => topPager = (RadzenPager)p);
             }
 
-            // 22, not 20: the top pager's band now runs to 20, and the numbers a region writes must
-            // ascend in the order it writes them.
-            builder.OpenElement(22, "table");
-            builder.AddAttribute(23, "class", TableClass());
+            // 21, not 20: the top pager's band runs to 20, and the numbers a region writes must ascend
+            // in the order it writes them.
+            //
+            // The scroll container, and the element that carries role=grid. Both jobs are load-bearing:
+            // it is what a widened column overflows into rather than pushing the page sideways, and the
+            // rowgroup/row/gridcell roles below it require a grid ancestor to mean anything. The theme
+            // expects exactly this pair - .rz-data-grid is a flex column and this is its flex: 1 child.
+            builder.OpenElement(21, "div");
+            builder.AddAttribute(22, "class", "rz-data-grid-data");
+            builder.AddAttribute(23, "role", "grid");
+
+            builder.OpenElement(24, "table");
+            builder.AddAttribute(25, "class", TableClass());
+
+            // The grid role belongs to the container above; the table is scaffolding for it, and its own
+            // implicit table role would otherwise sit between the grid and its rows.
+            builder.AddAttribute(26, "role", "presentation");
 
             RenderColumnGroup(builder);
 
@@ -646,6 +659,7 @@ namespace Radzen.FastGrid
             RenderBody(builder);
             RenderFoot(builder);
 
+            builder.CloseElement();
             builder.CloseElement();
 
             if (Paging && PagerPosition.HasFlag(PagerPosition.Bottom))
@@ -866,17 +880,17 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            builder.OpenElement(24, "colgroup");
+            builder.OpenElement(27, "colgroup");
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
                 var column = visibleColumns[i];
 
-                builder.OpenElement(25, "col");
+                builder.OpenElement(28, "col");
 
                 if (column.ColStyle(column.Width ?? ColumnWidth) is { } style)
                 {
-                    builder.AddAttribute(26, "style", style);
+                    builder.AddAttribute(29, "style", style);
                 }
 
                 builder.CloseElement();

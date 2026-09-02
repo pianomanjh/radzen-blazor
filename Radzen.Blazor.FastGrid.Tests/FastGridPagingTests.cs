@@ -199,8 +199,12 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(3, children.Length);
             Assert.Contains("rz-pager", children[0]);
-            Assert.Contains("rz-grid-table", children[1]);
+            Assert.Contains("rz-data-grid-data", children[1]);
             Assert.Contains("rz-pager", children[2]);
+
+            // The pagers are the container's siblings, not its children: they must not scroll with the
+            // rows, and they sit outside the element that carries role=grid.
+            Assert.Contains("rz-grid-table", cut.Find(".rz-data-grid-data > table").ClassName);
         }
 
         [Fact]
