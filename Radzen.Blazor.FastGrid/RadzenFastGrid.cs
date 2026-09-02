@@ -1234,7 +1234,7 @@ namespace Radzen.FastGrid
                 // CreateBinder cannot carry it - it wraps the delegate, so the receiver is lost - and
                 // the box needs no binder anyway: the value attribute above already tracks the filter.
                 builder.AddAttribute(72, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this,
-                    this.AsNonRenderingEventHandler<ChangeEventArgs>(
+                    NonRenderingHandler.Wrap<ChangeEventArgs>(
                         args => OnFilterTyped(column, args.Value as string))));
             }
 

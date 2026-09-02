@@ -13,17 +13,16 @@ using Xunit;
 namespace Radzen.FastGrid.Tests
 {
     /// <summary>
-    /// End to end against the real adapter package and a real Entity Framework provider, rather than a
-    /// fake executor: <c>AddRadzenQueryableEntityFrameworkAdapter()</c> and a DbSet. What the fake can
-    /// never show is whether the queries the grid composes are ones a provider will actually translate -
-    /// an untranslatable one throws here.
+    /// End to end against a real Entity Framework provider rather than a fake executor: a DbSet and
+    /// nothing else. What the fake can never show is whether the queries the grid composes are ones a
+    /// provider will actually translate - an untranslatable one throws here.
     /// </summary>
-    public class EntityFrameworkAdapterTests : IDisposable
+    public class EntityFrameworkTests : IDisposable
     {
         readonly SqliteConnection connection = new("DataSource=:memory:");
         readonly Ctx context;
 
-        public EntityFrameworkAdapterTests()
+        public EntityFrameworkTests()
         {
             connection.Open();
 
@@ -54,7 +53,6 @@ namespace Radzen.FastGrid.Tests
             Action<ComponentParameterCollectionBuilder<RadzenFastGrid<Employee>>>? extra = null)
         {
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
-            ctx.Services.AddRadzenQueryableEntityFrameworkAdapter();
 
             return ctx.RenderComponent<RadzenFastGrid<Employee>>(p =>
             {
@@ -71,8 +69,11 @@ namespace Radzen.FastGrid.Tests
         static string[] Names(IRenderedComponent<RadzenFastGrid<Employee>> cut) =>
             cut.FindAll("tbody tr[role=row]").Select(row => row.QuerySelectorAll("td")[0].TextContent).ToArray();
 
+        // The grid resolves the built-in IAsyncEnumerable executor when nothing is registered, so a
+        // DbSet goes down the asynchronous path with no service registration at all. Registering
+        // nothing is the assertion: this fails if that fallback is ever dropped.
         [Fact]
-        public void TheAdapterRegistrationIsAllThatIsNeeded()
+        public void ADbSetNeedsNoRegistration()
         {
             using var ctx = new TestContext();
 
@@ -169,7 +170,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void VirtualizationFetchesItsRowsThroughTheAdapter()
+        public void VirtualizationFetchesItsRowsAsynchronously()
         {
             // How large the window is depends on the viewport, which no renderer without a browser has,
             // so bUnit asks the provider for everything. What is checked here is that the rows arrive

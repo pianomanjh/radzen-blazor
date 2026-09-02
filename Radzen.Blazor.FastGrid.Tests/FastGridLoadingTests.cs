@@ -41,7 +41,7 @@ namespace Radzen.FastGrid.Tests
         {
             var executor = new GatedExecutor();
 
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             return (Render(ctx, People.Many(6).AsQueryable(), extra), executor);
         }
@@ -134,7 +134,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         /// <summary>Holds each materialization open until the test releases it.</summary>
-        sealed class GatedExecutor : IAsyncQueryExecutor
+        sealed class GatedExecutor : IFastGridQueryExecutor
         {
             public Gate Pending { get; private set; }
 

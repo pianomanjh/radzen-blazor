@@ -15,7 +15,6 @@ on:
       - 'Radzen.Blazor.FastGrid/**'
       - 'Radzen.Blazor.FastGrid.Tests/**'
       - 'Radzen.Blazor/**'
-      - 'Radzen.Blazor.EntityFrameworkAdapter/**'
       - 'Radzen.Blazor.FastGrid.TrimTest/**'
       - '.github/workflows/fastgrid-parity.yml'
   pull_request:
@@ -23,7 +22,6 @@ on:
       - 'Radzen.Blazor.FastGrid/**'
       - 'Radzen.Blazor.FastGrid.Tests/**'
       - 'Radzen.Blazor/**'
-      - 'Radzen.Blazor.EntityFrameworkAdapter/**'
       - 'Radzen.Blazor.FastGrid.TrimTest/**'
       - '.github/workflows/fastgrid-parity.yml'
   workflow_dispatch:
