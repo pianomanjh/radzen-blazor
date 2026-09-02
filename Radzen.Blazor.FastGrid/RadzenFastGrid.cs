@@ -1077,7 +1077,11 @@ namespace Radzen.FastGrid
                     (false, false) => "rz-unselectable-text",
                 });
 
-                if (sorted >= 0)
+                // Only while sorting is offered. A grid with AllowSorting off still applies a sort it
+                // was given - the data is ordered and reordering it would be the surprise - but it must
+                // not advertise the column as sorted-by-you when the header is inert: aria-sort on a
+                // header nothing can activate tells a screen reader about a control that is not there.
+                if (sortable && sorted >= 0)
                 {
                     builder.AddAttribute(38, "aria-sort",
                         sorts[sorted].Descending ? "descending" : "ascending");
@@ -1132,7 +1136,7 @@ namespace Radzen.FastGrid
                 // The position in the sort, as RadzenDataGrid shows it - a RadzenBadge there, the markup
                 // that badge produces here, since a component per sorted header buys nothing this grid
                 // wants. One is not worth showing: the number only means anything against another.
-                if (sorted >= 0 && ShowMultiColumnSortingIndex && sorts.Count > 1)
+                if (sortable && sorted >= 0 && ShowMultiColumnSortingIndex && sorts.Count > 1)
                 {
                     builder.OpenElement(50, "span");
                     builder.AddAttribute(51, "class",
@@ -1141,7 +1145,7 @@ namespace Radzen.FastGrid
                     builder.CloseElement();
                 }
 
-                if (sorted >= 0)
+                if (sortable && sorted >= 0)
                 {
                     builder.OpenElement(46, "span");
                     builder.AddAttribute(47, "class", sorts[sorted].Descending
