@@ -124,16 +124,21 @@ namespace Radzen.FastGrid.Tests
         public void CellRenderSkipsTheRowDetailToggleCell()
         {
             using var ctx = Context();
-            var calls = 0;
+
+            // Which columns the hook was handed, rather than how many times it ran. A grid whose click
+            // listener cannot attach - which is every grid under bUnit - renders a second time to put
+            // the handlers back, so a raw call count measures the number of renders as much as it
+            // measures the hook.
+            var seen = new HashSet<string>(StringComparer.Ordinal);
 
             var cut = Render(ctx, p =>
             {
                 p.Add<RenderFragment<Person>>(g => g.Template, person => builder => builder.AddContent(0, "d"));
-                p.Add(g => g.CellRender, _ => calls++);
+                p.Add(g => g.CellRender, args => seen.Add(args.Column.Title ?? "(none)"));
             });
 
             Assert.Equal(3, cut.FindAll("td.rz-col-icon").Count);
-            Assert.Equal(6, calls);
+            Assert.Equal(new[] { "First", "Id" }, seen.OrderBy(t => t, StringComparer.Ordinal).ToArray());
             Assert.All(cut.FindAll("td.rz-col-icon"), td => Assert.Null(td.GetAttribute("data-seen")));
         }
 

@@ -204,7 +204,7 @@ time against the same baseline:
 | `ItemKey` | 175.28 KB | **+23.5 KB** | 1.05x |
 | cell tooltip | 267.63 KB | **+115.9 KB** | 1.45x |
 | row click | 169.17 KB | **+16 KB** | 1.05x |
-| row detail with its toggle column | 555.44 KB | **+404 KB** | 2.17x |
+| row detail with its toggle column | 169.27 KB | **+16 KB** | 1.10x |
 | cell click | 169.17 KB | **+16 KB** | 1.10x |
 
 Every row is from one run, so the marginals are comparable with each other; the time ratios move a few
@@ -226,20 +226,22 @@ Two rows are worth reading carefully rather than at face value:
 - **Responsive titles allocate nothing and still cost 40% more time.** A span and a text frame per cell
   is work even when it is not memory.
 - **Row detail has no idle state.** Declaring a `Template` draws a toggle on every row, so the feature
-  costs its 404 KB from the moment it is available rather than when a row is expanded - there is no
-  "switched on but not in use" for it, because a row that can be expanded has to show that it can. The
-  two rows above are the same feature with and without that column, and the difference between them is
-  the whole of it.
+  costs from the moment it is available rather than when a row is expanded - there is no "switched on
+  but not in use" for it, because a row that can be expanded has to show that it can. What it costs is
+  now 16 KB rather than 404, because the toggle goes through the grid's one pointer listener instead of
+  carrying a delegate of its own.
 - **`ItemKey`'s 23.5 KB is the boxing.** A `Func<TItem, object>` over an `int` key boxes once per row,
   which is 24 bytes a thousand times. A reference-typed key costs nothing here. This is the one feature
   on the list whose price is paid in the key's type rather than in the grid.
-- **Trimming the toggle's markup saved nothing.** The empty `rz-column-title` span RadzenDataGrid puts
-  in the toggle cell was measured inert and removed, and the allocation did not move: 555.13 KB against
-  554.99 KB with it, which is noise. `RenderTreeBuilder` rents its frame array from a pool, so markup is
-  paid in DOM nodes and render time, not in managed allocation. An earlier note here decomposed the
-  404 KB into "310 for the delegate, 93 for the markup"; the 93 was inferred rather than measured, and
-  this is the measurement that says it was not markup. What the delegate costs is real; what the rest is
-  remains unattributed.
+- **Trimming the toggle's markup saved nothing, and the delegate was all of it.** The empty
+  `rz-column-title` span RadzenDataGrid puts in the toggle cell was measured inert and removed, and the
+  allocation did not move: 555.13 KB against 554.99 KB with it, which is noise. `RenderTreeBuilder`
+  rents its frame array from a pool, so markup is paid in DOM nodes and render time, not in managed
+  allocation. An earlier note here decomposed the 404 KB into "310 for the delegate, 93 for the markup"
+  and admitted the 93 was inferred rather than measured. Removing the delegate settles it: the feature
+  fell from 404 KB to 16, so **the delegate was about 388 KB of it and the markup was not the rest** -
+  the split was wrong in the direction the pooled frame array predicted, and the part left unattributed
+  was more delegate than anything else.
 
 The tooltip's 116 KB is the `title` attribute plus deriving each cell's text a second time, since
 `RenderCell` writes into the builder rather than returning a string.
@@ -271,7 +273,7 @@ and deliberately so: the honest comparison is against the best version of the th
 | a filter row | 157.14 KB | 16,098 KB | **102x** | +2,926 KB |
 | a column picker | 175.77 KB | 15,618 KB | **89x** | +2,446 KB |
 | responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
-| row detail | 557.03 KB | 18,467 KB | **33x** | +5,295 KB |
+| row detail | 169.27 KB | 18,467 KB | **109x** | +5,295 KB |
 | cell click | 169.17 KB | 22,352 KB | **132x** | +9,180 KB |
 
 Take the modal value of several runs before trusting the `RadzenDataGrid` column: those rows are bimodal
@@ -411,35 +413,36 @@ report what changed - including the row that single mode closes for you, since a
 screen without an event is a row you still think is expanded - and `ToggleRow` / `IsRowExpanded` drive
 it from code.
 
-**This is the one feature here whose availability is its cost.** Declaring the `Template` draws a
-toggle button on every row, which is 404 KB at 1000 rows. It is charged whether or not anything is ever
-expanded, because a row that can be expanded has to show that it can. Nothing is paid while `Template`
-is null.
+**Availability is its cost, not use.** Declaring the `Template` draws a toggle button on every row,
+charged whether or not anything is ever expanded, because a row that can be expanded has to show that
+it can. Nothing is paid while `Template` is null.
 
-Most of that is the delegate the toggle needs - 310 KB of it, the same a row click costs. The rest is
-not the markup: the toggle cell was trimmed to the button alone after the geometry check established
-RadzenDataGrid's empty `rz-column-title` span takes no space, and the allocation did not move, because
-`RenderTreeBuilder` rents its frame array from a pool.
+That used to be 404 KB at 1000 rows, and 310 KB of it was the delegate the toggle needed - the same a
+row click cost. The toggle now goes through the same listener as the clicks, so the delegate is gone
+and what is left is the 16 KB the listener costs in total, shared with every other pointer event
+rather than added to them. The toggle cell itself was already as small as it goes: it was trimmed to
+the button alone after the geometry check established RadzenDataGrid's empty `rz-column-title` span
+takes no space, and the allocation did not move, because `RenderTreeBuilder` rents its frame array
+from a pool.
 
 Against the same feature on `RadzenDataGrid`, which is the comparison that decides whether 404 KB is a
 lot:
 
 | | Allocated | Row detail costs it |
 | --- | ---: | ---: |
-| `RadzenFastGrid` | 152.92 KB -> 557.03 KB | **+404 KB** |
+| `RadzenFastGrid` | 153.25 KB -> 169.27 KB | **+16 KB** |
 | `RadzenDataGrid` | 13,172 KB -> 18,467 KB | **+5,295 KB** |
 
-Row detail costs `RadzenDataGrid` thirteen times what it costs this grid, because there it is a
-component per row that can be expanded rather than a cell and a delegate. With the feature on both
-sides this grid is **33x leaner** - further ahead than the 86x-to-25x drop against a `RadzenDataGrid`
-with the feature switched off suggests, because that comparison charges one grid for the feature and
-not the other.
+Row detail costs `RadzenDataGrid` three hundred times what it costs this grid, because there it is a
+component per row that can be expanded rather than a marked cell. With the feature on both sides this
+grid is **109x leaner** - further ahead than the 86x baseline rather than behind it, which is what a
+feature costing one grid 5,295 KB and the other 16 does to a ratio.
 
 QuickGrid has no row detail, so there is nothing to compare; a `RadzenFastGrid` with it on is heavier
 than QuickGrid, which is the price of doing something QuickGrid does not do.
 
-`ShowExpandColumn="false"` is the way out where the cost matters: the feature stays, the per-row toggle
-goes, and expansion comes from your own UI through `ToggleRow`. That is +0.27 KB rather than +403.
+`ShowExpandColumn="false"` still drops the per-row toggle and drives expansion from your own UI through
+`ToggleRow`. It is now a way of choosing where the control lives rather than a way of avoiding a cost.
 
 **Virtualization.** An expanded row is taller than `ItemSize`, so `Virtualize`'s spacers drift and the
 scrollbar stops being proportional. `RadzenDataGrid` has the same problem - it renders its `Template`
