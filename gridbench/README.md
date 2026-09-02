@@ -590,6 +590,18 @@ confirmed to fail with the component deliberately broken:
 | Drop the `<span class="rz-cell-data">` | 5 | `the td has no element children`; body cell `37px -> 35px` |
 | Drop `rz-data-row` | 1 | `class="rz-row"` |
 | Unreachable stylesheet | 8 | `resources failed to load, so the page is not styled as intended` |
+| Drop `rz-selectable` from the grid | 1 | `selected 'rgb(255,255,255)' vs unselected 'rgb(255,255,255)'` |
+| Drop the toggle column's `<col>` | 3 | widths shift one column left; toggle cell `47.19px -> 90px` |
+| Give a frozen column no inset | 2 | `frozen moved -200px, unfrozen moved -200px`, and every row of every section reported covered |
+| Drop the frozen header's `z-index` | 1 | `covered in: thead row 0 col 1, thead row 1 col 1` - both header rows, and only the column with something to its left to be covered by |
+| Unpin the filter row | 1 | `covered in: thead row 1 col 0, thead row 1 col 1` |
+| Unpin the footer | 1 | `covered in: tfoot row 0 col 0, tfoot row 0 col 1` |
+
+The last six rows are all the same fault in different clothes: a class the theme scopes under a parent
+the grid never emitted, or an inset the theme never supplies. Each passed every markup assertion, and
+each needed the browser to be asked what it actually drew. The filter-row row is the sharpest of them -
+the check written for the header fault still passed with the filter row broken, because it searched for
+cells already carrying the frozen class and a row that never got one has nothing to find.
 
 The alternating-class rule is checked two ways on purpose. The named form catches Radzen's own
 `rz-datatable-odd`/`-even`; the general form - all rows must carry an identical class list - catches an
@@ -604,8 +616,8 @@ these are the differences the parity rules deliberately do not cover:
 | --- | --- |
 | `title="<value>"` on the cell span is opt-in | `RadzenDataGrid` always emits one, so a cell truncated to an ellipsis reveals its full value on hover. `RadzenFastGrid` does it behind `ShowCellDataAsTooltip`. Measured on the component at **+116 KB** at 1000 x 5 - about 23 B/cell, against the ~61 B/cell this table predicted from the prototype, so +77% rather than the tripling it forecast. Still off by default, since it is an attribute per cell plus deriving each cell's text a second time; a `TemplateColumn` remains the way to have it on one column only. |
 | No `rz-text-truncate` on the cell span | Inert: `.rz-grid-table td .rz-cell-data` already sets `overflow/text-overflow/white-space`. Verified: identical computed styles. |
-| No `<colgroup>`, no `role="presentation"` on the table | Widths match today only because five equal columns under `table-layout: fixed` distribute evenly with or without it. This diverges the moment column widths are supported. |
-| No `rz-text-align-*` class on `th`/`td` | Inert for the default, which the theme resolves to `start` either way. `RadzenFastGrid` has no `TextAlign` concept at all yet. |
+| No `role="presentation"` on the table | Inert. The `<colgroup>` this row once said was missing is emitted - widths, resize and the frozen columns' insets all depend on it, and it carries a bare `col` for the toggle column so the widths below it do not shift by one. |
+| No `rz-text-align-*` class on `th`/`td` | `RadzenFastGrid` has `TextAlign`, and applies it as `text-align` in the memoized cell style rather than as a class. Same rendered alignment; a custom theme hanging rules off the class name would not see it. |
 | No `rz-datatable-scrollable`, no `rz-data-grid-data[role="grid"]`, no `rz-has-pager` | Deliberate (spec §6). The scroll container is also what carries `RadzenDataGrid`'s keyboard navigation, so that is not free either. |
 
 ## Lookup face-off: RadzenDropDownDataGrid vs RadzenFastDropDownDataGrid

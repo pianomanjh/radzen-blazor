@@ -262,6 +262,30 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void HidingTheFirstFrozenColumnPinsTheNextOneAtTheEdge()
+        {
+            // The runs are read off the columns as drawn, so hiding one does not strand the rest: the
+            // next frozen column simply becomes the one at the edge, and is pinned at zero.
+            using var ctx = Context();
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.AllowColumnReorder, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, title: "First", width: "90px",
+                        frozen: true, visible: false),
+                    Columns.Property<Person, string>(x => x.Last, title: "Last", width: "120px", frozen: true),
+                    Columns.Property<Person, int>(x => x.Id, title: "Id")));
+            });
+
+            var classes = BodyClasses(cut);
+
+            Assert.Contains("rz-frozen-cell", classes[0], StringComparison.Ordinal);
+            Assert.Contains("left:0", BodyStyles(cut)[0], StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void AResizedWidthMovesTheColumnPinnedBehindIt()
         {
             // The inset is built from EffectiveWidth, so a drag that widens the first frozen column has
