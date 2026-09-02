@@ -3,14 +3,19 @@
 A read-only data grid for [Radzen.Blazor](https://blazor.radzen.com), for large row counts. Same theme,
 same markup contract, roughly a hundredth of the allocation.
 
-At 1000 rows x 5 columns, rendering identical output, all three in one run - `RadzenDataGrid` measured
-with PR #8 merged, which is the leanest it gets:
+At 1000 rows x 5 columns, rendering identical output, all three in one run - `RadzenDataGrid` as it
+stands on master, which is the leanest it gets:
 
 | | Time | Allocated |
 | --- | ---: | ---: |
-| `RadzenDataGrid` | 34,737 us | 13,652 KB |
-| **`RadzenFastGrid`** | **1,771 us** | **152 KB** |
-| Blazor `QuickGrid` | 3,409 us | 370 KB |
+| `RadzenDataGrid` | 12,003 us | 13,172 KB |
+| **`RadzenFastGrid`** | **449 us** | **153 KB** |
+| Blazor `QuickGrid` | 832 us | 371 KB |
+
+Compare allocation across revisions of this table, not time: the times above are roughly three times
+faster than the previous run recorded for all three grids alike, which is the machine and not the code.
+Allocation is stable across the same move - `QuickGrid`, whose code did not change at all, came back
+within 1.2 KB - so treat differences under about 1.5 KB at this scale as drift.
 
 It gets there by not doing three things a general-purpose grid has to: no component per row, no cascading
 value per row, no render fragment per cell. Those are what inline editing needs, and this grid does not
@@ -232,38 +237,45 @@ is paid, and the two can point different ways. So each feature is measured on `R
 with the same data and the same five columns, and the ratio below is both grids with that feature on -
 the only comparison that is like for like.
 
-Measured against `RadzenDataGrid` **with PR #8 merged**, which took its baseline from 18,191 KB to
-13,652 KB. Every ratio here is smaller than it was before that landed, and deliberately so: the honest
-comparison is against the best version of the thing being compared to.
+Measured against `RadzenDataGrid` **as it stands on master**, which took its baseline from 18,191 KB to
+13,172 KB over two rounds of optimization. Every ratio here is smaller than it was before those landed,
+and deliberately so: the honest comparison is against the best version of the thing being compared to.
 
 | Feature on both | `RadzenFastGrid` | `RadzenDataGrid` | Gap | Costs RadzenDataGrid |
 | --- | ---: | ---: | ---: | ---: |
-| *nothing* | 151.78 KB | 13,652 KB | 90x | - |
-| cell tooltip | 267.63 KB | 13,652 KB | **51x** | +0 KB |
-| row class | 151.88 KB | 14,566 KB | 96x | +914 KB |
-| row click | 461.88 KB | 15,313 KB | **33x** | +1,661 KB |
-| a filter row | 155.66 KB | 16,838 KB | **108x** | +3,186 KB |
-| a column picker | 174.02 KB | 16,093 KB | **93x** | +2,441 KB |
-| responsive titles | 151.95 KB | 18,333 KB | **121x** | +4,681 KB |
-| row detail | 555.44 KB | 19,427 KB | **35x** | +5,775 KB |
-| cell click | 1,634 KB | 22,832 KB | **14x** | +9,180 KB |
+| *nothing* | 152.92 KB | 13,172 KB | 86x | - |
+| cell tooltip | 269.62 KB | 13,172 KB | **49x** | +0 KB |
+| row class | 153.17 KB | 14,087 KB | 92x | +914 KB |
+| row click | 462.98 KB | 14,834 KB | **32x** | +1,662 KB |
+| a filter row | 157.14 KB | 16,098 KB | **102x** | +2,926 KB |
+| a column picker | 175.77 KB | 15,618 KB | **89x** | +2,446 KB |
+| responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
+| row detail | 557.03 KB | 18,467 KB | **33x** | +5,295 KB |
+| cell click | 1,635 KB | 22,352 KB | **14x** | +9,180 KB |
+
+Take the modal value of several runs before trusting the `RadzenDataGrid` column: those rows are bimodal
+between two values about 990 KB apart, for reasons `gridbench/README.md` sets out.
 
 The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
 delegate per row or per cell - and widens wherever the feature is markup the other grid pays for per
 row. Cell click is the narrowest at 14x and is still 14x.
 
-Two rows changed meaning when PR #8 landed, and both are worth reading rather than skimming:
+Two rows are worth reading rather than skimming, because each changed meaning as `RadzenDataGrid` was
+optimized underneath them:
 
-- **The cell tooltip now costs `RadzenDataGrid` nothing**, where it used to cost 5,243 KB - 29% of
+- **The cell tooltip now costs `RadzenDataGrid` nothing at all**, where it used to cost 5,243 KB - 29% of
   everything the grid allocated - because `ShowCellDataAsTooltip` defaults to true and each cell built a
-  `Dictionary` to carry one `title` attribute. That was found here, fixed there, and the gap on this row
-  closed from 68x to 51x as a result. This table is the reason it was found at all.
-- **Responsive titles now cost `RadzenDataGrid` 4,682 KB**, where the same measurement against the
-  pre-#8 grid said +0.4 KB. The feature has not changed; only the baseline under it has. That is a real,
-  deterministic 4.7 MB and it is not yet explained - the likeliest candidate is `RenderTreeBuilder`
-  frame-array growth crossing a bucket that the tooltip's frames used to keep it past anyway, but that is
-  a hypothesis and it has not been measured. **Recorded here as an open question rather than a finding**,
-  and it is a question about `RadzenDataGrid`, not about this component.
+  `Dictionary` to carry one `title` attribute. That was found here and fixed there, and the gap on this
+  row closed from 68x to 49x as a result. The last residue has now gone too: turning the tooltip off
+  still saved 704 KB after the first round of fixes, and on current master the baseline and the
+  tooltip-off measurement are the same 13,172 KB. This table is the reason any of it was found.
+- **Responsive titles cost `RadzenDataGrid` 4,202 KB**, where the same measurement against the earliest
+  grid said +0.4 KB. The feature has not changed; only the baseline under it has. The likeliest candidate
+  is `RenderTreeBuilder` frame-array growth crossing a bucket that the tooltip's frames used to keep it
+  past anyway - and that candidate has since been caught in the act on a different row, which flips
+  between two values 990 KB apart with gen1/gen2 collections as the visible correlate. The mechanism is
+  still inferred rather than demonstrated, so it **stays an open question rather than a finding**, and it
+  is a question about `RadzenDataGrid` rather than about this component. `gridbench/README.md` has it.
 
 ## Sorting a column that is not typed at its key
 
@@ -392,12 +404,12 @@ lot:
 
 | | Allocated | Row detail costs it |
 | --- | ---: | ---: |
-| `RadzenFastGrid` | 151.78 KB -> 555.44 KB | **+404 KB** |
-| `RadzenDataGrid` | 13,652 KB -> 19,427 KB | **+5,775 KB** |
+| `RadzenFastGrid` | 152.92 KB -> 557.03 KB | **+404 KB** |
+| `RadzenDataGrid` | 13,172 KB -> 18,467 KB | **+5,295 KB** |
 
-Row detail costs `RadzenDataGrid` fourteen times what it costs this grid, because there it is a
+Row detail costs `RadzenDataGrid` thirteen times what it costs this grid, because there it is a
 component per row that can be expanded rather than a cell and a delegate. With the feature on both
-sides this grid is **35x leaner** - further ahead than the 90x-to-25x drop against a `RadzenDataGrid`
+sides this grid is **33x leaner** - further ahead than the 86x-to-25x drop against a `RadzenDataGrid`
 with the feature switched off suggests, because that comparison charges one grid for the feature and
 not the other.
 

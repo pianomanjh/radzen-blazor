@@ -134,19 +134,25 @@ rows were added was that comparing a switched-on FastGrid against a switched-off
 
 | Feature on both, N=1000 | `RadzenFastGrid` | `RadzenDataGrid` | Gap | Costs RadzenDataGrid |
 | --- | ---: | ---: | ---: | ---: |
-| *nothing* | 151.52 KB | 13,652 KB | 90x | - |
-| cell tooltip | 267.22 KB | 13,652 KB | **51x** | +0 KB |
-| row class | 151.70 KB | 14,566 KB | 96x | +914 KB |
-| row click | 461.42 KB | 15,313 KB | **33x** | +1,661 KB |
-| a filter row | 154.97 KB | 16,837 KB | **109x** | +3,186 KB |
-| a column picker | 173.89 KB | 16,093 KB | **93x** | +2,442 KB |
-| responsive titles | 151.62 KB | 18,333 KB | **121x** | +4,682 KB |
-| row detail | 555.15 KB | 19,428 KB | **35x** | +5,776 KB |
-| cell click | 1,634 KB | 22,832 KB | **14x** | +9,180 KB |
+| *nothing* | 152.92 KB | 13,172 KB | 86x | - |
+| cell tooltip | 269.62 KB | 13,172 KB | **49x** | +0 KB |
+| row class | 153.17 KB | 14,087 KB | 92x | +914 KB |
+| row click | 462.98 KB | 14,834 KB | **32x** | +1,662 KB |
+| a filter row | 157.14 KB | 16,098 KB | **102x** | +2,926 KB |
+| a column picker | 175.77 KB | 15,618 KB | **89x** | +2,446 KB |
+| responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
+| row detail | 557.03 KB | 18,467 KB | **33x** | +5,295 KB |
+| cell click | 1,635 KB | 22,352 KB | **14x** | +9,180 KB |
 
-Measured against `RadzenDataGrid` with PR #8 merged, so every ratio is smaller than the first version of
-this table reported. That is the point: the comparison is against the best version of the thing being
-compared to, and #8 is 4,540 KB better than the grid these rows first ran against.
+Measured against `RadzenDataGrid` as it now stands on master, which has absorbed the render and async
+work these rows were first measured against as PRs. That is the point: the comparison is against the best
+version of the thing being compared to, and it has moved twice now.
+
+The interesting part is what did *not* move. The baseline fell 480 KB, and four of the marginal costs -
+row class, row click, the column picker, cell click - came back within a kilobyte of what they were, so
+their totals fell by the baseline shift and nothing else. Three fell further on their own: the filter row
+by 260 KB, responsive titles and row detail by about 480 KB each. A feature's marginal cost is the durable
+number here; the totals move whenever the grid underneath them does.
 
 The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
 delegate per row or per cell - and *widens* wherever the feature is markup the other grid pays for per
@@ -155,20 +161,27 @@ times, so with either on both sides the gap widens rather than narrowing. The un
 pessimistic one. Which is the argument for the reference rows either way: the direction of the error was
 not guessable, and half these numbers had never been measured at all.
 
-### One row is an open question, not a finding
+### The reference rows are bimodal, and one run of them proves nothing
 
-Responsive titles measure **+4,682 KB on `RadzenDataGrid`** here. The same measurement against the
-pre-#8 grid said **+0.4 KB**. The feature did not change; the baseline under it did.
+`= RadzenDataGrid, same columns` does not settle on a value. Run it on its own, same binary, same
+machine, and it returns **12.86 MB about three times in four and 13.83 MB the rest of the time** - a
+990 KB step between two stable values, with nothing in between. Two full passes of this table
+disagreed by exactly that step on that row while every other row reproduced to within half a kilobyte,
+which is how it was noticed at all.
 
-Both numbers are deterministic allocation, so neither is noise, and 4.7 MB is too large to wave at. The
-likeliest mechanism is `RenderTreeBuilder` frame-array growth: a span and a text frame per cell is 10,000
-extra frames, and before #8 the tooltip's own frames may have kept the pooled array past the growth
-boundary that responsive now crosses on its own. That would also explain the original +0.4 KB, which was
-surprising when it was recorded and was explained away as "markup is paid in DOM nodes, not managed
-allocation" - an explanation that now looks like it was fitted to one measurement.
+The correlate is visible in the diagnoser's own columns: every 12.86 MB run records gen1 and gen2
+collections, and the 13.83 MB run records none. That points at `RenderTreeBuilder`'s pooled frame
+arrays - whether they survive between iterations decides whether the next one re-grows from scratch -
+and it is the same mechanism guessed at when responsive titles jumped from +0.4 KB against the pre-#8
+grid to +4,682 KB after it. That guess was recorded here as a hypothesis fitted to one measurement.
+It now has a second instance that can be reproduced on demand, so it is no longer fitted to one - but
+the mechanism is still inferred from a correlation rather than demonstrated, and it stays a hypothesis
+until something measures the pool directly.
 
-It has not been measured, so it stays a hypothesis. It is a question about `RadzenDataGrid`'s render
-path rather than about this component, and it is recorded here because this table is where it surfaced.
+**The operational consequence is the part that matters: take the modal value of several runs before
+recording anything from a reference row.** The 13,172 KB baseline in the table above is the modal value
+of four. A single run of this table produced 14,159 KB for it, which reads as a 507 KB regression and
+is an artefact.
 
 ### The reference rows found something in RadzenDataGrid
 
@@ -194,6 +207,13 @@ thousand strings at 1000 x 5.
 
 `ShowCellDataAsTooltip="false"` is no longer a 29% cut, because there is no longer 29% to cut. The
 parameter now changes one attribute per cell and nothing else.
+
+It has since gone all the way to nothing. On current master the baseline and the tooltip-turned-off row
+are **both 13,172 KB** - the same number, not merely a close one. Turning the tooltip off used to save
+704 KB even after PR #8 (13,652 against 12,948), and that residue is now gone. Worth stating plainly
+because this section previously reported the tooltip costing "+0 KB" in the table while the off-row sat
+704 KB below the baseline, which cannot both be true; the table was comparing two tooltip-on rows. Now
+they agree.
 
 ## Marginal cost of each feature on a slim renderer
 
