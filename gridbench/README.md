@@ -753,30 +753,55 @@ in reverse.
 
 Keyboard navigation needed one - the cursor moves through the whole data set under virtualization
 rather than through the rendered window, and there was no way to drive that in a browser. The toggle
-took a minute to add and immediately turned up a fault that no test in this repository can reach:
+took a minute to add and immediately turned up a fault no test in this repository could reach:
 
-**Switching a grid over an asynchronous source (a DbSet) from paging to virtualization spins the
-render loop until the circuit dies.** Roughly 880,000 renders in two and a half seconds, at 200% CPU,
-with the render trace cycling
-`Home -> RadzenFastGrid -> Defer -> Home -> CascadingValue -> Virtualize` forever. The server logs
-**nothing**: no exception is thrown, the process stays up, and the only trace is the WebSocket closing
-1006 and the metrics strip freezing at whatever it last managed to flush.
+**A virtualized grid over an asynchronous source refreshed itself forever.** Roughly 880,000 renders in
+two and a half seconds at 200% CPU, the trace cycling
+`Home -> RadzenFastGrid -> Defer -> Home -> CascadingValue -> Virtualize`. The server logged
+**nothing**: no exception, the process stayed up, and the only trace was the WebSocket closing 1006 and
+the metrics strip freezing at whatever it last managed to flush.
 
-Two things about finding it are worth keeping:
+The cycle, once instrumented, was four steps and every one of them looked reasonable on its own:
 
-- **A frozen counter reads exactly like a stable one.** The first pass at this concluded "keyboard
-  navigation off, renders steady at 2, clean" - and 2 was simply the last number that reached the
-  browser before the circuit stopped answering. The reading that discriminates is not the counter but
-  whether the circuit *responds*: click a toggle and see whether the DOM changes. Every conclusion
-  drawn from the counter before that check was wrong, in both directions.
-- **It is not the keyboard's.** Reverting the library to the commit before this work, keeping only the
-  playground's new toggle, reproduces it exactly. The order matters and the source matters: Entity
-  Framework first and then Virtualize dies, Virtualize first and then Entity Framework does not, and an
-  in-memory list does neither. It is a fault in the asynchronous data path's interaction with
-  `Virtualize`, and it belongs to its own commit rather than to this one.
+1. `OnParametersSetAsync` compares `Data` by reference and finds it changed.
+2. Virtualizing, it calls `RefreshAsync`, which raises `SettingsChanged` - the grid announcing its
+   state so an application can persist it.
+3. The application stores what it was handed and re-renders, which is the entire point of the
+   parameter.
+4. Its `Data` property answers with **a new queryable object**, because that is what
+   `context.Rows.AsNoTracking()` does every time it is read. Back to 1.
 
-`FastGridVirtualizationTests` and `EntityFrameworkTests` both cover a virtualized grid over a DbSet and
-both pass, because bUnit has no viewport: `Virtualize` asks its provider for everything once and never
-re-queries. The switch itself is testable there and also passes. What is not reachable without a
-browser is the re-query, which is where this lives - layer 6 of the protocol earning its place for the
-eighth time.
+The settings guard was not the fault and held perfectly throughout: `raisedSettings` is compared by
+reference and every returning instance was correctly ignored. The loop ran entirely on the *data*
+comparison, and the announcement was what fed the parent the render it needed to close the circle.
+
+**The fix is that a data change is not a settings change.** Being handed a new source is not something
+the user chose, so there is nothing to persist and nothing to announce; `RefreshAsync` gained an
+`announce` flag and the parameter-set path passes `false`. Nothing else changes, and the paged branch
+never had the fault because `BeginAsyncLoad` announces nothing - it was bounded by luck rather than by
+design. `Data` is also now read once rather than twice, since an unstable source was being compared
+against one instance and remembered as another.
+
+`EntityFrameworkTests` pins both halves: a fresh-but-equivalent queryable raises no settings, and a
+genuinely different query still reloads. The playground's `EfSource.Rows` is deliberately left
+unstable, because that is what ordinary application code looks like and it is what caught this.
+
+Three things about finding it are worth keeping:
+
+- **A frozen counter reads exactly like a stable one.** The first pass concluded "keyboard navigation
+  off, renders steady at 2, clean" - and 2 was simply the last number that reached the browser before
+  the circuit stopped answering. The reading that discriminates is not the counter but whether the
+  circuit *responds*: click a toggle and see whether the DOM changes. Several conclusions drawn from
+  the counter before that check were wrong, in both directions.
+- **Bisecting the suspect first wasted the most time.** The feature being built was assumed guilty
+  because it was new, and two builds went into removing its markup and then its lifecycle hooks before
+  anyone reverted the *library* and reproduced it with none of it present. Reverting to the last known
+  good commit is the cheaper first move and it was available from the start.
+- **The log said nothing, and that was the clue.** An unhandled exception in a circuit logs. Silence
+  plus a 1006 close plus 200% CPU is not a crash, it is a spin - and it points at the render loop
+  rather than at the data path, which is where the two builds of bisecting went looking.
+
+`FastGridVirtualizationTests` and `EntityFrameworkTests` both covered a virtualized grid over a DbSet
+before this and both passed, because bUnit has no viewport: `Virtualize` asks its provider for
+everything once. What was missing was not a browser but a parent that stores what the grid announces
+and hands its `Data` back - which is now a test, and did not need a browser after all.

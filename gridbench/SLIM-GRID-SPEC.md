@@ -318,9 +318,14 @@ Each layer below caught real faults the previous one missed. Use all of them.
    page.
 
    **This layer is not optional, and it is not last.** Layers 1-5 all assert on markup; none of them
-   can see what a browser does with it. Seven bugs got through every one of them and were found here,
+   can see what a browser does with it. Nine bugs got through every one of them and were found here,
    most within a minute of the first click, and three of them by a person looking at the screen rather
    than by anything that could have been automated first:
+
+   Two of the nine turned out to be testable after all, once the browser had shown what to look for -
+   which is the layer's other use. A fault found here is worth a minute asking what the test would have
+   had to do; sometimes the answer is "have a viewport", and sometimes it is a parameter nobody thought
+   to set.
 
    | Fault | Why nothing above caught it |
    | --- | --- |
@@ -331,10 +336,15 @@ Each layer below caught real faults the previous one missed. Use all of them.
    | A selected row was never painted | The theme nests its selected-row rule inside `.rz-selectable`, which the grid did not emit. `rz-state-highlight` sat on exactly the right `tr` and matched nothing. |
    | Scrolled columns drawn over the frozen ones, in the header only | The theme stacks every header cell at the same z-index, frozen or not, so a frozen one tied with its neighbours and document order let the column to its right win. The body was correct, which made it look like a rendering glitch rather than a rule. |
    | The filter row not pinned with its column | It is a second `tr` inside `thead` rather than part of the title row, so it never received the class or the inset - and the check written for the previous fault skipped it, because it searched for cells already carrying the frozen class. |
+   | A virtualized grid over an asynchronous source refreshing itself forever | `RefreshAsync` announced a data change as a settings change; the application stored it, re-rendered, and its `Data` property answered with a new queryable - which is what `AsNoTracking()` does on every read. 880,000 renders in 2.5s, no exception, nothing in the log. Every existing test passed: bUnit's `Virtualize` fetches once, and nothing tested a parent that hands the settings back. |
    | The keyboard cursor vanishing on `PageDown` under virtualization | The jump lands on a row outside the rendered window, so the script has nothing to focus; it scrolls to where the row will be and the re-assert after the next render was to catch it. There is no next render - `Virtualize` re-renders *itself* when the window arrives, and the grid's `OnAfterRenderAsync` never runs. The fix waits for the row in the script instead, bounded and superseded by the next keystroke. Every bUnit test passed throughout: there the window is the whole data set, so the row is always already there. |
 
    Watch **renders/sec** on the metrics strip: a grid at rest is 0, and the panel turns it red above
-   five. That reading alone names a render loop in a glance.
+   five. That reading alone names a render loop in a glance - **while the circuit is answering.** Once
+   it is not, the strip freezes at its last value and a stopped counter reads exactly like a quiet one.
+   The reading that tells them apart is whether the page still *responds*: click a toggle and see
+   whether the DOM changes. A render loop killed a circuit here and was twice read as "clean" from a
+   counter that had simply stopped being updated.
 
    The playground is also where a feature is *discoverable*: selection is driven by clicking a row and
    nothing on the page said so, and its toggle was wired to discard the grid's answer rather than to
@@ -401,11 +411,6 @@ Each layer below caught real faults the previous one missed. Use all of them.
 
 ## 10. Open decisions
 
-- **A virtualized grid over an asynchronous source spins the render loop until the circuit dies**, if
-  it was paging over that source first. Found by the playground's new Virtualize toggle; reproduced on
-  the commit before keyboard navigation, so it is not that feature's. ~880,000 renders in 2.5s at 200%
-  CPU, no exception logged, the WebSocket closing 1006 and nothing else. Its own commit;
-  `gridbench/README.md` has what is known and the two things that made it hard to see.
 - Package and namespace name.
 - ~~Column resize~~ - **done**, and it settled the question that gated three features. Resize does not
   need the scrollable variant's structure; it needs a `colgroup`, which the grid already emitted. What

@@ -87,6 +87,13 @@ public sealed class EfSource : IDisposable
     /// AsNoTracking: the grid only reads, and tracking every row would measure the change tracker
     /// rather than the grid.
     /// </remarks>
+    /// <remarks>
+    /// A new queryable on every read, deliberately: that is what ordinary application code produces -
+    /// a DbSet put through AsNoTracking, or a Where written in markup - and a playground that handed
+    /// the grid one stable instance would be testing a shape nobody writes. It is what caught the
+    /// render loop the grid used to spin over an asynchronous source under virtualization; leaving it
+    /// this way is what would catch that again.
+    /// </remarks>
     public IQueryable<Row> Rows => context!.Rows.AsNoTracking();
 
     public void Dispose()

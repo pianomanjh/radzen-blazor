@@ -11,8 +11,6 @@
     <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
     <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
     <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
-    @* Switching this on over Entity Framework, having paged over it first, spins the render loop until
-       the circuit dies. Not keyboard navigation's - it reproduces without it. See gridbench/README.md. *@
     <label><input type="checkbox" @bind="virtualize" /> Virtualize</label>
     <label><input type="checkbox" @bind="allowPicking" /> Column picker</label>
     <label><input type="checkbox" @bind="alternating" /> Alternating</label>

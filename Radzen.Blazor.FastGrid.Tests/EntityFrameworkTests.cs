@@ -209,6 +209,62 @@ namespace Radzen.FastGrid.Tests
                 row => Assert.Equal("Ops", row.QuerySelectorAll("td")[1].TextContent));
         }
 
+        // A queryable read from a property is a new instance every time it is read - `Set<T>()`,
+        // `.AsNoTracking()`, a `Where` written in markup. That is ordinary application code, and the
+        // grid has to survive it: reference equality is the only affordable way to notice the source
+        // changed, so an unstable source looks changed on every render.
+        //
+        // What must not happen is a *loop*. Refreshing raised SettingsChanged, the parent stored it and
+        // re-rendered, the property handed back another new queryable, and the grid refreshed again -
+        // 880,000 renders in two and a half seconds, no exception, the circuit dying with nothing in
+        // the log. It needed virtualization to bite, because that is the branch that goes through
+        // RefreshAsync; the paged branch loads without announcing anything and was bounded by luck.
+        [Fact]
+        public void AFreshQueryableEveryRenderDoesNotRaiseSettings()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var raised = 0;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Employee>>(p =>
+            {
+                p.Add(g => g.Data, context.People.AsNoTracking());
+                p.Add(g => g.AllowVirtualization, true);
+                p.Add(g => g.ChildContent, Columns.Of(Columns.Property<Employee, string>(x => x.Name)));
+                p.Add(g => g.SettingsChanged,
+                    EventCallback.Factory.Create<FastGridSettings>(this, _ => raised++));
+            });
+
+            var before = raised;
+
+            // What the parent's next render does: the same query, a different object.
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, context.People.AsNoTracking()));
+
+            Assert.Equal(before, raised);
+        }
+
+        [Fact]
+        public void AGenuinelyNewSourceStillReloads()
+        {
+            // The other half of the rule: not announcing a data change must not mean ignoring one.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Employee>>(p =>
+            {
+                p.Add(g => g.Data, context.People.Where(e => e.Id <= 2));
+                p.Add(g => g.AllowVirtualization, true);
+                p.Add(g => g.ChildContent, Columns.Of(Columns.Property<Employee, string>(x => x.Name)));
+            });
+
+            Assert.Equal(new[] { "Name1", "Name2" }, Names(cut));
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, context.People.Where(e => e.Id == 5)));
+
+            Assert.Equal(new[] { "Name5" }, Names(cut));
+        }
+
         public class Employee
         {
             public int Id { get; set; }
