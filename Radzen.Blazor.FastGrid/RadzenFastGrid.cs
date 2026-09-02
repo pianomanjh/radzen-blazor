@@ -1002,12 +1002,18 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(186, "role", "gridcell");
                 builder.AddAttribute(187, "scope", "col");
 
-                if (!string.IsNullOrEmpty(column.FooterCssClass))
+                if (column.FrozenClass is { } frozenFooter)
+                {
+                    builder.AddAttribute(188, "class", string.IsNullOrEmpty(column.FooterCssClass)
+                        ? frozenFooter
+                        : column.FooterCssClass + " " + frozenFooter);
+                }
+                else if (!string.IsNullOrEmpty(column.FooterCssClass))
                 {
                     builder.AddAttribute(188, "class", column.FooterCssClass);
                 }
 
-                if (column.CellStyle is { } footerStyle)
+                if (column.FrozenFooterStyle is { } footerStyle)
                 {
                     builder.AddAttribute(189, "style", footerStyle);
                 }
@@ -1286,7 +1292,17 @@ namespace Radzen.FastGrid
                 builder.OpenElement(52, "th");
                 builder.AddAttribute(53, "role", "columnheader");
                 builder.AddAttribute(54, "scope", "col");
-                builder.AddAttribute(55, "class", "rz-unselectable-text");
+
+                // The filter row is a second row of the same header, so a frozen column has to pin here
+                // too - otherwise its title holds still and the box you type in slides out from under it.
+                builder.AddAttribute(55, "class", column.FrozenClass is { } frozenFilter
+                    ? "rz-unselectable-text " + frozenFilter
+                    : "rz-unselectable-text");
+
+                if (column.FrozenHeaderStyle is { } filterStyle)
+                {
+                    builder.AddAttribute(61, "style", filterStyle);
+                }
 
                 if (column.CanFilter || column.FilterTemplate is not null)
                 {

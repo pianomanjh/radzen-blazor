@@ -166,23 +166,58 @@ async function main() {
                     // document what it would hit at a point inside the frozen header.
                     frozenOverlap: (() => {
                         const scroller = pane.querySelector('.rz-data-grid-data');
-                        const th = pane.querySelectorAll('thead th')[1];
-                        const td = pane.querySelectorAll('tbody tr td')[1];
-                        if (!scroller || !th || !td) { return null; }
+                        const table = pane.querySelector('table');
+                        if (!scroller || !table) { return null; }
 
                         // elementFromPoint works in viewport coordinates, and this pane sits well below
                         // the fold on a page of several grids - without this the hit test lands outside
                         // the window and reports nothing on top of anything.
                         pane.scrollIntoView({ block: 'start' });
                         scroller.scrollLeft = 200;
-                        const at = element => {
-                            const r = element.getBoundingClientRect();
-                            const hit = document.elementFromPoint(r.left + Math.min(8, r.width / 2), r.top + r.height / 2);
-                            return hit ? (hit.closest('th, td') === element) : false;
-                        };
-                        const result = { headerOnTop: at(th), bodyOnTop: at(td) };
+
+                        // Which columns are pinned is read from the title row, and then every row is
+                        // asked what is on top at that column's x. Testing by position rather than by
+                        // looking for the frozen class is the point: a row that never got the class at
+                        // all - the filter row did not - has nothing to find, so a class-driven check
+                        // skips it in silence and calls the grid clean.
+                        const head = table.querySelector('thead tr');
+                        if (!head) { return null; }
+
+                        const pinned = [...head.children]
+                            .map((cell, index) => ({ cell, index }))
+                            .filter(c => c.cell.classList.contains('rz-frozen-cell'))
+                            .map(c => ({ index: c.index, x: c.cell.getBoundingClientRect().left + 8 }));
+
+                        const rows = [...table.querySelectorAll('tr')];
+                        const covered = [];
+
+                        // A row has to be visible in the window *and* inside the scroller before it can
+                        // be asked what is on top of it: one clipped by the scroller's own overflow hit
+                        // tests to whatever is painted there instead - the pager, the scrollbar - and
+                        // would be reported as covered on a grid that is perfectly correct.
+                        const clip = scroller.getBoundingClientRect();
+
+                        for (const row of rows) {
+                            const r = row.getBoundingClientRect();
+                            if (r.height === 0 || r.bottom < 0 || r.top > window.innerHeight) { continue; }
+                            if (r.top < clip.top || r.bottom > clip.bottom) { continue; }
+
+                            for (const { index, x } of pinned) {
+                                const hit = document.elementFromPoint(x, r.top + r.height / 2);
+                                const cell = hit && hit.closest('th, td');
+
+                                // Whatever is drawn at the pinned column's x has to be that column's own
+                                // cell in this row. Anything else means something scrolled over it.
+                                if (!cell || cell.parentNode !== row || cell.cellIndex !== index) {
+                                    covered.push(row.parentNode.tagName.toLowerCase() + ' row ' +
+                                        ([...row.parentNode.children].indexOf(row)) + ' col ' + index);
+                                }
+                            }
+                        }
+
                         scroller.scrollLeft = 0;
-                        return result;
+
+                        return { rowsChecked: rows.length, pinnedColumns: pinned.length, covered };
                     })(),
 
                     // Every data cell's width, so a colgroup that is misaligned by one is visible. The

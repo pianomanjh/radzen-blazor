@@ -132,10 +132,14 @@ namespace Radzen.Blazor.FastGrid.Tests
 
                 // And once more with the first two columns frozen. The theme makes a frozen cell sticky
                 // but supplies no inset, so this pane is where "does it actually hold still" is decided.
+                // With a filter row and a footer, because the theme stacks the title row, the filter
+                // row, the body and the footer differently - a frozen column can win in one section and
+                // be painted over in the next, which is exactly what happened to the filter row.
                 FastGridFrozenMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
                 {
                     p.Add(g => g.Data, people);
                     p.Add(g => g.ChildContent, FastGridFrozenColumns);
+                    p.Add(g => g.AllowFiltering, true);
                 }).Markup;
             }
 
@@ -232,11 +236,11 @@ namespace Radzen.Blazor.FastGrid.Tests
         {
             var s = 0;
 
-            Column<int>(builder, ref s, x => x.Id, "Id", "90px", frozen: true);
-            Column<string>(builder, ref s, x => x.Name, "Name", "180px", frozen: true);
-            Column<int>(builder, ref s, x => x.Age, "Age", "400px");
-            Column<DateTime>(builder, ref s, x => x.Hired, "Hired", "400px");
-            Column<decimal>(builder, ref s, x => x.Salary, "Salary", "400px");
+            Column<int>(builder, ref s, x => x.Id, "Id", "90px", frozen: true, footer: true);
+            Column<string>(builder, ref s, x => x.Name, "Name", "180px", frozen: true, footer: true);
+            Column<int>(builder, ref s, x => x.Age, "Age", "400px", footer: true);
+            Column<DateTime>(builder, ref s, x => x.Hired, "Hired", "400px", footer: true);
+            Column<decimal>(builder, ref s, x => x.Salary, "Salary", "400px", footer: true);
         };
 
         static readonly RenderFragment FastGridDetailColumns = builder =>
@@ -263,7 +267,7 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         static void Column<TProp>(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder,
             ref int sequence, Expression<Func<Person, TProp>> property, string title, string width = null,
-            bool frozen = false)
+            bool frozen = false, bool footer = false)
         {
             builder.OpenComponent<PropertyColumn<Person, TProp>>(sequence++);
             builder.AddAttribute(sequence++, "Property", property);
@@ -277,6 +281,12 @@ namespace Radzen.Blazor.FastGrid.Tests
             if (frozen)
             {
                 builder.AddAttribute(sequence++, "Frozen", true);
+            }
+
+            if (footer)
+            {
+                builder.AddAttribute(sequence++, "FooterTemplate",
+                    (RenderFragment<ColumnBase<Person>>)(_ => b => b.AddContent(0, title)));
             }
 
             builder.CloseComponent();

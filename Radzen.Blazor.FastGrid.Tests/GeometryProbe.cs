@@ -85,12 +85,18 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// <summary>Which cell wins where a frozen column and a scrolled one overlap.</summary>
     public sealed class FrozenOverlap
     {
-        [JsonPropertyName("headerOnTop")] public bool HeaderOnTop { get; set; }
+        /// <summary>How many rows were examined, so an empty result cannot pass for a clean one.</summary>
+        [JsonPropertyName("rowsChecked")] public int RowsChecked { get; set; }
 
-        [JsonPropertyName("bodyOnTop")] public bool BodyOnTop { get; set; }
+        /// <summary>How many columns the title row says are pinned; zero means nothing was tested.</summary>
+        [JsonPropertyName("pinnedColumns")] public int PinnedColumns { get; set; }
 
-        public override string ToString() =>
-            $"header on top: {HeaderOnTop}, body on top: {BodyOnTop}";
+        /// <summary>The rows where something scrolling under the frozen column was drawn over it.</summary>
+        [JsonPropertyName("covered")] public string[] Covered { get; set; }
+
+        public override string ToString() => Covered is { Length: > 0 }
+            ? $"{RowsChecked} rows x {PinnedColumns} pinned columns, covered in: {string.Join(", ", Covered)}"
+            : $"{RowsChecked} rows x {PinnedColumns} pinned columns, none covered";
     }
 
     /// <summary>How far a pinned cell and a loose one moved when the grid was scrolled sideways.</summary>
