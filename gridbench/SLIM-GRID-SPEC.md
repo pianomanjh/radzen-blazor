@@ -30,6 +30,7 @@ is up as #2698 and is the one piece not yet merged.
 | column resize | +4.1 KB |
 | column reorder | +6.7 KB |
 | two frozen columns | +0.9 KB |
+| keyboard navigation | **+1.3 KB, 1.01x** |
 | the scroll container and `role="grid"` | 0 |
 
 Resize and reorder re-measured together in one run, against a 153.3 KB bare grid: resize 158.3 KB,
@@ -50,7 +51,13 @@ question in §11 again, from the other side.
 Against `RadzenDataGrid` with the same feature on both sides, the narrowest row is cell click at
 **132x** and row detail is **109x**. Nothing in the grid charges a delegate per row any more.
 
-**Not built**: editing, grouping, composite headers, keyboard navigation. §10 has what is still open.
+Keyboard navigation measured 155.2 KB against a 153.85 KB bare grid over three full-length runs, inside
+the +2 KB and 1.02x gate §12 set for it. It cost eight times that until an assumption in §12 was
+measured rather than believed: `data-r` on every row is **+16 KB at a thousand rows**, because a
+pre-cached value costs nothing and the frame carrying it does. §12 records what replaced it.
+
+**Not built**: editing, grouping, composite headers. Keyboard navigation is built as far as the cursor
+and the keys; range selection and positional ARIA are steps 3 and 4 of §12. §10 has what is still open.
 
 ## 1. Why a separate component
 
@@ -312,7 +319,7 @@ Each layer below caught real faults the previous one missed. Use all of them.
 
    **This layer is not optional, and it is not last.** Layers 1-5 all assert on markup; none of them
    can see what a browser does with it. Seven bugs got through every one of them and were found here,
-   most within a minute of the first click, and the last three by a person looking at the screen rather
+   most within a minute of the first click, and three of them by a person looking at the screen rather
    than by anything that could have been automated first:
 
    | Fault | Why nothing above caught it |
@@ -324,6 +331,7 @@ Each layer below caught real faults the previous one missed. Use all of them.
    | A selected row was never painted | The theme nests its selected-row rule inside `.rz-selectable`, which the grid did not emit. `rz-state-highlight` sat on exactly the right `tr` and matched nothing. |
    | Scrolled columns drawn over the frozen ones, in the header only | The theme stacks every header cell at the same z-index, frozen or not, so a frozen one tied with its neighbours and document order let the column to its right win. The body was correct, which made it look like a rendering glitch rather than a rule. |
    | The filter row not pinned with its column | It is a second `tr` inside `thead` rather than part of the title row, so it never received the class or the inset - and the check written for the previous fault skipped it, because it searched for cells already carrying the frozen class. |
+   | The keyboard cursor vanishing on `PageDown` under virtualization | The jump lands on a row outside the rendered window, so the script has nothing to focus; it scrolls to where the row will be and the re-assert after the next render was to catch it. There is no next render - `Virtualize` re-renders *itself* when the window arrives, and the grid's `OnAfterRenderAsync` never runs. The fix waits for the row in the script instead, bounded and superseded by the next keystroke. Every bUnit test passed throughout: there the window is the whole data set, so the row is always already there. |
 
    Watch **renders/sec** on the metrics strip: a grid at rest is 0, and the panel turns it red above
    five. That reading alone names a render loop in a glance.
@@ -393,6 +401,11 @@ Each layer below caught real faults the previous one missed. Use all of them.
 
 ## 10. Open decisions
 
+- **A virtualized grid over an asynchronous source spins the render loop until the circuit dies**, if
+  it was paging over that source first. Found by the playground's new Virtualize toggle; reproduced on
+  the commit before keyboard navigation, so it is not that feature's. ~880,000 renders in 2.5s at 200%
+  CPU, no exception logged, the WebSocket closing 1006 and nothing else. Its own commit;
+  `gridbench/README.md` has what is known and the two things that made it hard to see.
 - Package and namespace name.
 - ~~Column resize~~ - **done**, and it settled the question that gated three features. Resize does not
   need the scrollable variant's structure; it needs a `colgroup`, which the grid already emitted. What
@@ -518,9 +531,13 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 ## 12. Keyboard navigation - the design
 
-Designed and not yet built. Everything below carries the reason it was decided that way, so it can be
-re-argued rather than merely obeyed; where it diverges from `RadzenDataGrid` the divergence is
-deliberate and the reason is given.
+Steps 1 and 2 of the order below are built: the theme fix upstream, and the cursor itself - the C#
+algorithm, the JavaScript effect layer, the re-assert after every render, and the package's interim
+stylesheet. **Measured at +1.3 KB and 1.01x**, inside the gate. Range selection and positional ARIA are
+still ahead. Everything below carries the reason it was decided that way, so it can be re-argued rather
+than merely obeyed; where it diverges from `RadzenDataGrid` the divergence is deliberate and the reason
+is given. Two of the decisions did not survive contact with a measurement, and both are marked where
+they stand rather than quietly rewritten.
 
 ### What it is for
 
@@ -581,6 +598,22 @@ exactly this. Note that upstream re-renders on every arrow key too - its keydown
 handler, so `ComponentBase` wraps it in `StateHasChanged` and the JavaScript then patches a class on top
 of a render that already happened. Skipping the render is not a divergence in behaviour, only in cost.
 
+That has one consequence worth naming, because it is what forces a listener into the script that the
+design did not otherwise want. Blazor's `preventDefault` for an event is an attribute written by a
+render - upstream drives it from a `preventKeyDown` field, which only reaches the DOM on the render its
+keystroke caused. A grid that does not render per keystroke can never update it, and blanket
+`preventDefault` on keydown would swallow `Tab` and trap focus in the grid. So the script attaches one
+native listener whose only job is to call `preventDefault` for the keys **C# names in the call** - the
+browser scrolls a line for an arrow key and a page for `Space`, and the grid scrolls the focused cell
+into view itself, so both run and the container jitters. Suppressing a key the grid handles is not a
+rule about navigation; which keys those are is still decided where they are handled.
+
+Two exceptions the same listener has to make, both about the browser rather than about the grid: it
+ignores a key typed inside an `input`, `textarea`, `select` or `contenteditable`, where the arrows move
+a caret and are not ours to take. The filter row separately stops keydown propagating, which is what
+keeps the *grid's* handler from seeing it - two mechanisms because there are two listeners, and only
+Blazor's honours Blazor's flag.
+
 **`OnAfterRenderAsync` re-asserts focus.** The grid re-renders constantly for other reasons - sort,
 filter, page, resize, a parent's `StateHasChanged` - and each one rewrites the row's `class`. Rather
 than defend the class, the grid tells the script where focus is again after any render while focus is
@@ -592,6 +625,23 @@ are delegated or navigation is live". Addressing by `tbody.rows[i]` would cost n
 `Virtualize` emits a spacer `tr` and row detail emits a second `tr` per expanded row, so DOM order is
 already not model order. The index strings are pre-cached, so the attribute costs a frame and no
 allocation.
+
+> **Measured, and wrong on the last sentence.** An attribute per row is **+16 KB at 1000 rows** even
+> when its value is a pre-cached string - eight times this feature's whole budget, and enough to fail
+> the gate on its own. The value costs nothing; the frame does. `RenderTreeBuilder` rents its frame
+> array from a pool and a thousand more frames push that rental into the next bucket, which is the same
+> mechanism §9 records from the other side for frozen columns, where two frames per cell cost time and
+> no bytes. It is also, it turns out, most of what a row click costs: delegated clicks pay this same
+> 16 KB for this same attribute.
+>
+> The premise was right and the conclusion was too narrow. DOM order is not model order - but the
+> rendered *data rows* are, because the two things that break it are distinguishable: a detail row is a
+> sibling carrying `rz-expanded-row-content`, and `Virtualize`'s spacer carries no class at all. So the
+> nth `tr.rz-data-row` is the nth row, and the inline path needs no attribute. Under virtualization it
+> still does, because there the index is a position in the whole data set rather than in the DOM - and
+> there it is tens of rows rather than a thousand, which is the same argument delegated clicks make in
+> reverse. `RowsAreAddressed` is `ClicksAreDelegated || (navigation && virtualizing)`, and the script
+> takes `data-r` where it is offered and counts where it is not.
 
 ### The keys
 
@@ -639,7 +689,10 @@ exactly the grids that have the most columns.
 pinned from the first paint, so `scrollIntoViewIfNeeded` - which reads the viewport rect - considers a
 cell scrolled underneath one to be visible, and the focused cell sits occluded with no indication.
 `RadzenFastGrid.Frozen.cs` already sums those widths with `calc()` for the pinning; the scroll margin is
-the same number reused. Upstream never meets this because it pins nothing until a column is resized.
+the same number reused - *almost*. That sum is a CSS length, `calc(80px + 220px)`, and nothing in C#
+can turn it into the pixels a scroll needs. What is reused is the run rather than the number: C# says
+how many cells of the row are pinned to each edge, which it knows, and the browser measures how wide
+they came out, which only it does. Same division of labour as everywhere else here. Upstream never meets this because it pins nothing until a column is resized.
 
 **Focus tracks a column's position; it tracks a row's item.** These point different ways on purpose.
 Reordering or hiding a column is a deliberate act on the columns, and having focus stay where it is on
@@ -740,7 +793,12 @@ and is written down. Concretely:
 - `gridbench` gains cases in the established naming: `+ keyboard navigation`,
   `+ keyboard navigation and range selection`, `+ positional ARIA`, and
   `= RadzenDataGrid + keyboard navigation` for the like-for-like ratio, which is the only comparison
-  that means anything once a feature is paid for on both sides.
+  that means anything once a feature is paid for on both sides. **That last row does not exist**, and
+  the reason is worth keeping: `RadzenDataGrid`'s navigation has no switch - the tab stop and the
+  keydown handler are unconditional - so its baseline row is already the navigation-on measurement and
+  a second identical row would say nothing. The like-for-like comparison is `+ keyboard navigation`
+  against that baseline: 155.2 KB against 12.86 MB, **85x**, and it costs that grid nothing marginal
+  because it never had the choice.
 - **Navigation is measured alone, before range selection**, so the gate judges one thing rather than a
   bundle.
 - **Time ratios come from a full-length run or are not quoted.** `--job short` measures allocation;
@@ -771,10 +829,14 @@ that paints nothing.
 ### The order it lands in
 
 1. ~~The `_grid.scss` focus rule, upstream, on its own~~ - **done, radzenhq/radzen-blazor#2698.** It
-   turned out to be two rules rather than one, for the reason above. The interim package rule can now
-   be written to match what went up.
-2. Navigation. Then measure, and record.
-3. Range selection - `Shift+Space` and `Shift+Arrow`.
+   turned out to be two rules rather than one, for the reason above. The interim package rule now
+   matches what went up, in `wwwroot/fastgrid.css`, and the README's styling section says so.
+2. ~~Navigation. Then measure, and record.~~ - **done: 155.2 KB against 153.85 KB bare, 1.01x over
+   three full-length runs.** Allocation is `--job short`, stable to two decimals across three runs; the
+   time ratio came out 1.03, 1.01 and 0.90 at full length, every one with an error bar wider than the
+   difference, which is the answer "not measurably slower" rather than a number to quote to two places.
+3. Range selection - `Shift+Space` and `Shift+Arrow`. Until it lands, `Shift+Arrow` moves the cursor
+   without extending anything, which is what a grid with no range selection does.
 4. Positional ARIA.
 
 One commit each, which is what every other feature on this branch did, and the only reason resize,
@@ -785,6 +847,11 @@ reorder and frozen columns have separate numbers at all.
 - **The row/column asymmetry** of "focus follows the item, focus follows the position" will read as an
   inconsistency to anyone who meets it without the reason. The reason is above; it needs to survive
   review rather than be smoothed away.
+- **The measured `--job short` time column was noise, and it nearly took a decision with it.** Three
+  short runs of this feature returned 1.00, 1.04 and 1.19; three full-length runs returned 1.03, 1.01
+  and 0.90. Had the gate been read off the first set it would have failed on a number that does not
+  exist. §9 already says this; it is recorded again here because the temptation to read the column that
+  is already printed is what makes the rule necessary.
 - **The round trip is accepted, not solved.** Every keystroke costs one server round trip, which in the
   consuming application is a ~157ms floor from Hong Kong that is the speed of light rather than
   anything fixable in code. A single press is fine; holding an arrow to scan may not be. The escape

@@ -24,6 +24,14 @@ namespace Radzen.FastGrid
         // every grid that does not freeze anything.
         bool hasFrozenColumns;
 
+        // How many cells of a row are pinned to each edge, counting the toggle cell that sits inside the
+        // leading run. Keyboard navigation reads these: scrollIntoView considers a cell underneath a
+        // pinned column to be visible, because it reads the container's rect and the pinned column is
+        // inside it - so the focused cell sits occluded with nothing to say so. C# knows which columns
+        // are pinned; the browser measures how wide they came out.
+        int frozenStartRun;
+        int frozenEndRun;
+
         /// <summary>
         /// Works out which columns are pinned, to which edge, and how far in - once per render, over the
         /// columns as they are currently drawn, so reordering or hiding one is accounted for.
@@ -36,6 +44,8 @@ namespace Radzen.FastGrid
         void RefreshFrozenColumns()
         {
             hasFrozenColumns = false;
+            frozenStartRun = 0;
+            frozenEndRun = 0;
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
@@ -85,15 +95,16 @@ namespace Radzen.FastGrid
                 right--;
             }
 
-            PinLeftRun(left);
-            PinRightRun(right + 1);
+            frozenStartRun = PinLeftRun(left);
+            frozenEndRun = PinRightRun(right + 1);
         }
 
-        void PinLeftRun(int count)
+        /// <summary>Pins the leading run, and answers how many cells of a row it covers.</summary>
+        int PinLeftRun(int count)
         {
             if (count == 0)
             {
-                return;
+                return 0;
             }
 
             // The toggle column is a cell in every row and sits before the first data column, so a left
@@ -130,16 +141,20 @@ namespace Radzen.FastGrid
                     column.SetFrozen("rz-frozen-cell rz-frozen-cell-left rz-frozen-cell-left-end",
                         Inset("left", offset));
 
-                    return;
+                    // The toggle cell is inside the pinned run and is a cell of every row, so it counts.
+                    return i + 1 + (ExpandColumn ? 1 : 0);
                 }
             }
+
+            return count + (ExpandColumn ? 1 : 0);
         }
 
-        void PinRightRun(int start)
+        /// <summary>Pins the trailing run, and answers how many cells of a row it covers.</summary>
+        int PinRightRun(int start)
         {
             if (start >= visibleColumns.Count)
             {
-                return;
+                return 0;
             }
 
             var offset = new StringBuilder();
@@ -169,9 +184,11 @@ namespace Radzen.FastGrid
                     column.SetFrozen("rz-frozen-cell rz-frozen-cell-right rz-frozen-cell-right-end",
                         Inset("right", offset));
 
-                    return;
+                    return visibleColumns.Count - i;
                 }
             }
+
+            return visibleColumns.Count - start;
         }
 
         /// <summary>Adds a column's width to the running offset, or false when it declares none.</summary>

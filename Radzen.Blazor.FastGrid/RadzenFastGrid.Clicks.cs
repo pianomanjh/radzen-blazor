@@ -19,9 +19,6 @@ namespace Radzen.FastGrid
     // listeners at all, and in any browser where the module fails to load.
     public partial class RadzenFastGrid<TItem>
     {
-        const string ModulePath = "./_content/Radzen.Blazor.FastGrid/fastgrid.js";
-
-        IJSObjectReference? clickModule;
         DotNetObjectReference<RadzenFastGrid<TItem>>? clickReference;
         bool clickAttachAttempted;
 
@@ -114,10 +111,16 @@ namespace Radzen.FastGrid
 
             try
             {
-                clickModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>("import", ModulePath);
+                var script = await ModuleAsync();
+
+                if (script is null)
+                {
+                    return;
+                }
+
                 clickReference ??= DotNetObjectReference.Create(this);
 
-                var attached = await clickModule.InvokeAsync<bool>("attach", BodyElementId, clickReference,
+                var attached = await script.InvokeAsync<bool>("attach", BodyElementId, clickReference,
                     new
                     {
                         click = kinds.Click,
@@ -251,34 +254,6 @@ namespace Radzen.FastGrid
             var index = ExpandColumn ? cellIndex - 1 : cellIndex;
 
             return index >= 0 && index < visibleColumns.Count ? visibleColumns[index] : null;
-        }
-
-        async ValueTask DisposeClicksAsync()
-        {
-            if (clickModule is not null)
-            {
-                try
-                {
-                    await clickModule.InvokeVoidAsync("detach", BodyElementId);
-                    await clickModule.DisposeAsync();
-                }
-#pragma warning disable CA1031
-                catch (Exception)
-#pragma warning restore CA1031
-                {
-                    // The circuit being gone already is the ordinary way this component is disposed, and
-                    // there is nothing to release when it is. Every exception, for the same reason as the
-                    // attach: teardown has no caller to report to, and an exception escaping here is
-                    // unhandled in the circuit rather than handled anywhere.
-                    //
-                    // Narrower did not work. JSDisconnectedException derives from Exception and not from
-                    // JSException, so catching the JS types missed the one case this is actually for, and
-                    // every navigation away from a grid logged an unhandled circuit exception.
-                }
-
-                clickModule = null;
-            }
-
         }
     }
 }

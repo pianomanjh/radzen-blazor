@@ -434,6 +434,14 @@ public class FastGridFeatureBench
     [Benchmark(Description = "= RadzenDataGrid + two frozen columns")]
     public Task ReferenceFrozenColumns() => Reference(p => p["Columns"] = ReferenceFrozenColumnSet);
 
+    // Keyboard navigation, measured on its own and before range selection, so the gate judges one thing
+    // rather than a bundle. There is no "= RadzenDataGrid + keyboard navigation" row to put beside it:
+    // that grid's navigation has no switch - the tab stop and the keydown handler are unconditional -
+    // so its baseline row above is already the navigation-on measurement, and a second identical row
+    // would say nothing. The like-for-like comparison is this row against that baseline.
+    [Benchmark(Description = "+ keyboard navigation")]
+    public Task KeyboardNavigation() => Render(p => p["AllowKeyboardNavigation"] = true);
+
     [Benchmark(Description = "+ a column picker")]
     public Task ColumnPicking() => Render(p => p["AllowColumnPicking"] = true);
 

@@ -569,6 +569,14 @@ dotnet test Radzen.Blazor.FastGrid.Tests
   `standard-base.css`, with header cell, body cell and table heights compared to `RadzenDataGrid` within
   0.5px and to the recorded 37 / 37 / 332 baseline within 1px.
 
+Two of the panes have no `RadzenDataGrid` beside them, and deliberately: the keyboard cursor is drawn
+on a read-only grid and on a frozen cell, and a parity assertion there would assert that this grid
+matches a grid that paints nothing. They are checked against their own neighbours instead - the focused
+cell's outline against the cell next to it, and the focused row's colour against a row **two** rows
+away, since striping is `:nth-child` and the row next door differs whatever focus does. The package's
+`fastgrid.css` is linked into the page after the theme, so what those panes measure is what an
+application gets.
+
 Two guards keep the geometry half honest. It never skips: no node, no Playwright or no Chromium fails the
 run with a message naming which one, because a check that quietly disappears in CI is the failure this
 exists to prevent. And the absolute baseline is asserted alongside the parity comparison, because two
@@ -671,3 +679,104 @@ Both were caught before the numbers were quoted, and both would have made the re
 - **`--job short` produced error bars larger than its means** (+/-5,589 us on a 4,672 us mean). Those
   numbers were discarded rather than reported. The table above is the default job, whose error is
   around 2% of the mean.
+
+## Keyboard navigation
+
+`--job short --filter "*FastGridFeatureBench.Bare*" "*FastGridFeatureBench.KeyboardNavigation*"`, three
+runs, playground stopped:
+
+| | Allocated |
+| --- | ---: |
+| bare | 153.82 / 153.93 / 153.96 KB |
+| `+ keyboard navigation` | 155.27 / 155.16 / 155.24 KB |
+
+**+1.34 KB**, against a gate of +2 KB. Full-length runs for the time, which is the only job length the
+ratio means anything at:
+
+| Run | bare | `+ keyboard navigation` | Ratio |
+| --- | ---: | ---: | ---: |
+| 1 | 524.8 us +/- 9.87 | 541.5 us +/- 10.77 | 1.03x |
+| 2 | 519.7 us +/- 10.08 | 522.5 us +/- 10.42 | 1.01x |
+| 3 | 524.8 us +/- 10.49 | 471.1 us +/- 5.47 | 0.90x |
+
+Every one of those has an error bar wider than the difference it claims, which is the answer: **not
+measurably slower**. The middle run is the one to quote if a single number is wanted, and the honest
+reading of all three is 1.01x. The `--job short` time column for the same pair returned 1.00, 1.04 and
+1.19 - it is not a time measurement and reading it as one would have failed the 1.02x gate on a number
+that does not exist.
+
+There is no `= RadzenDataGrid + keyboard navigation` row to set beside this, and the absence is the
+finding rather than an omission: that grid's tab stop and keydown handler are unconditional, so its
+`= RadzenDataGrid, same columns` row **is** the navigation-on measurement. Against it: 155.2 KB against
+12.86 MB, **85x**, costing that grid nothing marginal because it never had the choice. Five runs of the
+reference on its own returned 12.86 MB every time, so this one is not sitting on the bimodal step.
+
+### `data-r` costs 16 KB, and the value is not where it goes
+
+The design had the cursor address rows by the `data-r` attribute that delegated clicks already write,
+on the reasoning that its values are pre-cached strings and so the attribute "costs a frame and no
+allocation". Measured, that is wrong by eight times the feature's whole budget:
+
+| | Allocated |
+| --- | ---: |
+| bare | 153.82 KB |
+| `+ keyboard navigation`, writing `data-r` per row | 170.41 KB |
+| `+ keyboard navigation`, addressing rows by position | 155.16 KB |
+| `+ row click` (writes `data-r`, binds no delegates) | 169.85 KB |
+
+The strings really are free. The **frame** is not: `RenderTreeBuilder` rents its frame array from a
+pool, and a thousand more frames push that rental into the next bucket. The row-click row is the
+control - it writes the same attribute and binds nothing else - and lands within half a kilobyte of
+the same +16 KB, which says the cost belongs to the attribute rather than to either feature.
+
+This is the pooled frame array again, and it is worth putting the two sightings next to each other
+because they look contradictory and are the same mechanism:
+
+- **Frozen columns**: two attribute frames on the cells of a frozen column. Costs **1.10x time and
+  +0.9 KB** - work with no bytes, because the rental did not change bucket.
+- **`data-r`**: one attribute frame per row. Costs **+16 KB and no measurable time** - bytes with no
+  work, because it did.
+
+Which of the two a change lands on is not predictable from the change; it depends on where the frame
+count already sits relative to a bucket boundary. That is an argument for measuring markup rather than
+reasoning about it, in both directions.
+
+The fix cost no markup at all. DOM order is not model order - `Virtualize` emits a spacer `tr` and
+every expanded row emits a second `tr` beneath itself - but the rendered *data rows* are model order,
+because both intruders are distinguishable: the detail row carries `rz-expanded-row-content` and the
+spacer carries no class. So the script takes the nth `tr.rz-data-row`. Virtualization keeps the
+attribute, because there the index is a position in the whole data set rather than in the DOM, and
+there it is a window of tens of rows rather than a thousand - the same argument delegated clicks make
+in reverse.
+
+### The playground grew a Virtualize toggle, and it found a circuit-killing loop
+
+Keyboard navigation needed one - the cursor moves through the whole data set under virtualization
+rather than through the rendered window, and there was no way to drive that in a browser. The toggle
+took a minute to add and immediately turned up a fault that no test in this repository can reach:
+
+**Switching a grid over an asynchronous source (a DbSet) from paging to virtualization spins the
+render loop until the circuit dies.** Roughly 880,000 renders in two and a half seconds, at 200% CPU,
+with the render trace cycling
+`Home -> RadzenFastGrid -> Defer -> Home -> CascadingValue -> Virtualize` forever. The server logs
+**nothing**: no exception is thrown, the process stays up, and the only trace is the WebSocket closing
+1006 and the metrics strip freezing at whatever it last managed to flush.
+
+Two things about finding it are worth keeping:
+
+- **A frozen counter reads exactly like a stable one.** The first pass at this concluded "keyboard
+  navigation off, renders steady at 2, clean" - and 2 was simply the last number that reached the
+  browser before the circuit stopped answering. The reading that discriminates is not the counter but
+  whether the circuit *responds*: click a toggle and see whether the DOM changes. Every conclusion
+  drawn from the counter before that check was wrong, in both directions.
+- **It is not the keyboard's.** Reverting the library to the commit before this work, keeping only the
+  playground's new toggle, reproduces it exactly. The order matters and the source matters: Entity
+  Framework first and then Virtualize dies, Virtualize first and then Entity Framework does not, and an
+  in-memory list does neither. It is a fault in the asynchronous data path's interaction with
+  `Virtualize`, and it belongs to its own commit rather than to this one.
+
+`FastGridVirtualizationTests` and `EntityFrameworkTests` both cover a virtualized grid over a DbSet and
+both pass, because bUnit has no viewport: `Virtualize` asks its provider for everything once and never
+re-queries. The switch itself is testable there and also passes. What is not reachable without a
+browser is the re-query, which is where this lives - layer 6 of the protocol earning its place for the
+eighth time.

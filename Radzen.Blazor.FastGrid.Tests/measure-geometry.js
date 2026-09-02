@@ -226,6 +226,88 @@ async function main() {
                     dataCellWidths: [...(pane.querySelector('tbody tr')?.querySelectorAll('td') ?? [])]
                         .map(td => round(td.getBoundingClientRect().width)),
 
+                    // The keyboard cursor, asked the way round that can fail. Not "does the focused
+                    // cell carry rz-state-focused" - that is the check that passed while the filter
+                    // row's pinning was missing, because a row that never got the class has nothing to
+                    // find and is skipped in silence. Ask what is painted at the cursor instead, and
+                    // whether it differs from the cells and rows around it.
+                    focus: (() => {
+                        const cell = pane.querySelector('tbody td.rz-state-focused');
+                        if (!cell) { return null; }
+
+                        const row = cell.parentNode;
+                        const other = [...row.children].find(c => c !== cell);
+                        // Two rows away, not one: striping is :nth-child, so adjacent rows differ
+                        // whatever focus does and a comparison across them passes on its own. The same
+                        // trap the selected-row probe two blocks down already carries.
+                        const rows = [...pane.querySelectorAll('tbody tr')];
+                        const at = rows.indexOf(row);
+                        const elsewhere = rows[at + 2] || rows[at - 2];
+
+                        const outline = e => getComputedStyle(e).outlineStyle + ' ' + getComputedStyle(e).outlineWidth;
+
+                        // What the cell actually shows. A frozen cell keeps an opaque background of its
+                        // own and carries the row's colour on the pseudo-element the theme uses for the
+                        // seam, so reading the cell's own background there reports white on a row that
+                        // is painted perfectly well.
+                        const shown = td => {
+                            const own = getComputedStyle(td).backgroundColor;
+                            if (!td.classList.contains('rz-frozen-cell')) { return own; }
+                            const seam = getComputedStyle(td, '::before').backgroundColor;
+                            return seam && seam !== 'rgba(0, 0, 0, 0)' ? seam : own;
+                        };
+
+                        // A frozen cell paints its own background, so the one thing that can go wrong
+                        // for a focused frozen cell is losing it and letting the column scrolling
+                        // underneath show through. Ask the document what is on top - and bring the cell
+                        // into the window first, because elementFromPoint works in viewport coordinates
+                        // and a point below the fold answers null on a grid that is perfectly correct.
+                        const scroller = pane.querySelector('.rz-data-grid-data');
+                        let onTop = null;
+                        let onTopWas = null;
+
+                        if (scroller) {
+                            cell.scrollIntoView({ block: 'center' });
+                            scroller.scrollLeft = 200;
+
+                            const box = cell.getBoundingClientRect();
+                            const x = box.left + 8;
+                            const y = box.top + box.height / 2;
+
+                            // Null means the question could not be asked, which is not the same answer
+                            // as "something is drawn over it" and must not be reported as one.
+                            onTopWas = 'at ' + Math.round(x) + ',' + Math.round(y) +
+                                ' in ' + window.innerWidth + 'x' + window.innerHeight;
+
+                            if (x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight) {
+                                const hit = document.elementFromPoint(x, y);
+                                onTop = (hit && hit.closest('th, td')) === cell;
+                                onTopWas = (hit
+                                    ? hit.tagName.toLowerCase() + '.' + (hit.className || '(none)')
+                                    : '(nothing)') + ' ' + onTopWas;
+                            }
+
+                            scroller.scrollLeft = 0;
+                        }
+
+                        // The cursor is an outline on the cell and a background on the row. Either
+                        // alone shows a lit row with no cursor in it, or a cursor on an unlit row.
+                        return {
+                            outline: outline(cell),
+                            otherOutline: other ? outline(other) : null,
+                            background: shown(cell),
+
+                            // The same column of an unfocused row, so the comparison is like for like -
+                            // a frozen column and a scrolling one are painted differently whatever
+                            // focus does.
+                            otherRowBackground: elsewhere
+                                ? shown(elsewhere.children[cell.cellIndex])
+                                : null,
+                            onTop,
+                            onTopWas,
+                        };
+                    })(),
+
                     // Rows 1 and 3, not 1 and 2: striping is :nth-child, so adjacent rows differ
                     // whatever selection does and a comparison across them would pass on its own.
                     selectedRowBackground: (() => {

@@ -11,9 +11,13 @@
     <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
     <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
     <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
+    @* Switching this on over Entity Framework, having paged over it first, spins the render loop until
+       the circuit dies. Not keyboard navigation's - it reproduces without it. See gridbench/README.md. *@
+    <label><input type="checkbox" @bind="virtualize" /> Virtualize</label>
     <label><input type="checkbox" @bind="allowPicking" /> Column picker</label>
     <label><input type="checkbox" @bind="alternating" /> Alternating</label>
     <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
+    <label><input type="checkbox" @bind="keyboard" /> Keyboard</label>
     <label><input type="checkbox" checked="@selectable" @onchange="SelectableChanged" /> Selection</label>
     <label><input type="checkbox" @bind="multiSelect" /> Multi-select</label>
     <label><input type="checkbox" checked="@useEf" @onchange="UseEfChanged" /> Entity Framework</label>
@@ -41,7 +45,9 @@
                     AllowSorting="@allowSorting"
                     AllowFiltering="@allowFiltering"
                     AllowPaging="@allowPaging"
+                    AllowVirtualization="@virtualize"
                     AllowColumnPicking="@allowPicking"
+                    AllowKeyboardNavigation="@keyboard"
                     AllowAlternatingRows="@alternating"
                     AllowRowSelectOnRowClick="@selectable"
                     SelectionMode="@(multiSelect ? DataGridSelectionMode.Multiple : DataGridSelectionMode.Single)"
@@ -83,9 +89,11 @@
     bool allowSorting = true;
     bool allowFiltering = true;
     bool allowPaging = true;
+    bool virtualize;
     bool allowPicking;
     bool alternating = true;
     bool rowDetail;
+    bool keyboard = true;
     bool selectable = true;
     bool multiSelect;
     bool useEf;
@@ -98,7 +106,7 @@
     ICollection<Row>? selection;
     FastGridSettings? settings;
     int settingsRaised;
-    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it.";
+    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it. Tab into the grid and the arrows move a cell: Enter opens a row, Space selects one, and arrowing off the end turns the page.";
 
     // The grid takes IEnumerable either way; what differs is whether it is a queryable the executor
     // will run asynchronously, which is what AsyncOwnsData decides.
