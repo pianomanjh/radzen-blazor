@@ -189,6 +189,46 @@ namespace Radzen.Blazor.FastGrid.Tests
             }
         }
 
+        [Fact]
+        public void A_selected_row_is_actually_painted()
+        {
+            // The check that geometry cannot make. Every markup assertion about selection passed while
+            // a selected row was drawn identically to its neighbours: the theme nests its rule inside
+            // .rz-selectable, which the grid did not emit, so rz-state-highlight sat on the right tr
+            // and matched nothing. Compare the two backgrounds rather than pinning a colour, so a theme
+            // that changes its palette does not fail this.
+            var report = fixtures.Geometry;
+
+            foreach (var grid in new[] { GridParityFixture.DataGridSelected, GridParityFixture.FastGridSelected })
+            {
+                var geometry = report[grid];
+
+                ParityAssert.True(
+                    !string.IsNullOrEmpty(geometry.SelectedRowBackground)
+                        && !string.IsNullOrEmpty(geometry.UnselectedRowBackground)
+                        && geometry.SelectedRowBackground != geometry.UnselectedRowBackground,
+                    $"{grid} draws a selected row differently from an unselected one",
+                    "the theme's selected-row rule lives inside .rz-selectable, so a grid that never emits that class highlights nothing however correct the row's own classes are",
+                    "a selected cell whose computed background differs from an unselected cell of the same stripe parity",
+                    geometry.SelectedRowBackground is null
+                        ? "no selected row was found in the pane"
+                        : $"selected '{geometry.SelectedRowBackground}' vs unselected '{geometry.UnselectedRowBackground}'",
+                    report.Describe());
+            }
+
+            // And the colour itself has to match the reference grid's, not merely differ from something.
+            // A grid could highlight in any colour it liked and still pass the check above.
+            var reference = report[GridParityFixture.DataGridSelected].SelectedRowBackground;
+            var actual = report[GridParityFixture.FastGridSelected].SelectedRowBackground;
+
+            ParityAssert.True(reference == actual,
+                "RadzenFastGrid highlights a selected row in the same colour as RadzenDataGrid",
+                "both read it from the theme, so a difference means one of them is not matching the rule it thinks it is",
+                $"'{reference}'",
+                $"'{actual}'",
+                report.Describe());
+        }
+
         static double? Height(GridGeometry geometry, string what) => what switch
         {
             "header cell" => geometry.HeaderCell,

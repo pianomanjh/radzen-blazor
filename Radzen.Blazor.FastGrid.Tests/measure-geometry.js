@@ -137,6 +137,25 @@ async function main() {
                         return round(button.getBoundingClientRect().left - cell.getBoundingClientRect().left);
                     })(),
                     toggleButtonWidth: width(pane.querySelector('tbody td.rz-col-icon button')),
+
+                    // Paint, not geometry. The theme nests its selected-row rule inside .rz-selectable,
+                    // so a grid can put rz-state-highlight on exactly the right tr and still draw a row
+                    // that looks like every other one. Reading the computed background of a selected
+                    // cell and an unselected one is the only check that can tell those apart.
+                    // Rows 1 and 3, not 1 and 2: striping is :nth-child, so adjacent rows differ
+                    // whatever selection does and a comparison across them would pass on its own.
+                    selectedRowBackground: (() => {
+                        const row = pane.querySelector('tbody tr:nth-child(1)');
+                        const td = row && row.classList.contains('rz-state-highlight')
+                            ? row.querySelector('td') : null;
+                        return td ? getComputedStyle(td).backgroundColor : null;
+                    })(),
+                    unselectedRowBackground: (() => {
+                        const row = pane.querySelector('tbody tr:nth-child(3)');
+                        const td = row && !row.classList.contains('rz-state-highlight')
+                            ? row.querySelector('td') : null;
+                        return td ? getComputedStyle(td).backgroundColor : null;
+                    })(),
                 })),
             };
         });
