@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using Bunit;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static Radzen.Blazor.Tests.ChartTestHelper;
 
@@ -158,6 +159,59 @@ namespace Radzen.Blazor.Tests
             };
 
             Assert.Equal("50.00", component.Instance.GetHandleLabel(0.5));
+        }
+
+        [Fact]
+        public void RangeNavigator_WithLineSeries_DoesNotThrow_BeforeWidthIsMeasured()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+            // The element has no layout yet, so the measurement returns a zero width.
+            ctx.JSInterop.Setup<double[]>("Radzen.createRangeNavigator", _ => true)
+                .SetResult(new double[] { 0, 0 });
+            ctx.Services.AddScoped<TooltipService>();
+
+            var data = new[]
+            {
+                new DataItem { Category = "A", Value = 10 },
+                new DataItem { Category = "B", Value = 20 },
+            };
+
+            var component = ctx.RenderComponent<RadzenRangeNavigator>(parameters =>
+                parameters.AddChildContent<RadzenRangeNavigatorLineSeries<DataItem>>(series =>
+                {
+                    series.Add(p => p.Data, data);
+                    series.Add(p => p.CategoryProperty, "Category");
+                    series.Add(p => p.ValueProperty, "Value");
+                }));
+
+            // Re-render with the series registered but the width still unknown.
+            component.SetParametersAndRender(parameters => parameters.Add(p => p.Start, 0.1));
+
+            Assert.DoesNotContain("NaN", component.Markup);
+        }
+
+        [Fact]
+        public void RangeNavigator_WithLineSeries_RendersSeries_AfterWidthIsMeasured()
+        {
+            using var ctx = CreateChartContext();
+
+            var data = new[]
+            {
+                new DataItem { Category = "A", Value = 10 },
+                new DataItem { Category = "B", Value = 20 },
+            };
+
+            var component = ctx.RenderComponent<RadzenRangeNavigator>(parameters =>
+                parameters.AddChildContent<RadzenRangeNavigatorLineSeries<DataItem>>(series =>
+                {
+                    series.Add(p => p.Data, data);
+                    series.Add(p => p.CategoryProperty, "Category");
+                    series.Add(p => p.ValueProperty, "Value");
+                }));
+
+            Assert.Contains("rz-range-nav-series", component.Markup);
+            Assert.DoesNotContain("NaN", component.Markup);
         }
     }
 }

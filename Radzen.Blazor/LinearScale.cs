@@ -60,7 +60,16 @@ namespace Radzen.Blazor
 
         protected virtual double CalculateTickCount(int distance)
         {
-            return  Math.Max(1, Math.Ceiling(Math.Abs(Output.End - Output.Start) / distance));
+            var count = Math.Ceiling(Math.Abs(Output.End - Output.Start) / distance);
+
+            // A zero sized output range (an unmeasured plot area) divided by a zero tick distance
+            // yields NaN, which Math.Max() propagates through the tick math in Ticks().
+            if (double.IsNaN(count))
+            {
+                return 1;
+            }
+
+            return Math.Max(1, count);
         }
 
         public override (double Start, double End, double Step) Ticks(int distance)

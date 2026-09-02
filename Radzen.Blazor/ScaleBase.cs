@@ -134,7 +134,10 @@ namespace Radzen.Blazor
         /// <param name="round">Wether to round.</param>
         public double NiceNumber(double range, bool round)
         {
-            if (range == 0)
+            // A scale which has not been measured yet keeps the infinite ScaleRange defaults and
+            // produces infinite or NaN ranges. Math.Sign() throws on NaN, so return the neutral 1
+            // and let the callers detect and replace the degenerate range.
+            if (range == 0 || !double.IsFinite(range))
             {
                 return 1;
             }
