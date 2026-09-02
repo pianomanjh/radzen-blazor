@@ -472,10 +472,12 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 **Not built:**
 
-- **Keyboard navigation.** `RadzenDataGrid` hangs it off `.rz-data-grid-data` with `tabindex` and a
-  keydown handler; that element now exists here. It would be one delegate per grid, not per row, so
-  the budget is not the obstacle - the roving-focus model is. This is the last of the three the scroll
-  container unblocked; resize, reorder and frozen columns are all built.
+- **Keyboard navigation** - **designed in §12, not built.** It is the last of the three the scroll
+  container unblocked; resize, reorder and frozen columns are all built. The roving-focus model turned
+  out not to be the obstacle it looked like, because `RadzenDataGrid` does not use one either: focus
+  stays on `.rz-data-grid-data` and the active cell is named by `aria-activedescendant`. What the design
+  had to settle instead was where the algorithm lives, what paints a focused cell when the theme has no
+  rule for one, and what a keystroke costs on a server-rendered circuit.
 - **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
 
 **Measurement debt:**
@@ -510,3 +512,265 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 - Package and namespace name.
 - Whether any of `RadzenDataGrid`'s four richer filter UIs - operator menu, date popup, numeric range,
   enum picker - should be built in, or whether `FilterTemplate` stays the whole answer.
+
+---
+
+## 12. Keyboard navigation - the design
+
+Designed and not yet built. Everything below carries the reason it was decided that way, so it can be
+re-argued rather than merely obeyed; where it diverges from `RadzenDataGrid` the divergence is
+deliberate and the reason is given.
+
+### What it is for
+
+**Power-user navigation on a large business grid**, not an accessibility checkbox. The target shape is
+`Cartons.razor` in the consuming application: eight-plus columns, ~11,700 rows, `RowClick` navigating to
+a detail page, `SelectionMode.Multiple`. Accessibility follows from doing it properly, but it is not
+what sets the scope.
+
+**It is judged against the WAI-ARIA grid pattern, not against `RadzenDataGrid`.** Every other feature
+here mirrors Radzen because the *theme* keys off the class names; keyboard behaviour is not a markup
+contract, so that argument does not carry. Where upstream matches the pattern, matching upstream is
+free. Where it does not, this grid follows the pattern and the difference is recorded in the README's
+divergence table rather than inherited.
+
+The bar is an upstream pull request, because that bar subsumes the consuming application's.
+
+### The model
+
+**Cell level.** Up and Down move a row; Left and Right move a cell within the row. The grid already
+emits `role="grid"` on the scroll container, and a `role="grid"` whose cells cannot be reached is
+mis-roled - that content is a `table`, or the container is a `listbox`. Cell movement is also the only
+keyboard route to a column that horizontal scrolling has pushed off screen, which a ten-column grid
+has and a five-column one does not.
+
+**The header is row 0**, as upstream has it: Left and Right cross the `<th>`s and Enter or Space sorts
+the focused column. Sorting is the most common thing anyone does to a business grid and without the
+header there is no keyboard route to it at all.
+
+**The filter row is not in the arrow space.** It holds real `<input>`s that `Tab` already reaches, and
+putting them in the arrow space would make every keystroke decide whether it is navigation or typing.
+It swallows keydown instead, which is what upstream does and costs nothing to copy.
+
+**One tab stop**, on `.rz-data-grid-data`, which restores its last position when re-entered - tabbing
+out to a filter box and back is a constant gesture, and starting over each time is the difference
+between keyboard support existing and anyone using it. `aria-activedescendant` is cleared on blur;
+upstream never resets `hasActiveRow`, so its grid claims an active descendant while unfocused.
+
+**The active cell is named by `aria-activedescendant`, not by roving tabindex.** Roving focus would put
+a `tabindex` attribute on every cell, which is an attribute frame per cell - the shape that costs frozen
+columns 1.10x - and it is over budget for a feature that does not need it.
+
+### Where the work happens
+
+**The algorithm is C#. The effect is JavaScript. JavaScript holds no rules.**
+
+Upstream splits it the other way: ~156 lines of `focusTableRow` own the index arithmetic, the clamping,
+the highlight and the `aria-activedescendant` bookkeeping, and C# caches two integers. Two of upstream's
+four keyboard bugs come from that split - JavaScript mutating state Blazor also owns. Its focus ring is
+wiped whenever selection changes `RowStyle` and Blazor rewrites the row's `class`; and passing
+`UniqueID` where the rendered element carries `GetId()` means setting `id=` on a grid kills navigation
+silently, swallowed by a bare `catch`.
+
+Here C# computes the new `(row, cell)` and calls down with it. The script swaps a class, moves the id
+and scrolls into view. It decides nothing, so it cannot disagree.
+
+**No render per keystroke.** The handler is wrapped in `NonRenderingHandler`, which already exists for
+exactly this. Note that upstream re-renders on every arrow key too - its keydown is an ordinary Blazor
+handler, so `ComponentBase` wraps it in `StateHasChanged` and the JavaScript then patches a class on top
+of a render that already happened. Skipping the render is not a divergence in behaviour, only in cost.
+
+**`OnAfterRenderAsync` re-asserts focus.** The grid re-renders constantly for other reasons - sort,
+filter, page, resize, a parent's `StateHasChanged` - and each one rewrites the row's `class`. Rather
+than defend the class, the grid tells the script where focus is again after any render while focus is
+live. One interop call on renders that were happening anyway, and C# is unambiguously the authority.
+This is what upstream cannot do, because its `focusedIndex` is a cache rather than the source of truth.
+
+**Rows are addressed by `data-r`**, whose emit condition widens from "clicks are delegated" to "clicks
+are delegated or navigation is live". Addressing by `tbody.rows[i]` would cost no markup and be wrong:
+`Virtualize` emits a spacer `tr` and row detail emits a second `tr` per expanded row, so DOM order is
+already not model order. The index strings are pre-cached, so the attribute costs a frame and no
+allocation.
+
+### The keys
+
+Arrows; `Home` and `End` for the first and last cell **in the row**; `Ctrl+Home` and `Ctrl+End` for the
+first and last cell **in the grid**; `PageUp` and `PageDown` for a viewport of rows.
+
+`Home` and `End` are a deliberate divergence: upstream binds them to the first and last *row*, which is
+the pattern's `Ctrl+Home` and `Ctrl+End`. On a ten-column grid the row meaning is the more useful of the
+two and the one fingers expect.
+
+**`Enter` activates and raises `RowClick`. `Space` selects.** Upstream binds both to selection and
+offers no keyboard route to a row click at all, which on the target page means a keyboard user can
+multi-select cartons but can never open one. Splitting the two keys is the pattern's own answer and it
+resolves that outright. `Shift+Space` and `Shift+Arrow` extend a range from the selection anchor.
+
+**In RTL the arrows flip**, because the pattern specifies visual direction and this grid is already
+direction-aware through logical properties and edge-relative freezing. `Home` and `End` do not flip -
+"first cell in the row" is already logical. Direction is read once when the listener attaches, not per
+keystroke.
+
+**Not built: typeahead, `F2`, `Escape` in the body.** Typeahead on a grid sorted by an arbitrary column
+is ambiguous about which column it should match, and that ambiguity is a design question rather than a
+key binding. `F2` and `Escape` belong to editing, which is out of scope for the reasons in §1.
+
+### Boundaries
+
+**Paging: arrowing past the last row advances the page** and lands on the first row of the next, and
+likewise backwards. Upstream simply stops - nothing calls `ChangePage` - which on 11,700 cartons makes
+the keyboard useless past row 100. Paging state and the item count are already in C# here, so the
+boundary is a comparison rather than a DOM measurement.
+
+**Virtualization: focus follows the data, not the rendered window.** Upstream clamps `focusedIndex` at
+the window edge while the viewport scrolls, so the index and the row drift apart with nothing to
+re-sync them. The window edge is an implementation detail the user should never feel.
+
+### Cells, columns and rows that move
+
+**Every rendered cell is navigable, including the row-detail toggle**, and `Enter` activates whatever
+is in it. The toggle is already a `<td role="gridcell">`; making it unreachable would be the markup
+lying again. One rule beats two, and it avoids upstream's trap of having `ArrowRight` mean expand rather
+than move whenever a `Template` is supplied - which costs upstream horizontal navigation entirely on
+exactly the grids that have the most columns.
+
+**Scroll-into-view carries an inset equal to the frozen run's width.** A frozen column is sticky and
+pinned from the first paint, so `scrollIntoViewIfNeeded` - which reads the viewport rect - considers a
+cell scrolled underneath one to be visible, and the focused cell sits occluded with no indication.
+`RadzenFastGrid.Frozen.cs` already sums those widths with `calc()` for the pinning; the scroll margin is
+the same number reused. Upstream never meets this because it pins nothing until a column is resized.
+
+**Focus tracks a column's position; it tracks a row's item.** These point different ways on purpose.
+Reordering or hiding a column is a deliberate act on the columns, and having focus stay where it is on
+screen is less startling than having it chase a column across the table. A sort or a filter is an act on
+the *rows* whose entire purpose is to move the one being looked for, so focus follows the item through
+`ItemKey` - which already exists and already backs selection membership - and falls back to the position
+where no `ItemKey` is supplied.
+
+**Nothing to focus.** Keys are inert while `IsLoading`. Focus clears when the row set empties and
+returns to the first row when data arrives; retaining an index against an empty set means holding a
+position that may not exist later, for a benefit nobody would notice. The empty-message row is not
+navigable. **Focus never enters `FastGridSettings`** - column order, widths, sorts and filters are the
+user's configuration; where the cursor was is about the current moment.
+
+### What paints the focused cell
+
+**The theme cannot draw one, and this is why upstream's cell navigation is invisible.**
+`_grid.scss` has exactly two focus rules: `.rz-grid-table thead th.rz-state-focused` gives an outline,
+and `tr.rz-state-focused > td` gives a row background. There is **no `td.rz-state-focused` rule**.
+`focusTableRow` adds that class to a body `<td>` on Left and Right, and it lands under neither parent;
+the row's own class is not cleared either, since the query only finds descendants. So upstream moves
+`aria-activedescendant` correctly - a screen reader announces the new cell - while a sighted keyboard
+user pressing `ArrowRight` sees nothing change at all.
+
+This is the third instance on this branch of the same failure: **a class the theme scopes under a parent
+does nothing until that parent is emitted, and every markup assertion passes meanwhile.**
+
+The fix goes upstream, as the missing rule in `_grid.scss`, using the `--rz-grid-cell-focus-*` variables
+every theme already defines - it is a defect in `RadzenDataGrid` on its own merits, and the same route
+the cell-tooltip finding took. The package carries the same few lines meanwhile so the grid does not
+depend on a version bump, and the styling section says so rather than quietly weakening its claim that
+no stylesheet is needed.
+
+### The ARIA that costs something, and when it is paid
+
+With paging or virtualization the DOM holds a window - a hundred rows of 11,700 - and nothing tells a
+screen reader which. The pattern's answer is `aria-rowcount` and `aria-rowindex`; for hidden columns it
+is `aria-colcount` and `aria-colindex`.
+
+These land on opposite sides of the budget. `aria-rowindex` is a frame **per row**, roughly a tenth of
+what frozen columns cost, comfortably inside. `aria-colindex` is a frame **per cell**, about half of
+frozen's cost, which is outside.
+
+So **each is emitted only where it is needed**, which is §3 rule 3 applied literally: `aria-rowindex`
+and `aria-rowcount` only when paging or virtualization makes the DOM a window; `aria-colindex` and
+`aria-colcount` only when the picker has hidden a column, so that rendered position and logical position
+have actually diverged. An unpaged grid showing every column pays nothing - which is the configuration
+the 153 KB baseline measures - and the grid that pays is the one that would otherwise be wrong.
+
+### The drop-down
+
+`RadzenFastDropDownDataGrid` opens on `Enter`, `Space` and `ArrowDown` and closes on `Escape`, but has
+no navigation inside the popup - the README lists it as a limitation. It gets row-level navigation from
+the same code with cell movement switched off, and the drop-down owns `Enter` as select-and-close. Full
+cell navigation in a picker is motion without a purpose: the user is choosing a row, not reading a
+table.
+
+### Allocation is a design constraint here, not an afterthought
+
+This component exists because `RadzenDataGrid` allocates 13,172 KB where it allocates 153. A feature
+that quietly gives some of that back has taken the argument away. §3 rules 2 and 3 apply in full, and
+for this feature specifically they mean:
+
+- **Nothing per cell.** No `tabindex`, no `id`, no unconditional `aria-colindex`. This is what rules out
+  roving focus, and what makes the conditional ARIA above the design rather than a refinement of it.
+- **Nothing per row that is not already there.** `data-r` is reused rather than joined by a second
+  attribute, and its index strings are already pre-cached.
+- **No delegate per row or per cell.** One keydown listener for the whole grid.
+- **No render per keystroke**, via `NonRenderingHandler`.
+- **Nothing at all when the feature is off.** A grid with navigation disabled must measure as the bare
+  grid does, to the two decimals `--job short` is stable to.
+
+### Budget, and the measurements that have to be recorded
+
+**The gate: under +2 KB and under 1.02x at 1000 x 5.** That is strict enough to rule out anything
+per-cell and loose enough not to micro-argue. A model that lands at 1.05x gets brought back as a number
+to decide on, not quietly accepted.
+
+**Measuring is part of the work, not a follow-up.** A commit here is not done until its number exists
+and is written down. Concretely:
+
+- `gridbench` gains cases in the established naming: `+ keyboard navigation`,
+  `+ keyboard navigation and range selection`, `+ positional ARIA`, and
+  `= RadzenDataGrid + keyboard navigation` for the like-for-like ratio, which is the only comparison
+  that means anything once a feature is paid for on both sides.
+- **Navigation is measured alone, before range selection**, so the gate judges one thing rather than a
+  bundle.
+- **Time ratios come from a full-length run or are not quoted.** `--job short` measures allocation;
+  it settled reorder at 1.76x, 1.86x and 0.97x across three runs before one full-length run put it at
+  0.93x. Allocation is stable to two decimals at `--job short` and that is what that job length is for.
+- Run it on a quiet machine. One earlier pass had the playground serving a circuit alongside it.
+- The numbers land in **three places**: the cost table in §0, the "what each of these costs" and
+  "where that leaves it against `RadzenDataGrid`" tables in `README.md`, and `gridbench/README.md` for
+  the raw data. Take the modal value of several runs before trusting the `RadzenDataGrid` column, which
+  is bimodal between two values about 990 KB apart.
+
+### How it is verified
+
+**bUnit for the algorithm, Chromium for the paint.** bUnit drives keydowns and asserts the computed
+`(row, cell)`, the boundary behaviour, the key set and the ARIA - which is the whole reason the
+algorithm is in C#. `GeometryParityTests` gains a pane for what is drawn.
+
+**The probe must ask the question the wrong way round.** Not "does the focused cell carry
+`rz-state-focused`" - that is the check that passed while the filter row's pinning was deliberately
+removed, because a row that never got the class has nothing to find and is skipped in silence. It must
+ask *what is painted at the focused cell's rect*, and assert it differs from its neighbours. The same
+probe covers the frozen-column occlusion case, by asserting the focused cell is not painted over by a
+pinned one.
+
+**No parity pane against `RadzenDataGrid` for focus.** It would assert that this grid matches a grid
+that paints nothing.
+
+### The order it lands in
+
+1. The `_grid.scss` focus rule, upstream, on its own - it is independent of everything else here and
+   fixes a live `RadzenDataGrid` bug. Going first means the interim package rule can be written knowing
+   what upstream accepted.
+2. Navigation. Then measure, and record.
+3. Range selection - `Shift+Space` and `Shift+Arrow`.
+4. Positional ARIA.
+
+One commit each, which is what every other feature on this branch did, and the only reason resize,
+reorder and frozen columns have separate numbers at all.
+
+### Where this could still be wrong
+
+- **The row/column asymmetry** of "focus follows the item, focus follows the position" will read as an
+  inconsistency to anyone who meets it without the reason. The reason is above; it needs to survive
+  review rather than be smoothed away.
+- **The round trip is accepted, not solved.** Every keystroke costs one server round trip, which in the
+  consuming application is a ~157ms floor from Hong Kong that is the speed of light rather than
+  anything fixable in code. A single press is fine; holding an arrow to scan may not be. The escape
+  hatch is moving the algorithm into JavaScript, which reverses the decision that made it testable -
+  a rewrite of the tested part, not a tweak, and one that should be taken on a measurement rather than
+  a guess.
