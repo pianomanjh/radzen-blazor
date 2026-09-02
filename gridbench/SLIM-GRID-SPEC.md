@@ -28,6 +28,7 @@ which is why `Radzen.Blazor.EntityFrameworkAdapter` no longer exists: the built-
 | row click, cell click, cell context menu, row detail - **all four together** | **+16 KB** |
 | column resize | +4.1 KB |
 | column reorder | +6.7 KB |
+| two frozen columns | +0.9 KB |
 | the scroll container and `role="grid"` | 0 |
 
 Resize and reorder re-measured together in one run, against a 153.3 KB bare grid: resize 158.3 KB,
@@ -35,11 +36,20 @@ reorder 160.0 KB, both at once 162.3 KB. They are additive because they are the 
 a handle and a pair of callbacks per *header*. Against `RadzenDataGrid` with reorder on both sides,
 which allocates 13,184 KB for it, that is **82x**.
 
+Frozen columns measured 154.4 KB and 154.6 KB across two runs against a 153.6 KB bare grid - the inset
+belongs to the column rather than the cell, so what is paid is one memoized string for the whole grid
+plus a class and a style frame on the cells of a frozen column. `RadzenDataGrid` allocates 19,785 KB
+for the same two frozen columns, which is **128x**.
+
+Frozen is the one feature here that costs measurably more *time* than it does memory: a full-length run
+puts it at **1.10x** (478.0us to 525.0us, error 3.7 and 10.5), which is those two frames on two
+thousand cells. Two frames per cell being visible while a kilobyte is not is the pooled-frame-array
+question in §11 again, from the other side.
+
 Against `RadzenDataGrid` with the same feature on both sides, the narrowest row is cell click at
 **132x** and row detail is **109x**. Nothing in the grid charges a delegate per row any more.
 
-**Not built**: editing, grouping, frozen columns, composite headers, keyboard navigation. §10 has what
-is still open.
+**Not built**: editing, grouping, composite headers, keyboard navigation. §10 has what is still open.
 
 ## 1. Why a separate component
 
@@ -351,6 +361,36 @@ Each layer below caught real faults the previous one missed. Use all of them.
   list is rebuilt from column registration. Every visible column is given its index outright instead,
   which survives a re-registration and a round trip through the settings. Costs +6.7 KB and no
   measurable time.
+- ~~Frozen columns~~ - **done**, and the theme turned out to supply less than it looked. A
+  `.rz-frozen-cell` is made `position: sticky` and given a background, a z-index and the seam shadow -
+  but no inset, and sticky without an inset does not stick. `RadzenDataGrid` supplies it from
+  `updateFrozenColumnPositions`, which measures the header and writes an inline style to every frozen
+  cell in every row - and which is called from exactly one place, inside the resize drag, so upstream
+  does not pin anything until a column is resized.
+
+  Here the inset is a property of the *column*: the table is `table-layout: fixed` with a colgroup, so
+  a column's distance from its edge is the sum of the declared widths between it and that edge. It is
+  composed once, folded into the cell style that was already memoized and already emitted, and correct
+  on the first paint with no script and no interop - and nothing to redo on a scroll, a page or a
+  virtualized window. The widths are summed with `calc()` rather than parsed, so a column may be sized
+  in any unit or a mixture of them. **A run ends at the first frozen column that declares no width**:
+  its own position is still known, but nothing after it is, so those are drawn unfrozen rather than
+  pinned to a guess.
+
+  Left and right edge runs only. A frozen column stranded in the middle is what `RadzenDataGrid`'s
+  `-inner` classes are for; it is drawn as an ordinary column here.
+
+  **The header needs one thing the body does not.** The theme makes every header cell sticky at
+  `z-index: 1`, frozen or not, so a frozen header cell ties with its neighbours and document order
+  settles it - the column to its right paints straight over the pinned one while every position and
+  inset stays correct. Frozen header cells are raised to `z-index: 2` for that, inside the header's own
+  stacking context, which the theme pins at 2 so it cannot climb over the rows. The body needs none of
+  it: an unfrozen cell there is `static`, so being positioned at all is enough.
+
+  Costs +0.9 KB and 1.10x the render time at 1000 x 5 with two columns frozen - the only feature on
+  this list whose time cost is larger than its allocation, because what it adds is two attribute frames
+  per cell of a frozen column and frames are pooled.
+- **Delegated clicks are off under virtualization**,
 - **Delegated clicks are off under virtualization**, and that is a scope choice rather than a gap. A
   virtualized grid renders a window of some tens of rows, so the per-cell delegates cost tens of
   kilobytes there rather than 1,483, and `Virtualize` hands its `ChildContent` an item with no position,
@@ -377,9 +417,7 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 **Unblocked by the scroll container, not built:**
 
-- **Frozen columns.** They wanted the container that resize needed, and it is now there. They
-  additionally want `.rz-frozen-cell` positioning, which the theme already carries and
-  `Radzen.Blazor.js` already maintains through `updateFrozenColumnPositions`.
+- Nothing. Frozen columns were the last of the three, and are built.
 - **Keyboard navigation.** `RadzenDataGrid` hangs it off `.rz-data-grid-data` with `tabindex` and a
   keydown handler; that element now exists here. It would be one delegate per grid, not per row, so
   the budget is not the obstacle - the roving-focus model is.

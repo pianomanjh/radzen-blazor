@@ -532,6 +532,33 @@ Visibility joins sort, filters and page in `FastGridSettings`, but **only while 
 grid without one records `null` for every column, because storing a visibility nothing can change would
 write the markup back to itself and then overrule a later edit to it on the next load.
 
+## Freezing a column to an edge
+
+`Frozen` pins a column while the rest of the grid scrolls sideways under it. `FrozenPosition` picks the
+edge, and defaults to `Left`.
+
+```razor
+<PropertyColumn Property="@(o => o.Number)" Title="Order" Width="90px" Frozen="true" />
+<PropertyColumn Property="@(o => o.Customer)" Title="Customer" Width="220px" Frozen="true" />
+<PropertyColumn Property="@(o => o.Total)" Title="Total" Width="120px"
+                Frozen="true" FrozenPosition="FrozenColumnPosition.Right" />
+```
+
+**Every frozen column between one and its edge needs a `Width`** - its own is needed only by whatever
+comes after it. Where a column is pinned is the sum of the widths in front of it, so a frozen column
+that declares none can still be placed while nothing after it can: the run ends there, and the columns
+past it are drawn unfrozen rather than stuck to a position nobody worked out. Any unit will do, and
+they can be mixed - the widths are added with `calc()` rather than parsed.
+
+Only runs at the edges are pinned. A column marked `Frozen` with an unfrozen column between it and its
+edge is stranded, and is drawn as an ordinary column; `RadzenDataGrid`'s `-inner` case is not built.
+
+The position is worked out on the server and written into the cell style. `RadzenDataGrid` has the
+browser do it - `updateFrozenColumnPositions` measures the header and writes an inline style to every
+frozen cell in every row - which is a DOM write per frozen cell per row, and would have to run again
+after every render. Composing it per column instead costs one string for the whole grid, is right on
+the first paint, and needs nothing on a scroll, a page change or a virtualized window.
+
 ## Virtualization
 
 `AllowVirtualization` renders only the rows in view, through Blazor's `Virtualize`. The grid needs a
@@ -811,13 +838,13 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
 
 - **Editing.** The per-row component and cascading values that inline editing needs are exactly the cost
   this grid exists to avoid. Use `RadzenDataGrid`.
-- **Grouping, frozen columns, composite headers.** Frozen columns want `.rz-frozen-cell` positioning,
-  which the theme carries and `Radzen.Blazor.js` already maintains; nothing has been built against it.
-  Column resize and reorder were on this list until the scroll container that gated them landed, and
-  both now ship.
-- **The nested scrollable structure.** No `rz-datatable-scrollable`, which is what `RadzenDataGrid`
-  builds a frozen-column layout on. The ordinary `.rz-data-grid-data` container is emitted, and it is
-  what resize overflows into and where keyboard navigation would hang; nothing hangs there yet.
+- **Grouping and composite headers.** Column resize, reorder and frozen columns were all on this list
+  until the scroll container that gated them landed; all three now ship.
+- **The nested scrollable structure.** No `rz-datatable-scrollable`. The ordinary
+  `.rz-data-grid-data` container is emitted instead, and it is what resize overflows into, what frozen
+  columns are pinned against, and where keyboard navigation would hang; nothing hangs there yet.
+- **Frozen columns stranded in the middle of the table.** Only runs at the left and right edges are
+  pinned, so `RadzenDataGrid`'s `-inner` case is not built; such a column is drawn as an ordinary one.
 - **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
   so it is filtered through the grid's own filter row rather than a separate search input, and the
   closed drop-down lists the chosen rows as text rather than as removable chips. The drop-down is a form
