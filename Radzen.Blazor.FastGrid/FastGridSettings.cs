@@ -7,11 +7,11 @@ namespace Radzen.FastGrid
     /// be stored and handed back.
     /// </summary>
     /// <remarks>
-    /// Sort, filters, page - and column visibility once <c>AllowColumnPicking</c> is on, because that is
-    /// the point at which a user can change it and storing it records a choice rather than repeating the
-    /// markup. Width and order are still absent for that reason: nothing in this grid lets a user drag or
-    /// resize a column, so persisting them would restore only what the markup already said. When those
-    /// features arrive the type grows with them.
+    /// Sort, filters, page - and column visibility once <c>AllowColumnPicking</c> is on, and column
+    /// width once <c>AllowColumnResize</c> is, because those are the points at which a user can change
+    /// them and storing one records a choice rather than repeating the markup. Order is still absent for
+    /// that reason: nothing here lets a user drag a column to a new position, so persisting it would
+    /// restore only what the markup already said.
     /// </remarks>
     public class FastGridSettings
     {
@@ -51,5 +51,11 @@ namespace Radzen.FastGrid
         /// Null restores nothing, so the markup's own <c>Visible</c> stands.
         /// </summary>
         public bool? Visible { get; set; }
+
+        /// <summary>
+        /// The width a user dragged the column to, as a CSS length, or null when none did. Null
+        /// restores nothing, so the markup's own <c>Width</c> stands.
+        /// </summary>
+        public string? Width { get; set; }
     }
 }
