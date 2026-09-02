@@ -346,70 +346,88 @@ namespace Radzen.FastGrid
         }
 
         string? frozenCellStyle;
-        string? frozenCellStyleFor;
-        string? frozenCellStyleOver;
-
         string? frozenHeaderStyle;
-        string? frozenHeaderStyleFor;
-        string? frozenHeaderStyleOver;
+        string? frozenFooterStyle;
+        string? frozenStyleFor;
+        string? frozenStyleOver;
+
+        // The three places a frozen column is drawn, and the stacking each of them has to win.
+        //
+        // The body needs nothing beyond being positioned: an unfrozen cell there is static, so the
+        // theme's own z-index on .rz-frozen-cell already puts the pinned one on top.
+        //
+        // The header and the footer are different, and for the same reason. The theme makes every cell
+        // in them sticky - thead th at z-index 1, tfoot td at 2 - frozen or not. So a frozen cell there
+        // ties with the ordinary ones beside it, and a tie is settled by document order: the column to
+        // its right paints straight over the pinned one while every position and inset stays correct.
+        // Each is raised one above its own siblings, and stays inside the stacking context its section
+        // already creates, so neither can climb out over the rows.
+        void ComposeFrozenStyles()
+        {
+            var basis = CellStyle;
+
+            if (ReferenceEquals(frozenStyleFor, frozenInset)
+                && string.Equals(frozenStyleOver, basis, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            frozenStyleFor = frozenInset;
+            frozenStyleOver = basis;
+
+            frozenCellStyle = string.IsNullOrEmpty(basis) ? frozenInset : basis + ";" + frozenInset;
+            frozenHeaderStyle = frozenCellStyle + ";z-index:2";
+            frozenFooterStyle = frozenCellStyle + ";z-index:3";
+        }
 
         /// <summary>
-        /// The style of this column's cells with the frozen inset folded in. Same memo, same reason: the
-        /// inset is a property of the column, so it is composed once and handed to every row.
+        /// The style of this column's body cells with the frozen inset folded in. Composed once per
+        /// column, so the inset is handed to every row rather than built for each of them.
         /// </summary>
         internal string? FrozenCellStyle
         {
             get
             {
-                var basis = CellStyle;
-
                 if (frozenInset is null)
                 {
-                    return basis;
+                    return CellStyle;
                 }
 
-                if (!ReferenceEquals(frozenCellStyleFor, frozenInset)
-                    || !string.Equals(frozenCellStyleOver, basis, StringComparison.Ordinal))
-                {
-                    frozenCellStyleFor = frozenInset;
-                    frozenCellStyleOver = basis;
-                    frozenCellStyle = string.IsNullOrEmpty(basis) ? frozenInset : basis + ";" + frozenInset;
-                }
+                ComposeFrozenStyles();
 
                 return frozenCellStyle;
             }
         }
 
-        /// <summary>
-        /// The same for the header, which needs one thing the body does not: the theme makes every
-        /// header cell sticky at <c>z-index: 1</c>, frozen or not, so a frozen header cell ties with the
-        /// ordinary ones beside it and a tie is settled by document order - the column to its right
-        /// wins and paints over it. Raising it above its siblings is what stops that. The body needs no
-        /// such thing: an unfrozen cell there is static, so being positioned at all is enough. And it
-        /// stays inside the header's own stacking context, which the theme pins at 2, so this cannot
-        /// climb over the rows.
-        /// </summary>
+        /// <summary>The same for a header cell, raised above the ordinary headers beside it.</summary>
         internal string? FrozenHeaderStyle
         {
             get
             {
-                var basis = CellStyle;
-
                 if (frozenInset is null)
                 {
-                    return basis;
+                    return CellStyle;
                 }
 
-                if (!ReferenceEquals(frozenHeaderStyleFor, frozenInset)
-                    || !string.Equals(frozenHeaderStyleOver, basis, StringComparison.Ordinal))
-                {
-                    frozenHeaderStyleFor = frozenInset;
-                    frozenHeaderStyleOver = basis;
-                    frozenHeaderStyle = (string.IsNullOrEmpty(basis) ? frozenInset : basis + ";" + frozenInset)
-                        + ";z-index:2";
-                }
+                ComposeFrozenStyles();
 
                 return frozenHeaderStyle;
+            }
+        }
+
+        /// <summary>The same for a footer cell, whose siblings sit a level higher than a header's.</summary>
+        internal string? FrozenFooterStyle
+        {
+            get
+            {
+                if (frozenInset is null)
+                {
+                    return CellStyle;
+                }
+
+                ComposeFrozenStyles();
+
+                return frozenFooterStyle;
             }
         }
 

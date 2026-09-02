@@ -307,17 +307,26 @@ namespace Radzen.Blazor.FastGrid.Tests
                 "(none)",
                 report.Describe());
 
-            ParityAssert.True(overlap.BodyOnTop,
-                "a frozen body cell is drawn over the row scrolling under it",
-                "an unfrozen cell in the body is static, so being positioned at all should be enough to win",
-                "the frozen cell on top",
+            // The pane carries a title row, a filter row, a body and a footer for this reason: the
+            // theme stacks each section differently, so winning in one says nothing about the next.
+            ParityAssert.True(overlap.PinnedColumns > 0,
+                "the pane actually has pinned columns to test",
+                "with none, every check below is vacuously true",
+                "at least one frozen column",
                 overlap.ToString(),
                 report.Describe());
 
-            ParityAssert.True(overlap.HeaderOnTop,
-                "a frozen header cell is drawn over the header scrolling under it",
-                "every header cell is sticky at z-index 1, so a frozen one ties with its neighbours and the later column wins unless it is raised above them",
-                "the frozen header cell on top",
+            ParityAssert.True(overlap.RowsChecked > 3,
+                "every section of the grid was examined",
+                "a pane with only a body cannot show a frozen column losing in the header or the footer, which is where it does lose",
+                "a title row, a filter row, body rows and a footer",
+                overlap.ToString(),
+                report.Describe());
+
+            ParityAssert.True(overlap.Covered is not { Length: > 0 },
+                "no row draws a scrolling column over the frozen one",
+                "the theme makes header and footer cells sticky at a fixed z-index whether or not they are frozen, so a frozen cell there ties with its neighbours and document order lets the column to its right paint over it",
+                "no covered rows",
                 overlap.ToString(),
                 report.Describe());
         }

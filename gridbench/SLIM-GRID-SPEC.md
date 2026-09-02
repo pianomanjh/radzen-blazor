@@ -380,12 +380,20 @@ Each layer below caught real faults the previous one missed. Use all of them.
   Left and right edge runs only. A frozen column stranded in the middle is what `RadzenDataGrid`'s
   `-inner` classes are for; it is drawn as an ordinary column here.
 
-  **The header needs one thing the body does not.** The theme makes every header cell sticky at
-  `z-index: 1`, frozen or not, so a frozen header cell ties with its neighbours and document order
-  settles it - the column to its right paints straight over the pinned one while every position and
-  inset stays correct. Frozen header cells are raised to `z-index: 2` for that, inside the header's own
-  stacking context, which the theme pins at 2 so it cannot climb over the rows. The body needs none of
-  it: an unfrozen cell there is `static`, so being positioned at all is enough.
+  **Every section stacks differently, and a frozen column has to win in each.** The theme makes header
+  cells sticky at `z-index: 1` and footer cells at `2`, frozen or not, so a frozen cell there ties with
+  the ordinary ones beside it and document order settles it - the column to its right paints straight
+  over the pinned one while every position and inset stays correct. Each is raised one above its own
+  siblings, inside the stacking context its section already creates, so neither can climb out over the
+  rows. The body needs none of it: an unfrozen cell there is `static`, so being positioned at all is
+  enough.
+
+  There are **four** such sections - the title row, the filter row, the body and the footer - and the
+  filter row is a second row of the header rather than a thing of its own, which is how it was missed
+  after the title row was fixed. The check that catches this reads which columns are pinned off the
+  title row and then asks every row what is drawn at that column's x. An earlier version looked for
+  cells *carrying* the frozen class instead, and passed with the filter row's pinning deliberately
+  removed: a row that never got the class has nothing to find, so it was skipped in silence.
 
   Costs +0.9 KB and 1.10x the render time at 1000 x 5 with two columns frozen - the only feature on
   this list whose time cost is larger than its allocation, because what it adds is two attribute frames
