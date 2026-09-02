@@ -142,6 +142,49 @@ async function main() {
                     // so a grid can put rz-state-highlight on exactly the right tr and still draw a row
                     // that looks like every other one. Reading the computed background of a selected
                     // cell and an unselected one is the only check that can tell those apart.
+                    // A frozen column is only frozen if it survives a scroll. Scroll the pane's own
+                    // container sideways and record how far the first cell moved against a cell that
+                    // was never pinned: the frozen one should not have moved at all.
+                    frozenHold: (() => {
+                        const scroller = pane.querySelector('.rz-data-grid-data');
+                        const first = pane.querySelector('tbody tr td');
+                        const loose = pane.querySelector('tbody tr td:last-child');
+                        if (!scroller || !first || !loose) { return null; }
+                        const before = first.getBoundingClientRect().left;
+                        const looseBefore = loose.getBoundingClientRect().left;
+                        scroller.scrollLeft = 200;
+                        const moved = round(first.getBoundingClientRect().left - before);
+                        const looseMoved = round(loose.getBoundingClientRect().left - looseBefore);
+                        scroller.scrollLeft = 0;
+                        return { scrolled: 200, frozenMoved: moved, unfrozenMoved: looseMoved };
+                    })(),
+
+                    // Which element is actually on top where a frozen column overlaps a scrolled one.
+                    // Position and inset can both be right while the column sliding underneath paints
+                    // over the top: the theme makes every header cell sticky at the same z-index, so a
+                    // frozen header ties with its neighbours and document order decides. Ask the
+                    // document what it would hit at a point inside the frozen header.
+                    frozenOverlap: (() => {
+                        const scroller = pane.querySelector('.rz-data-grid-data');
+                        const th = pane.querySelectorAll('thead th')[1];
+                        const td = pane.querySelectorAll('tbody tr td')[1];
+                        if (!scroller || !th || !td) { return null; }
+
+                        // elementFromPoint works in viewport coordinates, and this pane sits well below
+                        // the fold on a page of several grids - without this the hit test lands outside
+                        // the window and reports nothing on top of anything.
+                        pane.scrollIntoView({ block: 'start' });
+                        scroller.scrollLeft = 200;
+                        const at = element => {
+                            const r = element.getBoundingClientRect();
+                            const hit = document.elementFromPoint(r.left + Math.min(8, r.width / 2), r.top + r.height / 2);
+                            return hit ? (hit.closest('th, td') === element) : false;
+                        };
+                        const result = { headerOnTop: at(th), bodyOnTop: at(td) };
+                        scroller.scrollLeft = 0;
+                        return result;
+                    })(),
+
                     // Every data cell's width, so a colgroup that is misaligned by one is visible. The
                     // toggle column is a cell with no col of its own, and without a col standing in for
                     // it each declared width lands on the column to its left.

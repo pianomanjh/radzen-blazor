@@ -601,6 +601,7 @@ namespace Radzen.FastGrid
             }
 
             RefreshVisibleColumns();
+            RefreshFrozenColumns();
 
             BeginDrawing();
 
@@ -1109,13 +1110,18 @@ namespace Radzen.FastGrid
 
                 // rz-resizable-column is what gives the th position:relative, and the handle below is
                 // absolutely positioned against it. Added only when there is a handle to contain.
-                builder.AddAttribute(37, "class", (sortable, resizable) switch
+                var headerClass = (sortable, resizable) switch
                 {
                     (true, true) => "rz-unselectable-text rz-sortable-column rz-resizable-column",
                     (true, false) => "rz-unselectable-text rz-sortable-column",
                     (false, true) => "rz-unselectable-text rz-resizable-column",
                     (false, false) => "rz-unselectable-text",
-                });
+                };
+
+                // The header has to be pinned along with the body, or a frozen column's title scrolls
+                // away from its own cells. Per column, so the concat here is not per-row work.
+                builder.AddAttribute(37, "class",
+                    column.FrozenClass is { } frozen ? headerClass + " " + frozen : headerClass);
 
                 // Only while sorting is offered. A grid with AllowSorting off still applies a sort it
                 // was given - the data is ordered and reordering it would be the surprise - but it must
@@ -1127,7 +1133,7 @@ namespace Radzen.FastGrid
                         sorts[sorted].Descending ? "descending" : "ascending");
                 }
 
-                if (column.CellStyle is { } headerStyle)
+                if (column.FrozenHeaderStyle is { } headerStyle)
                 {
                     builder.AddAttribute(48, "style", headerStyle);
                 }
@@ -1543,9 +1549,9 @@ namespace Radzen.FastGrid
                 // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
                 // both places is inert under the shipped themes but would apply a custom
                 // `.rz-cell-data { padding: ... }` twice.
-                if (!string.IsNullOrEmpty(column.CssClass))
+                if (column.CellElementClass is { } cellClass)
                 {
-                    builder.AddAttribute(147, "class", column.CssClass);
+                    builder.AddAttribute(147, "class", cellClass);
                 }
 
                 // Per cell, so five times a per-row delegate at five columns. Bound only when something
@@ -1561,8 +1567,9 @@ namespace Radzen.FastGrid
                 }
 
                 // Memoized on the column, so this is a reference to the same string on every row, and
-                // null - no attribute at all - for a column that aligns left and bounds nothing.
-                if (column.CellStyle is { } cellStyle)
+                // null - no attribute at all - for a column that aligns left, bounds nothing and is not
+                // pinned to an edge.
+                if (column.FrozenCellStyle is { } cellStyle)
                 {
                     builder.AddAttribute(150, "style", cellStyle);
                 }

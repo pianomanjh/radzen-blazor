@@ -7,6 +7,7 @@
 <div class="toolbar">
     <label><input type="checkbox" @bind="allowResize" /> Resize</label>
     <label><input type="checkbox" @bind="allowReorder" /> Reorder</label>
+    <label><input type="checkbox" @bind="frozen" /> Freeze Id + Name</label>
     <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
     <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
     <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
@@ -58,14 +59,17 @@
                     Settings="@settings"
                     SettingsChanged="@OnSettingsChanged">
         <ChildContent>
-            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="80px" />
-            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="220px" />
-            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" />
+            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="80px"
+                            Frozen="@frozen" />
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="220px"
+                            Frozen="@frozen" />
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" Width="260px" />
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" Width="90px" />
-            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" Format="d" />
-            <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" Format="C0" />
+            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" Format="d" Width="180px" />
+            <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" Format="C0" Width="180px" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (fixed)"
-                            Resizable="false" Reorderable="false" />
+                            Width="260px" Resizable="false" Reorderable="false"
+                            Frozen="@frozen" FrozenPosition="FrozenColumnPosition.Right" />
         </ChildContent>
     </RadzenFastGrid>
 </div>
@@ -75,6 +79,7 @@
 @code {
     bool allowResize = true;
     bool allowReorder = true;
+    bool frozen;
     bool allowSorting = true;
     bool allowFiltering = true;
     bool allowPaging = true;
@@ -93,7 +98,7 @@
     ICollection<Row>? selection;
     FastGridSettings? settings;
     int settingsRaised;
-    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder.";
+    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it.";
 
     // The grid takes IEnumerable either way; what differs is whether it is a queryable the executor
     // will run asynchronously, which is what AsyncOwnsData decides.

@@ -129,6 +129,14 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(g => g.SelectionChanged,
                         EventCallback.Factory.Create<ICollection<Person>>(new object(), _ => { }));
                 }).Markup;
+
+                // And once more with the first two columns frozen. The theme makes a frozen cell sticky
+                // but supplies no inset, so this pane is where "does it actually hold still" is decided.
+                FastGridFrozenMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.ChildContent, FastGridFrozenColumns);
+                }).Markup;
             }
 
             var parser = new HtmlParser();
@@ -156,6 +164,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         public string FastGridSelectedMarkup { get; }
 
+        public string FastGridFrozenMarkup { get; }
+
         /// <summary>Names of the two panes rendered with row detail.</summary>
         public const string DataGridDetail = "RadzenDataGrid detail";
 
@@ -165,6 +175,9 @@ namespace Radzen.Blazor.FastGrid.Tests
         public const string DataGridSelected = "RadzenDataGrid selected";
 
         public const string FastGridSelected = "RadzenFastGrid selected";
+
+        /// <summary>The pane with its first two columns frozen to the left edge.</summary>
+        public const string FastGridFrozen = "RadzenFastGrid frozen";
 
         static readonly RenderFragment<Person> Detail =
             person => builder => builder.AddContent(0, person.Name);
@@ -215,6 +228,17 @@ namespace Radzen.Blazor.FastGrid.Tests
             }
         };
 
+        static readonly RenderFragment FastGridFrozenColumns = builder =>
+        {
+            var s = 0;
+
+            Column<int>(builder, ref s, x => x.Id, "Id", "90px", frozen: true);
+            Column<string>(builder, ref s, x => x.Name, "Name", "180px", frozen: true);
+            Column<int>(builder, ref s, x => x.Age, "Age", "400px");
+            Column<DateTime>(builder, ref s, x => x.Hired, "Hired", "400px");
+            Column<decimal>(builder, ref s, x => x.Salary, "Salary", "400px");
+        };
+
         static readonly RenderFragment FastGridDetailColumns = builder =>
         {
             var s = 0;
@@ -238,7 +262,8 @@ namespace Radzen.Blazor.FastGrid.Tests
         };
 
         static void Column<TProp>(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder,
-            ref int sequence, Expression<Func<Person, TProp>> property, string title, string width = null)
+            ref int sequence, Expression<Func<Person, TProp>> property, string title, string width = null,
+            bool frozen = false)
         {
             builder.OpenComponent<PropertyColumn<Person, TProp>>(sequence++);
             builder.AddAttribute(sequence++, "Property", property);
@@ -247,6 +272,11 @@ namespace Radzen.Blazor.FastGrid.Tests
             if (width is not null)
             {
                 builder.AddAttribute(sequence++, "Width", width);
+            }
+
+            if (frozen)
+            {
+                builder.AddAttribute(sequence++, "Frozen", true);
             }
 
             builder.CloseComponent();
@@ -289,6 +319,7 @@ namespace Radzen.Blazor.FastGrid.Tests
 <style>
   body {{ margin: 0; padding: 24px; background: #fff; }}
   .pane {{ margin-bottom: 40px; }}
+  .pane-narrow {{ width: 500px; }}
 </style>
 </head><body>
 <div class=""pane"" data-grid=""{DataGrid.Name}"">{DataGridMarkup}</div>
@@ -297,6 +328,7 @@ namespace Radzen.Blazor.FastGrid.Tests
 <div class=""pane"" data-grid=""{FastGridDetail}"">{FastGridDetailMarkup}</div>
 <div class=""pane"" data-grid=""{DataGridSelected}"">{DataGridSelectedMarkup}</div>
 <div class=""pane"" data-grid=""{FastGridSelected}"">{FastGridSelectedMarkup}</div>
+<div class=""pane pane-narrow"" data-grid=""{FastGridFrozen}"">{FastGridFrozenMarkup}</div>
 </body></html>";
 
             File.WriteAllText(pagePath, page);

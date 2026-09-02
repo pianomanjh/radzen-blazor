@@ -281,6 +281,138 @@ namespace Radzen.FastGrid
         /// </summary>
         [Parameter] public bool Reorderable { get; set; } = true;
 
+        /// <summary>Whether the column stays put while the grid is scrolled sideways.</summary>
+        /// <remarks>
+        /// Where a frozen column is pinned is the sum of the widths between it and its edge, so every
+        /// frozen column before it needs a <see cref="Width" /> - its own is only needed by whatever
+        /// comes after. A run therefore ends at the first column that declares no width, and the columns
+        /// past that are drawn unfrozen rather than stuck to a position nobody worked out.
+        /// </remarks>
+        [Parameter] public bool Frozen { get; set; }
+
+        /// <summary>Which edge a frozen column is pinned to.</summary>
+        [Parameter] public FrozenColumnPosition FrozenPosition { get; set; } = FrozenColumnPosition.Left;
+
+        // What the grid worked out for this column this render: the class list and the inset that pins
+        // it. They depend on the column's neighbours, so the grid assigns them rather than the column
+        // deriving them - it is the only thing that knows what is beside what.
+        string? frozenClass;
+        string? frozenInset;
+
+        internal void SetFrozen(string? classList, string? inset)
+        {
+            frozenClass = classList;
+            frozenInset = inset;
+        }
+
+        internal bool IsFrozen => frozenClass is not null;
+
+        /// <summary>The frozen class list for this column, or null when it is not pinned.</summary>
+        internal string? FrozenClass => frozenClass;
+
+        string? frozenCellClass;
+        string? frozenCellClassFor;
+        string? frozenCellClassOver;
+
+        /// <summary>
+        /// The class of this column's <c>td</c>, frozen classes included - distinct from
+        /// <see cref="CellClass" />, which is the inner span's. Memoized on the pair it is built from,
+        /// so a frozen column costs one string for the whole grid rather than one per cell.
+        /// </summary>
+        internal string? CellElementClass
+        {
+            get
+            {
+                if (frozenClass is null)
+                {
+                    return string.IsNullOrEmpty(CssClass) ? null : CssClass;
+                }
+
+                if (string.IsNullOrEmpty(CssClass))
+                {
+                    return frozenClass;
+                }
+
+                if (!ReferenceEquals(frozenCellClassFor, frozenClass)
+                    || !string.Equals(frozenCellClassOver, CssClass, StringComparison.Ordinal))
+                {
+                    frozenCellClassFor = frozenClass;
+                    frozenCellClassOver = CssClass;
+                    frozenCellClass = CssClass + " " + frozenClass;
+                }
+
+                return frozenCellClass;
+            }
+        }
+
+        string? frozenCellStyle;
+        string? frozenCellStyleFor;
+        string? frozenCellStyleOver;
+
+        string? frozenHeaderStyle;
+        string? frozenHeaderStyleFor;
+        string? frozenHeaderStyleOver;
+
+        /// <summary>
+        /// The style of this column's cells with the frozen inset folded in. Same memo, same reason: the
+        /// inset is a property of the column, so it is composed once and handed to every row.
+        /// </summary>
+        internal string? FrozenCellStyle
+        {
+            get
+            {
+                var basis = CellStyle;
+
+                if (frozenInset is null)
+                {
+                    return basis;
+                }
+
+                if (!ReferenceEquals(frozenCellStyleFor, frozenInset)
+                    || !string.Equals(frozenCellStyleOver, basis, StringComparison.Ordinal))
+                {
+                    frozenCellStyleFor = frozenInset;
+                    frozenCellStyleOver = basis;
+                    frozenCellStyle = string.IsNullOrEmpty(basis) ? frozenInset : basis + ";" + frozenInset;
+                }
+
+                return frozenCellStyle;
+            }
+        }
+
+        /// <summary>
+        /// The same for the header, which needs one thing the body does not: the theme makes every
+        /// header cell sticky at <c>z-index: 1</c>, frozen or not, so a frozen header cell ties with the
+        /// ordinary ones beside it and a tie is settled by document order - the column to its right
+        /// wins and paints over it. Raising it above its siblings is what stops that. The body needs no
+        /// such thing: an unfrozen cell there is static, so being positioned at all is enough. And it
+        /// stays inside the header's own stacking context, which the theme pins at 2, so this cannot
+        /// climb over the rows.
+        /// </summary>
+        internal string? FrozenHeaderStyle
+        {
+            get
+            {
+                var basis = CellStyle;
+
+                if (frozenInset is null)
+                {
+                    return basis;
+                }
+
+                if (!ReferenceEquals(frozenHeaderStyleFor, frozenInset)
+                    || !string.Equals(frozenHeaderStyleOver, basis, StringComparison.Ordinal))
+                {
+                    frozenHeaderStyleFor = frozenInset;
+                    frozenHeaderStyleOver = basis;
+                    frozenHeaderStyle = (string.IsNullOrEmpty(basis) ? frozenInset : basis + ";" + frozenInset)
+                        + ";z-index:2";
+                }
+
+                return frozenHeaderStyle;
+            }
+        }
+
         string? resizedWidth;
 
         /// <summary>

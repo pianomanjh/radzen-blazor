@@ -114,6 +114,8 @@ namespace Radzen.FastGrid.Tests
             bool pickable = true,
             bool resizable = true,
             bool reorderable = true,
+            bool frozen = false,
+            FrozenColumnPosition frozenPosition = FrozenColumnPosition.Left,
             string columnPickerTitle = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
@@ -147,6 +149,16 @@ namespace Radzen.FastGrid.Tests
             if (!reorderable)
             {
                 builder.AddAttribute(seq + 43, nameof(PropertyColumn<TItem, TProp>.Reorderable), false);
+            }
+
+            if (frozen)
+            {
+                builder.AddAttribute(seq + 44, nameof(PropertyColumn<TItem, TProp>.Frozen), true);
+            }
+
+            if (frozenPosition != FrozenColumnPosition.Left)
+            {
+                builder.AddAttribute(seq + 45, nameof(PropertyColumn<TItem, TProp>.FrozenPosition), frozenPosition);
             }
 
             if (cssClass is not null)

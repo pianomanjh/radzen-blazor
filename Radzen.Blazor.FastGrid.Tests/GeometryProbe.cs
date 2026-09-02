@@ -43,6 +43,18 @@ namespace Radzen.Blazor.FastGrid.Tests
         [JsonPropertyName("toggleButtonWidth")] public double? ToggleButtonWidth { get; set; }
 
         /// <summary>
+        /// What happened to a frozen cell when its container was scrolled sideways. Null on a pane with
+        /// no scroll container. The whole feature is this number being zero.
+        /// </summary>
+        [JsonPropertyName("frozenHold")] public FrozenHold FrozenHold { get; set; }
+
+        /// <summary>
+        /// Whether the frozen column is the element actually on top where a scrolled column passes
+        /// under it, in the header and in the body. Null on a pane with no frozen column.
+        /// </summary>
+        [JsonPropertyName("frozenOverlap")] public FrozenOverlap FrozenOverlap { get; set; }
+
+        /// <summary>
         /// Every data cell's width in the first body row, including the toggle cell. A colgroup missing
         /// a col for the toggle column shifts all of these by one, which no markup assertion can see.
         /// </summary>
@@ -68,6 +80,30 @@ namespace Radzen.Blazor.FastGrid.Tests
                 : text + string.Create(CultureInfo.InvariantCulture,
                     $", toggle {ToggleCell}x{ToggleCellWidth}px, row {DataRow}px, button +{ToggleButtonLeft}x{ToggleButtonWidth}px");
         }
+    }
+
+    /// <summary>Which cell wins where a frozen column and a scrolled one overlap.</summary>
+    public sealed class FrozenOverlap
+    {
+        [JsonPropertyName("headerOnTop")] public bool HeaderOnTop { get; set; }
+
+        [JsonPropertyName("bodyOnTop")] public bool BodyOnTop { get; set; }
+
+        public override string ToString() =>
+            $"header on top: {HeaderOnTop}, body on top: {BodyOnTop}";
+    }
+
+    /// <summary>How far a pinned cell and a loose one moved when the grid was scrolled sideways.</summary>
+    public sealed class FrozenHold
+    {
+        [JsonPropertyName("scrolled")] public double Scrolled { get; set; }
+
+        [JsonPropertyName("frozenMoved")] public double FrozenMoved { get; set; }
+
+        [JsonPropertyName("unfrozenMoved")] public double UnfrozenMoved { get; set; }
+
+        public override string ToString() => string.Create(CultureInfo.InvariantCulture,
+            $"scrolled {Scrolled}px: frozen moved {FrozenMoved}px, unfrozen moved {UnfrozenMoved}px");
     }
 
     /// <summary>One stylesheet request the page made, and how it came back.</summary>
