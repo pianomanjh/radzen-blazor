@@ -225,25 +225,38 @@ namespace Radzen.FastGrid
         IEnumerable<TItem>? lastData;
 
         bool executorResolved;
-        IAsyncQueryExecutor? executor;
+        IFastGridQueryExecutor? executor;
         CancellationTokenSource? loadCts;
 
         object? isODataFor;
         bool isOData;
 
-        IAsyncQueryExecutor? Executor
+        /// <summary>
+        /// What will execute a bound queryable asynchronously: whatever the service provider offers, and
+        /// otherwise the built-in <see cref="IAsyncEnumerable{T}" /> executor, which needs no registration.
+        /// Null only when asynchronous execution has been switched off.
+        /// </summary>
+        IFastGridQueryExecutor? Executor
         {
             get
             {
                 if (!executorResolved)
                 {
                     executorResolved = true;
-                    executor = Services?.GetService(typeof(IAsyncQueryExecutor)) as IAsyncQueryExecutor;
+                    executor = Services?.GetService(typeof(IFastGridQueryExecutor)) as IFastGridQueryExecutor
+                        ?? (AsyncQueryExecutionDisabled ? null : AsyncEnumerableQueryExecutor.Instance);
                 }
 
                 return executor;
             }
         }
+
+        /// <summary>
+        /// The switch <c>Radzen.Blazor</c> reads to turn asynchronous execution off, honoured here too so
+        /// one setting covers both grids.
+        /// </summary>
+        static bool AsyncQueryExecutionDisabled =>
+            AppContext.TryGetSwitch("Radzen.Blazor.DisableAsyncQueryExecution", out var disabled) && disabled;
 
         /// <inheritdoc />
         protected override Task OnParametersSetAsync()
@@ -566,7 +579,7 @@ namespace Radzen.FastGrid
         /// ToListAsync is generic, and the values are boxed after it returns rather than by composing a
         /// Cast into the provider's tree - which is what Entity Framework refuses to translate.
         /// </summary>
-        static Task<List<object>> ToObjectListAsync(IAsyncQueryExecutor async, IQueryable values,
+        static Task<List<object>> ToObjectListAsync(IFastGridQueryExecutor async, IQueryable values,
             CancellationToken token)
         {
             // Unreachable with the switch off: the only caller asks a column for its distinct values,
@@ -582,7 +595,7 @@ namespace Radzen.FastGrid
                 .Invoke(null, new object[] { async, values, token })!;
         }
 
-        static async Task<List<object>> ToObjectListOfAsync<TValue>(IAsyncQueryExecutor async,
+        static async Task<List<object>> ToObjectListOfAsync<TValue>(IFastGridQueryExecutor async,
             IQueryable values, CancellationToken token)
         {
             var items = await async.ToListAsync((IQueryable<TValue>)values, token);
@@ -603,28 +616,40 @@ namespace Radzen.FastGrid
         internal RadzenPager? bottomPager;
 
         /// <summary>
+        /// Whether the pager's page is being driven from the grid, so the PageChanged it raises back is
+        /// an echo of what the grid already applied rather than a request to move.
+        /// </summary>
+        bool syncingPagers;
+
+        /// <summary>
         /// Puts the pager back on the page the grid is actually showing. RadzenPager keeps its own
         /// offset and has no CurrentPage parameter to be told through, so every path that sends the grid
         /// back to page one - a sort, a filter, ClearFilters, ApplyFilters, GoToPage - left the pager
         /// highlighting the old page and paging onward from it.
         /// </summary>
-        void SyncPagers()
+        async Task SyncPagersAsync()
         {
             var page = pageSize > 0 ? skip / pageSize : 0;
 
-            SyncPager(topPager, page);
-            SyncPager(bottomPager, page);
-        }
-
-        static void SyncPager(RadzenPager? pager, int page)
-        {
-            if (pager is null || pager.CurrentPage == page)
+            if (NeedsSync(topPager, page) || NeedsSync(bottomPager, page))
             {
-                return;
+                syncingPagers = true;
+
+                try
+                {
+                    await SyncPager(topPager, page);
+                    await SyncPager(bottomPager, page);
+                }
+                finally
+                {
+                    syncingPagers = false;
+                }
             }
 
-            pager.SetCurrentPage(page);
-            pager.ChangeState();
+            static bool NeedsSync(RadzenPager? pager, int page) => pager is not null && pager.CurrentPage != page;
+
+            static Task SyncPager(RadzenPager? pager, int page) =>
+                NeedsSync(pager, page) ? pager!.GoToPage(page) : Task.CompletedTask;
         }
 
         /// <summary>
@@ -676,7 +701,7 @@ namespace Radzen.FastGrid
                 await RefreshAsync();
             }
 
-            SyncPagers();
+            await SyncPagersAsync();
 
             await LoadLookupsAsync();
         }
@@ -1163,7 +1188,7 @@ namespace Radzen.FastGrid
         /// in-memory source: it is not an IQueryable, so the first test short-circuits before the
         /// executor is even resolved.
         /// </summary>
-        bool TryGetAsyncSource([NotNullWhen(true)] out IAsyncQueryExecutor? executor,
+        bool TryGetAsyncSource([NotNullWhen(true)] out IFastGridQueryExecutor? executor,
             [NotNullWhen(true)] out IQueryable<TItem>? source)
         {
             if (Data is IQueryable<TItem> queryable && Executor is { } async && async.IsSupported(queryable))
@@ -1204,7 +1229,7 @@ namespace Radzen.FastGrid
             StateHasChanged();
         }
 
-        async Task LoadPageAsync(IAsyncQueryExecutor async, IQueryable<TItem> source)
+        async Task LoadPageAsync(IFastGridQueryExecutor async, IQueryable<TItem> source)
         {
             var token = BeginLoad();
             var filtered = ApplyFilters(source);
@@ -1628,6 +1653,13 @@ namespace Radzen.FastGrid
 
         async Task OnPageChanged(PagerEventArgs args)
         {
+            // GoToPage raises this on the way back from SyncPagersAsync. The grid is already on that
+            // page - refreshing for it would reload the same rows and re-enter the sync.
+            if (syncingPagers)
+            {
+                return;
+            }
+
             skip = args.Skip;
 
             await RefreshAsync();

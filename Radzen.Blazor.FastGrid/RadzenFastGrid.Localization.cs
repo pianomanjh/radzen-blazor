@@ -6,11 +6,13 @@ namespace Radzen.FastGrid
 {
     public partial class RadzenFastGrid<TItem>
     {
-        Localizer? localizer;
+        StringResolver? strings;
 
         // Services is injected in the data half of this component and is nullable there, because a grid
         // rendered without a service provider - which is what a bare unit test is - still has to work.
-        Localizer Localizer => localizer ??= Services?.GetService<Localizer>() ?? Localizer.Default;
+        StringResolver Strings => strings ??= Services?.GetService<ILocalizer>() is { } custom
+            ? new StringResolver(custom)
+            : StringResolver.Default;
 
         /// <summary>
         /// The culture strings are resolved in when a grid does not name one, set by an ancestor.
@@ -37,7 +39,7 @@ namespace Radzen.FastGrid
         /// Resolves one of the grid's own strings: a custom <c>ILocalizer</c> first, then the consuming
         /// application's own <c>RadzenStrings</c> resources, then the ones shipped with Radzen.Blazor.
         /// </summary>
-        public string Localize(string key) => Localizer.Get(key, UICulture);
+        public string Localize(string key) => Strings.Get(key, UICulture);
 
         // Every string below is "what the markup said, else what the resources say", which a component
         // parameter cannot express as an auto-property; BL0007 objects to the shape. Radzen.Blazor

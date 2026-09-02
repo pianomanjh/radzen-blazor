@@ -11,7 +11,7 @@ using Xunit;
 namespace Radzen.FastGrid.Tests
 {
     /// <summary>
-    /// The grid asks an <see cref="IAsyncQueryExecutor" /> to count and materialize a queryable whose
+    /// The grid asks an <see cref="IFastGridQueryExecutor" /> to count and materialize a queryable whose
     /// provider supports it, so an Entity Framework page is awaited rather than blocking the thread on
     /// Count() / ToList(). With no executor registered, or one that does not support the queryable,
     /// nothing changes.
@@ -51,7 +51,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(6));
 
@@ -65,7 +65,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor { Supported = false };
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(6).AsQueryable());
 
@@ -78,7 +78,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(6).AsQueryable());
 
@@ -93,7 +93,7 @@ namespace Radzen.FastGrid.Tests
             // database would buy nothing.
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             Render(ctx, People.Many(6).AsQueryable());
 
@@ -105,7 +105,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
@@ -126,7 +126,7 @@ namespace Radzen.FastGrid.Tests
             // one page however much data there is.
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             Render(ctx, People.Many(30).AsQueryable(), p =>
             {
@@ -144,7 +144,7 @@ namespace Radzen.FastGrid.Tests
             // it comes back - otherwise the database returns an arbitrary page and the grid sorts that.
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
@@ -164,7 +164,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
@@ -185,7 +185,7 @@ namespace Radzen.FastGrid.Tests
             // comes back would fetch an unfiltered page and then hide most of it.
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
@@ -205,7 +205,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
@@ -225,7 +225,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Sample().AsQueryable(), p =>
             {
@@ -243,7 +243,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new FakeExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Sample().AsQueryable(), p =>
             {
@@ -264,7 +264,7 @@ namespace Radzen.FastGrid.Tests
             // to land it would replace the newer page with a stale one.
             using var ctx = new TestContext();
             var executor = new GatedExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
@@ -299,7 +299,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
             var executor = new GatedExecutor();
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, People.Many(6).AsQueryable());
 
@@ -311,7 +311,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         /// <summary>Executes against the in-memory queryable, recording what it was asked to run.</summary>
-        class FakeExecutor : IAsyncQueryExecutor
+        class FakeExecutor : IFastGridQueryExecutor
         {
             public bool Supported { get; set; } = true;
 
@@ -347,7 +347,7 @@ namespace Radzen.FastGrid.Tests
         /// cancellation token: a real executor may finish its query before it observes cancellation, so
         /// the grid cannot rely on the await throwing to discard a superseded answer.
         /// </summary>
-        sealed class GatedExecutor : IAsyncQueryExecutor
+        sealed class GatedExecutor : IFastGridQueryExecutor
         {
             public Gate? Pending { get; private set; }
 

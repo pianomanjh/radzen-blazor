@@ -202,7 +202,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
             var executor = new CountingExecutor();
 
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, data: People.Many(20).AsQueryable());
 
@@ -219,7 +219,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
             var executor = new CountingExecutor();
 
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, data: People.Many(20).AsQueryable());
 
@@ -237,7 +237,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
             var executor = new CountingExecutor();
 
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, data: People.Many(40).AsQueryable());
 
@@ -260,7 +260,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
             var executor = new CountingExecutor();
 
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, data: People.Many(40).AsQueryable());
 
@@ -277,7 +277,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
             var executor = new CountingExecutor();
 
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = Render(ctx, data: People.Many(40).AsQueryable());
 
@@ -390,7 +390,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         /// <summary>Records what the grid asked it to run.</summary>
-        sealed class CountingExecutor : IAsyncQueryExecutor
+        sealed class CountingExecutor : IFastGridQueryExecutor
         {
             public int ToListCalls { get; private set; }
 

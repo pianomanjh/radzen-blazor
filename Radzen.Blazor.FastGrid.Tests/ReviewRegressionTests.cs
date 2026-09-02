@@ -47,7 +47,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         /// <summary>Answers after a yield, the way a database does - not from an already-complete task.</summary>
-        sealed class YieldingExecutor : IAsyncQueryExecutor
+        sealed class YieldingExecutor : IFastGridQueryExecutor
         {
             public bool IsSupported<T>(IQueryable<T> queryable) => true;
 
@@ -76,7 +76,7 @@ namespace Radzen.FastGrid.Tests
             var source = new WalkCountingQueryable(People.Many(40).AsQueryable());
 
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(new YieldingExecutor());
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(new YieldingExecutor());
 
             var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
             {
@@ -104,7 +104,7 @@ namespace Radzen.FastGrid.Tests
             var source = new WalkCountingQueryable(People.Many(40).AsQueryable());
 
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(new YieldingExecutor());
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(new YieldingExecutor());
 
             var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
             {
@@ -404,7 +404,7 @@ namespace Radzen.FastGrid.Tests
             var executor = new ObservingExecutor();
 
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
-            ctx.Services.AddSingleton<IAsyncQueryExecutor>(executor);
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
             {
@@ -421,7 +421,7 @@ namespace Radzen.FastGrid.Tests
             Assert.True(token.IsCancellationRequested);
         }
 
-        sealed class ObservingExecutor : IAsyncQueryExecutor
+        sealed class ObservingExecutor : IFastGridQueryExecutor
         {
             public CancellationToken LastToken { get; private set; }
 

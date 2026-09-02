@@ -419,19 +419,19 @@ raise it towards the average expanded height.
 `Data` takes an `IEnumerable<T>` or an `IQueryable<T>`. Sorting, filtering and paging compose onto it,
 so an Entity Framework query stays a query - typed expressions throughout, no dynamic-LINQ string parse.
 
-**Asynchronously**, with the adapter registered:
+**Asynchronously**, with nothing to register. A provider that streams through `IAsyncEnumerable<T>` -
+Entity Framework Core among them - is detected on the bound queryable itself, and the grid awaits its
+count and page queries instead of blocking the thread on `Count()` / `ToList()`. Nothing else changes;
+a source that does not support it uses the synchronous path unchanged.
 
-```
-dotnet add package Radzen.Blazor.EntityFrameworkAdapter
-```
+Counting composes `GroupBy(x => 1).Select(g => g.Count())` rather than calling `CountAsync`, so the
+aggregate stays a sequence the provider streams and translates to a plain `COUNT` - which is how this
+works without referencing Entity Framework. Operations are serialized per `IQueryProvider`, because
+queries from one `DbContext` share a provider that rejects concurrent use.
 
-```csharp
-builder.Services.AddRadzenQueryableEntityFrameworkAdapter();
-```
-
-The grid then awaits its count and page queries instead of blocking the thread on `Count()` / `ToList()`.
-Nothing else changes; with no adapter registered, or a source the adapter does not support, it falls back
-to the synchronous path.
+Register an `IFastGridQueryExecutor` to execute a provider that runs asynchronously by some other
+route, or set the `Radzen.Blazor.DisableAsyncQueryExecution` `AppContext` switch - the one
+`Radzen.Blazor` reads - to turn it off entirely.
 
 **`LoadData`** stays the escape hatch for sources the grid cannot compose over - REST, OData, gRPC,
 stored procedures. The handler is given `Skip`, `Top`, `OrderBy` and both `Filter` (as a string, in the
