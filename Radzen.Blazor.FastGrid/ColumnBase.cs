@@ -273,6 +273,7 @@ namespace Radzen.FastGrid
         internal string? ResizedWidth => resizedWidth;
 
         int elementIdIndex = -1;
+        string? baseElementId;
         string? colElementId;
         string? resizerElementId;
 
@@ -280,16 +281,23 @@ namespace Radzen.FastGrid
         /// The ids the resize script resolves this column by, built once per position rather than per
         /// render. They only change when the column moves, which picking a column can do.
         /// </summary>
-        internal (string Col, string Resizer) ElementIds(string gridId, int index)
+        /// <remarks>
+        /// The script is handed <c>Base</c> and derives the other two itself, by appending '-col' and
+        /// '-resizer'. Handing it either of the derived ids instead leaves it looking for '-col-col':
+        /// it then finds no col, writes the width to the th, and under table-layout:fixed the colgroup
+        /// wins and nothing moves - while the rest of the drag still works, so it looks like it ran.
+        /// </remarks>
+        internal (string Base, string Col, string Resizer) ElementIds(string gridId, int index)
         {
-            if (elementIdIndex != index || colElementId is null)
+            if (elementIdIndex != index || baseElementId is null)
             {
                 elementIdIndex = index;
-                colElementId = string.Create(CultureInfo.InvariantCulture, $"{gridId}-{index}-col");
-                resizerElementId = colElementId + "-resizer";
+                baseElementId = string.Create(CultureInfo.InvariantCulture, $"{gridId}-{index}");
+                colElementId = baseElementId + "-col";
+                resizerElementId = baseElementId + "-resizer";
             }
 
-            return (colElementId, resizerElementId!);
+            return (baseElementId, colElementId!, resizerElementId!);
         }
 
         /// <summary>Records the width a drag settled on. Null restores the declared width.</summary>

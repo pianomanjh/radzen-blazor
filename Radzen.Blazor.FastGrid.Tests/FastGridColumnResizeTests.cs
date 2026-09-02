@@ -91,8 +91,10 @@ namespace Radzen.FastGrid.Tests
         [Fact]
         public void TheHandleIdsMatchTheColIdsTheScriptResolvesAgainst()
         {
-            // The script finds the column by taking the handle's id, stripping '-resizer', and looking
-            // the rest up as a col. If the two ever drift apart it silently resizes nothing.
+            // The script is handed one base id and appends '-col' and '-resizer' to reach the two
+            // elements. If what the markup emits stops matching that convention it finds no col, writes
+            // the width to the th instead, and table-layout:fixed discards it - a drag that runs, raises
+            // its callback, and moves nothing. Which is exactly what happened before this was pinned.
             using var ctx = Context();
 
             var cut = Render(ctx, p => p.Add(g => g.AllowColumnResize, true));
@@ -102,7 +104,12 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(3, cols.Length);
             Assert.All(cols, id => Assert.EndsWith("-col", id, StringComparison.Ordinal));
-            Assert.Equal(cols.Select(id => id + "-resizer").ToArray(), handles);
+
+            // Both derive from the same base by suffix, which is the contract the script relies on.
+            var bases = cols.Select(id => id[..^"-col".Length]).ToArray();
+
+            Assert.Equal(bases.Select(b => b + "-resizer").ToArray(), handles);
+            Assert.All(bases, b => Assert.False(b.EndsWith("-col", StringComparison.Ordinal)));
         }
 
         [Fact]
