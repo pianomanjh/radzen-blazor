@@ -258,6 +258,70 @@ namespace Radzen.Blazor.FastGrid.Tests
                 report.Describe());
         }
 
+        [Fact]
+        public void A_frozen_column_is_actually_pinned()
+        {
+            // The one assertion the whole feature reduces to. The theme makes .rz-frozen-cell sticky and
+            // stops there - it supplies no inset, and sticky without an inset does not stick - so a grid
+            // can emit every frozen class correctly and scroll away exactly like an ordinary one. Only
+            // scrolling the container and watching what moves can tell those apart.
+            var report = fixtures.Geometry;
+            var hold = report[GridParityFixture.FastGridFrozen].FrozenHold;
+
+            ParityAssert.True(hold is not null,
+                "the frozen pane reported what a scroll did to it",
+                "without a scroll container there is nothing to hold still against",
+                "a measurement",
+                "(none)",
+                report.Describe());
+
+            ParityAssert.True(Math.Abs(hold.UnfrozenMoved) > 1,
+                "the grid actually scrolled",
+                "a pane that cannot scroll makes every column look frozen and proves nothing",
+                "an unfrozen cell moved by the scroll",
+                hold.ToString(),
+                report.Describe());
+
+            ParityAssert.True(Math.Abs(hold.FrozenMoved) <= ParityTolerance,
+                "a frozen column stays put while the grid scrolls under it",
+                "this is the feature; the classes are only the half of it the theme can see",
+                "a frozen cell that did not move",
+                hold.ToString(),
+                report.Describe());
+        }
+
+        [Fact]
+        public void A_frozen_column_stays_on_top_of_what_scrolls_under_it()
+        {
+            // Holding still is not enough: the theme makes every header cell sticky at the same
+            // z-index, frozen or not, so a frozen header cell ties with its neighbours and document
+            // order settles it - the column to its right paints straight over the pinned one while
+            // every position and inset stays correct. Only asking what is actually on top can see it.
+            var report = fixtures.Geometry;
+            var overlap = report[GridParityFixture.FastGridFrozen].FrozenOverlap;
+
+            ParityAssert.True(overlap is not null,
+                "the frozen pane reported what is on top where its columns overlap",
+                "position being right says nothing about paint order",
+                "a measurement",
+                "(none)",
+                report.Describe());
+
+            ParityAssert.True(overlap.BodyOnTop,
+                "a frozen body cell is drawn over the row scrolling under it",
+                "an unfrozen cell in the body is static, so being positioned at all should be enough to win",
+                "the frozen cell on top",
+                overlap.ToString(),
+                report.Describe());
+
+            ParityAssert.True(overlap.HeaderOnTop,
+                "a frozen header cell is drawn over the header scrolling under it",
+                "every header cell is sticky at z-index 1, so a frozen one ties with its neighbours and the later column wins unless it is raised above them",
+                "the frozen header cell on top",
+                overlap.ToString(),
+                report.Describe());
+        }
+
         static string Describe(double[] widths) =>
             widths is null ? "(none)" : "[" + string.Join(", ", widths.Select(w => w.ToString(CultureInfo.InvariantCulture))) + "]";
 

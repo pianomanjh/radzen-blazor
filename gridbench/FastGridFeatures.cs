@@ -72,6 +72,60 @@ public class FastGridFeatureBench
         Column<decimal>(x => x.Salary, "Salary", "120px", TextAlign.Right);
     };
 
+    // The same five columns with the first two pinned to the left edge. Widths are required to pin
+    // anything, so this row carries them and is read against the sized baseline rather than the bare one.
+    static readonly RenderFragment FrozenColumnSet = b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title, string width, bool frozen)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+            b.AddAttribute(s++, "Width", width);
+
+            if (frozen)
+            {
+                b.AddAttribute(s++, "Frozen", true);
+            }
+
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id", "80px", true);
+        Column<string>(x => x.Name, "Name", "220px", true);
+        Column<int>(x => x.Age, "Age", "60px", false);
+        Column<DateTime>(x => x.Hired, "Hired", "140px", false);
+        Column<decimal>(x => x.Salary, "Salary", "120px", false);
+    };
+
+    static readonly RenderFragment ReferenceFrozenColumnSet = b =>
+    {
+        var s = 0;
+
+        void Column(string property, string title, string width, bool frozen)
+        {
+            b.OpenComponent<RadzenDataGridColumn<Person>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+            b.AddAttribute(s++, "Width", width);
+
+            if (frozen)
+            {
+                b.AddAttribute(s++, "Frozen", true);
+            }
+
+            b.CloseComponent();
+        }
+
+        Column("Id", "Id", "80px", true);
+        Column("Name", "Name", "220px", true);
+        Column("Age", "Age", "60px", false);
+        Column("Hired", "Hired", "140px", false);
+        Column("Salary", "Salary", "120px", false);
+    };
+
     static readonly RenderFragment Plain = Columns(geometry: false);
     static readonly RenderFragment Sized = Columns(geometry: true);
 
@@ -370,6 +424,15 @@ public class FastGridFeatureBench
         p["AllowColumnResize"] = true;
         p["AllowColumnReorder"] = true;
     });
+
+    // Frozen columns are the first feature that puts a class on every cell of a column, so this row
+    // is the one that says whether that stayed per column. The inset is composed once and handed to
+    // every row, so what a frozen column costs is an attribute frame per cell and nothing else.
+    [Benchmark(Description = "+ two frozen columns")]
+    public Task FrozenColumns() => Render(p => p["ChildContent"] = FrozenColumnSet);
+
+    [Benchmark(Description = "= RadzenDataGrid + two frozen columns")]
+    public Task ReferenceFrozenColumns() => Reference(p => p["Columns"] = ReferenceFrozenColumnSet);
 
     [Benchmark(Description = "+ a column picker")]
     public Task ColumnPicking() => Render(p => p["AllowColumnPicking"] = true);
