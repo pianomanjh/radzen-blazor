@@ -295,7 +295,11 @@ namespace Radzen.FastGrid
                 pagingChanged = true;
             }
 
-            var dataChanged = !ReferenceEquals(lastData, Data);
+            // Read once. A source that answers with a new object every time it is read - a DbSet put
+            // through AsNoTracking, a Where written in markup - would otherwise be compared against one
+            // instance and remembered as another.
+            var data = Data;
+            var dataChanged = !ReferenceEquals(lastData, data);
 
             // Before the LoadData branch, not after: a LoadData grid replaces Data on every load, and a
             // check-box list built from page one is wrong for every page after it.
@@ -325,7 +329,7 @@ namespace Radzen.FastGrid
                 return Task.CompletedTask;
             }
 
-            lastData = Data;
+            lastData = data;
 
             // Drop what any previous load produced. Deliberately not RefreshAsync on the ordinary path:
             // that renders, and the render ComponentBase queues after this returns would then be the
@@ -335,7 +339,17 @@ namespace Radzen.FastGrid
 
             // Virtualizing is the exception, and has to be: Virtualize is still holding the window it
             // fetched from the old source, and nothing else will ask it for another.
-            return AllowVirtualization ? RefreshAsync() : BeginAsyncLoad() ?? Task.CompletedTask;
+            //
+            // Silently, though. Being handed a new source is not a setting the user chose, so there is
+            // nothing here to persist - and announcing it is a loop rather than a courtesy. A queryable
+            // read from a property is a new object every time it is read, which is what ordinary
+            // application code produces; the parent stores the settings this raises, re-renders, hands
+            // back another new queryable, and the grid refreshes again. That ran to 880,000 renders in
+            // two and a half seconds with no exception and nothing in the log. The paged branch below
+            // never had the fault because BeginAsyncLoad announces nothing.
+            return AllowVirtualization
+                ? RefreshAsync(announce: false)
+                : BeginAsyncLoad() ?? Task.CompletedTask;
         }
 
         /// <summary>
@@ -1233,12 +1247,20 @@ namespace Radzen.FastGrid
             };
         }
 
-        Task RefreshAsync()
+        /// <summary>
+        /// Re-reads the data for whatever the grid is currently showing.
+        /// </summary>
+        /// <param name="announce">
+        /// Whether to raise <see cref="SettingsChanged" />. True for everything a user did - a sort, a
+        /// filter, a page, a resize - and false when the only thing that changed is the source the grid
+        /// was handed, because no setting changed and saying otherwise starts a loop. See the caller.
+        /// </param>
+        Task RefreshAsync(bool announce = true)
         {
             // Every state change a user can make funnels through here, so this is the one place the
             // grid has to say so - and it is not the render path, which is what keeps a grid nobody is
             // persisting from ever building the object.
-            if (SettingsChanged.HasDelegate)
+            if (announce && SettingsChanged.HasDelegate)
             {
                 // Remembered so the settings the grid hands out are not then read back as an instruction.
                 // An application that stores what it is given and passes it back - which is the whole
