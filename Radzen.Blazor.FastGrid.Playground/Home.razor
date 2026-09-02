@@ -1,39 +1,58 @@
 @page "/"
 @rendermode InteractiveServer
+@implements IDisposable
 
 <h1>RadzenFastGrid playground</h1>
 
 <div class="toolbar">
-    <label><input type="checkbox" @bind="allowResize" /> AllowColumnResize</label>
-    <label><input type="checkbox" @bind="allowSorting" /> AllowSorting</label>
-    <label><input type="checkbox" @bind="allowFiltering" /> AllowFiltering</label>
-    <label><input type="checkbox" @bind="allowPaging" /> AllowPaging</label>
-    <label><input type="checkbox" @bind="allowPicking" /> AllowColumnPicking</label>
-    <label><input type="checkbox" @bind="alternating" /> AlternatingRows</label>
-    <label><input type="checkbox" @bind="rowDetail" /> RowDetail</label>
-    <label>Rows <input type="number" @bind="rowCount" style="width:6rem" min="1" max="100000" /></label>
-    <button @onclick="Rebuild">Apply row count</button>
+    <label><input type="checkbox" @bind="allowResize" /> Resize</label>
+    <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
+    <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
+    <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
+    <label><input type="checkbox" @bind="allowPicking" /> Column picker</label>
+    <label><input type="checkbox" @bind="alternating" /> Alternating</label>
+    <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
+    <label><input type="checkbox" @bind="selectable" /> Selection</label>
+    <label><input type="checkbox" @bind="multiSelect" /> Multi-select</label>
+    <label><input type="checkbox" checked="@useEf" @onchange="UseEfChanged" /> Entity Framework</label>
+    <label>Rows <input type="number" @bind="rowCount" style="width:6rem" min="1" max="200000" /></label>
+    <button @onclick="Rebuild">Apply</button>
     <button @onclick="ResetWidths">Reset widths</button>
+    <button @onclick="@(() => metrics.Reset())">Reset metrics</button>
+</div>
+
+<div class="metrics">
+    <span><b>@(useEf ? "EF / SQLite" : "in-memory list")</b></span>
+    <span>renders <b>@metrics.Renders</b></span>
+    <span>per sec <b class="@(metrics.RendersPerSecond > 5 ? "bad" : null)">@metrics.RendersPerSecond.ToString("F1")</b></span>
+    <span>last render <b>@metrics.LastRenderMs.ToString("F1") ms</b></span>
+    <span>alloc/render <b>@Kb(metrics.LastRenderBytes)</b></span>
+    <span>heap <b>@Kb(metrics.ManagedHeapBytes)</b></span>
+    <span>GC <b>@metrics.Gen0 / @metrics.Gen1 / @metrics.Gen2</b></span>
+    <span>settings raised <b>@settingsRaised</b></span>
 </div>
 
 <div class="stage">
-    <RadzenFastGrid TItem="Row" Data="@rows"
+    <RadzenFastGrid TItem="Row" Data="@Data"
                     AllowColumnResize="@allowResize"
                     AllowSorting="@allowSorting"
                     AllowFiltering="@allowFiltering"
                     AllowPaging="@allowPaging"
                     AllowColumnPicking="@allowPicking"
                     AllowAlternatingRows="@alternating"
+                    SelectionMode="@(multiSelect ? DataGridSelectionMode.Multiple : DataGridSelectionMode.Single)"
+                    Selection="@selection"
+                    SelectionChanged="@OnSelectionChanged"
                     PageSize="25"
                     ShowPagingSummary="true"
-                    ColumnResized="@OnColumnResized"
+                    Template="@(rowDetail ? DetailTemplate : null)"
+                    ColumnResized="@(a => Log($"resized {a.Column.Title} -> {a.Width:F0}px"))"
                     RowClick="@(r => Log($"row click: {r.Name}"))"
                     RowDoubleClick="@(r => Log($"row dblclick: {r.Name}"))"
                     CellClick="@(a => Log($"cell click: {a.Data.Name} / {a.Column.Title}"))"
                     CellContextMenu="@(a => Log($"cell menu: {a.Data.Name} / {a.Column.Title}"))"
-                    Template="@(rowDetail ? DetailTemplate : null)"
                     Settings="@settings"
-                    SettingsChanged="@(s => settings = s)">
+                    SettingsChanged="@OnSettingsChanged">
         <ChildContent>
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="80px" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="220px" />
@@ -41,13 +60,13 @@
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" Width="90px" />
             <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" Format="d" />
             <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" Format="C0" />
-            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (not resizable)"
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (fixed)"
                             Resizable="false" />
         </ChildContent>
     </RadzenFastGrid>
 </div>
 
-<div class="readout">@readout</div>
+<div class="readout">@readout<br />selected: @SelectionText</div>
 
 @code {
     bool allowResize = true;
@@ -57,6 +76,88 @@
     bool allowPicking;
     bool alternating = true;
     bool rowDetail;
+    bool selectable = true;
+    bool multiSelect;
+    bool useEf;
+    int rowCount = 500;
+
+    readonly Metrics metrics = new();
+    readonly EfSource ef = new();
+
+    List<Row> rows = Row.Make(500);
+    ICollection<Row>? selection;
+    FastGridSettings? settings;
+    int settingsRaised;
+    string readout = "Drag a column edge, click a cell, right-click one.";
+
+    // The grid takes IEnumerable either way; what differs is whether it is a queryable the executor
+    // will run asynchronously, which is what AsyncOwnsData decides.
+    IEnumerable<Row> Data => useEf ? ef.Rows : rows;
+
+    // Building the database happens here rather than in Data: a render is no place to create and seed
+    // one, and an exception thrown from a render takes the circuit down instead of showing up.
+    void UseEfChanged(ChangeEventArgs args)
+    {
+        useEf = args.Value is true;
+        selection = null;
+        settings = null;
+
+        if (useEf)
+        {
+            ef.Prepare(rowCount);
+        }
+
+        Log(useEf ? "switched to Entity Framework over SQLite" : "switched to the in-memory list");
+    }
+
+    string SelectionText => selection is { Count: > 0 }
+        ? string.Join(", ", selection.Select(r => r.Name).Take(5)) + (selection.Count > 5 ? $" (+{selection.Count - 5})" : "")
+        : "none";
+
+    static string Kb(long bytes) => (bytes / 1024d).ToString("N0") + " KB";
+
+    protected override bool ShouldRender()
+    {
+        metrics.BeginRender();
+
+        return true;
+    }
+
+    protected override void OnAfterRender(bool firstRender) => metrics.EndRender();
+
+    void Rebuild()
+    {
+        rows = Row.Make(rowCount);
+        selection = null;
+
+        if (useEf)
+        {
+            ef.Prepare(rowCount);
+        }
+    }
+
+    void ResetWidths()
+    {
+        settings = null;
+        rows = Row.Make(rowCount);
+        Log("widths reset to what the markup declares");
+    }
+
+    void OnSelectionChanged(ICollection<Row> value)
+    {
+        selection = selectable ? value : null;
+        Log($"selection: {value?.Count ?? 0} row(s)");
+    }
+
+    void OnSettingsChanged(FastGridSettings value)
+    {
+        settings = value;
+        settingsRaised++;
+    }
+
+    void Log(string line) => readout = line;
+
+    public void Dispose() => ef.Dispose();
 
     // Passed as a parameter rather than declared as markup: a Template that is merely empty still
     // switches the expand column on, because having one is what the grid keys the column off.
@@ -64,49 +165,4 @@
         @<div style="padding:.75rem 1rem">
             Detail for <b>@row.Name</b> - @row.Department, hired @row.Hired.ToShortDateString()
         </div>;
-    int rowCount = 500;
-
-    List<Row> rows = Row.Make(500);
-    FastGridSettings? settings;
-    string readout = "Drag a column edge. The width that comes back is printed here.";
-
-    void Rebuild() => rows = Row.Make(rowCount);
-
-    // Clearing the stored widths is the only way back to the declared ones, which is worth being able
-    // to do by hand - a resize that cannot be undone is easy to mistake for a resize that is stuck.
-    void ResetWidths()
-    {
-        settings = null;
-        rows = Row.Make(rowCount);
-        readout = "Widths reset to what the markup declares.";
-    }
-
-    void OnColumnResized(FastGridColumnResizedEventArgs<Row> args) =>
-        Log($"{args.Column.Title} -> {args.Width:F1}px");
-
-    void Log(string line) => readout = line;
-
-    public class Row
-    {
-        public int Id { get; set; }
-        public string Name { get; set; } = "";
-        public string Department { get; set; } = "";
-        public int Age { get; set; }
-        public DateTime Hired { get; set; }
-        public decimal Salary { get; set; }
-        public string Notes { get; set; } = "";
-
-        static readonly string[] Departments = ["Engineering", "Sales", "Ops", "Finance", "Support"];
-
-        public static List<Row> Make(int n) => Enumerable.Range(0, n).Select(i => new Row
-        {
-            Id = i,
-            Name = "Person " + i,
-            Department = Departments[i % Departments.Length],
-            Age = 20 + (i % 45),
-            Hired = new DateTime(2010, 1, 1).AddDays(i),
-            Salary = 40000m + (i % 1000) * 37m,
-            Notes = "Row " + i + " has a long enough note to truncate when the column is narrowed.",
-        }).ToList();
-    }
 }

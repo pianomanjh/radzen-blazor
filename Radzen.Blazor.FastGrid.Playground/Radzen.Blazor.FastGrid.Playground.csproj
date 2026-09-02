@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.*-*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Radzen.Blazor.FastGrid\Radzen.Blazor.FastGrid.csproj" />
     <ProjectReference Include="..\Radzen.Blazor\Radzen.Blazor.csproj" />
   </ItemGroup>

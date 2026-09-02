@@ -7,3 +7,8 @@ h1 { font-size: 1.1rem; margin: 0 0 1rem; }
 /* The grid needs a bounded height for the scroll container to have anything to do. */
 .stage { height: 60vh; display: flex; }
 .stage > * { flex: 1; min-width: 0; }
+.metrics { display:flex; flex-wrap:wrap; gap:1.25rem; margin-bottom:1rem; padding:.6rem .75rem;
+           border:1px solid var(--rz-base-300,#ddd); border-radius:4px; font-size:.8rem;
+           font-family:ui-monospace, monospace; }
+.metrics b { font-weight:600; }
+.metrics .bad { color:#c00; }
