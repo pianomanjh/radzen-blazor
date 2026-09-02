@@ -13,7 +13,7 @@
     <label><input type="checkbox" @bind="allowPicking" /> Column picker</label>
     <label><input type="checkbox" @bind="alternating" /> Alternating</label>
     <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
-    <label><input type="checkbox" @bind="selectable" /> Selection</label>
+    <label><input type="checkbox" checked="@selectable" @onchange="SelectableChanged" /> Selection</label>
     <label><input type="checkbox" @bind="multiSelect" /> Multi-select</label>
     <label><input type="checkbox" checked="@useEf" @onchange="UseEfChanged" /> Entity Framework</label>
     <label>Rows <input type="number" @bind="rowCount" style="width:6rem" min="1" max="200000" /></label>
@@ -42,6 +42,7 @@
                     AllowPaging="@allowPaging"
                     AllowColumnPicking="@allowPicking"
                     AllowAlternatingRows="@alternating"
+                    AllowRowSelectOnRowClick="@selectable"
                     SelectionMode="@(multiSelect ? DataGridSelectionMode.Multiple : DataGridSelectionMode.Single)"
                     Selection="@selection"
                     SelectionChanged="@OnSelectionChanged"
@@ -92,7 +93,7 @@
     ICollection<Row>? selection;
     FastGridSettings? settings;
     int settingsRaised;
-    string readout = "Drag a column edge, click a cell, right-click one.";
+    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder.";
 
     // The grid takes IEnumerable either way; what differs is whether it is a queryable the executor
     // will run asynchronously, which is what AsyncOwnsData decides.
@@ -149,8 +150,18 @@
 
     void OnSelectionChanged(ICollection<Row> value)
     {
-        selection = selectable ? value : null;
+        selection = value;
         Log($"selection: {value?.Count ?? 0} row(s)");
+    }
+
+    // Turning selection off drives AllowRowSelectOnRowClick, so the grid stops running the selection
+    // path rather than the page throwing its answer away - which is the difference between measuring a
+    // grid without selection and measuring one that selects into a bin.
+    void SelectableChanged(ChangeEventArgs args)
+    {
+        selectable = args.Value is true;
+        selection = null;
+        Log(selectable ? "row clicks select again" : "row clicks no longer select");
     }
 
     void OnSettingsChanged(FastGridSettings value)
