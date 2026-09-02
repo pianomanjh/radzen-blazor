@@ -7,6 +7,34 @@ Read `README.md` first for the raw data. This file is the design that follows fr
 
 ---
 
+## 0. Where this is
+
+Shipped as `Radzen.Blazor.FastGrid` on `tech/radzen-datagrid-slim`, rebased onto `upstream/master`.
+The branch is **almost purely additive**: the only change to `Radzen.Blazor` is an eight-line
+`QueryableExtension` array-filter fix, and the package needs **no `InternalsVisibleTo`** - the async
+executor, the string resolver and the non-rendering event handler are all mirrored over public
+surface, so it installs against stock `Radzen.Blazor`.
+
+Upstream has since absorbed the async IQueryable seam (#2689) and the render optimizations (#2684),
+which is why `Radzen.Blazor.EntityFrameworkAdapter` no longer exists: the built-in
+`AsyncEnumerableQueryExecutor` made it redundant.
+
+**Built and measured** (1000 x 5, allocation, modal of several runs):
+
+| | Costs |
+| --- | ---: |
+| bare | 153 KB |
+| sorting, filtering, paging, virtualization, column picking, settings, templates, `ItemKey` | see `README.md` |
+| row click, cell click, cell context menu, row detail - **all four together** | **+16 KB** |
+| column resize | +4.1 KB |
+| the scroll container and `role="grid"` | 0 |
+
+Against `RadzenDataGrid` with the same feature on both sides, the narrowest row is cell click at
+**132x** and row detail is **109x**. Nothing in the grid charges a delegate per row any more.
+
+**Not built**: editing, grouping, column reorder, frozen columns, composite headers, keyboard
+navigation. §10 has what is still open.
+
 ## 1. Why a separate component
 
 `RadzenDataGrid` renders 1000 rows x 5 columns in 28,708 KB on master. Optimising it in place got that
@@ -251,11 +279,73 @@ Each layer below caught real faults the previous one missed. Use all of them.
    the eye for what no assertion has been written for yet.
 5. **Geometry** — `node measure.js` reads rendered sizes back through Playwright, ad hoc. Caught a short
    header row that survived a screenshot being looked at, which is why step 2 exists at all.
-6. **Benchmarks** — `--filter "*SlimBench*"` etc. Numbers last: they say nothing about correctness.
+6. **Drive it in a browser** — `dotnet run --project Radzen.Blazor.FastGrid.Playground`, then
+   http://localhost:5399. Toggles for every feature, an Entity Framework / in-memory switch, an
+   adjustable row count, and a metrics strip on the page.
+
+   **This layer is not optional, and it is not last.** Layers 1-5 all assert on markup; none of them
+   can see what a browser does with it. Four bugs got through every one of them and were found here
+   within a minute of the first click:
+
+   | Fault | Why nothing above caught it |
+   | --- | --- |
+   | Resize ran, raised its callback, and moved nothing | The script takes a base id and appends `-col`; it was handed the already-suffixed one, found no col, and wrote the width to the `th`, which `table-layout: fixed` discards. The id test agreed with the markup rather than with the script. |
+   | The row-detail toggle counted as a row click | Whether a click was a toggle was decided by a flag settled when the listener attached, so a grid that gained a `Template` later drew a toggle the listener had never heard of. |
+   | Unhandled `JSDisconnectedException` on every teardown | It derives from `Exception`, not `JSException`. Nothing failed; the only trace was a line in a server log. |
+   | A render loop at ~3,600 renders/sec | Nothing on screen changed while the circuit spun, so it read as "the grid is slow". |
+
+   Watch **renders/sec** on the metrics strip: a grid at rest is 0, and the panel turns it red above
+   five. That reading alone names a render loop in a glance.
+
+7. **Benchmarks** — `--job short --filter "*FastGridFeatureBench*"`. Numbers last: they say nothing
+   about correctness.
+
+   **Take the modal value of several runs.** The `RadzenDataGrid` reference rows are bimodal between
+   two values about 990 KB apart - every low run records gen1 and gen2 collections and the high one
+   records neither, which points at `RenderTreeBuilder`'s pooled frame arrays. One pass of the table
+   reported a 507 KB regression that was an artefact of that.
+
+   **Keep the harness's fakes honest.** `gridbench`'s fake `IJSObjectReference` answered `default(bool)`,
+   so the grid's click listener never confirmed, the fallback rendered, and the benchmark measured the
+   cost the browser no longer pays. A fake standing in for a browser has to answer like one.
+
+### Rules this protocol has cost us
+
+- **Do not narrow a `catch` around an optional path.** Three times in one session, narrowing to the
+  precise-looking exception types broke the exact case the catch was written for: bUnit's strict mode
+  throws a type this package cannot name, and `JSDisconnectedException` is not a `JSException`. Where
+  the fallback is correct, catch everything and say why.
+- **A test that agrees with the markup is not a test.** Both the resize id test and the toggle flag
+  were self-consistent and wrong about the contract they were meant to pin. Pin the contract, not the
+  output.
+- **Any browser-facing optimization needs a fallback, and the fallback is what keeps it testable.**
+  The click listener leaves the per-cell delegates in place unless the script confirms it attached, so
+  `cut.Find("td").Click()` still reaches `CellClick` under bUnit. Without that a test written the
+  obvious way would pass while asserting nothing - worse than a slow grid. Cost: a grid whose listener
+  cannot attach renders twice, so render hooks run twice there.
+- **Order the optimistic render first.** Render the cheap shape and fall back on failure, never the
+  reverse: starting with the handlers and dropping them on success makes every browser grid pay the
+  cost once and then re-render to undo it.
 
 ## 10. Open decisions
 
 - Package and namespace name.
+- ~~Column resize~~ - **done**, and it settled the question that gated three features. Resize does not
+  need the scrollable variant's structure; it needs a `colgroup`, which the grid already emitted. What
+  it did need was the ordinary `.rz-data-grid-data` scroll container, so a widened column has somewhere
+  to overflow rather than pushing the page sideways. That container is now emitted always, costs
+  nothing measurable, and carries the `role="grid"` the grid had never emitted - the `row`, `rowgroup`
+  and `gridcell` roles below it had no grid ancestor. **Column reorder and frozen columns were gated on
+  the same decision and are now unblocked**; neither is built.
+- **Delegated clicks are off under virtualization**, and that is a scope choice rather than a gap. A
+  virtualized grid renders a window of some tens of rows, so the per-cell delegates cost tens of
+  kilobytes there rather than 1,483, and `Virtualize` hands its `ChildContent` an item with no position,
+  so there is no row index for the listener to resolve. Revisit only if virtualized windows get large.
+- **Whether turning `AllowSorting` off should clear an applied sort.** It currently does not - the data
+  stays ordered, because reordering it would be the surprise - but the icon, the multi-sort badge and
+  `aria-sort` now follow `AllowSorting`, so the grid no longer advertises a control that is not there.
+- **`ShowExpandColumn="false"` is now a placement choice, not a saving.** It used to avoid 404 KB; row
+  detail costs 16 KB, so the parameter is about where the control lives.
 - ~~Whether virtualization is in scope for v1~~ - **done.** `AllowVirtualization` puts the rows through
   `Virtualize` with `SpacerElement="tr"`, and one items provider serves every source. It is exclusive
   with paging: the two solve the same problem, so `Paging` is a single property both the pager and the
@@ -266,3 +356,37 @@ Each layer below caught real faults the previous one missed. Use all of them.
 - The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no date
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
+
+## 11. What is next, in the order it was argued
+
+Nothing here is committed to; this is the list as it stood, so it can be picked up cold.
+
+**Unblocked by the scroll container, not built:**
+
+- **Column reorder** and **frozen columns**. Both wanted the container that resize needed, and it is
+  now there. Frozen columns additionally want `.rz-frozen-cell` positioning, which the theme already
+  carries and `Radzen.Blazor.js` already maintains through `updateFrozenColumnPositions`.
+- **Keyboard navigation.** `RadzenDataGrid` hangs it off `.rz-data-grid-data` with `tabindex` and a
+  keydown handler; that element now exists here. It would be one delegate per grid, not per row, so
+  the budget is not the obstacle - the roving-focus model is.
+
+**Measurement debt:**
+
+- **The bimodal reference rows.** Two stable values ~990 KB apart, correlated with whether gen1/gen2
+  collections happened, hypothesised as `RenderTreeBuilder`'s pooled frame arrays. It has now shown up
+  twice and been reproduced on demand, and it is still inferred from a correlation. Measuring the pool
+  directly would close the oldest open question in `README.md` - and it is a question about
+  `RadzenDataGrid`, not about this grid.
+
+**Upstream, separable from everything else:**
+
+- **The `QueryableExtension` array-filter fix** is a genuine bug in `Radzen.Blazor` - an array property
+  is enumerable but not generic, so the filter was built against the array itself and threw
+  ("the binary operator Equal is not defined for Int32[] and Int32"). It is eight lines and has nothing
+  to do with this grid; it could go up on its own.
+
+**Still open from before, unchanged:**
+
+- Package and namespace name.
+- Whether any of `RadzenDataGrid`'s four richer filter UIs - operator menu, date popup, numeric range,
+  enum picker - should be built in, or whether `FilterTemplate` stays the whole answer.
