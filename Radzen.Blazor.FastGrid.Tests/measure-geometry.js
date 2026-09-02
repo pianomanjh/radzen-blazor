@@ -142,6 +142,12 @@ async function main() {
                     // so a grid can put rz-state-highlight on exactly the right tr and still draw a row
                     // that looks like every other one. Reading the computed background of a selected
                     // cell and an unselected one is the only check that can tell those apart.
+                    // Every data cell's width, so a colgroup that is misaligned by one is visible. The
+                    // toggle column is a cell with no col of its own, and without a col standing in for
+                    // it each declared width lands on the column to its left.
+                    dataCellWidths: [...(pane.querySelector('tbody tr')?.querySelectorAll('td') ?? [])]
+                        .map(td => round(td.getBoundingClientRect().width)),
+
                     // Rows 1 and 3, not 1 and 2: striping is :nth-child, so adjacent rows differ
                     // whatever selection does and a comparison across them would pass on its own.
                     selectedRowBackground: (() => {

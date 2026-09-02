@@ -95,14 +95,14 @@ namespace Radzen.Blazor.FastGrid.Tests
                 DataGridDetailMarkup = ctx.RenderComponent<RadzenDataGrid<Person>>(p =>
                 {
                     p.Add(g => g.Data, people);
-                    p.Add(g => g.Columns, DataGridColumns);
+                    p.Add(g => g.Columns, DataGridDetailColumns);
                     p.Add(g => g.Template, Detail);
                 }).Markup;
 
                 FastGridDetailMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
                 {
                     p.Add(g => g.Data, people);
-                    p.Add(g => g.ChildContent, FastGridColumns);
+                    p.Add(g => g.ChildContent, FastGridDetailColumns);
                     p.Add(g => g.Template, Detail);
                 }).Markup;
 
@@ -194,6 +194,38 @@ namespace Radzen.Blazor.FastGrid.Tests
             }
         };
 
+        /// <summary>
+        /// Declared widths, distinct so that a column drawn at its neighbour's width is visible. The
+        /// detail panes use these: the toggle column is a cell with no column of its own, so it is the
+        /// one place a colgroup can be misaligned, and every width there lands one column to the left.
+        /// </summary>
+        static readonly string[] ColumnWidths = { "90px", "180px", "120px", "150px", "140px" };
+
+        static readonly RenderFragment DataGridDetailColumns = builder =>
+        {
+            var s = 0;
+
+            for (var i = 0; i < ColumnTitles.Length; i++)
+            {
+                builder.OpenComponent<RadzenDataGridColumn<Person>>(s++);
+                builder.AddAttribute(s++, nameof(RadzenDataGridColumn<Person>.Property), ColumnTitles[i]);
+                builder.AddAttribute(s++, nameof(RadzenDataGridColumn<Person>.Title), ColumnTitles[i]);
+                builder.AddAttribute(s++, nameof(RadzenDataGridColumn<Person>.Width), ColumnWidths[i]);
+                builder.CloseComponent();
+            }
+        };
+
+        static readonly RenderFragment FastGridDetailColumns = builder =>
+        {
+            var s = 0;
+
+            Column<int>(builder, ref s, x => x.Id, "Id", ColumnWidths[0]);
+            Column<string>(builder, ref s, x => x.Name, "Name", ColumnWidths[1]);
+            Column<int>(builder, ref s, x => x.Age, "Age", ColumnWidths[2]);
+            Column<DateTime>(builder, ref s, x => x.Hired, "Hired", ColumnWidths[3]);
+            Column<decimal>(builder, ref s, x => x.Salary, "Salary", ColumnWidths[4]);
+        };
+
         static readonly RenderFragment FastGridColumns = builder =>
         {
             var s = 0;
@@ -206,11 +238,17 @@ namespace Radzen.Blazor.FastGrid.Tests
         };
 
         static void Column<TProp>(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder,
-            ref int sequence, Expression<Func<Person, TProp>> property, string title)
+            ref int sequence, Expression<Func<Person, TProp>> property, string title, string width = null)
         {
             builder.OpenComponent<PropertyColumn<Person, TProp>>(sequence++);
             builder.AddAttribute(sequence++, "Property", property);
             builder.AddAttribute(sequence++, "Title", title);
+
+            if (width is not null)
+            {
+                builder.AddAttribute(sequence++, "Width", width);
+            }
+
             builder.CloseComponent();
         }
 

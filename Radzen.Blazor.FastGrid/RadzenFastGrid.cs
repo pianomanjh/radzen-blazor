@@ -900,6 +900,16 @@ namespace Radzen.FastGrid
 
             builder.OpenElement(27, "colgroup");
 
+            // The toggle column is a td in every row but has no column of its own here, so without a col
+            // standing in for it every width below lands one column to the left - the toggle takes the
+            // first column's width, the first column takes the second's, and the last column gets
+            // whatever is left. Bare, so the theme's own rz-col-icon width still applies.
+            if (ExpandColumn)
+            {
+                builder.OpenElement(31, "col");
+                builder.CloseElement();
+            }
+
             for (var i = 0; i < visibleColumns.Count; i++)
             {
                 var column = visibleColumns[i];
