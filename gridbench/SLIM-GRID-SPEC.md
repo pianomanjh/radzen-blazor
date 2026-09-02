@@ -10,14 +10,15 @@ Read `README.md` first for the raw data. This file is the design that follows fr
 ## 0. Where this is
 
 Shipped as `Radzen.Blazor.FastGrid` on `tech/radzen-datagrid-slim`, rebased onto `upstream/master`.
-The branch is **almost purely additive**: the only change to `Radzen.Blazor` is an eight-line
-`QueryableExtension` array-filter fix, and the package needs **no `InternalsVisibleTo`** - the async
-executor, the string resolver and the non-rendering event handler are all mirrored over public
-surface, so it installs against stock `Radzen.Blazor`.
+The branch is now **purely additive**: it changes nothing in `Radzen.Blazor` at all, and the package
+needs **no `InternalsVisibleTo`** - the async executor, the string resolver and the non-rendering event
+handler are all mirrored over public surface, so it installs against stock `Radzen.Blazor`.
 
-Upstream has since absorbed the async IQueryable seam (#2689) and the render optimizations (#2684),
-which is why `Radzen.Blazor.EntityFrameworkAdapter` no longer exists: the built-in
-`AsyncEnumerableQueryExecutor` made it redundant.
+It got there by sending its one library change up rather than carrying it. Upstream has absorbed the
+async IQueryable seam (#2689), the render optimizations (#2684) and now the `QueryableExtension`
+array-filter fix (#2696) - which is why `Radzen.Blazor.EntityFrameworkAdapter` no longer exists: the
+built-in `AsyncEnumerableQueryExecutor` made it redundant. The theme fix that keyboard navigation needs
+is up as #2698 and is the one piece not yet merged.
 
 **Built and measured** (1000 x 5, allocation, modal of several runs):
 
