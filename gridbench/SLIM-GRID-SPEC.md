@@ -498,10 +498,12 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 **Upstream, separable from everything else:**
 
-- **The `QueryableExtension` array-filter fix** is a genuine bug in `Radzen.Blazor` - an array property
-  is enumerable but not generic, so the filter was built against the array itself and threw
-  ("the binary operator Equal is not defined for Int32[] and Int32"). It is eight lines and has nothing
-  to do with this grid; it could go up on its own.
+- ~~The `QueryableExtension` array-filter fix~~ - **sent up on its own** as radzenhq/radzen-blazor#2696,
+  from a branch off `upstream/master` rather than from here. An array property is enumerable but not
+  generic, so the filter was built against the array itself and threw ("the binary operator Equal is not
+  defined for Int32[] and Int32"). Upstream had no array coverage on that path at all - the two tests
+  named `Where_FiltersArrayProperty_*` filter a string - so the PR carries two of its own, written to
+  fail on master first.
 
 **Still open from before, unchanged:**
 
