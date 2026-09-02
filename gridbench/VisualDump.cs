@@ -85,6 +85,7 @@ static class VisualDump
             p.Add(g => g.PageSize, 5);
             p.Add(g => g.ShowPagingSummary, true);
             p.Add(g => g.PageSizeOptions, new[] { 5, 10, 20 });
+            p.Add(g => g.AllowColumnResize, true);
             p.Add(g => g.ChildContent, (RenderFragment)(b =>
             {
                 var s = 0;

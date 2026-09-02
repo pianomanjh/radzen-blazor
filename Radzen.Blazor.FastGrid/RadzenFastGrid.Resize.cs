@@ -37,7 +37,7 @@ namespace Radzen.FastGrid
         /// handle it reads the dragged cell from. The '-col' suffix is the shape that script matches on.
         /// </summary>
         /// <remarks>Cached on the column, so a render that changes nothing allocates no strings.</remarks>
-        internal (string Col, string Resizer) ColumnElementIds(int index) =>
+        internal (string Base, string Col, string Resizer) ColumnElementIds(int index) =>
             visibleColumns[index].ElementIds(ElementId, index);
 
         async Task StartColumnResize(int index, double clientX)
@@ -50,7 +50,7 @@ namespace Radzen.FastGrid
             selfReference ??= DotNetObjectReference.Create(this);
 
             await JSRuntime.InvokeVoidAsync("Radzen.startColumnResize",
-                ColumnElementIds(index).Col, selfReference, index, clientX);
+                ColumnElementIds(index).Base, selfReference, index, clientX);
         }
 
         /// <summary>
