@@ -666,11 +666,27 @@ user pressing `ArrowRight` sees nothing change at all.
 This is the third instance on this branch of the same failure: **a class the theme scopes under a parent
 does nothing until that parent is emitted, and every markup assertion passes meanwhile.**
 
-The fix goes upstream, as the missing rule in `_grid.scss`, using the `--rz-grid-cell-focus-*` variables
-every theme already defines - it is a defect in `RadzenDataGrid` on its own merits, and the same route
-the cell-tooltip finding took. The package carries the same few lines meanwhile so the grid does not
-depend on a version bump, and the styling section says so rather than quietly weakening its claim that
-no stylesheet is needed.
+**And the row highlight is scoped to selection, which is the same bug one level up.** The
+`tr.rz-state-focused > td` rule lives inside `.rz-selectable`, a class `RadzenDataGrid` adds only when
+`RowSelect`, `ValueChanged` or `SelectionMode.Multiple` is set - and which this grid adds only when
+`SelectsOnRowClick`. So on a **read-only grid, keyboard focus paints nothing at all**: not the cell,
+not the row. That is not upstream trivia, it is a hole in this design, since the grid this section is
+written for is read-only by definition.
+
+The fix went upstream as **radzenhq/radzen-blazor#2698**: it adds the missing `td.rz-state-focused`
+rule using the `--rz-grid-cell-focus-outline` variables every theme already defines, and moves the
+focus block out of `.rz-selectable`, placed directly after it so a focused row still beats a selected
+one at equal specificity. Measured in Chromium against the compiled themes rather than read off the
+source - on a selectable grid, selected, focused and selected-and-focused are byte-identical before and
+after; on a grid without selection, the row background goes from nothing to `rgba(53,160,215,.2)` and
+the cell from no outline to `solid 2px` inset by `-2px`.
+
+The package carries the same rules meanwhile so the grid does not depend on a version bump, and the
+styling section says so rather than quietly weakening its claim that no stylesheet is needed.
+
+A read-only grid is the *only* configuration this component promises, so until one of the two lands
+this feature has no visible cursor at all. That makes the upstream fix a prerequisite rather than a
+courtesy, which is why it is first in the order below.
 
 ### The ARIA that costs something, and when it is paid
 
@@ -753,9 +769,9 @@ that paints nothing.
 
 ### The order it lands in
 
-1. The `_grid.scss` focus rule, upstream, on its own - it is independent of everything else here and
-   fixes a live `RadzenDataGrid` bug. Going first means the interim package rule can be written knowing
-   what upstream accepted.
+1. ~~The `_grid.scss` focus rule, upstream, on its own~~ - **done, radzenhq/radzen-blazor#2698.** It
+   turned out to be two rules rather than one, for the reason above. The interim package rule can now
+   be written to match what went up.
 2. Navigation. Then measure, and record.
 3. Range selection - `Shift+Space` and `Shift+Arrow`.
 4. Positional ARIA.
