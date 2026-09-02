@@ -86,6 +86,9 @@ namespace Radzen.FastGrid
         [Parameter] public EventCallback<FastGridSettings> SettingsChanged { get; set; }
 
         FastGridSettings? appliedSettings;
+
+        // The last settings object the grid handed to SettingsChanged.
+        FastGridSettings? raisedSettings;
         bool settingsPending;
         bool settingsNeedReload;
 
@@ -263,7 +266,9 @@ namespace Radzen.FastGrid
         {
             // Noted here and applied as the table draws: sorts and filters name columns, and no column
             // has registered yet on the parameter set that precedes the first render.
-            if (!ReferenceEquals(appliedSettings, Settings))
+            // Not the settings this grid just produced: that is its own state coming back, and applying
+            // it would be a loop rather than a restore.
+            if (!ReferenceEquals(appliedSettings, Settings) && !ReferenceEquals(raisedSettings, Settings))
             {
                 appliedSettings = Settings;
                 settingsPending = Settings is not null;
@@ -1074,9 +1079,14 @@ namespace Radzen.FastGrid
                 }
             }
 
-            // A grid over a plain queryable composes from this state on the render now under way. One
-            // that loads - LoadData, or an async executor - has to ask again.
-            settingsNeedReload = LoadData.HasDelegate || Executor is not null;
+            // A grid composing in memory has drawn this state already - the render applying it composed
+            // from it. One that loads has to ask again, which is LoadData or a source the executor will
+            // actually run: AsyncOwnsData, not merely that an executor exists. Since the executor is
+            // built in it always exists, and reading it as "does this grid load" made every settings
+            // apply schedule a reload it did not need - which raised SettingsChanged, which handed the
+            // grid new settings, which applied them and scheduled another. One sort spun the circuit at
+            // several thousand renders a second and never stopped.
+            settingsNeedReload = LoadData.HasDelegate || AsyncOwnsData;
         }
 
         // Null unless the grid actually has a picker and this column is in it. Recording visibility for
@@ -1164,7 +1174,13 @@ namespace Radzen.FastGrid
             // persisting from ever building the object.
             if (SettingsChanged.HasDelegate)
             {
-                _ = SettingsChanged.InvokeAsync(CaptureSettings());
+                // Remembered so the settings the grid hands out are not then read back as an instruction.
+                // An application that stores what it is given and passes it back - which is the whole
+                // point of the parameter - would otherwise return this object as a parameter change, and
+                // a grid that reloads on a settings change would reload, raise, and be handed it again.
+                raisedSettings = CaptureSettings();
+
+                _ = SettingsChanged.InvokeAsync(raisedSettings);
             }
 
             if (AllowVirtualization)
