@@ -43,6 +43,12 @@ namespace Radzen.Blazor.FastGrid.Tests
         [JsonPropertyName("toggleButtonWidth")] public double? ToggleButtonWidth { get; set; }
 
         /// <summary>
+        /// Every data cell's width in the first body row, including the toggle cell. A colgroup missing
+        /// a col for the toggle column shifts all of these by one, which no markup assertion can see.
+        /// </summary>
+        [JsonPropertyName("dataCellWidths")] public double[] DataCellWidths { get; set; }
+
+        /// <summary>
         /// The computed background of a selected cell and of an unselected one. Geometry cannot see a
         /// selected row that is not painted - the theme's rule is nested inside <c>.rz-selectable</c>,
         /// so the highlight class can be on exactly the right element and mean nothing. Null on a pane

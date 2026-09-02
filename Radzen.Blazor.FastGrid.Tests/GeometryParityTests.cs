@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Globalization;
 using Xunit;
 
@@ -228,6 +229,37 @@ namespace Radzen.Blazor.FastGrid.Tests
                 $"'{actual}'",
                 report.Describe());
         }
+
+        [Fact]
+        public void Declared_widths_land_on_the_columns_that_declared_them()
+        {
+            // The toggle column is a cell in every row with no col of its own, so a colgroup that does
+            // not stand one in for it shifts every declared width one column to the left - the toggle
+            // takes the first column's width and the last column takes whatever is left. The markup is
+            // entirely correct either way; only measured widths show it.
+            var report = fixtures.Geometry;
+
+            var reference = report[GridParityFixture.DataGridDetail].DataCellWidths;
+            var actual = report[GridParityFixture.FastGridDetail].DataCellWidths;
+
+            ParityAssert.True(reference is { Length: > 0 } && actual is { Length: > 0 },
+                "both detail panes reported cell widths",
+                "without them this check cannot run at all",
+                "a width for every cell in the first body row",
+                $"reference {Describe(reference)}, actual {Describe(actual)}",
+                report.Describe());
+
+            ParityAssert.True(reference.Length == actual.Length
+                    && reference.Zip(actual, (r, a) => Math.Abs(r - a) <= ParityTolerance).All(equal => equal),
+                "RadzenFastGrid draws a row-detail grid's columns at the same widths as RadzenDataGrid",
+                "both were given the same declared widths, so a difference means one of them is applying them to the wrong columns",
+                Describe(reference),
+                Describe(actual),
+                report.Describe());
+        }
+
+        static string Describe(double[] widths) =>
+            widths is null ? "(none)" : "[" + string.Join(", ", widths.Select(w => w.ToString(CultureInfo.InvariantCulture))) + "]";
 
         static double? Height(GridGeometry geometry, string what) => what switch
         {
