@@ -42,6 +42,16 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         [JsonPropertyName("toggleButtonWidth")] public double? ToggleButtonWidth { get; set; }
 
+        /// <summary>
+        /// The computed background of a selected cell and of an unselected one. Geometry cannot see a
+        /// selected row that is not painted - the theme's rule is nested inside <c>.rz-selectable</c>,
+        /// so the highlight class can be on exactly the right element and mean nothing. Null on a pane
+        /// with no selection.
+        /// </summary>
+        [JsonPropertyName("selectedRowBackground")] public string SelectedRowBackground { get; set; }
+
+        [JsonPropertyName("unselectedRowBackground")] public string UnselectedRowBackground { get; set; }
+
         public override string ToString()
         {
             var text = string.Create(CultureInfo.InvariantCulture,

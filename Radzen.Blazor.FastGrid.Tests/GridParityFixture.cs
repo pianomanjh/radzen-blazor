@@ -105,6 +105,30 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(g => g.ChildContent, FastGridColumns);
                     p.Add(g => g.Template, Detail);
                 }).Markup;
+
+                // And again with the first row selected. The theme nests its selected-row rule inside
+                // .rz-selectable, so a grid can carry rz-state-highlight on the right tr and still paint
+                // nothing - which is what happened, and what no markup assertion could see.
+                var selected = new[] { people[0] };
+
+                DataGridSelectedMarkup = ctx.RenderComponent<RadzenDataGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.Columns, DataGridColumns);
+                    p.Add(g => g.Value, selected);
+                    p.Add(g => g.SelectionMode, DataGridSelectionMode.Single);
+                    p.Add(g => g.RowSelect, EventCallback.Factory.Create<Person>(new object(), _ => { }));
+                }).Markup;
+
+                FastGridSelectedMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.ChildContent, FastGridColumns);
+                    p.Add(g => g.Selection, selected);
+                    p.Add(g => g.SelectionMode, DataGridSelectionMode.Single);
+                    p.Add(g => g.SelectionChanged,
+                        EventCallback.Factory.Create<ICollection<Person>>(new object(), _ => { }));
+                }).Markup;
             }
 
             var parser = new HtmlParser();
@@ -128,10 +152,19 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         public string FastGridDetailMarkup { get; }
 
+        public string DataGridSelectedMarkup { get; }
+
+        public string FastGridSelectedMarkup { get; }
+
         /// <summary>Names of the two panes rendered with row detail.</summary>
         public const string DataGridDetail = "RadzenDataGrid detail";
 
         public const string FastGridDetail = "RadzenFastGrid detail";
+
+        /// <summary>Names of the two panes rendered with a row selected.</summary>
+        public const string DataGridSelected = "RadzenDataGrid selected";
+
+        public const string FastGridSelected = "RadzenFastGrid selected";
 
         static readonly RenderFragment<Person> Detail =
             person => builder => builder.AddContent(0, person.Name);
@@ -224,6 +257,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 <div class=""pane"" data-grid=""{FastGrid.Name}"">{FastGridMarkup}</div>
 <div class=""pane"" data-grid=""{DataGridDetail}"">{DataGridDetailMarkup}</div>
 <div class=""pane"" data-grid=""{FastGridDetail}"">{FastGridDetailMarkup}</div>
+<div class=""pane"" data-grid=""{DataGridSelected}"">{DataGridSelectedMarkup}</div>
+<div class=""pane"" data-grid=""{FastGridSelected}"">{FastGridSelectedMarkup}</div>
 </body></html>";
 
             File.WriteAllText(pagePath, page);

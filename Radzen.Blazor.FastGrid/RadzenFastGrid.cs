@@ -617,9 +617,17 @@ namespace Radzen.FastGrid
         void RenderGrid(RenderTreeBuilder builder)
         {
             builder.OpenElement(0, "div");
-            builder.AddAttribute(1, "class", string.IsNullOrEmpty(CssClass)
-                ? "rz-data-grid rz-datatable"
-                : "rz-data-grid rz-datatable " + CssClass);
+
+            // rz-selectable is load-bearing, not decoration: the theme nests the selected-row and
+            // row-hover rules inside it - `.rz-selectable tbody tr.rz-data-row.rz-state-highlight > td`
+            // - so without it a clicked row carries rz-state-highlight and nothing paints it.
+            builder.AddAttribute(1, "class", (string.IsNullOrEmpty(CssClass), SelectsOnRowClick) switch
+            {
+                (true, false) => "rz-data-grid rz-datatable",
+                (true, true) => "rz-data-grid rz-datatable rz-selectable",
+                (false, false) => "rz-data-grid rz-datatable " + CssClass,
+                (false, true) => "rz-data-grid rz-datatable rz-selectable " + CssClass,
+            });
 
             // The reorder script attaches its pointer tracking to the grid rather than to the header,
             // so a drag that wanders off the row it started on keeps following the pointer. That is the
