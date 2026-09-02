@@ -23,7 +23,7 @@ namespace Radzen.FastGrid
     // is false by construction for the common case: LoadData.HasDelegate, `Data is IQueryable<TItem>`,
     // `Data is ODataEnumerable<TItem>`. Nothing is materialized, counted or string-formatted unless one
     // of them is true.
-    public partial class RadzenFastGrid<TItem> : IDisposable
+    public partial class RadzenFastGrid<TItem> : IDisposable, IAsyncDisposable
     {
         [Inject]
         private IServiceProvider? Services { get; set; }
@@ -702,6 +702,9 @@ namespace Radzen.FastGrid
             }
 
             await SyncPagersAsync();
+
+            // After the pagers, so the rows the listener will resolve are the ones now on screen.
+            await AttachClicksAsync();
 
             await LoadLookupsAsync();
         }
@@ -1712,6 +1715,24 @@ namespace Radzen.FastGrid
             loadCts?.Cancel();
             loadCts?.Dispose();
             loadCts = null;
+
+            // The references handed to the browser. The listener itself is released in DisposeAsync,
+            // which is the path Blazor takes for a component that offers one.
+            clickReference?.Dispose();
+            clickReference = null;
+
+            selfReference?.Dispose();
+            selfReference = null;
+        }
+
+        /// <summary>Releases the grid, and the listener it attached in the browser.</summary>
+        public async ValueTask DisposeAsync()
+        {
+            await DisposeClicksAsync().ConfigureAwait(false);
+
+            Dispose(true);
+
+            GC.SuppressFinalize(this);
         }
     }
 }

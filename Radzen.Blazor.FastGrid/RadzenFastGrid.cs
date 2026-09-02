@@ -1334,6 +1334,12 @@ namespace Radzen.FastGrid
             builder.OpenElement(100, "tbody");
             builder.AddAttribute(101, "role", "rowgroup");
 
+            // Only when a listener is going to resolve rows inside it.
+            if (ClicksAreLive && !AllowVirtualization)
+            {
+                builder.AddAttribute(102, "id", BodyElementId);
+            }
+
             if (AllowVirtualization)
             {
                 RenderVirtualizedRows(builder);
@@ -1341,12 +1347,13 @@ namespace Radzen.FastGrid
             else
             {
                 var any = false;
+                var index = 0;
 
                 foreach (var item in View())
                 {
                     any = true;
 
-                    RenderRow(builder, item);
+                    RenderRow(builder, item, index++);
                 }
 
                 if (!any)
@@ -1358,7 +1365,9 @@ namespace Radzen.FastGrid
             builder.CloseElement();
         }
 
-        void RenderRow(RenderTreeBuilder builder, TItem item)
+        // rowIndex is the row's position in the view, or -1 when the caller has none to give - which is
+        // Virtualize, and is why delegated clicks are off under virtualization.
+        void RenderRow(RenderTreeBuilder builder, TItem item, int rowIndex)
         {
             var selection = Selection;
             var selected = selection is not null && selection.Contains(item);
@@ -1389,20 +1398,32 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(124, "style", style);
             }
 
-            // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
-            if (RowClick.HasDelegate || SelectsOnRowClick)
-            {
-                builder.AddAttribute(125, "onclick", RowClickHandler(item));
-            }
+            var delegated = ClicksAreDelegated;
 
-            if (RowDoubleClick.HasDelegate)
+            if (delegated)
             {
-                builder.AddAttribute(126, "ondblclick", RowDoubleClickHandler(item));
+                // What the listener resolves the row by. One attribute, no allocation for the row
+                // counts a page ever reaches, and it replaces every click delegate on the row and its
+                // cells alike.
+                builder.AddAttribute(127, "data-r", RowIndexString(rowIndex));
+            }
+            else
+            {
+                // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
+                if (RowClick.HasDelegate || SelectsOnRowClick)
+                {
+                    builder.AddAttribute(125, "onclick", RowClickHandler(item));
+                }
+
+                if (RowDoubleClick.HasDelegate)
+                {
+                    builder.AddAttribute(126, "ondblclick", RowDoubleClickHandler(item));
+                }
             }
 
             var tooltips = ShowCellDataAsTooltip;
-            var cellClick = CellClick.HasDelegate;
-            var cellContextMenu = CellContextMenu.HasDelegate;
+            var cellClick = !delegated && CellClick.HasDelegate;
+            var cellContextMenu = !delegated && CellContextMenu.HasDelegate;
 
             // Read once for the row rather than per cell, on the same reasoning as the two above: an
             // unset hook has to cost a null check, not a property access times five columns.
@@ -1697,7 +1718,7 @@ namespace Radzen.FastGrid
             }
 
             builder.AddAttribute(115, nameof(Virtualize<TItem>.ChildContent),
-                virtualRow ??= item => rows => RenderRow(rows, item));
+                virtualRow ??= item => rows => RenderRow(rows, item, -1));
 
             // Virtualize owns the body while it is on, so the empty row the inline path writes is
             // unreachable - without this an empty virtualized grid showed a header over nothing.

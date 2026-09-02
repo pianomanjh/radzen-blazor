@@ -26,6 +26,10 @@
                     PageSize="25"
                     ShowPagingSummary="true"
                     ColumnResized="@OnColumnResized"
+                    RowClick="@(r => Log($"row click: {r.Name}"))"
+                    RowDoubleClick="@(r => Log($"row dblclick: {r.Name}"))"
+                    CellClick="@(a => Log($"cell click: {a.Data.Name} / {a.Column.Title}"))"
+                    CellContextMenu="@(a => Log($"cell menu: {a.Data.Name} / {a.Column.Title}"))"
                     Settings="@settings"
                     SettingsChanged="@(s => settings = s)">
         <ChildContent>
@@ -68,7 +72,9 @@
     }
 
     void OnColumnResized(FastGridColumnResizedEventArgs<Row> args) =>
-        readout = $"{args.Column.Title} -> {args.Width:F1}px";
+        Log($"{args.Column.Title} -> {args.Width:F1}px");
+
+    void Log(string line) => readout = line;
 
     public class Row
     {

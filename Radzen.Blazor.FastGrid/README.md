@@ -138,10 +138,31 @@ matches by identity and moves the rows. Not free - the renderer builds a diction
 value-typed key boxes once per row - so it is worth it where rows are reordered, not where they only
 scroll.
 
-`RowClick`, `RowDoubleClick`, `CellClick` and `CellContextMenu` are each bound only when something
-listens - an unhandled event costs no attribute and no delegate. That matters most for the cell ones:
-a delegate per cell is five times a delegate per row on a five-column grid. `ShowCellDataAsTooltip`
-puts each cell's value in a `title`, and is off for the same reason.
+`RowClick`, `RowDoubleClick`, `CellClick` and `CellContextMenu` cost nothing while nothing listens,
+and **16 KB between them** once something does - not each. `ShowCellDataAsTooltip` puts each cell's
+value in a `title`, and is off by default for the same kind of reason.
+
+They are raised from one listener on the `tbody` rather than from a delegate per row or per cell. The
+browser already routes a click to its ancestors, so binding five thousand delegates to be told which
+cell was clicked is paying for something the DOM does anyway - and it was expensive: `CellClick` alone
+cost **1,483 KB** at 1000 rows x 5 columns, by a distance the most expensive thing this grid could be
+asked to do. What is left is one `data-r` attribute per row for the listener to resolve rows by.
+
+**The delegates come back if the listener cannot be attached.** The grid renders the cheap shape first
+and re-renders with the handlers only if the script does not confirm - so a browser that could not
+fetch the module keeps working, and so does a test host, which has no DOM listeners at all. That
+second case is the important one: under bUnit `cut.Find("td").Click()` still reaches `CellClick`, which
+it could not if the grid only delegated. A test written the obvious way would otherwise pass while
+asserting nothing.
+
+Two things follow from where the cost was rather than from the design:
+
+- **Virtualization keeps the handlers.** A virtualized grid renders a window of some tens of rows
+  rather than all of them, so the cost this removes is a few tens of kilobytes and not one and a half
+  megabytes - and `Virtualize` hands its `ChildContent` an item with no position, so there is no row
+  index for a listener to resolve.
+- **Turning a callback on after the first render keeps the handlers too.** The listener is attached
+  once. That costs allocation, not correctness.
 
 ### What each of these costs
 
@@ -182,9 +203,9 @@ time against the same baseline:
 | row detail, driven through the API | 152.13 KB | +0.35 KB | 1.02x |
 | `ItemKey` | 175.28 KB | **+23.5 KB** | 1.05x |
 | cell tooltip | 267.63 KB | **+115.9 KB** | 1.45x |
-| row click | 461.88 KB | **+310 KB** | 1.51x |
+| row click | 169.17 KB | **+16 KB** | 1.05x |
 | row detail with its toggle column | 555.44 KB | **+404 KB** | 2.17x |
-| cell click | 1,634.30 KB | **+1,483 KB** | 3.09x |
+| cell click | 169.17 KB | **+16 KB** | 1.10x |
 
 Every row is from one run, so the marginals are comparable with each other; the time ratios move a few
 points between runs on a shared machine, the allocation figures barely at all.
@@ -246,19 +267,20 @@ and deliberately so: the honest comparison is against the best version of the th
 | *nothing* | 152.92 KB | 13,172 KB | 86x | - |
 | cell tooltip | 269.62 KB | 13,172 KB | **49x** | +0 KB |
 | row class | 153.17 KB | 14,087 KB | 92x | +914 KB |
-| row click | 462.98 KB | 14,834 KB | **32x** | +1,662 KB |
+| row click | 169.17 KB | 14,834 KB | **88x** | +1,662 KB |
 | a filter row | 157.14 KB | 16,098 KB | **102x** | +2,926 KB |
 | a column picker | 175.77 KB | 15,618 KB | **89x** | +2,446 KB |
 | responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
 | row detail | 557.03 KB | 18,467 KB | **33x** | +5,295 KB |
-| cell click | 1,635 KB | 22,352 KB | **14x** | +9,180 KB |
+| cell click | 169.17 KB | 22,352 KB | **132x** | +9,180 KB |
 
 Take the modal value of several runs before trusting the `RadzenDataGrid` column: those rows are bimodal
 between two values about 990 KB apart, for reasons `gridbench/README.md` sets out.
 
 The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
 delegate per row or per cell - and widens wherever the feature is markup the other grid pays for per
-row. Cell click is the narrowest at 14x and is still 14x.
+row. Cell click used to be the narrowest at 14x; it is now 132x, because it stopped costing a
+delegate per cell.
 
 Two rows are worth reading rather than skimming, because each changed meaning as `RadzenDataGrid` was
 optimized underneath them:
