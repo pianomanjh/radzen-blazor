@@ -286,6 +286,14 @@ Each layer below caught real faults the previous one missed. Use all of them.
    of its assertions was confirmed to fail with the component deliberately broken — see
    *Proving it discriminates* in `README.md`. It never skips: a missing node, Playwright or Chromium
    fails the run rather than quietly passing.
+
+   **It reads paint as well as geometry**, because three faults got past every markup assertion by
+   emitting correct classes the theme did nothing with. Over seven panes it now also asserts that a
+   selected row's computed background differs from an unselected one of the same stripe parity and
+   matches `RadzenDataGrid`'s; that declared widths land on the columns that declared them; that a
+   frozen column does not move when its container is scrolled; and that nothing is drawn over a frozen
+   column in *any* of the four sections that stack independently — title row, filter row, body, footer.
+   Each of those panes exists because a check without it passed while the grid was wrong.
 3. **Markup diff against `RadzenDataGrid`** — `dotnet run --project gridbench -- visual <dir>` writes
    both grids' real HTML. Diff them. This caught a bug where a cell's `style` vanished entirely while
    every test still passed. Still worth doing by hand for anything the parity check does not assert;
@@ -296,12 +304,15 @@ Each layer below caught real faults the previous one missed. Use all of them.
 5. **Geometry** — `node measure.js` reads rendered sizes back through Playwright, ad hoc. Caught a short
    header row that survived a screenshot being looked at, which is why step 2 exists at all.
 6. **Drive it in a browser** — `dotnet run --project Radzen.Blazor.FastGrid.Playground`, then
-   http://localhost:5399. Toggles for every feature, an Entity Framework / in-memory switch, an
-   adjustable row count, and a metrics strip on the page.
+   http://localhost:5399 (it takes ~25s to bind, and a stale instance from an earlier session will hold
+   the port while you drive the *old* build - check the toolbar matches your change). Toggles for every
+   feature, an Entity Framework / in-memory switch, an adjustable row count, and a metrics strip on the
+   page.
 
    **This layer is not optional, and it is not last.** Layers 1-5 all assert on markup; none of them
-   can see what a browser does with it. Four bugs got through every one of them and were found here
-   within a minute of the first click:
+   can see what a browser does with it. Seven bugs got through every one of them and were found here,
+   most within a minute of the first click, and the last three by a person looking at the screen rather
+   than by anything that could have been automated first:
 
    | Fault | Why nothing above caught it |
    | --- | --- |
@@ -309,9 +320,17 @@ Each layer below caught real faults the previous one missed. Use all of them.
    | The row-detail toggle counted as a row click | Whether a click was a toggle was decided by a flag settled when the listener attached, so a grid that gained a `Template` later drew a toggle the listener had never heard of. |
    | Unhandled `JSDisconnectedException` on every teardown | It derives from `Exception`, not `JSException`. Nothing failed; the only trace was a line in a server log. |
    | A render loop at ~3,600 renders/sec | Nothing on screen changed while the circuit spun, so it read as "the grid is slow". |
+   | A selected row was never painted | The theme nests its selected-row rule inside `.rz-selectable`, which the grid did not emit. `rz-state-highlight` sat on exactly the right `tr` and matched nothing. |
+   | Scrolled columns drawn over the frozen ones, in the header only | The theme stacks every header cell at the same z-index, frozen or not, so a frozen one tied with its neighbours and document order let the column to its right win. The body was correct, which made it look like a rendering glitch rather than a rule. |
+   | The filter row not pinned with its column | It is a second `tr` inside `thead` rather than part of the title row, so it never received the class or the inset - and the check written for the previous fault skipped it, because it searched for cells already carrying the frozen class. |
 
    Watch **renders/sec** on the metrics strip: a grid at rest is 0, and the panel turns it red above
    five. That reading alone names a render loop in a glance.
+
+   The playground is also where a feature is *discoverable*: selection is driven by clicking a row and
+   nothing on the page said so, and its toggle was wired to discard the grid's answer rather than to
+   `AllowRowSelectOnRowClick`, so "off" measured a grid that selected into a bin. A control that does
+   not drive the grid teaches the wrong thing about it.
 
 7. **Benchmarks** — `--job short --filter "*FastGridFeatureBench*"`. Numbers last: they say nothing
    about correctness.
@@ -320,6 +339,18 @@ Each layer below caught real faults the previous one missed. Use all of them.
    two values about 990 KB apart - every low run records gen1 and gen2 collections and the high one
    records neither, which points at `RenderTreeBuilder`'s pooled frame arrays. One pass of the table
    reported a 507 KB regression that was an artefact of that.
+
+   **`--job short` measures allocation, not time.** Allocation repeats to two decimals across runs;
+   the time column does not. Reorder came out at 1.76x, 1.86x and 0.97x on three passes of it, frozen
+   at 1.01x and then 2.68x, every one with an error bar wider than the difference being claimed. Both
+   settled under a full-length run - reorder 0.93x, frozen 1.10x, errors under 3%. Quote a time ratio
+   from a full-length run or do not quote one. And run it on a quiet machine: one of those passes had
+   the playground serving a circuit alongside it.
+
+   **Read the numbers against what the feature does per row.** Frozen columns cost +0.9 KB and 1.10x
+   time, which looks contradictory until you count what changed: two attribute frames on the cells of
+   a frozen column. Frames are pooled, so the work shows up in time and not in bytes - the same
+   observation as the bimodal rows, from the other side.
 
    **Keep the harness's fakes honest.** `gridbench`'s fake `IJSObjectReference` answered `default(bool)`,
    so the grid's click listener never confirmed, the fallback rendered, and the benchmark measured the
@@ -334,6 +365,22 @@ Each layer below caught real faults the previous one missed. Use all of them.
 - **A test that agrees with the markup is not a test.** Both the resize id test and the toggle flag
   were self-consistent and wrong about the contract they were meant to pin. Pin the contract, not the
   output.
+- **A class the theme scopes under a parent does nothing until that parent is emitted, and every
+  markup assertion passes meanwhile.** Selection put `rz-state-highlight` on exactly the right `<tr>`
+  and painted nothing for the life of the feature, because the theme nests that rule inside
+  `.rz-selectable`, which the grid never emitted. Frozen columns did the same twice over: the theme
+  makes a `.rz-frozen-cell` sticky and supplies no inset, and it stacks header and footer cells at a
+  fixed z-index whether or not they are frozen. All three were found by a person looking at the screen.
+  **Before trusting a mirrored Radzen class, read what the theme nests it under** - `grep` it in
+  `themes/components/blazor/_grid.scss` and follow the nesting, not just the rule.
+- **A check that looks for the thing being present can only see it once it works.** The frozen-overlap
+  probe searched each row for a cell *carrying* the frozen class, so the filter row - which never got
+  the class at all - was skipped in silence and the grid reported clean with the bug in place. Ask
+  instead what is drawn at the position the feature claims to own. The same trap as the two above,
+  one level up: the check agreed with the markup rather than with the contract.
+- **A probe that can report a false positive will eventually be deleted rather than fixed.** The same
+  overlap check hit-tests rows clipped by the scroller as "covered", because `elementFromPoint` returns
+  whatever is painted there. Bound the rows to the scroller before asking.
 - **Any browser-facing optimization needs a fallback, and the fallback is what keeps it testable.**
   The click listener leaves the per-cell delegates in place unless the script confirms it attached, so
   `cut.Find("td").Click()` still reaches `CellClick` under bUnit. Without that a test written the
@@ -423,12 +470,13 @@ Each layer below caught real faults the previous one missed. Use all of them.
 
 Nothing here is committed to; this is the list as it stood, so it can be picked up cold.
 
-**Unblocked by the scroll container, not built:**
+**Not built:**
 
-- Nothing. Frozen columns were the last of the three, and are built.
 - **Keyboard navigation.** `RadzenDataGrid` hangs it off `.rz-data-grid-data` with `tabindex` and a
   keydown handler; that element now exists here. It would be one delegate per grid, not per row, so
-  the budget is not the obstacle - the roving-focus model is.
+  the budget is not the obstacle - the roving-focus model is. This is the last of the three the scroll
+  container unblocked; resize, reorder and frozen columns are all built.
+- **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
 
 **Measurement debt:**
 
@@ -437,6 +485,16 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
   twice and been reproduced on demand, and it is still inferred from a correlation. Measuring the pool
   directly would close the oldest open question in `README.md` - and it is a question about
   `RadzenDataGrid`, not about this grid.
+
+  Frozen columns are the same question from the other side: two attribute frames per cell of a frozen
+  column cost **1.10x** the render time and under a kilobyte of allocation. If frames are pooled, that
+  is exactly the shape to expect - the work is real and the bytes are not new.
+
+- **`--job short` cannot answer a question about time.** Reorder measured 1.76x, 1.86x and 0.97x across
+  three runs of it; frozen measured 1.01x and then 2.68x, with error bars wider than the means. Both
+  were settled by one full-length run, which put reorder at 0.93x and frozen at 1.10x with errors under
+  3%. Allocation is stable to two decimals at `--job short` and is what that job length is for. **Take
+  a time ratio from a full-length run or do not quote one.**
 
 **Upstream, separable from everything else:**
 

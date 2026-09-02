@@ -129,6 +129,11 @@ that changed.
                 SelectionMode="DataGridSelectionMode.Multiple" />
 ```
 
+A grid with a `SelectionMode` and nothing listening does not select, and does not pretend to: the
+selectable class the theme hangs its row hover and selected-row rules off is emitted only when a click
+would actually change something, so such a grid neither highlights a row nor responds to one. Handle
+`SelectionChanged` - or bind it - and both appear.
+
 Pass a `HashSet<T>` when many rows can be selected: membership is looked up once per row through the
 collection's own `Contains`, so a long `List<T>` is a scan per row.
 
@@ -552,6 +557,11 @@ they can be mixed - the widths are added with `calc()` rather than parsed.
 
 Only runs at the edges are pinned. A column marked `Frozen` with an unfrozen column between it and its
 edge is stranded, and is drawn as an ordinary column; `RadzenDataGrid`'s `-inner` case is not built.
+
+The runs are worked out from the order the columns are *drawn*, so they follow reordering and picking.
+Dragging an unfrozen column to the front unpins what was there - the column no longer at the edge stops
+being frozen rather than staying pinned in the middle of the table. Hiding a frozen column is the
+gentler case: the next one along simply becomes the column at the edge, and is pinned at zero.
 
 The position is worked out on the server and written into the cell style. `RadzenDataGrid` has the
 browser do it - `updateFrozenColumnPositions` measures the header and writes an inline style to every
