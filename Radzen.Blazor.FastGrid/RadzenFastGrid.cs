@@ -659,12 +659,20 @@ namespace Radzen.FastGrid
             builder.AddAttribute(22, "class", "rz-data-grid-data");
             builder.AddAttribute(23, "role", "grid");
 
-            builder.OpenElement(24, "table");
-            builder.AddAttribute(25, "class", TableClass());
+            // 24 to 28, so the table below moves to 29: an element's attributes and its children share
+            // one ascending sequence, and a region cannot be opened between the two - attributes may
+            // only follow the frame that opened the element.
+            if (AllowKeyboardNavigation)
+            {
+                RenderNavigation(builder, 24);
+            }
+
+            builder.OpenElement(29, "table");
+            builder.AddAttribute(26, "class", TableClass());
 
             // The grid role belongs to the container above; the table is scaffolding for it, and its own
             // implicit table role would otherwise sit between the grid and its rows.
-            builder.AddAttribute(26, "role", "presentation");
+            builder.AddAttribute(27, "role", "presentation");
 
             RenderColumnGroup(builder);
 
@@ -1299,21 +1307,30 @@ namespace Radzen.FastGrid
                     ? "rz-unselectable-text " + frozenFilter
                     : "rz-unselectable-text");
 
+                // The filter row holds real inputs that Tab already reaches, so it is not in the arrow
+                // space: putting it there would make every keystroke decide whether it is navigation or
+                // typing. It swallows keydown instead, which is what stops the grid's own handler - one
+                // element up - reading a left arrow in a filter box as a move.
+                if (AllowKeyboardNavigation)
+                {
+                    builder.AddEventStopPropagationAttribute(56, "onkeydown", true);
+                }
+
                 if (column.FrozenHeaderStyle is { } filterStyle)
                 {
-                    builder.AddAttribute(61, "style", filterStyle);
+                    builder.AddAttribute(57, "style", filterStyle);
                 }
 
                 if (column.CanFilter || column.FilterTemplate is not null)
                 {
-                    builder.OpenElement(56, "div");
-                    builder.AddAttribute(57, "class", "rz-cell-filter");
                     builder.OpenElement(58, "div");
-                    builder.AddAttribute(59, "class", "rz-cell-filter-content");
+                    builder.AddAttribute(59, "class", "rz-cell-filter");
+                    builder.OpenElement(60, "div");
+                    builder.AddAttribute(61, "class", "rz-cell-filter-content");
 
                     if (column.FilterTemplate is not null)
                     {
-                        builder.AddContent(60, column.FilterTemplate(column));
+                        builder.AddContent(62, column.FilterTemplate(column));
                     }
                     else if (FilterModeOf(column) == FilterMode.CheckBoxList)
                     {
@@ -1434,17 +1451,18 @@ namespace Radzen.FastGrid
             }
             else
             {
-                var any = false;
                 var index = 0;
 
                 foreach (var item in View())
                 {
-                    any = true;
-
                     RenderRow(builder, item, index++);
                 }
 
-                if (!any)
+                // What the keyboard cursor may not go past. Recorded here because this is the only place
+                // that knows it without walking the view a second time.
+                renderedRows = index;
+
+                if (index == 0)
                 {
                     RenderEmpty(builder);
                 }
@@ -1453,8 +1471,11 @@ namespace Radzen.FastGrid
             builder.CloseElement();
         }
 
-        // rowIndex is the row's position in the view, or -1 when the caller has none to give - which is
-        // Virtualize, and is why delegated clicks are off under virtualization.
+        // rowIndex is the row's position - in the view for the inline path, in the whole data set under
+        // virtualization, which is what the window Virtualize was served is offset by. It is -1 when
+        // there is none to give, which is a virtualized grid that is not navigating: Virtualize hands
+        // its ChildContent an item and no position, and finding one costs a walk of the window that only
+        // the keyboard cursor needs. That, rather than the cost, is why delegated clicks stay off there.
         void RenderRow(RenderTreeBuilder builder, TItem item, int rowIndex)
         {
             var selection = Selection;
@@ -1488,24 +1509,27 @@ namespace Radzen.FastGrid
 
             var delegated = ClicksAreDelegated;
 
-            if (delegated)
+            // What the listener resolves the row by. No allocation for the row counts a page ever
+            // reaches - the index strings are cached - but the frame is not free: this attribute alone
+            // is +16 KB at a thousand rows, which is most of what a row click costs. Written only where
+            // something needs it, which RowsAreAddressed decides and explains.
+            if (rowIndex >= 0 && RowsAreAddressed)
             {
-                // What the listener resolves the row by. One attribute, no allocation for the row
-                // counts a page ever reaches, and it replaces every click delegate on the row and its
-                // cells alike.
-                builder.AddAttribute(127, "data-r", RowIndexString(rowIndex));
+                builder.AddAttribute(125, "data-r", RowIndexString(rowIndex));
             }
-            else
+
+            // A per-row delegate costs about 310 bytes, so it is only bound when something listens and
+            // the listener that would have answered instead did not attach.
+            if (!delegated)
             {
-                // A per-row delegate costs about 310 bytes, so it is only bound when something listens.
                 if (RowClick.HasDelegate || SelectsOnRowClick)
                 {
-                    builder.AddAttribute(125, "onclick", RowClickHandler(item));
+                    builder.AddAttribute(126, "onclick", RowClickHandler(item));
                 }
 
                 if (RowDoubleClick.HasDelegate)
                 {
-                    builder.AddAttribute(126, "ondblclick", RowDoubleClickHandler(item));
+                    builder.AddAttribute(127, "ondblclick", RowDoubleClickHandler(item));
                 }
             }
 
@@ -1817,7 +1841,7 @@ namespace Radzen.FastGrid
             }
 
             builder.AddAttribute(115, nameof(Virtualize<TItem>.ChildContent),
-                virtualRow ??= item => rows => RenderRow(rows, item, -1));
+                virtualRow ??= item => rows => RenderRow(rows, item, VirtualRowIndex(item)));
 
             // Virtualize owns the body while it is on, so the empty row the inline path writes is
             // unreachable - without this an empty virtualized grid showed a header over nothing.

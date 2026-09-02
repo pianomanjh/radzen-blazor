@@ -70,6 +70,14 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         [JsonPropertyName("unselectedRowBackground")] public string UnselectedRowBackground { get; set; }
 
+        /// <summary>
+        /// What is drawn at the keyboard cursor. Null on a pane with no focused cell. Radzen's theme
+        /// draws nothing here on a read-only grid - the row rule is nested inside <c>.rz-selectable</c>
+        /// and there is no cell rule at all - so this is the only check that can tell a working cursor
+        /// from a correctly-classed invisible one.
+        /// </summary>
+        [JsonPropertyName("focus")] public FocusPaint Focus { get; set; }
+
         public override string ToString()
         {
             var text = string.Create(CultureInfo.InvariantCulture,
@@ -80,6 +88,28 @@ namespace Radzen.Blazor.FastGrid.Tests
                 : text + string.Create(CultureInfo.InvariantCulture,
                     $", toggle {ToggleCell}x{ToggleCellWidth}px, row {DataRow}px, button +{ToggleButtonLeft}x{ToggleButtonWidth}px");
         }
+    }
+
+    /// <summary>What the keyboard cursor is painted as, against what its neighbours are painted as.</summary>
+    public sealed class FocusPaint
+    {
+        [JsonPropertyName("outline")] public string Outline { get; set; }
+
+        [JsonPropertyName("otherOutline")] public string OtherOutline { get; set; }
+
+        [JsonPropertyName("background")] public string Background { get; set; }
+
+        [JsonPropertyName("otherRowBackground")] public string OtherRowBackground { get; set; }
+
+        /// <summary>Whether the focused cell is the element painted at its own rect, once scrolled.</summary>
+        [JsonPropertyName("onTop")] public bool? OnTop { get; set; }
+
+        /// <summary>What was painted there instead, so a failure names the element that won.</summary>
+        [JsonPropertyName("onTopWas")] public string OnTopWas { get; set; }
+
+        public override string ToString() =>
+            $"outline '{Outline}' against '{OtherOutline}', background '{Background}' against " +
+            $"'{OtherRowBackground}', on top: {(OnTop is null ? "(not measured)" : OnTop.ToString())}, hit {OnTopWas ?? "(nothing tried)"}";
     }
 
     /// <summary>Which cell wins where a frozen column and a scrolled one overlap.</summary>

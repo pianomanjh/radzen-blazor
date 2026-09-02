@@ -61,12 +61,16 @@ namespace Radzen.Blazor.FastGrid.Tests
         {
             RepositoryRoot = FindRepositoryRoot();
             ThemeStylesheet = Path.Combine(RepositoryRoot, "Radzen.Blazor", "wwwroot", "css", "standard-base.css");
+            PackageStylesheet = Path.Combine(RepositoryRoot, "Radzen.Blazor.FastGrid", "wwwroot", "fastgrid.css");
 
-            if (!File.Exists(ThemeStylesheet))
+            foreach (var stylesheet in new[] { ThemeStylesheet, PackageStylesheet })
             {
-                throw new FileNotFoundException(
-                    "The parity check measures against the real theme stylesheet and cannot run without it.",
-                    ThemeStylesheet);
+                if (!File.Exists(stylesheet))
+                {
+                    throw new FileNotFoundException(
+                        "The parity check measures against the real stylesheets and cannot run without them.",
+                        stylesheet);
+                }
             }
 
             var people = Person.Make(RowCount);
@@ -141,6 +145,34 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(g => g.ChildContent, FastGridFrozenColumns);
                     p.Add(g => g.AllowFiltering, true);
                 }).Markup;
+
+                // And with the keyboard cursor on the second row's second cell. No selection is wired,
+                // deliberately: a read-only grid is the only configuration this component promises, and
+                // it is exactly the one Radzen's own theme draws no cursor for - the row rule is nested
+                // inside .rz-selectable and there is no cell rule at all. This pane is what says whether
+                // the package's interim stylesheet closes that.
+                //
+                // The classes are placed here the way the script places them at runtime, through the
+                // grid's own RowClass and CellRender hooks. What is being checked is the paint.
+                FastGridFocusMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.ChildContent, FastGridColumns);
+                    p.Add(g => g.RowClass, Focused(people[1]));
+                    p.Add(g => g.CellRender, FocusedCell(people[1], "Name"));
+                }).Markup;
+
+                // The same cursor on a frozen cell. A frozen cell paints its own background over the
+                // row's, so the focus colour has to reach the pseudo-element the theme uses for the
+                // seam - and if the cell loses its opaque background instead, the column scrolling
+                // underneath shows through it.
+                FastGridFrozenFocusMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.ChildContent, FastGridFrozenColumns);
+                    p.Add(g => g.RowClass, Focused(people[1]));
+                    p.Add(g => g.CellRender, FocusedCell(people[1], "Id"));
+                }).Markup;
             }
 
             var parser = new HtmlParser();
@@ -156,6 +188,12 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// <summary>Absolute path to the theme stylesheet the geometry is measured against.</summary>
         public string ThemeStylesheet { get; }
 
+        /// <summary>
+        /// The package's own stylesheet, which carries the keyboard cursor until Radzen's theme draws
+        /// one. Linked after the theme, which is the order an application links them in.
+        /// </summary>
+        public string PackageStylesheet { get; }
+
         public string DataGridMarkup { get; }
 
         public string FastGridMarkup { get; }
@@ -170,6 +208,10 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         public string FastGridFrozenMarkup { get; }
 
+        public string FastGridFocusMarkup { get; }
+
+        public string FastGridFrozenFocusMarkup { get; }
+
         /// <summary>Names of the two panes rendered with row detail.</summary>
         public const string DataGridDetail = "RadzenDataGrid detail";
 
@@ -182,6 +224,28 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         /// <summary>The pane with its first two columns frozen to the left edge.</summary>
         public const string FastGridFrozen = "RadzenFastGrid frozen";
+
+        /// <summary>The panes carrying a keyboard cursor, on an ordinary cell and on a frozen one.</summary>
+        public const string FastGridFocus = "RadzenFastGrid focus";
+
+        public const string FastGridFrozenFocus = "RadzenFastGrid frozen focus";
+
+        static Func<Person, string> Focused(Person row) =>
+            person => ReferenceEquals(person, row) ? "rz-state-focused" : null;
+
+        // Added to whatever the cell already carries, which is what the script does - it calls
+        // classList.add. Replacing the class instead takes a frozen cell's rz-frozen-cell with it, and
+        // the column silently stops being sticky while every other assertion about it still passes.
+        static Action<FastGridCellRenderEventArgs<Person>> FocusedCell(Person row, string title) =>
+            args =>
+            {
+                if (ReferenceEquals(args.Data, row) && args.Column.Title == title)
+                {
+                    args.Attributes["class"] = args.Column.CellElementClass is { } existing
+                        ? existing + " rz-state-focused"
+                        : "rz-state-focused";
+                }
+            };
 
         static readonly RenderFragment<Person> Detail =
             person => builder => builder.AddContent(0, person.Name);
@@ -326,6 +390,7 @@ namespace Radzen.Blazor.FastGrid.Tests
             var page = $@"<!doctype html>
 <html><head><meta charset=""utf-8"">
 <link rel=""stylesheet"" href=""{new Uri(ThemeStylesheet).AbsoluteUri}"">
+<link rel=""stylesheet"" href=""{new Uri(PackageStylesheet).AbsoluteUri}"">
 <style>
   body {{ margin: 0; padding: 24px; background: #fff; }}
   .pane {{ margin-bottom: 40px; }}
@@ -339,6 +404,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 <div class=""pane"" data-grid=""{DataGridSelected}"">{DataGridSelectedMarkup}</div>
 <div class=""pane"" data-grid=""{FastGridSelected}"">{FastGridSelectedMarkup}</div>
 <div class=""pane pane-narrow"" data-grid=""{FastGridFrozen}"">{FastGridFrozenMarkup}</div>
+<div class=""pane"" data-grid=""{FastGridFocus}"">{FastGridFocusMarkup}</div>
+<div class=""pane pane-narrow"" data-grid=""{FastGridFrozenFocus}"">{FastGridFrozenFocusMarkup}</div>
 </body></html>";
 
             File.WriteAllText(pagePath, page);

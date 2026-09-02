@@ -206,6 +206,7 @@ time against the same baseline:
 | sorted by one column | 178.88 KB | **+27.1 KB** | 1.50x |
 | sorted by two columns | 200.86 KB | **+22 KB** *over one* | 1.05x *over one* |
 | row detail, driven through the API | 152.13 KB | +0.35 KB | 1.02x |
+| keyboard navigation | 155.20 KB | +1.34 KB | 1.01x |
 | `ItemKey` | 175.28 KB | **+23.5 KB** | 1.05x |
 | cell tooltip | 267.63 KB | **+115.9 KB** | 1.45x |
 | row click | 169.17 KB | **+16 KB** | 1.05x |
@@ -238,6 +239,14 @@ Two rows are worth reading carefully rather than at face value:
 - **`ItemKey`'s 23.5 KB is the boxing.** A `Func<TItem, object>` over an `int` key boxes once per row,
   which is 24 bytes a thousand times. A reference-typed key costs nothing here. This is the one feature
   on the list whose price is paid in the key's type rather than in the grid.
+- **An attribute per row is not free, and `data-r` is 16 KB of it.** The row index every delegated
+  click resolves a row by costs **+16 KB at 1000 rows** - most of what a row click costs - and the value
+  is not where it goes: the strings are cached, so nothing is allocated for them. The *frame* is.
+  `RenderTreeBuilder` rents its frame array from a pool, and a thousand more frames push that rental
+  into the next bucket. Keyboard navigation was going to pay it a second time and does not: the
+  rendered data rows are the model's rows in order, so the cursor's row is found by counting them. It
+  is the same observation as the row below, arrived at from the opposite direction - markup is usually
+  paid in frames rather than bytes, and the exception is when the count of frames moves a bucket.
 - **Trimming the toggle's markup saved nothing, and the delegate was all of it.** The empty
   `rz-column-title` span RadzenDataGrid puts in the toggle cell was measured inert and removed, and the
   allocation did not move: 555.13 KB against 554.99 KB with it, which is noise. `RenderTreeBuilder`
@@ -280,6 +289,12 @@ and deliberately so: the honest comparison is against the best version of the th
 | responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
 | row detail | 169.27 KB | 18,467 KB | **109x** | +5,295 KB |
 | cell click | 169.17 KB | 22,352 KB | **132x** | +9,180 KB |
+| keyboard navigation | 155.20 KB | 13,172 KB | **85x** | +0 KB |
+
+Keyboard navigation is the one row whose reference figure is the baseline itself, and that is the
+finding rather than a gap in the table: `RadzenDataGrid` has no switch for it. Its tab stop and its
+keydown handler are unconditional, so every grid it renders has already paid - which is the premise
+this whole component rests on, seen once more.
 
 Take the modal value of several runs before trusting the `RadzenDataGrid` column: those rows are bimodal
 between two values about 990 KB apart, for reasons `gridbench/README.md` sets out.
@@ -569,6 +584,45 @@ frozen cell in every row - which is a DOM write per frozen cell per row, and wou
 after every render. Composing it per column instead costs one string for the whole grid, is right on
 the first paint, and needs nothing on a scroll, a page change or a virtualized window.
 
+## Keyboard navigation
+
+`AllowKeyboardNavigation` puts a cursor in the grid. The whole grid is **one tab stop**, on the
+scroll container that already carries `role="grid"`, and it remembers where the cursor was when you
+tab away and back - tabbing out to a filter box and back is a constant gesture.
+
+| Key | |
+| --- | --- |
+| Arrows | a row up or down, a cell left or right. In RTL the horizontal pair flips |
+| `Home` / `End` | the first and last cell **of the row** |
+| `Ctrl+Home` / `Ctrl+End` | the first and last cell of the page |
+| `PageUp` / `PageDown` | a viewport of rows |
+| `Enter` | activates: raises `RowClick` on a row, sorts on a header, expands on a row-detail toggle |
+| `Space` | selects the focused row, without activating it |
+
+The header is row 0, so `ArrowUp` from the first row reaches it and `Enter` there sorts the column -
+sorting being the most common thing anyone does to a business grid, and otherwise unreachable without
+a mouse. The filter row is not in the arrow space: it holds real inputs that `Tab` already reaches, and
+it swallows keydown so a left arrow typed in a filter box moves a caret rather than the cursor.
+
+**Arrowing off the end of a page turns it** and lands on the first row of the next, and arrowing up
+past the header turns it back. Under virtualization the cursor moves through the whole data set rather
+than the rendered window, which scrolls to follow it.
+
+Two behaviours are asymmetric on purpose. **Focus follows a row's item** through `ItemKey` - a sort or
+a filter exists to move the row you were looking for, so the cursor goes with it - and **follows a
+column's position**: hiding or reordering a column is a deliberate act on the columns, and having the
+cursor stay where it is on screen is less startling than watching it chase a column across the table.
+Without an `ItemKey` the row falls back to its position too.
+
+None of it re-renders. Arrow keys go through a handler that opts out of `StateHasChanged`, so a
+keystroke costs one interop call and no render; the cursor is re-asserted after any render that happens
+for another reason, which is what keeps it from being wiped when a sort or a selection rewrites a row's
+class. `RadzenDataGrid` loses its focus ring exactly there.
+
+**What it costs:** +1.34 KB at 1000 rows and no measurable time. Nothing is per cell - no `tabindex`,
+no `id` - because the active cell is named by `aria-activedescendant`, which is one attribute on the
+container rather than a frame on every cell.
+
 ## Virtualization
 
 `AllowVirtualization` renders only the rows in view, through Blazor's `Virtualize`. The grid needs a
@@ -852,9 +906,12 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
   until the scroll container that gated them landed; all three now ship.
 - **The nested scrollable structure.** No `rz-datatable-scrollable`. The ordinary
   `.rz-data-grid-data` container is emitted instead, and it is what resize overflows into, what frozen
-  columns are pinned against, and where keyboard navigation would hang; nothing hangs there yet.
+  columns are pinned against, and what carries the keyboard cursor's tab stop.
 - **Frozen columns stranded in the middle of the table.** Only runs at the left and right edges are
   pinned, so `RadzenDataGrid`'s `-inner` case is not built; such a column is drawn as an ordinary one.
+- **Range selection and positional ARIA from the keyboard.** `Shift+Arrow` moves the cursor without
+  extending a selection, and `aria-rowindex` / `aria-colindex` are not emitted, so a paged or
+  column-picked grid does not tell a screen reader where the window sits in the whole set.
 - **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
   so it is filtered through the grid's own filter row rather than a separate search input, and the
   closed drop-down lists the chosen rows as text rather than as removable chips. The drop-down is a form
@@ -866,3 +923,20 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
 It emits Radzen's own class names, so every theme - including custom ones and CSS variables - styles it
 with no extra work. Rendered geometry is checked against `RadzenDataGrid` in CI, laid out by Chromium
 against the real stylesheet: header cell, body cell and table heights match to within half a pixel.
+
+**One exception, and it is temporary.** If you use `AllowKeyboardNavigation`, link the package's own
+stylesheet after your theme:
+
+```html
+<link rel="stylesheet" href="_content/Radzen.Blazor.FastGrid/fastgrid.css" />
+```
+
+Without it the keyboard cursor is invisible on a read-only grid, which is the only kind this component
+renders. Radzen's `_grid.scss` draws a focused *row* only inside `.rz-selectable` - a class a grid
+carries when something is wired to selection - and draws a focused *cell* nowhere at all, which is why
+`RadzenDataGrid`'s own cell navigation moves `aria-activedescendant` correctly and shows a sighted user
+nothing. The fix went upstream as [radzenhq/radzen-blazor#2698]; this file is the same rules, reading
+the same theme variables, so a Radzen version carrying that fix has them twice and identically rather
+than in conflict. Delete the link once your `Radzen.Blazor` includes it.
+
+[radzenhq/radzen-blazor#2698]: https://github.com/radzenhq/radzen-blazor/pull/2698

@@ -331,6 +331,62 @@ namespace Radzen.Blazor.FastGrid.Tests
                 report.Describe());
         }
 
+        [Theory]
+        [InlineData(GridParityFixture.FastGridFocus)]
+        [InlineData(GridParityFixture.FastGridFrozenFocus)]
+        public void The_keyboard_cursor_is_actually_painted(string pane)
+        {
+            // The third instance on this branch of one failure: a class the theme scopes under a parent
+            // does nothing until that parent is emitted, and every markup assertion passes meanwhile.
+            // Radzen draws a focused *row* only inside .rz-selectable - which a read-only grid never
+            // carries - and draws a focused *cell* nowhere at all, which is why RadzenDataGrid's own
+            // cell navigation is invisible. These panes wire no selection, so they are exactly the
+            // configuration that paints nothing without the package's stylesheet.
+            var report = fixtures.Geometry;
+            var focus = report[pane].Focus;
+
+            ParityAssert.True(focus is not null,
+                $"{pane} has a focused cell to measure",
+                "with none, every check below is vacuously true - which is the shape of check that let the filter row ship unpinned",
+                "a cell carrying the cursor",
+                "(none)",
+                report.Describe());
+
+            ParityAssert.True(!string.IsNullOrEmpty(focus.Outline)
+                    && focus.Outline != focus.OtherOutline
+                    && !focus.Outline.StartsWith("none", StringComparison.Ordinal),
+                $"{pane} draws an outline on the focused cell and not on its neighbour",
+                "the row background cannot show which cell of the row the cursor is in, and there is no td.rz-state-focused rule in any shipped Radzen theme",
+                "an outline the neighbouring cell does not have",
+                $"focused '{focus.Outline}', neighbour '{focus.OtherOutline}'",
+                report.Describe());
+
+            ParityAssert.True(!string.IsNullOrEmpty(focus.Background)
+                    && focus.Background != focus.OtherRowBackground,
+                $"{pane} draws the focused row differently from an unfocused one",
+                "the theme's focused-row rule lives inside .rz-selectable, so on a grid with no selection wired it matches nothing however correct the row's class is",
+                "a focused cell whose computed background differs from a cell of an unfocused row",
+                $"focused '{focus.Background}', elsewhere '{focus.OtherRowBackground}'",
+                report.Describe());
+
+            // Null, not false, when the question could not be asked - a point outside the window
+            // answers nothing, and reporting that as "covered" is how a probe earns its reputation for
+            // false positives and gets deleted rather than fixed.
+            ParityAssert.True(focus.OnTop is not null,
+                $"{pane} could be hit-tested at all",
+                "elementFromPoint works in viewport coordinates, so a cell below the fold answers null on a grid that is perfectly correct",
+                "the focused cell inside the window",
+                focus.ToString(),
+                report.Describe());
+
+            ParityAssert.True(focus.OnTop is true,
+                $"{pane} draws the focused cell over what scrolls under it",
+                "a focused frozen cell that loses its opaque background lets the column sliding beneath show through, and every class on it stays correct",
+                "the focused cell painted at its own rect",
+                focus.ToString(),
+                report.Describe());
+        }
+
         static string Describe(double[] widths) =>
             widths is null ? "(none)" : "[" + string.Join(", ", widths.Select(w => w.ToString(CultureInfo.InvariantCulture))) + "]";
 

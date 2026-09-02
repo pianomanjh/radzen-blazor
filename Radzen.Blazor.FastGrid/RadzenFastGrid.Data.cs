@@ -365,7 +365,8 @@ namespace Radzen.FastGrid
             {
                 await InvokeLoadDataAsync(request.StartIndex, top);
 
-                return new ItemsProviderResult<TItem>(Data ?? Enumerable.Empty<TItem>(), Count);
+                return Window(request.StartIndex,
+                    new ItemsProviderResult<TItem>(Data ?? Enumerable.Empty<TItem>(), Count));
             }
 
             if (TryGetAsyncSource(out var async, out var queryable))
@@ -384,7 +385,8 @@ namespace Radzen.FastGrid
                         virtualTotal = await async.CountAsync(source, request.CancellationToken);
                     }
 
-                    return new ItemsProviderResult<TItem>(window, virtualTotal.Value);
+                    return Window(request.StartIndex,
+                        new ItemsProviderResult<TItem>(window, virtualTotal.Value));
                 }
                 catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested)
                 {
@@ -405,8 +407,54 @@ namespace Radzen.FastGrid
             // Materialized, not handed over lazily: Virtualize keeps the result and re-enumerates it on
             // every render, so a deferred filter-and-sort would be re-run over the whole source each
             // time rather than over the window.
-            return new ItemsProviderResult<TItem>(Page(rows, request.StartIndex, top).ToList(),
-                virtualTotal.Value);
+            return Window(request.StartIndex,
+                new ItemsProviderResult<TItem>(Page(rows, request.StartIndex, top).ToList(),
+                    virtualTotal.Value));
+        }
+
+        /// <summary>
+        /// The rows Virtualize is currently showing, and where in the data they start. Only the keyboard
+        /// cursor reads it: Virtualize hands its ChildContent an item and no position, so this is where
+        /// a rendered row's index in the whole data set comes from.
+        /// </summary>
+        /// <remarks>
+        /// Kept whether or not navigation is on, which is the one place this component does not follow
+        /// its own "nothing is paid for when switched off" rule, and the reason is that switching it on
+        /// is a runtime parameter change: a grid whose navigation arrives after the window did would
+        /// have no window to index against until the next scroll, and would spend that time addressing
+        /// rows by a position that means something else. What it costs is a reference assignment per
+        /// scroll batch - tens of rows, once - rather than anything per row or per render.
+        /// </remarks>
+        IList<TItem>? virtualWindow;
+        int virtualWindowStart;
+
+        ItemsProviderResult<TItem> Window(int start, ItemsProviderResult<TItem> result)
+        {
+            virtualWindowStart = start;
+
+            // Already a list on every path that materializes one, which is all but the LoadData handler's.
+            virtualWindow = result.Items as IList<TItem> ?? result.Items.ToList();
+
+            return result;
+        }
+
+        /// <summary>
+        /// A rendered row's index in the whole data set, under virtualization. Identity against the
+        /// window rather than a counter: Virtualize re-renders on its own as the viewport scrolls, so a
+        /// cursor reset by the grid's render would drift the moment it did. The window is tens of rows,
+        /// and this is only walked while navigation is on.
+        /// </summary>
+        int VirtualRowIndex(TItem item)
+        {
+            if (!AllowKeyboardNavigation || virtualWindow is null)
+            {
+                return -1;
+            }
+
+
+            var index = virtualWindow.IndexOf(item);
+
+            return index < 0 ? -1 : virtualWindowStart + index;
         }
 
         /// <summary>
@@ -710,6 +758,12 @@ namespace Radzen.FastGrid
 
             // After the pagers, so the rows the listener will resolve are the ones now on screen.
             await AttachClicksAsync();
+
+            await AttachNavigationAsync();
+
+            // Last, and after every path above that can reload: this is the render the cursor has to be
+            // put back on, and a reload started here would move the rows out from under it.
+            await ReassertFocusAsync();
 
             await LoadLookupsAsync();
         }
@@ -1756,7 +1810,7 @@ namespace Radzen.FastGrid
         /// <summary>Releases the grid, and the listener it attached in the browser.</summary>
         public async ValueTask DisposeAsync()
         {
-            await DisposeClicksAsync().ConfigureAwait(false);
+            await DisposeScriptAsync().ConfigureAwait(false);
 
             Dispose(true);
 
