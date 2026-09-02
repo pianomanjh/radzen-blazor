@@ -1257,6 +1257,12 @@ namespace Radzen.FastGrid
         /// </param>
         Task RefreshAsync(bool announce = true)
         {
+            // A Shift run and its anchor are both positions in the view, and this is where the view
+            // stops being the one they were taken in. Dropping them here rather than at each caller
+            // covers the sort, the filter and the page together, which is all three ways a row can
+            // arrive at an index that used to belong to another one.
+            ForgetRange();
+
             // Every state change a user can make funnels through here, so this is the one place the
             // grid has to say so - and it is not the render path, which is what keeps a grid nobody is
             // persisting from ever building the object.

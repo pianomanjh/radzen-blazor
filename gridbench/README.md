@@ -711,6 +711,31 @@ finding rather than an omission: that grid's tab stop and keydown handler are un
 12.86 MB, **85x**, costing that grid nothing marginal because it never had the choice. Five runs of the
 reference on its own returned 12.86 MB every time, so this one is not sitting on the bimodal step.
 
+### Range selection measures as nothing, and the row that says so is 0.23 KB off
+
+`--job short`, two runs, plus one full-length run for the time:
+
+| | Allocated |
+| --- | ---: |
+| bare | 153.83 KB |
+| `+ keyboard navigation` | 155.25 / 155.18 KB |
+| `+ keyboard navigation and range selection` | 155.48 / 155.48 KB |
+
+Full length, one run: bare 439.2 us +/- 5.72, navigation 437.4 +/- 4.72 (**1.00x**), range selection
+436.0 +/- 3.34 (**0.99x**). Three means inside one error bar of each other, which is the answer.
+
+The allocation row is the interesting one, because it is **0.23 KB above the navigation row for a
+feature that renders nothing**. The two rows differ by one parameter - `SelectionMode` - and the
+control settles which of the two that 0.23 KB belongs to: set the same parameter to its **default**
+value, so the feature is off and the parameter is still passed, and it reads 155.48 KB as well. So the
+cost is the harness handing the component one more parameter, and range selection itself is **+0 KB**.
+That is what its shape predicts - it has no parameter of its own, binds nothing and emits nothing,
+because a Shift key is the whole of its surface - but the number had to be asked for rather than
+assumed, which is the rule the row above this one exists to enforce.
+
+**A benchmark row that differs by a parameter is measuring the parameter too.** At a hundred kilobytes
+that is invisible; at one and a half it is a fifth of the reading.
+
 ### `data-r` costs 16 KB, and the value is not where it goes
 
 The design had the cursor address rows by the `data-r` attribute that delegated clicks already write,

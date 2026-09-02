@@ -30,7 +30,8 @@ is up as #2698 and is the one piece not yet merged.
 | column resize | +4.1 KB |
 | column reorder | +6.7 KB |
 | two frozen columns | +0.9 KB |
-| keyboard navigation | **+1.3 KB, 1.01x** |
+| keyboard navigation | **+1.4 KB, 1.00x** |
+| range selection, on top of navigation | **+0 KB** |
 | the scroll container and `role="grid"` | 0 |
 
 Resize and reorder re-measured together in one run, against a 153.3 KB bare grid: resize 158.3 KB,
@@ -56,8 +57,14 @@ the +2 KB and 1.02x gate §12 set for it. It cost eight times that until an assu
 measured rather than believed: `data-r` on every row is **+16 KB at a thousand rows**, because a
 pre-cached value costs nothing and the frame carrying it does. §12 records what replaced it.
 
-**Not built**: editing, grouping, composite headers. Keyboard navigation is built as far as the cursor
-and the keys; range selection and positional ARIA are steps 3 and 4 of §12. §10 has what is still open.
+Range selection measured as nothing at all, which is the answer its shape predicts: it has no
+parameter, binds nothing and emits nothing, because a Shift key is its whole surface. The row that
+proves it reads 0.23 KB above the navigation row, and setting `SelectionMode` to its default rather than
+`Multiple` - the feature off, the parameter still passed - reads the same 0.23 KB. **A benchmark row
+that differs by a parameter is measuring the parameter too**, and at this resolution that is visible.
+
+**Not built**: editing, grouping, composite headers. Keyboard navigation is built as far as the cursor,
+the keys and range selection; positional ARIA is step 4 of §12. §10 has what is still open.
 
 ## 1. Why a separate component
 
@@ -536,10 +543,10 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 ## 12. Keyboard navigation - the design
 
-Steps 1 and 2 of the order below are built: the theme fix upstream, and the cursor itself - the C#
+Steps 1 to 3 of the order below are built: the theme fix upstream, the cursor itself - the C#
 algorithm, the JavaScript effect layer, the re-assert after every render, and the package's interim
-stylesheet. **Measured at +1.3 KB and 1.01x**, inside the gate. Range selection and positional ARIA are
-still ahead. Everything below carries the reason it was decided that way, so it can be re-argued rather
+stylesheet - and range selection. **Measured at +1.4 KB and 1.00x** for the cursor and **+0 KB** for
+range selection, inside the gate. Positional ARIA is still ahead. Everything below carries the reason it was decided that way, so it can be re-argued rather
 than merely obeyed; where it diverges from `RadzenDataGrid` the divergence is deliberate and the reason
 is given. Two of the decisions did not survive contact with a measurement, and both are marked where
 they stand rather than quietly rewritten.
@@ -670,6 +677,58 @@ keystroke.
 **Not built: typeahead, `F2`, `Escape` in the body.** Typeahead on a grid sorted by an arbitrary column
 is ambiguous about which column it should match, and that ambiguity is a design question rather than a
 key binding. `F2` and `Escape` belong to editing, which is out of scope for the reasons in §1.
+
+### Range selection, and the anchor it reaches from
+
+Built, and it cost nothing: no parameter, no binding, no markup. A Shift key is the whole of its
+surface, which is why there is no `AllowRangeSelection` - a switch would name a cost that does not
+exist. It is live when `SelectionMode` is `Multiple`, which is the only mode where a range means
+anything.
+
+**The anchor is a selection anchor, not a cursor.** This is the one thing the design above got wrong,
+and `Shift+Space` is what exposed it: that gesture does not move, so a run anchored where the cursor
+stands would reach from a row to itself. The anchor is the last row `Space` or `Enter` acted on, and a
+grid whose cursor has only ever moved has none - there the first Shift key sets one where the cursor
+is, which is what makes `Shift+Arrow` work on a grid nobody has selected anything in yet.
+
+It follows that a plain arrow key moves the cursor without moving the anchor. That is a divergence from
+a desktop list, where an unmodified arrow moves the selection too - and it is forced rather than
+chosen: `Space` selects here and the arrows do not, so the last row *selected* and the last row
+*reached* are different facts, and the anchor is about the first.
+
+**The range is recomputed from the anchor on every keystroke rather than accumulated**, so shrinking it
+gives back exactly the rows it covered: the answer is a function of where the two ends are now, not of
+the path taken between them. What that costs is the selection as it stood when the run opened, kept for
+as long as the run lasts. It has to be kept, and this is the reason: the grid does not own `Selection`,
+so once the range has covered a row there is nothing left to read to find out whether the user had
+chosen it beforehand.
+
+**Which rows changed is the difference against the selection as it stands**, not against the previous
+range - so growing and shrinking are one code path, and a caller that changed the selection underneath
+the grid is still told the truth. Both sides go through sets: a range is thousands of rows on the grid
+this was written for, and `ICollection.Contains` per row would make it quadratic.
+
+**`Shift` with Left or Right does nothing.** The pattern extends a *cell* selection with them; what
+this grid selects is rows, so a sideways move has nothing to extend. The pattern's `Shift+Space` -
+"selects the row that contains the focus" - is likewise written for a cell-selecting grid, where it
+widens a cell selection to its row. Where selection is already rows that gesture is just `Space`, so
+`Shift+Space` takes the meaning it has in every desktop list instead, which is the one users arrive
+with.
+
+**A run ends at the next key without `Shift`, and at a sort, a filter or a page.** Those last three end
+the anchor with it, because both ends of a range are positions in the view and all three are ways a row
+arrives at an index that used to belong to another one. That is one call in `RefreshAsync`, which is
+where every state change a user can make already funnels.
+
+**Off under virtualization**, which is the same scope choice delegated clicks make and for a related
+reason. A range is the rows between two positions, and the rows come from `View()` - what the render
+walked. A virtualized view can only hand over the window it drew, so a range reaching past it would
+select the rows it could see and call that the answer. `Shift` there moves the cursor, which is what
+the grid did before this existed.
+
+**The anchor does not move on a mouse click.** The inline click path is handed the row rather than its
+index - only the delegated listener knows the position - and an anchor that moved on the grids whose
+script attached and not on the others would be worse than one that does not move at all.
 
 ### Boundaries
 
@@ -840,8 +899,11 @@ that paints nothing.
    three full-length runs.** Allocation is `--job short`, stable to two decimals across three runs; the
    time ratio came out 1.03, 1.01 and 0.90 at full length, every one with an error bar wider than the
    difference, which is the answer "not measurably slower" rather than a number to quote to two places.
-3. Range selection - `Shift+Space` and `Shift+Arrow`. Until it lands, `Shift+Arrow` moves the cursor
-   without extending anything, which is what a grid with no range selection does.
+3. ~~Range selection - `Shift+Space` and `Shift+Arrow`.~~ - **done, and it measured as nothing.** It
+   turned out to need one thing the design had not named: a *selection* anchor rather than a cursor
+   one. `Shift+Space` is aimed at the row the cursor is already on, so a run anchored where the cursor
+   stands reaches nowhere - the anchor has to be the last row `Space` or `Enter` acted on, and only
+   falls back to the cursor on a grid that has not selected anything yet. See below.
 4. Positional ARIA.
 
 One commit each, which is what every other feature on this branch did, and the only reason resize,

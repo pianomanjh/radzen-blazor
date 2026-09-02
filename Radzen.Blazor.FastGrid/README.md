@@ -206,7 +206,8 @@ time against the same baseline:
 | sorted by one column | 178.88 KB | **+27.1 KB** | 1.50x |
 | sorted by two columns | 200.86 KB | **+22 KB** *over one* | 1.05x *over one* |
 | row detail, driven through the API | 152.13 KB | +0.35 KB | 1.02x |
-| keyboard navigation | 155.20 KB | +1.34 KB | 1.01x |
+| keyboard navigation | 155.25 KB | +1.42 KB | 1.00x |
+| keyboard navigation and range selection | 155.48 KB | +0 KB *over navigation* | 0.99x |
 | `ItemKey` | 175.28 KB | **+23.5 KB** | 1.05x |
 | cell tooltip | 267.63 KB | **+115.9 KB** | 1.45x |
 | row click | 169.17 KB | **+16 KB** | 1.05x |
@@ -236,6 +237,11 @@ Two rows are worth reading carefully rather than at face value:
   but not in use" for it, because a row that can be expanded has to show that it can. What it costs is
   now 16 KB rather than 404, because the toggle goes through the grid's one pointer listener instead of
   carrying a delegate of its own.
+- **Range selection's 0.23 KB is the benchmark, not the feature.** The row reads 155.48 KB against
+  navigation's 155.25, and the difference is one more parameter passed to the component rather than
+  anything rendered for it. Setting `SelectionMode` to its *default* instead of `Multiple` - which
+  turns the feature off while leaving the parameter in place - measures the same 155.48 KB. The feature
+  itself is reached only through a Shift key, so there is nothing on the render path to charge for.
 - **`ItemKey`'s 23.5 KB is the boxing.** A `Func<TItem, object>` over an `int` key boxes once per row,
   which is 24 bytes a thousand times. A reference-typed key costs nothing here. This is the one feature
   on the list whose price is paid in the key's type rather than in the grid.
@@ -289,7 +295,7 @@ and deliberately so: the honest comparison is against the best version of the th
 | responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
 | row detail | 169.27 KB | 18,467 KB | **109x** | +5,295 KB |
 | cell click | 169.17 KB | 22,352 KB | **132x** | +9,180 KB |
-| keyboard navigation | 155.20 KB | 13,172 KB | **85x** | +0 KB |
+| keyboard navigation | 155.25 KB | 13,172 KB | **85x** | +0 KB |
 
 Keyboard navigation is the one row whose reference figure is the baseline itself, and that is the
 finding rather than a gap in the table: `RadzenDataGrid` has no switch for it. Its tab stop and its
@@ -598,6 +604,8 @@ tab away and back - tabbing out to a filter box and back is a constant gesture.
 | `PageUp` / `PageDown` | a viewport of rows |
 | `Enter` | activates: raises `RowClick` on a row, sorts on a header, expands on a row-detail toggle |
 | `Space` | selects the focused row, without activating it |
+| `Shift` + any of the above | extends the selection to wherever the cursor lands |
+| `Shift+Space` | extends to the focused row without moving the cursor |
 
 The header is row 0, so `ArrowUp` from the first row reaches it and `Enter` there sorts the column -
 sorting being the most common thing anyone does to a business grid, and otherwise unreachable without
@@ -614,14 +622,32 @@ column's position**: hiding or reordering a column is a deliberate act on the co
 cursor stay where it is on screen is less startling than watching it chase a column across the table.
 Without an `ItemKey` the row falls back to its position too.
 
+**Holding `Shift` extends a selection** rather than starting one afresh, on a grid with
+`SelectionMode="DataGridSelectionMode.Multiple"`. The range reaches from the **selection anchor** - the
+last row `Space` or `Enter` acted on - to wherever the cursor is now, so `Shift+Space` after choosing a
+row selects everything between the two, and `Shift+Arrow` grows and shrinks that range as the cursor
+moves. It is recomputed from the anchor every time rather than accumulated, so backing up gives back
+exactly the rows it covered, and rows chosen before the run began are left alone. Any key pressed
+without `Shift` ends the run, and a sort, a filter or a page change ends it too - both ends of a range
+are positions in the view, and those three are what make row 4 belong to a different item.
+
+Two limits, both deliberate. `Shift` with `ArrowLeft` or `ArrowRight` moves without extending: the
+WAI-ARIA pattern extends a *cell* selection with them, and what this grid selects is rows. And range
+selection is **off under virtualization** - a range is the rows between two positions, a virtualized
+view can only hand over the window it has rendered, and a range reaching past that would select what it
+could see and call it the answer. `Shift` there moves the cursor, which is what a grid with no range
+selection does.
+
 None of it re-renders. Arrow keys go through a handler that opts out of `StateHasChanged`, so a
 keystroke costs one interop call and no render; the cursor is re-asserted after any render that happens
 for another reason, which is what keeps it from being wiped when a sort or a selection rewrites a row's
 class. `RadzenDataGrid` loses its focus ring exactly there.
 
-**What it costs:** +1.34 KB at 1000 rows and no measurable time. Nothing is per cell - no `tabindex`,
+**What it costs:** +1.42 KB at 1000 rows and no measurable time. Nothing is per cell - no `tabindex`,
 no `id` - because the active cell is named by `aria-activedescendant`, which is one attribute on the
-container rather than a frame on every cell.
+container rather than a frame on every cell. **Range selection on top of that is free**, and measurably
+so: it has no parameter, binds nothing and emits nothing, because a Shift key is the whole of its
+surface.
 
 ## Virtualization
 
@@ -909,9 +935,14 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
   columns are pinned against, and what carries the keyboard cursor's tab stop.
 - **Frozen columns stranded in the middle of the table.** Only runs at the left and right edges are
   pinned, so `RadzenDataGrid`'s `-inner` case is not built; such a column is drawn as an ordinary one.
-- **Range selection and positional ARIA from the keyboard.** `Shift+Arrow` moves the cursor without
-  extending a selection, and `aria-rowindex` / `aria-colindex` are not emitted, so a paged or
-  column-picked grid does not tell a screen reader where the window sits in the whole set.
+- **Positional ARIA.** `aria-rowindex` and `aria-colindex` are not emitted, so a paged or column-picked
+  grid does not tell a screen reader where the window sits in the whole set.
+- **Range selection under virtualization, and across a page.** `Shift` extends a selection on the
+  rendered view; a virtualized grid has only the window it drew, and both ends of a range are positions
+  in one page. `Shift` moves the cursor in both cases without extending.
+- **The selection anchor is the keyboard's own.** Clicking a row does not move it: the inline click path
+  is handed the row rather than its index, and an anchor that moved only on grids whose click listener
+  attached would be worse than one that does not move at all.
 - **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
   so it is filtered through the grid's own filter row rather than a separate search input, and the
   closed drop-down lists the chosen rows as text rather than as removable chips. The drop-down is a form

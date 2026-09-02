@@ -442,6 +442,17 @@ public class FastGridFeatureBench
     [Benchmark(Description = "+ keyboard navigation")]
     public Task KeyboardNavigation() => Render(p => p["AllowKeyboardNavigation"] = true);
 
+    // Range selection, which is the row above plus the selection mode that lets Shift mean something.
+    // It is expected to measure as that row does, and the row exists to prove it: the feature is
+    // reached only through a Shift key, so it binds nothing, emits nothing and has no parameter of its
+    // own. A difference here would mean something leaked into the render.
+    [Benchmark(Description = "+ keyboard navigation and range selection")]
+    public Task KeyboardRangeSelection() => Render(p =>
+    {
+        p["AllowKeyboardNavigation"] = true;
+        p["SelectionMode"] = DataGridSelectionMode.Multiple;
+    });
+
     [Benchmark(Description = "+ a column picker")]
     public Task ColumnPicking() => Render(p => p["AllowColumnPicking"] = true);
 

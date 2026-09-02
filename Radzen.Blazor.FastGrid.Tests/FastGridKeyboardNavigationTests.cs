@@ -447,6 +447,234 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal((1, 0), cut.Instance.FocusedCell);
         }
 
+
+        // ---- range selection ----
+
+        /// <summary>
+        /// A grid whose selection is bound, which is what makes a range that grows and then shrinks
+        /// testable: the rows to give back are the difference against the selection as it stands, and
+        /// a grid nobody binds never has one.
+        /// </summary>
+        sealed class Selecting : IDisposable
+        {
+            readonly TestContext ctx = new();
+
+            public IRenderedComponent<RadzenFastGrid<Person>> Grid { get; }
+
+            public ICollection<Person>? Selection { get; private set; }
+
+            public List<string> Selected { get; } = new();
+
+            public List<string> Deselected { get; } = new();
+
+            public Selecting(DataGridSelectionMode mode = DataGridSelectionMode.Multiple,
+                Action<ComponentParameterCollectionBuilder<RadzenFastGrid<Person>>>? extra = null)
+            {
+                ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+                Grid = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, People.Sample());
+                    p.Add(g => g.ChildContent, TwoColumns());
+                    p.Add(g => g.AllowKeyboardNavigation, true);
+                    p.Add(g => g.SelectionMode, mode);
+                    p.Add(g => g.SelectionChanged, (ICollection<Person> value) => Selection = value);
+                    p.Add(g => g.RowSelect, (Person person) => Selected.Add(person.First!));
+                    p.Add(g => g.RowDeselect, (Person person) => Deselected.Add(person.First!));
+                    extra?.Invoke(p);
+                });
+
+                Grid.Find(".rz-data-grid-data").Focus();
+            }
+
+            /// <summary>One keystroke, followed by the bind the parameter would have done.</summary>
+            public void Press(string key, bool shift = false, bool ctrl = false)
+            {
+                Grid.Find(".rz-data-grid-data")
+                    .KeyDown(new KeyboardEventArgs { Key = key, ShiftKey = shift, CtrlKey = ctrl });
+
+                Grid.SetParametersAndRender(p => p.Add(g => g.Selection, Selection));
+            }
+
+            public string[] Rows() => Selection is null
+                ? Array.Empty<string>()
+                : Selection.Select(x => x.First!).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+
+            public void Dispose() => ctx.Dispose();
+        }
+
+        [Fact]
+        public void ShiftAndAnArrowExtendARangeFromWhereTheCursorStood()
+        {
+            using var grid = new Selecting();
+
+            grid.Press("ArrowDown", shift: true);
+
+            // Carol and Alice are rows 0 and 1 of the sample in the order it renders.
+            Assert.Equal(new[] { "Alice", "Carol" }, grid.Rows());
+        }
+
+        [Fact]
+        public void ShrinkingARangeGivesBackExactlyTheRowsItCovered()
+        {
+            // Computed from the anchor every time rather than accumulated, so the answer is a function
+            // of where the two ends are now and not of the path taken between them.
+            using var grid = new Selecting();
+
+            grid.Press("ArrowDown", shift: true);
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol", "Dave" }, grid.Rows());
+
+            grid.Press("ArrowUp", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol" }, grid.Rows());
+            Assert.Equal(new[] { "Dave" }, grid.Deselected.ToArray());
+        }
+
+        [Fact]
+        public void ARangeLeavesRowsSelectedOutsideItAlone()
+        {
+            // The selection the run started with is kept, which is why the base is captured at all:
+            // once the range has covered a row there is no way to read back out of the selection
+            // whether it was chosen before or by this run.
+            using var grid = new Selecting();
+
+            grid.Press("End", ctrl: true);
+            grid.Press(" ");
+
+            Assert.Equal(new[] { "Bob" }, grid.Rows());
+
+            // Back to the top and chosen there, which moves the anchor with it. The range that follows
+            // covers rows 0 and 1; Bob is row 3 and is none of its business.
+            grid.Press("Home", ctrl: true);
+            grid.Press(" ");
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Bob", "Carol" }, grid.Rows());
+        }
+
+        [Fact]
+        public void ShiftAndSpaceReachFromTheAnchorWithoutMovingTheCursor()
+        {
+            // The gesture Shift and a click make together in every desktop list. It needs a selection
+            // anchor rather than the cursor: the cursor is already where this is aimed.
+            using var grid = new Selecting();
+
+            grid.Press(" ");
+
+            grid.Press("ArrowDown");
+            grid.Press("ArrowDown");
+
+            grid.Press(" ", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol", "Dave" }, grid.Rows());
+            Assert.Equal((2, 0), grid.Grid.Instance.FocusedCell);
+        }
+
+        [Fact]
+        public void APlainKeyEndsTheRunSoTheNextShiftStartsAfresh()
+        {
+            using var grid = new Selecting();
+
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol" }, grid.Rows());
+
+            // Moves the cursor and nothing else, but the anchor stays where Space last put one - which
+            // here is nowhere, so the next run reaches from the cursor.
+            grid.Press("ArrowDown");
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Bob", "Carol", "Dave" }, grid.Rows());
+        }
+
+        [Fact]
+        public void LeftAndRightDoNotExtendAnything()
+        {
+            // The pattern extends a cell selection with them. What this grid selects is rows, so there
+            // is nothing in a sideways move to extend.
+            using var grid = new Selecting();
+
+            grid.Press("ArrowDown", shift: true);
+            grid.Press("ArrowRight", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol" }, grid.Rows());
+            Assert.Equal((1, 1), grid.Grid.Instance.FocusedCell);
+        }
+
+        [Fact]
+        public void CtrlEndExtendsToTheLastRow()
+        {
+            // Every key that moves the cursor extends, because extending is what the move does on the
+            // way rather than a rule each key carries.
+            using var grid = new Selecting();
+
+            grid.Press("End", shift: true, ctrl: true);
+
+            Assert.Equal(new[] { "Alice", "Bob", "Carol", "Dave" }, grid.Rows());
+        }
+
+        [Fact]
+        public void SingleSelectionDoesNotRange()
+        {
+            using var grid = new Selecting(DataGridSelectionMode.Single);
+
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Empty(grid.Rows());
+            Assert.Equal((1, 0), grid.Grid.Instance.FocusedCell);
+        }
+
+        [Fact]
+        public void AVirtualizedGridMovesWithoutExtending()
+        {
+            // A range is the rows between two positions and a virtualized view can only hand over the
+            // window it rendered, so a range reaching past it would select what it could see and call
+            // that the answer. The same scope choice delegated clicks make.
+            using var grid = new Selecting(extra: p => p.Add(g => g.AllowVirtualization, true));
+
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Empty(grid.Rows());
+            Assert.Equal((1, 0), grid.Grid.Instance.FocusedCell);
+        }
+
+        [Fact]
+        public void ASortDropsTheRunAndTheAnchorWithIt()
+        {
+            // Both are positions in the view, and a sort is what makes row 1 belong to another item.
+            using var grid = new Selecting(extra: p => p.Add(g => g.AllowSorting, true));
+
+            // Anchored on the last row, so a surviving anchor and a dropped one give different answers
+            // rather than the same one for different reasons.
+            grid.Press("End", ctrl: true);
+            grid.Press(" ");
+
+            var first = grid.Grid.FindComponents<PropertyColumn<Person, string>>()[0].Instance;
+
+            grid.Grid.InvokeAsync(() => grid.Grid.Instance.SortBy(first)).Wait();
+
+            grid.Press("Home", ctrl: true);
+            grid.Press("ArrowDown", shift: true);
+
+            // Rows 0 and 1 of the sorted view, reached from the cursor. Had the anchor survived at row
+            // 3 the range would have run the other way and taken Carol with it.
+            Assert.Equal(new[] { "Alice", "Bob" }, grid.Rows());
+        }
+
+        [Fact]
+        public void EveryRowTheRangeAddedIsAnnouncedOnce()
+        {
+            using var grid = new Selecting();
+
+            grid.Press("ArrowDown", shift: true);
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave" }, grid.Selected.ToArray());
+            Assert.Empty(grid.Deselected);
+        }
+
         // ---- what it costs the markup ----
 
         [Fact]
