@@ -39,9 +39,19 @@ public class Person
 
 sealed class NoopJsObjectReference : IJSObjectReference
 {
-    public ValueTask<T> InvokeAsync<T>(string identifier, object[] args) => new(default(T));
-    public ValueTask<T> InvokeAsync<T>(string identifier, CancellationToken ct, object[] args) => new(default(T));
+    public ValueTask<T> InvokeAsync<T>(string identifier, object[] args) => Answer<T>(identifier);
+    public ValueTask<T> InvokeAsync<T>(string identifier, CancellationToken ct, object[] args) => Answer<T>(identifier);
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    // This harness stands in for a browser, so where a component asks the browser whether something
+    // worked, the answer has to be the browser's. RadzenFastGrid attaches one listener for its row and
+    // cell clicks and renders the per-cell handlers instead if that call comes back false - so a fake
+    // answering default(bool) measures the fallback and reports the cost the browser no longer pays.
+    //
+    // Say yes to any call that asks for a bool. Nothing here is a real DOM, so nothing acts on it; the
+    // point is only that the component takes the branch a browser would.
+    static ValueTask<T> Answer<T>(string identifier) =>
+        typeof(T) == typeof(bool) ? new((T)(object)true) : new(default(T));
 }
 
 sealed class NoopJSRuntime : IJSRuntime

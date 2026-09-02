@@ -137,12 +137,12 @@ rows were added was that comparing a switched-on FastGrid against a switched-off
 | *nothing* | 152.92 KB | 13,172 KB | 86x | - |
 | cell tooltip | 269.62 KB | 13,172 KB | **49x** | +0 KB |
 | row class | 153.17 KB | 14,087 KB | 92x | +914 KB |
-| row click | 462.98 KB | 14,834 KB | **32x** | +1,662 KB |
+| row click | 169.17 KB | 14,834 KB | **88x** | +1,662 KB |
 | a filter row | 157.14 KB | 16,098 KB | **102x** | +2,926 KB |
 | a column picker | 175.77 KB | 15,618 KB | **89x** | +2,446 KB |
 | responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
 | row detail | 557.03 KB | 18,467 KB | **33x** | +5,295 KB |
-| cell click | 1,635 KB | 22,352 KB | **14x** | +9,180 KB |
+| cell click | 169.17 KB | 22,352 KB | **132x** | +9,180 KB |
 
 Measured against `RadzenDataGrid` as it now stands on master, which has absorbed the render and async
 work these rows were first measured against as PRs. That is the point: the comparison is against the best
@@ -154,12 +154,15 @@ their totals fell by the baseline shift and nothing else. Three fell further on 
 by 260 KB, responsive titles and row detail by about 480 KB each. A feature's marginal cost is the durable
 number here; the totals move whenever the grid underneath them does.
 
-The gap narrows only where this grid charges for something `RadzenDataGrid` charges for anyway - a
-delegate per row or per cell - and *widens* wherever the feature is markup the other grid pays for per
-row. Row detail is ten times more expensive on `RadzenDataGrid` and a filter row is sixteen hundred
-times, so with either on both sides the gap widens rather than narrowing. The unfair comparison was the
-pessimistic one. Which is the argument for the reference rows either way: the direction of the error was
-not guessable, and half these numbers had never been measured at all.
+The gap used to narrow wherever this grid charged for something `RadzenDataGrid` charges for anyway -
+a delegate per row or per cell - and widen wherever the feature is markup the other grid pays per row.
+Both click rows have since stopped charging for the delegate: one listener on the tbody answers for
+every row and cell, so a cell click costs 16 KB rather than 1,483 and the narrowest row in the table
+went from 14x to 132x. What is left is the shape of the second half of that sentence only. Row detail
+is the last feature here that costs a delegate per row, and it is the last row where the gap closes.
+
+Which is the argument for the reference rows either way: the direction of the error was not guessable,
+and half these numbers had never been measured at all.
 
 ### The reference rows are bimodal, and one run of them proves nothing
 
