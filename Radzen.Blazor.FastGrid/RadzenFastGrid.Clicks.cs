@@ -229,10 +229,18 @@ namespace Radzen.FastGrid
                     await clickModule.InvokeVoidAsync("detach", BodyElementId);
                     await clickModule.DisposeAsync();
                 }
-                catch (Exception exception) when (exception is JSException or InvalidOperationException
-                    or ObjectDisposedException or TaskCanceledException)
+#pragma warning disable CA1031
+                catch (Exception)
+#pragma warning restore CA1031
                 {
-                    // The circuit is already gone, which is the ordinary way a component is disposed.
+                    // The circuit being gone already is the ordinary way this component is disposed, and
+                    // there is nothing to release when it is. Every exception, for the same reason as the
+                    // attach: teardown has no caller to report to, and an exception escaping here is
+                    // unhandled in the circuit rather than handled anywhere.
+                    //
+                    // Narrower did not work. JSDisconnectedException derives from Exception and not from
+                    // JSException, so catching the JS types missed the one case this is actually for, and
+                    // every navigation away from a grid logged an unhandled circuit exception.
                 }
 
                 clickModule = null;
