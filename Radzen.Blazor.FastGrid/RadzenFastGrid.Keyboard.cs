@@ -67,6 +67,37 @@ namespace Radzen.FastGrid
         /// <summary>Whether the scroll container currently holds DOM focus.</summary>
         bool focusWithin;
 
+        /// <summary>
+        /// Whether a Shift run is open, and the row it reaches from. A run starts at the cursor's
+        /// position when the first Shift key arrives and ends at the next key that moves without
+        /// extending, which is how a plain arrow gets back to selecting one row.
+        /// </summary>
+        bool rangeOpen;
+
+        int rangeAnchor;
+
+        /// <summary>
+        /// The row a range reaches from: the last one Space or Enter acted on. It is a selection
+        /// anchor rather than a cursor, which is what makes Shift+Space mean anything - the cursor is
+        /// already where that gesture is aimed, so anchoring a run there would reach nowhere. A grid
+        /// whose cursor has only ever moved has no anchor yet, and the first Shift key sets one where
+        /// the cursor stands.
+        /// </summary>
+        /// <remarks>
+        /// Moved by the keyboard's own selection keys and not by a mouse click: the inline click path
+        /// is handed the row rather than its index, and an anchor that moved only on the grids whose
+        /// script attached would be worse than one that does not move at all.
+        /// </remarks>
+        int? selectionAnchor;
+
+        /// <summary>
+        /// The selection as it stood when the run opened. Extending and then shrinking a range has to
+        /// leave rows selected outside it alone, and the only record of which those were is this one -
+        /// the grid does not own <see cref="Selection" /> and cannot read the answer back out of it
+        /// once the range has covered them.
+        /// </summary>
+        List<TItem>? rangeBase;
+
         bool navigationAttached;
         bool rtl;
         int viewportRows;
@@ -121,6 +152,24 @@ namespace Radzen.FastGrid
         /// nothing to re-sync them.
         /// </summary>
         int NavigableRows => AllowVirtualization ? virtualTotal ?? 0 : renderedRows;
+
+        /// <summary>
+        /// Whether Shift extends a selection rather than only moving the cursor.
+        /// </summary>
+        /// <remarks>
+        /// Off under single selection, where a range has nothing to mean, and off under virtualization,
+        /// which is a scope choice with the same shape as the one delegated clicks make. A range is the
+        /// rows between two positions, and a virtualized view can only hand over the window it has
+        /// rendered - so a range that reached past it would quietly select the rows it could see and
+        /// call that the answer. Shift there moves without extending, which is what the grid did before
+        /// this existed.
+        /// <para>
+        /// It carries no parameter of its own. Nothing is emitted for it and nothing is bound: it is
+        /// reached only through a Shift key on a grid that already selects several rows, so a switch
+        /// would name a cost that does not exist.
+        /// </para>
+        /// </remarks>
+        bool ExtendsSelection => SelectionMode == DataGridSelectionMode.Multiple && !AllowVirtualization;
 
         void RenderNavigation(RenderTreeBuilder builder, int sequence)
         {
@@ -187,6 +236,10 @@ namespace Radzen.FastGrid
             var cells = NavigableCells;
             var rows = NavigableRows;
 
+            // Shift extends a range rather than starting one afresh. Read once: every branch below that
+            // moves the cursor passes it on, so a key that moves is a key that can extend.
+            var extend = args.ShiftKey && ExtendsSelection;
+
             if (cells == 0)
             {
                 return;
@@ -212,11 +265,11 @@ namespace Radzen.FastGrid
                 case "ArrowDown":
                     if (row == HeaderRow)
                     {
-                        await MoveAsync(rows > 0 ? 0 : HeaderRow, cell).ConfigureAwait(false);
+                        await MoveAsync(rows > 0 ? 0 : HeaderRow, cell, extend).ConfigureAwait(false);
                     }
                     else if (row + 1 < rows)
                     {
-                        await MoveAsync(row + 1, cell).ConfigureAwait(false);
+                        await MoveAsync(row + 1, cell, extend).ConfigureAwait(false);
                     }
                     else
                     {
@@ -238,7 +291,7 @@ namespace Radzen.FastGrid
                     }
                     else
                     {
-                        await MoveAsync(row == 0 ? HeaderRow : row - 1, cell).ConfigureAwait(false);
+                        await MoveAsync(row == 0 ? HeaderRow : row - 1, cell, extend).ConfigureAwait(false);
                     }
 
                     break;
@@ -259,25 +312,25 @@ namespace Radzen.FastGrid
                 // one fingers expect. Neither flips in RTL - "first cell in the row" is already logical.
                 case "Home":
                     await (args.CtrlKey
-                        ? MoveAsync(rows > 0 ? 0 : HeaderRow, 0)
-                        : MoveAsync(row, 0)).ConfigureAwait(false);
+                        ? MoveAsync(rows > 0 ? 0 : HeaderRow, 0, extend)
+                        : MoveAsync(row, 0, extend)).ConfigureAwait(false);
 
                     break;
 
                 case "End":
                     await (args.CtrlKey
-                        ? MoveAsync(rows > 0 ? rows - 1 : HeaderRow, cells - 1)
-                        : MoveAsync(row, cells - 1)).ConfigureAwait(false);
+                        ? MoveAsync(rows > 0 ? rows - 1 : HeaderRow, cells - 1, extend)
+                        : MoveAsync(row, cells - 1, extend)).ConfigureAwait(false);
 
                     break;
 
                 case "PageDown":
-                    await PageAsync(row, cell, rows, forward: true).ConfigureAwait(false);
+                    await PageAsync(row, cell, rows, forward: true, extend).ConfigureAwait(false);
 
                     break;
 
                 case "PageUp":
-                    await PageAsync(row, cell, rows, forward: false).ConfigureAwait(false);
+                    await PageAsync(row, cell, rows, forward: false, extend).ConfigureAwait(false);
 
                     break;
 
@@ -292,7 +345,7 @@ namespace Radzen.FastGrid
                     break;
 
                 case " ":
-                    await SelectFocusedAsync(row, cell).ConfigureAwait(false);
+                    await SelectFocusedAsync(row, cell, extend).ConfigureAwait(false);
 
                     break;
             }
@@ -300,7 +353,7 @@ namespace Radzen.FastGrid
 
         static int Step(int cell, int by, int cells) => Math.Clamp(cell + by, 0, cells - 1);
 
-        async Task PageAsync(int row, int cell, int rows, bool forward)
+        async Task PageAsync(int row, int cell, int rows, bool forward, bool extend)
         {
             var step = viewportRows > 0 ? viewportRows : UnmeasuredPageStep;
             var from = row == HeaderRow ? 0 : row;
@@ -316,11 +369,12 @@ namespace Radzen.FastGrid
             }
             else if (!forward && row == 0)
             {
-                await MoveAsync(HeaderRow, cell).ConfigureAwait(false);
+                await MoveAsync(HeaderRow, cell, extend).ConfigureAwait(false);
             }
             else
             {
-                await MoveAsync(Math.Clamp(target, 0, Math.Max(rows - 1, 0)), cell).ConfigureAwait(false);
+                await MoveAsync(Math.Clamp(target, 0, Math.Max(rows - 1, 0)), cell, extend)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -367,28 +421,48 @@ namespace Radzen.FastGrid
             await GoToPage(previous).ConfigureAwait(false);
         }
 
-        async Task MoveAsync(int row, int cell)
+        async Task MoveAsync(int row, int cell, bool extend = false)
         {
-            if (row == focusRow && cell == focusCell && hasFocus)
-            {
-                // Still worth showing: a re-entered grid, or one whose class the last render rewrote,
-                // has the position and not the paint.
-                await ShowFocusAsync().ConfigureAwait(false);
+            var moved = !hasFocus || row != focusRow || cell != focusCell;
+            var from = focusRow;
 
-                return;
+            // Read before the cursor moves, because the anchor is where the run started from rather
+            // than where it is going. A move that does not extend ends whatever run was open, which is
+            // what makes a plain arrow key the way back to a single row.
+            if (extend)
+            {
+                BeginRange(from);
+            }
+            else
+            {
+                EndRange();
             }
 
             hasFocus = true;
             focusRow = row;
             focusCell = cell;
 
-            RememberItem();
+            if (moved)
+            {
+                // Not on a move that went nowhere: a re-entered grid, or one whose class the last render
+                // rewrote, has the position already and only wants the paint.
+                RememberItem();
+            }
+
+            // Only a change of row changes a range. Left and Right move within one, and the pattern's
+            // cell extension has nothing to extend here - what this grid selects is rows.
+            if (extend && row != from)
+            {
+                await ExtendRangeAsync().ConfigureAwait(false);
+            }
 
             await ShowFocusAsync().ConfigureAwait(false);
         }
 
         async Task ActivateAsync(int row, int cell)
         {
+            EndRange();
+
             if (row == HeaderRow)
             {
                 // Sorting is the most common thing anyone does to a business grid, and without the
@@ -408,6 +482,8 @@ namespace Radzen.FastGrid
                 return;
             }
 
+            selectionAnchor = row;
+
             // The toggle cell activates the toggle, which is what is in it.
             if (ExpandColumn && cell == 0)
             {
@@ -423,7 +499,7 @@ namespace Radzen.FastGrid
             StateHasChanged();
         }
 
-        async Task SelectFocusedAsync(int row, int cell)
+        async Task SelectFocusedAsync(int row, int cell, bool extend)
         {
             if (row == HeaderRow)
             {
@@ -432,14 +508,152 @@ namespace Radzen.FastGrid
                 return;
             }
 
+            // Shift+Space is the range gesture that does not move: it reaches from the anchor to
+            // wherever the cursor already is, which is what Shift and a click do together in every
+            // desktop list. With no run open the anchor is this row, so it selects it and no more.
+            if (extend)
+            {
+                BeginRange(row);
+
+                await ExtendRangeAsync().ConfigureAwait(false);
+
+                StateHasChanged();
+
+                return;
+            }
+
+            EndRange();
+
             if (NavigableItem(row) is not { } item)
             {
                 return;
             }
 
+            selectionAnchor = row;
+
             await SelectRow(item).ConfigureAwait(false);
 
             StateHasChanged();
+        }
+
+        /// <summary>
+        /// Opens a Shift run, or leaves an open one alone. It reaches from the selection anchor, and
+        /// from <paramref name="fallback" /> on a grid that has not selected anything yet.
+        /// </summary>
+        void BeginRange(int fallback)
+        {
+            if (rangeOpen)
+            {
+                return;
+            }
+
+            rangeOpen = true;
+            rangeAnchor = selectionAnchor ?? fallback;
+            rangeBase = Selection is { } selection ? new List<TItem>(selection) : new List<TItem>();
+        }
+
+        void EndRange()
+        {
+            rangeOpen = false;
+            rangeBase = null;
+        }
+
+        /// <summary>
+        /// Drops the run and the anchor with it. Both are positions in the view, so this is what the
+        /// view being rebuilt costs them - a sort, a filter or a page leaves row 4 belonging to some
+        /// other item than the one the anchor was put on.
+        /// </summary>
+        void ForgetRange()
+        {
+            EndRange();
+
+            selectionAnchor = null;
+        }
+
+        /// <summary>
+        /// Reaches the selection from the anchor to the cursor, over the rows the run started with.
+        /// </summary>
+        /// <remarks>
+        /// Computed from the anchor every time rather than accumulated, so shrinking a range gives back
+        /// exactly the rows it covered: the answer is a function of where the two ends are now, not of
+        /// the path taken between them. The rows come from <c>View()</c>, which is what the render
+        /// walked, so a range cannot address a row that was never drawn.
+        /// </remarks>
+        async Task ExtendRangeAsync()
+        {
+            if (!rangeOpen || rangeBase is null || focusRow == HeaderRow || rangeAnchor == HeaderRow)
+            {
+                return;
+            }
+
+            var low = Math.Min(rangeAnchor, focusRow);
+            var high = Math.Max(rangeAnchor, focusRow);
+
+            var next = new List<TItem>(rangeBase);
+            var chosen = new HashSet<TItem>(next);
+            var index = 0;
+
+            foreach (var item in View())
+            {
+                if (index > high)
+                {
+                    break;
+                }
+
+                if (index >= low && chosen.Add(item))
+                {
+                    next.Add(item);
+                }
+
+                index++;
+            }
+
+            await AnnounceSelectionAsync(next, chosen).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Raises what a new selection changed, then the selection itself. Same contract as a click:
+        /// the grid computes the collection and never writes to <see cref="Selection" />.
+        /// </summary>
+        /// <remarks>
+        /// The per-row events are the difference against the selection as it stands, rather than
+        /// against the previous range, so growing and shrinking are the same code and a caller that
+        /// changed the selection underneath the grid is still told the truth. Both sides are compared
+        /// through sets - a range is thousands of rows on the grid this was written for, and
+        /// <c>ICollection.Contains</c> per row would make that quadratic.
+        /// </remarks>
+        async Task AnnounceSelectionAsync(List<TItem> next, HashSet<TItem> chosen)
+        {
+            var current = Selection;
+
+            if (RowSelect.HasDelegate || RowDeselect.HasDelegate)
+            {
+                var was = current is null ? new HashSet<TItem>() : new HashSet<TItem>(current);
+
+                if (RowSelect.HasDelegate)
+                {
+                    foreach (var item in next)
+                    {
+                        if (!was.Contains(item))
+                        {
+                            await RowSelect.InvokeAsync(item).ConfigureAwait(false);
+                        }
+                    }
+                }
+
+                if (RowDeselect.HasDelegate)
+                {
+                    foreach (var item in was)
+                    {
+                        if (!chosen.Contains(item))
+                        {
+                            await RowDeselect.InvokeAsync(item).ConfigureAwait(false);
+                        }
+                    }
+                }
+            }
+
+            await SelectionChanged.InvokeAsync(next).ConfigureAwait(false);
         }
 
         /// <summary>

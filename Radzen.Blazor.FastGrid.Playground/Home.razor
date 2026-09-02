@@ -104,7 +104,7 @@
     ICollection<Row>? selection;
     FastGridSettings? settings;
     int settingsRaised;
-    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it. Tab into the grid and the arrows move a cell: Enter opens a row, Space selects one, and arrowing off the end turns the page.";
+    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it. Tab into the grid and the arrows move a cell: Enter opens a row, Space selects one, and arrowing off the end turns the page. With Multi-select on, holding Shift extends the selection from the last row Space chose.";
 
     // The grid takes IEnumerable either way; what differs is whether it is a queryable the executor
     // will run asynchronously, which is what AsyncOwnsData decides.
