@@ -6,6 +6,7 @@
 
 <div class="toolbar">
     <label><input type="checkbox" @bind="allowResize" /> Resize</label>
+    <label><input type="checkbox" @bind="allowReorder" /> Reorder</label>
     <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
     <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
     <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
@@ -35,6 +36,7 @@
 <div class="stage">
     <RadzenFastGrid TItem="Row" Data="@Data"
                     AllowColumnResize="@allowResize"
+                    AllowColumnReorder="@allowReorder"
                     AllowSorting="@allowSorting"
                     AllowFiltering="@allowFiltering"
                     AllowPaging="@allowPaging"
@@ -47,6 +49,7 @@
                     ShowPagingSummary="true"
                     Template="@(rowDetail ? DetailTemplate : null)"
                     ColumnResized="@(a => Log($"resized {a.Column.Title} -> {a.Width:F0}px"))"
+                    ColumnReordered="@(a => Log($"reordered {a.Column.Title} -> {a.OrderIndex}"))"
                     RowClick="@(r => Log($"row click: {r.Name}"))"
                     RowDoubleClick="@(r => Log($"row dblclick: {r.Name}"))"
                     CellClick="@(a => Log($"cell click: {a.Data.Name} / {a.Column.Title}"))"
@@ -61,7 +64,7 @@
             <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" Format="d" />
             <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" Format="C0" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (fixed)"
-                            Resizable="false" />
+                            Resizable="false" Reorderable="false" />
         </ChildContent>
     </RadzenFastGrid>
 </div>
@@ -70,6 +73,7 @@
 
 @code {
     bool allowResize = true;
+    bool allowReorder = true;
     bool allowSorting = true;
     bool allowFiltering = true;
     bool allowPaging = true;

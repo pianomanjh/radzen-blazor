@@ -102,6 +102,25 @@ namespace Radzen.FastGrid
         /// </summary>
         [Parameter] public int? OrderIndex { get; set; }
 
+        int? reorderedIndex;
+
+        /// <summary>
+        /// Where the column actually sits: where a drag put it, else what the markup said.
+        /// </summary>
+        /// <remarks>
+        /// A drag cannot write to <see cref="OrderIndex" /> for the same reason it cannot write to
+        /// <see cref="Width" />: it is a parameter, so the next parameter set would put the markup's
+        /// value back and the columns would snap to their declared order on the next unrelated
+        /// re-render.
+        /// </remarks>
+        internal int? EffectiveOrderIndex => reorderedIndex ?? OrderIndex;
+
+        /// <summary>The position a drag settled on, or null when none has.</summary>
+        internal int? ReorderedIndex => reorderedIndex;
+
+        /// <summary>Records the position a drag settled on. Null restores the declared order.</summary>
+        internal void SetReorderedIndex(int? index) => reorderedIndex = index;
+
         /// <summary>
         /// CSS width of the column - <c>"120px"</c>, <c>"20%"</c>. Written once onto the table's
         /// <c>colgroup</c> rather than onto every cell, so it costs nothing per row.
@@ -255,6 +274,13 @@ namespace Radzen.FastGrid
         /// </summary>
         [Parameter] public bool Resizable { get; set; } = true;
 
+        /// <summary>
+        /// Whether the column offers a drag handle for reordering. Ignored unless the grid sets
+        /// <c>AllowColumnReorder</c>. A column that opts out can still be displaced by others moving
+        /// around it - what it declines is being dragged, not being in an order.
+        /// </summary>
+        [Parameter] public bool Reorderable { get; set; } = true;
+
         string? resizedWidth;
 
         /// <summary>
@@ -276,18 +302,21 @@ namespace Radzen.FastGrid
         string? baseElementId;
         string? colElementId;
         string? resizerElementId;
+        string? dragElementId;
 
         /// <summary>
-        /// The ids the resize script resolves this column by, built once per position rather than per
-        /// render. They only change when the column moves, which picking a column can do.
+        /// The ids the resize and reorder scripts resolve this column by, built once per position
+        /// rather than per render. They only change when the column moves, which picking a column and
+        /// dragging one both do.
         /// </summary>
         /// <remarks>
-        /// The script is handed <c>Base</c> and derives the other two itself, by appending '-col' and
-        /// '-resizer'. Handing it either of the derived ids instead leaves it looking for '-col-col':
-        /// it then finds no col, writes the width to the th, and under table-layout:fixed the colgroup
-        /// wins and nothing moves - while the rest of the drag still works, so it looks like it ran.
+        /// Both scripts are handed <c>Base</c> and derive what they need themselves, by appending
+        /// '-col', '-resizer' or '-drag'. Handing either of them a derived id instead leaves it looking
+        /// for '-col-col': resize then finds no col, writes the width to the th, and under
+        /// table-layout:fixed the colgroup wins and nothing moves - while the rest of the drag still
+        /// works, so it looks like it ran.
         /// </remarks>
-        internal (string Base, string Col, string Resizer) ElementIds(string gridId, int index)
+        internal (string Base, string Col, string Resizer, string Drag) ElementIds(string gridId, int index)
         {
             if (elementIdIndex != index || baseElementId is null)
             {
@@ -295,9 +324,10 @@ namespace Radzen.FastGrid
                 baseElementId = string.Create(CultureInfo.InvariantCulture, $"{gridId}-{index}");
                 colElementId = baseElementId + "-col";
                 resizerElementId = baseElementId + "-resizer";
+                dragElementId = baseElementId + "-drag";
             }
 
-            return (baseElementId, colElementId!, resizerElementId!);
+            return (baseElementId, colElementId!, resizerElementId!, dragElementId!);
         }
 
         /// <summary>Records the width a drag settled on. Null restores the declared width.</summary>

@@ -7,11 +7,11 @@ namespace Radzen.FastGrid
     /// be stored and handed back.
     /// </summary>
     /// <remarks>
-    /// Sort, filters, page - and column visibility once <c>AllowColumnPicking</c> is on, and column
-    /// width once <c>AllowColumnResize</c> is, because those are the points at which a user can change
-    /// them and storing one records a choice rather than repeating the markup. Order is still absent for
-    /// that reason: nothing here lets a user drag a column to a new position, so persisting it would
-    /// restore only what the markup already said.
+    /// Sort, filters, page - and column visibility once <c>AllowColumnPicking</c> is on, column width
+    /// once <c>AllowColumnResize</c> is, and column order once <c>AllowColumnReorder</c> is, because
+    /// those are the points at which a user can change them and storing one records a choice rather
+    /// than repeating the markup. Nothing a user cannot change is stored, which is why each of the
+    /// three is null until something records a choice.
     /// </remarks>
     public class FastGridSettings
     {
@@ -57,5 +57,11 @@ namespace Radzen.FastGrid
         /// restores nothing, so the markup's own <c>Width</c> stands.
         /// </summary>
         public string? Width { get; set; }
+
+        /// <summary>
+        /// The position a user dragged the column to, or null when none did. Null restores nothing, so
+        /// the markup's own <c>OrderIndex</c> stands.
+        /// </summary>
+        public int? OrderIndex { get; set; }
     }
 }

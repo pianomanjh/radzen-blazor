@@ -1077,6 +1077,12 @@ namespace Radzen.FastGrid
                 {
                     column.SetResizedWidth(width);
                 }
+
+                // And the same again for where the column sits.
+                if (stored.OrderIndex is { } orderIndex)
+                {
+                    column.SetReorderedIndex(orderIndex);
+                }
             }
 
             // A grid composing in memory has drawn this state already - the render applying it composed
@@ -1098,6 +1104,8 @@ namespace Radzen.FastGrid
         // Same rule for width: only a width a drag produced is a choice worth storing. The declared one
         // is already in the markup, and recording it back would override a later edit to that markup.
         static string? RecordedWidth(ColumnBase<TItem> column) => column.ResizedWidth;
+
+        static int? RecordedOrderIndex(ColumnBase<TItem> column) => column.ReorderedIndex;
 
         ColumnBase<TItem>? ColumnForPath(string path)
         {
@@ -1132,6 +1140,7 @@ namespace Radzen.FastGrid
                         FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
                         Visible = RecordedVisibility(column),
                         Width = RecordedWidth(column),
+                        OrderIndex = RecordedOrderIndex(column),
                     });
                 }
             }
@@ -1142,8 +1151,10 @@ namespace Radzen.FastGrid
 
                 var visibility = RecordedVisibility(column);
                 var width = RecordedWidth(column);
+                var orderIndex = RecordedOrderIndex(column);
 
-                if ((!column.HasFilter && visibility is null && width is null) || SortIndexOf(column) >= 0
+                if ((!column.HasFilter && visibility is null && width is null && orderIndex is null)
+                    || SortIndexOf(column) >= 0
                     || column.PropertyPath is not { Length: > 0 } path)
                 {
                     continue;
@@ -1156,6 +1167,7 @@ namespace Radzen.FastGrid
                     FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
                     Visible = visibility,
                     Width = width,
+                    OrderIndex = orderIndex,
                 });
             }
 

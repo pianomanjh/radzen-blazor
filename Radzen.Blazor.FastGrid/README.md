@@ -383,9 +383,12 @@ left it:
 <RadzenFastGrid Data="@orders" Settings="@stored" SettingsChanged="@(s => stored = s)" />
 ```
 
-It carries the sort, the filters and the page - and nothing else, deliberately. Width, order and
-visibility are settings on `RadzenDataGrid` because its user can drag, reorder and pick columns; this
-grid has no such UI, so persisting them would restore only what the markup already said. `SettingsChanged`
+It carries the sort, the filters and the page, and alongside them the three things a user can change
+about the columns themselves: visibility once `AllowColumnPicking` is on, width once
+`AllowColumnResize` is, and order once `AllowColumnReorder` is. Each is null until something records a
+choice, so a grid whose user cannot change one stores nothing for it and the markup's own value stands
+on the way back in - persisting it otherwise would restore only what the markup already said, and would
+then override a later edit to that markup. `SettingsChanged`
 fires whenever the grid reloads, which is every sort, filter and page change, and also a `Reload()`
 called from application code. `CaptureSettings()` gives the same object on demand.
 
@@ -808,10 +811,13 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
 
 - **Editing.** The per-row component and cascading values that inline editing needs are exactly the cost
   this grid exists to avoid. Use `RadzenDataGrid`.
-- **Grouping, column resize, reorder, frozen columns, composite headers.** Resize, reorder and frozen
-  columns all want the scroll container below, so that is one decision gating three features.
-- **A scroll container.** No `rz-datatable-scrollable` structure, which is also what carries
-  `RadzenDataGrid`'s keyboard navigation.
+- **Grouping, frozen columns, composite headers.** Frozen columns want `.rz-frozen-cell` positioning,
+  which the theme carries and `Radzen.Blazor.js` already maintains; nothing has been built against it.
+  Column resize and reorder were on this list until the scroll container that gated them landed, and
+  both now ship.
+- **The nested scrollable structure.** No `rz-datatable-scrollable`, which is what `RadzenDataGrid`
+  builds a frozen-column layout on. The ordinary `.rz-data-grid-data` container is emitted, and it is
+  what resize overflows into and where keyboard navigation would hang; nothing hangs there yet.
 - **Chips, a search box, and row-by-row keyboard navigation in the drop-down.** The popup is the grid,
   so it is filtered through the grid's own filter row rather than a separate search input, and the
   closed drop-down lists the chosen rows as text rather than as removable chips. The drop-down is a form
