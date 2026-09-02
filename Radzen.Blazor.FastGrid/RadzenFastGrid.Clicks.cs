@@ -26,6 +26,19 @@ namespace Radzen.FastGrid
         bool clickAttachAttempted;
 
         /// <summary>
+        /// Which events the attached listener was told to answer, so the grid can tell when what it
+        /// needs has changed. A callback switched on after the first render - row detail is the ordinary
+        /// case, since a Template can arrive with the data - would otherwise leave the listener answering
+        /// the wrong set, and the feature simply would not work.
+        /// </summary>
+        (bool Click, bool DoubleClick, bool ContextMenu) attachedKinds;
+
+        (bool Click, bool DoubleClick, bool ContextMenu) CurrentKinds => (
+            RowClick.HasDelegate || CellClick.HasDelegate || SelectsOnRowClick || ExpandColumn,
+            RowDoubleClick.HasDelegate,
+            CellContextMenu.HasDelegate);
+
+        /// <summary>
         /// Whether the click handlers have to be in the render tree. Starts false, so a grid in a
         /// browser renders the cheap shape from the very first frame and never renders the expensive
         /// one at all; a grid that cannot attach a listener renders once without handlers and then once
@@ -40,9 +53,12 @@ namespace Radzen.FastGrid
         /// </remarks>
         bool clicksNeedHandlers;
 
-        /// <summary>Whether anything is listening for a row or cell pointer event.</summary>
+        /// <summary>
+        /// Whether anything in the body answers a pointer. The row-detail toggle counts: it is a button
+        /// per row, and it was the last delegate per row this grid rendered.
+        /// </summary>
         bool ClicksAreLive => RowClick.HasDelegate || RowDoubleClick.HasDelegate
-            || CellClick.HasDelegate || CellContextMenu.HasDelegate || SelectsOnRowClick;
+            || CellClick.HasDelegate || CellContextMenu.HasDelegate || SelectsOnRowClick || ExpandColumn;
 
         /// <summary>
         /// Whether one listener answers for the whole body. Virtualization is excluded deliberately:
@@ -78,14 +94,23 @@ namespace Radzen.FastGrid
 
         async Task AttachClicksAsync()
         {
-            // Attempted once. A grid that turns a callback on later keeps the handlers it rendered with,
-            // which costs allocation rather than correctness.
-            if (clickAttachAttempted || !ClicksAreLive || AllowVirtualization || JSRuntime is null)
+            if (!ClicksAreLive || AllowVirtualization || JSRuntime is null)
+            {
+                return;
+            }
+
+            var kinds = CurrentKinds;
+
+            // Attach once, and again whenever what the grid listens for changes. The second case is not
+            // hypothetical: switching row detail on after the first render leaves a toggle the listener
+            // was never told about, and the button does nothing.
+            if (clickAttachAttempted && (clicksNeedHandlers || kinds == attachedKinds))
             {
                 return;
             }
 
             clickAttachAttempted = true;
+            attachedKinds = kinds;
 
             try
             {
@@ -95,9 +120,9 @@ namespace Radzen.FastGrid
                 var attached = await clickModule.InvokeAsync<bool>("attach", BodyElementId, clickReference,
                     new
                     {
-                        click = RowClick.HasDelegate || CellClick.HasDelegate || SelectsOnRowClick,
-                        doubleClick = RowDoubleClick.HasDelegate,
-                        contextMenu = CellContextMenu.HasDelegate,
+                        click = kinds.Click,
+                        doubleClick = kinds.DoubleClick,
+                        contextMenu = kinds.ContextMenu,
                     });
 
                 if (attached)
@@ -160,6 +185,14 @@ namespace Radzen.FastGrid
                     if (column is not null && CellClick.HasDelegate)
                     {
                         await CellClick.InvokeAsync(new FastGridCellEventArgs<TItem>(item, column));
+                    }
+
+                    break;
+
+                case "toggle":
+                    if (ExpandColumn)
+                    {
+                        await ToggleRow(item).ConfigureAwait(false);
                     }
 
                     break;

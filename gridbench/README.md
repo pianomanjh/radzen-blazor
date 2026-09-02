@@ -111,8 +111,10 @@ A shippable version has to cascade conditionally, so the 25% is not free.
 
 A feature's marginal cost answers "what did this cost". It does not answer "is this grid still worth
 using", which is the question anyone reading a commit is actually asking - and the two can point
-different ways. Row detail costs 403 KB, which leaves the grid 33x leaner than `RadzenDataGrid` and,
-for the first time, *heavier* than QuickGrid. Neither of those facts was in the commit that added it.
+different ways. When row detail cost 403 KB it left the grid 33x leaner than `RadzenDataGrid` and, for
+the first time, *heavier* than QuickGrid. Neither of those facts was in the commit that added it. (It
+now costs 16 KB and is 109x leaner, which is the other half of the same argument: the ratio moved
+because the grid changed under it, and only a table carrying both numbers shows that.)
 
 So `FastGridFeatureBench` carries the two reference points as rows of its own, in the same table as the
 features rather than in a document beside it, and a commit that changes what the grid costs records
@@ -141,7 +143,7 @@ rows were added was that comparing a switched-on FastGrid against a switched-off
 | a filter row | 157.14 KB | 16,098 KB | **102x** | +2,926 KB |
 | a column picker | 175.77 KB | 15,618 KB | **89x** | +2,446 KB |
 | responsive titles | 153.01 KB | 17,374 KB | **114x** | +4,202 KB |
-| row detail | 557.03 KB | 18,467 KB | **33x** | +5,295 KB |
+| row detail | 169.27 KB | 18,467 KB | **109x** | +5,295 KB |
 | cell click | 169.17 KB | 22,352 KB | **132x** | +9,180 KB |
 
 Measured against `RadzenDataGrid` as it now stands on master, which has absorbed the render and async
@@ -156,10 +158,12 @@ number here; the totals move whenever the grid underneath them does.
 
 The gap used to narrow wherever this grid charged for something `RadzenDataGrid` charges for anyway -
 a delegate per row or per cell - and widen wherever the feature is markup the other grid pays per row.
-Both click rows have since stopped charging for the delegate: one listener on the tbody answers for
-every row and cell, so a cell click costs 16 KB rather than 1,483 and the narrowest row in the table
-went from 14x to 132x. What is left is the shape of the second half of that sentence only. Row detail
-is the last feature here that costs a delegate per row, and it is the last row where the gap closes.
+That has stopped being true, because the delegates have gone. One listener on the tbody answers for
+every row and cell and for the row-detail toggle, so a cell click costs 16 KB rather than 1,483, row
+detail 16 KB rather than 404, and the three of them together cost that 16 KB once rather than each.
+The narrowest row in the table went from 14x to 132x, and no feature here charges a delegate per row
+any more. What is left is the shape of the second half of that sentence only: the gap now widens
+everywhere, because every remaining difference is markup the other grid pays for per row.
 
 Which is the argument for the reference rows either way: the direction of the error was not guessable,
 and half these numbers had never been measured at all.

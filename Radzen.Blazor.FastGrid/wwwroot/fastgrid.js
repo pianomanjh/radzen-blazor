@@ -13,6 +13,10 @@ export function attach(bodyId, dotNetRef, kinds) {
     return false;
   }
 
+  // Attaching twice is how the grid keeps the listener in step with what it is currently listening
+  // for - a callback switched on after the first render changes which events matter.
+  detach(bodyId);
+
   // The row index is written by the grid; the column index is the browser's own, so it costs no markup.
   // A click on padding between cells lands on the tr and resolves no cell, which is reported as -1
   // rather than dropped: a row click still has to happen.
@@ -40,6 +44,18 @@ export function attach(bodyId, dotNetRef, kinds) {
 
     if (preventDefault) {
       event.preventDefault();
+    }
+
+    // The row-detail toggle carried @onclick:stopPropagation, so expanding a row never counted as
+    // clicking it. It is its own kind here for the same reason: one click is one thing.
+    //
+    // Read from the markup rather than from a flag settled when the listener was attached: the
+    // attribute is on the button only while the grid draws one, which is the same condition, and it
+    // cannot go stale.
+    if (kind === 'click' && event.target.closest('[data-toggle]')) {
+      dotNetRef.invokeMethodAsync('RadzenFastGrid.OnDelegatedPointer', 'toggle', at.row, -1);
+
+      return;
     }
 
     dotNetRef.invokeMethodAsync('RadzenFastGrid.OnDelegatedPointer', kind, at.row, at.cell);

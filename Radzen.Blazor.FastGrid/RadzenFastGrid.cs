@@ -1443,8 +1443,18 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(139, "aria-label", togglerLabel);
                 builder.AddAttribute(140, "class",
                     "rz-button rz-button-sm rz-button-icon-only rz-variant-text rz-base rz-shade-default");
-                builder.AddAttribute(141, "onclick", ToggleHandler(item));
-                builder.AddEventStopPropagationAttribute(142, "onclick", true);
+                if (delegated)
+                {
+                    // What the listener recognises the toggle by, and what makes it swallow the click
+                    // the way stopPropagation did. One constant attribute per row rather than a
+                    // delegate per row, which is what row detail used to cost to have.
+                    builder.AddAttribute(150, "data-toggle", "");
+                }
+                else
+                {
+                    builder.AddAttribute(141, "onclick", ToggleHandler(item));
+                    builder.AddEventStopPropagationAttribute(142, "onclick", true);
+                }
 
                 builder.OpenElement(143, "span");
                 builder.AddAttribute(144, "class", expanded

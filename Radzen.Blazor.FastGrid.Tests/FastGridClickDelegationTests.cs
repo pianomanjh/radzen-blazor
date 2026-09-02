@@ -258,6 +258,92 @@ namespace Radzen.FastGrid.Tests
                 $"delegated {delegated:N0} B should be below handlers {handlers:N0} B");
         }
 
+
+        [Fact]
+        public void TheRowDetailToggleIsDelegatedToo()
+        {
+            using var ctx = new TestContext();
+
+            var cut = RenderDelegated(ctx, 4, p => p.Add<RenderFragment<Person>>(g => g.Template,
+                row => b => b.AddContent(0, "detail")));
+
+            // The button is marked for the listener rather than carrying a delegate of its own.
+            Assert.Equal(4, cut.FindAll("td.rz-col-icon button[data-toggle]").Count);
+            Assert.Throws<Bunit.MissingEventHandlerException>(
+                () => cut.FindAll("td.rz-col-icon button")[0].Click());
+        }
+
+        [Fact]
+        public void TheToggleStillExpandsThroughTheDelegatedPath()
+        {
+            using var ctx = new TestContext();
+
+            var cut = RenderDelegated(ctx, 4, p => p.Add<RenderFragment<Person>>(g => g.Template,
+                row => b => b.AddContent(0, "detail for " + row.First)));
+
+            cut.InvokeAsync(() => cut.Instance.OnDelegatedPointer("toggle", 1, -1));
+
+            Assert.Contains("detail for", cut.Markup, StringComparison.Ordinal);
+            Assert.Equal("true",
+                cut.FindAll("td.rz-col-icon button")[1].GetAttribute("aria-expanded"));
+        }
+
+        [Fact]
+        public void ATemplateArrivingLateStillGetsAWorkingToggle()
+        {
+            // The bug this pins, found in a browser and by no assertion: whether a click was a toggle
+            // used to be decided by a flag settled when the listener attached, so a grid that gained a
+            // Template afterwards drew a toggle the listener had never heard of. It rendered, it looked
+            // right, and clicking it counted as a row click instead of expanding anything.
+            //
+            // The toggle is now read from the markup at click time, which cannot go stale, so no
+            // re-attach is needed for this case at all.
+            using var ctx = new TestContext();
+
+            var cut = RenderDelegated(ctx, 4, p => p.Add(g => g.RowClick,
+                EventCallback.Factory.Create<Person>(this, _ => { })));
+
+            Assert.Empty(cut.FindAll("[data-toggle]"));
+
+            cut.SetParametersAndRender(p => p.Add<RenderFragment<Person>>(g => g.Template,
+                row => b => b.AddContent(0, "detail for " + row.First)));
+
+            Assert.Equal(4, cut.FindAll("td.rz-col-icon button[data-toggle]").Count);
+
+            cut.InvokeAsync(() => cut.Instance.OnDelegatedPointer("toggle", 0, -1));
+
+            Assert.Contains("detail for", cut.Markup, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void AnEventTheListenerWasNotAttachedForReattachesIt()
+        {
+            // contextmenu is a different browser event rather than a shape of click, so a grid that
+            // gains CellContextMenu after the first render needs the listener told.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var attach = ctx.JSInterop
+                .SetupModule("./_content/Radzen.Blazor.FastGrid/fastgrid.js")
+                .Setup<bool>("attach", _ => true);
+
+            attach.SetResult(true);
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Many(4));
+                p.Add(g => g.ChildContent, TwoColumns());
+                p.Add(g => g.RowClick, EventCallback.Factory.Create<Person>(this, _ => { }));
+            });
+
+            Assert.Single(attach.Invocations);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.CellContextMenu, EventCallback.Factory
+                .Create<FastGridCellEventArgs<Person>>(this, _ => { })));
+
+            Assert.Equal(2, attach.Invocations.Count);
+        }
+
         [Fact]
         public void AnOutOfRangeRowRaisesNothing()
         {

@@ -10,6 +10,7 @@
     <label><input type="checkbox" @bind="allowPaging" /> AllowPaging</label>
     <label><input type="checkbox" @bind="allowPicking" /> AllowColumnPicking</label>
     <label><input type="checkbox" @bind="alternating" /> AlternatingRows</label>
+    <label><input type="checkbox" @bind="rowDetail" /> RowDetail</label>
     <label>Rows <input type="number" @bind="rowCount" style="width:6rem" min="1" max="100000" /></label>
     <button @onclick="Rebuild">Apply row count</button>
     <button @onclick="ResetWidths">Reset widths</button>
@@ -30,6 +31,7 @@
                     RowDoubleClick="@(r => Log($"row dblclick: {r.Name}"))"
                     CellClick="@(a => Log($"cell click: {a.Data.Name} / {a.Column.Title}"))"
                     CellContextMenu="@(a => Log($"cell menu: {a.Data.Name} / {a.Column.Title}"))"
+                    Template="@(rowDetail ? DetailTemplate : null)"
                     Settings="@settings"
                     SettingsChanged="@(s => settings = s)">
         <ChildContent>
@@ -54,6 +56,14 @@
     bool allowPaging = true;
     bool allowPicking;
     bool alternating = true;
+    bool rowDetail;
+
+    // Passed as a parameter rather than declared as markup: a Template that is merely empty still
+    // switches the expand column on, because having one is what the grid keys the column off.
+    RenderFragment<Row> DetailTemplate => row =>
+        @<div style="padding:.75rem 1rem">
+            Detail for <b>@row.Name</b> - @row.Department, hired @row.Hired.ToShortDateString()
+        </div>;
     int rowCount = 500;
 
     List<Row> rows = Row.Make(500);
