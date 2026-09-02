@@ -1063,6 +1063,12 @@ namespace Radzen.FastGrid
                 {
                     column.SetPicked(visible);
                 }
+
+                // Same: a null leaves the declared Width standing rather than clearing it.
+                if (stored.Width is { Length: > 0 } width)
+                {
+                    column.SetResizedWidth(width);
+                }
             }
 
             // A grid over a plain queryable composes from this state on the render now under way. One
@@ -1075,6 +1081,10 @@ namespace Radzen.FastGrid
         // later edit to that markup on the next load.
         bool? RecordedVisibility(ColumnBase<TItem> column) =>
             AllowColumnPicking && column.Pickable ? column.IsVisible : null;
+
+        // Same rule for width: only a width a drag produced is a choice worth storing. The declared one
+        // is already in the markup, and recording it back would override a later edit to that markup.
+        static string? RecordedWidth(ColumnBase<TItem> column) => column.ResizedWidth;
 
         ColumnBase<TItem>? ColumnForPath(string path)
         {
@@ -1108,6 +1118,7 @@ namespace Radzen.FastGrid
                         FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
                         FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
                         Visible = RecordedVisibility(column),
+                        Width = RecordedWidth(column),
                     });
                 }
             }
@@ -1117,8 +1128,9 @@ namespace Radzen.FastGrid
                 var column = columns[i];
 
                 var visibility = RecordedVisibility(column);
+                var width = RecordedWidth(column);
 
-                if ((!column.HasFilter && visibility is null) || SortIndexOf(column) >= 0
+                if ((!column.HasFilter && visibility is null && width is null) || SortIndexOf(column) >= 0
                     || column.PropertyPath is not { Length: > 0 } path)
                 {
                     continue;
@@ -1130,6 +1142,7 @@ namespace Radzen.FastGrid
                     FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
                     FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
                     Visible = visibility,
+                    Width = width,
                 });
             }
 

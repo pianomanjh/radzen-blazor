@@ -112,6 +112,7 @@ namespace Radzen.FastGrid.Tests
             RenderFragment<ColumnBase<TItem>> footerTemplate = null,
             string footerCssClass = null,
             bool pickable = true,
+            bool resizable = true,
             string columnPickerTitle = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
@@ -135,6 +136,11 @@ namespace Radzen.FastGrid.Tests
             if (!sortable)
             {
                 builder.AddAttribute(seq + 5, nameof(PropertyColumn<TItem, TProp>.Sortable), false);
+            }
+
+            if (!resizable)
+            {
+                builder.AddAttribute(seq + 42, nameof(PropertyColumn<TItem, TProp>.Resizable), false);
             }
 
             if (cssClass is not null)

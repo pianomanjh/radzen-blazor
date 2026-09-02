@@ -867,7 +867,7 @@ namespace Radzen.FastGrid
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
-                if (!string.IsNullOrEmpty(visibleColumns[i].Width ?? ColumnWidth))
+                if (!string.IsNullOrEmpty(visibleColumns[i].EffectiveWidth ?? ColumnWidth))
                 {
                     any = true;
 
@@ -875,7 +875,9 @@ namespace Radzen.FastGrid
                 }
             }
 
-            if (!any)
+            // Without a colgroup a resize has nothing to write a width to, so switching resize on is
+            // itself a reason to emit one even when no column declares a width.
+            if (!any && !AllowColumnResize)
             {
                 return;
             }
@@ -888,9 +890,16 @@ namespace Radzen.FastGrid
 
                 builder.OpenElement(28, "col");
 
-                if (column.ColStyle(column.Width ?? ColumnWidth) is { } style)
+                // The id is what the resize script finds the column by, so it is emitted only when
+                // something is going to look for it.
+                if (AllowColumnResize)
                 {
-                    builder.AddAttribute(29, "style", style);
+                    builder.AddAttribute(29, "id", ColumnElementIds(i).Col);
+                }
+
+                if (column.ColStyle(column.EffectiveWidth ?? ColumnWidth) is { } style)
+                {
+                    builder.AddAttribute(30, "style", style);
                 }
 
                 builder.CloseElement();
@@ -943,7 +952,9 @@ namespace Radzen.FastGrid
                 }
             }
 
-            if (!any)
+            // Without a colgroup a resize has nothing to write a width to, so switching resize on is
+            // itself a reason to emit one even when no column declares a width.
+            if (!any && !AllowColumnResize)
             {
                 return;
             }
@@ -1054,9 +1065,17 @@ namespace Radzen.FastGrid
                 builder.OpenElement(34, "th");
                 builder.AddAttribute(35, "role", "columnheader");
                 builder.AddAttribute(36, "scope", "col");
-                builder.AddAttribute(37, "class", sortable
-                    ? "rz-unselectable-text rz-sortable-column"
-                    : "rz-unselectable-text");
+                var resizable = AllowColumnResize && column.Resizable;
+
+                // rz-resizable-column is what gives the th position:relative, and the handle below is
+                // absolutely positioned against it. Added only when there is a handle to contain.
+                builder.AddAttribute(37, "class", (sortable, resizable) switch
+                {
+                    (true, true) => "rz-unselectable-text rz-sortable-column rz-resizable-column",
+                    (true, false) => "rz-unselectable-text rz-sortable-column",
+                    (false, true) => "rz-unselectable-text rz-resizable-column",
+                    (false, false) => "rz-unselectable-text",
+                });
 
                 if (sorted >= 0)
                 {
@@ -1135,6 +1154,35 @@ namespace Radzen.FastGrid
                 }
 
                 builder.CloseElement();
+
+                // The drag handle, a sibling of the title span inside the header's padding div - which is
+                // where RadzenDataGrid puts it, and the level the theme's positioning assumes.
+                //
+                // Nothing here exists unless the grid allows resizing: no element, and no delegates. A
+                // pair of EventCallbacks per column would otherwise be rebuilt on every render of every
+                // grid that never resizes anything.
+                if (resizable)
+                {
+                    var index = i;
+
+                    builder.OpenElement(53, "div");
+                    builder.AddAttribute(54, "class", "rz-column-resizer");
+                    builder.AddAttribute(55, "id", ColumnElementIds(index).Resizer);
+                    // Only mousedown. The script registers its own document-level mousemove, mouseup,
+                    // touchmove and touchend when the drag starts, so a handler here for the end of it
+                    // would be a second EventCallback per column that never decides anything.
+                    builder.AddAttribute(56, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(
+                        this, args => StartColumnResize(index, args.ClientX)));
+                    builder.AddEventPreventDefaultAttribute(57, "onmousedown", true);
+
+                    // The handle sits inside the header's click target, and a drag that ends on it must
+                    // not also sort the column.
+                    builder.AddEventStopPropagationAttribute(59, "onclick", true);
+                    builder.AddEventPreventDefaultAttribute(60, "onclick", true);
+                    builder.AddContent(61, "\u00a0");
+                    builder.CloseElement();
+                }
+
                 builder.CloseElement();
                 builder.CloseElement();
             }

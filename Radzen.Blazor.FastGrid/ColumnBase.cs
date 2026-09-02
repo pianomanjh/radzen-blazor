@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Threading.Tasks;
@@ -247,6 +248,52 @@ namespace Radzen.FastGrid
 
         /// <summary>Whether the column offers sorting. Ignored when the column has no sortable path.</summary>
         [Parameter] public bool Sortable { get; set; } = true;
+
+        /// <summary>
+        /// Whether the column offers a resize handle. Ignored unless the grid sets
+        /// <c>AllowColumnResize</c>.
+        /// </summary>
+        [Parameter] public bool Resizable { get; set; } = true;
+
+        string? resizedWidth;
+
+        /// <summary>
+        /// The width the column actually renders at: what a user dragged it to, else what the markup
+        /// said.
+        /// </summary>
+        /// <remarks>
+        /// A drag cannot write to <see cref="Width" />. It is a parameter, so the next time the grid's
+        /// parameters are set Blazor would put the markup's value back and the column would jump to its
+        /// declared width - which is the ordinary Blazor rule about not treating a parameter as state,
+        /// and here the symptom would be a resize that survives until the next unrelated re-render.
+        /// </remarks>
+        internal string? EffectiveWidth => resizedWidth ?? Width;
+
+        /// <summary>The width a drag settled on, or null when none has.</summary>
+        internal string? ResizedWidth => resizedWidth;
+
+        int elementIdIndex = -1;
+        string? colElementId;
+        string? resizerElementId;
+
+        /// <summary>
+        /// The ids the resize script resolves this column by, built once per position rather than per
+        /// render. They only change when the column moves, which picking a column can do.
+        /// </summary>
+        internal (string Col, string Resizer) ElementIds(string gridId, int index)
+        {
+            if (elementIdIndex != index || colElementId is null)
+            {
+                elementIdIndex = index;
+                colElementId = string.Create(CultureInfo.InvariantCulture, $"{gridId}-{index}-col");
+                resizerElementId = colElementId + "-resizer";
+            }
+
+            return (colElementId, resizerElementId!);
+        }
+
+        /// <summary>Records the width a drag settled on. Null restores the declared width.</summary>
+        internal void SetResizedWidth(string? width) => resizedWidth = width;
 
         /// <summary>Whether the column offers filtering. Ignored when the column has no filterable path.</summary>
         [Parameter] public bool Filterable { get; set; } = true;
