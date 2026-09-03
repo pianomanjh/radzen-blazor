@@ -561,6 +561,16 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 **Upstream, separable from everything else:**
 
+- **`updateFrozenColumnPositions` is not scoped to its own grid.** A resize drag calls the shared
+  `Radzen.startColumnResize`, whose move handler runs that routine on every frame once any
+  `.rz-frozen-cell` exists. It measures the header's frozen cells and then writes an inline inset to
+  every frozen cell of `gridElement.querySelectorAll('tr')` - which reaches the rows of a grid rendered
+  inside a row-detail template, and pins them to the *outer* grid's offsets. It affects
+  `RadzenDataGrid` identically, and fixing it means changing `Radzen.Blazor.js`, which this branch
+  deliberately does not touch. So it goes up on its own, the way the array-filter fix did. Since the
+  toggle cell is pinned the offsets it computes for this grid's own rows now agree with the server's,
+  so what is left is the nested case and some wasted DOM writes during a drag.
+
 - ~~The `QueryableExtension` array-filter fix~~ - **sent up on its own** as radzenhq/radzen-blazor#2696,
   from a branch off `upstream/master` rather than from here. An array property is enumerable but not
   generic, so the filter was built against the array itself and threw ("the binary operator Equal is not
