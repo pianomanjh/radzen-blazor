@@ -1181,19 +1181,11 @@ It emits Radzen's own class names, so every theme - including custom ones and CS
 with no extra work. Rendered geometry is checked against `RadzenDataGrid` in CI, laid out by Chromium
 against the real stylesheet: header cell, body cell and table heights match to within half a pixel.
 
-**One exception, and it is temporary.** If you use `AllowKeyboardNavigation`, link the package's own
-stylesheet after your theme:
-
-```html
-<link rel="stylesheet" href="_content/Radzen.Blazor.FastGrid/fastgrid.css" />
-```
-
-Without it the keyboard cursor is invisible on a read-only grid, which is the only kind this component
-renders. Radzen's `_grid.scss` draws a focused *row* only inside `.rz-selectable` - a class a grid
-carries when something is wired to selection - and draws a focused *cell* nowhere at all, which is why
-`RadzenDataGrid`'s own cell navigation moves `aria-activedescendant` correctly and shows a sighted user
-nothing. The fix went upstream as [radzenhq/radzen-blazor#2698]; this file is the same rules, reading
-the same theme variables, so a Radzen version carrying that fix has them twice and identically rather
-than in conflict. Delete the link once your `Radzen.Blazor` includes it.
+That includes the keyboard cursor: `Radzen.Blazor` 11.3.1 draws a focused row and a focused cell on a
+grid with no selection wired to it, which is the only kind this component renders. Earlier versions
+draw neither - the row rule was scoped to `.rz-selectable` and there was no cell rule at all - so on
+one of those, `AllowKeyboardNavigation` moves `aria-activedescendant` correctly and shows a sighted
+user nothing. The fix is [radzenhq/radzen-blazor#2698] and its follow-up for frozen cells; there is no
+stylesheet to link, and this package no longer ships one.
 
 [radzenhq/radzen-blazor#2698]: https://github.com/radzenhq/radzen-blazor/pull/2698

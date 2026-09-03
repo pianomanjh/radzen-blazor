@@ -64,16 +64,11 @@ namespace Radzen.Blazor.FastGrid.Tests
         {
             RepositoryRoot = FindRepositoryRoot();
             ThemeStylesheet = Path.Combine(RepositoryRoot, "Radzen.Blazor", "wwwroot", "css", "standard-base.css");
-            PackageStylesheet = Path.Combine(RepositoryRoot, "Radzen.Blazor.FastGrid", "wwwroot", "fastgrid.css");
-
-            foreach (var stylesheet in new[] { ThemeStylesheet, PackageStylesheet })
+            if (!File.Exists(ThemeStylesheet))
             {
-                if (!File.Exists(stylesheet))
-                {
-                    throw new FileNotFoundException(
-                        "The parity check measures against the real stylesheets and cannot run without them.",
-                        stylesheet);
-                }
+                throw new FileNotFoundException(
+                    "The parity check measures against the real stylesheet and cannot run without it.",
+                    ThemeStylesheet);
             }
 
             var people = Person.Make(RowCount);
@@ -205,12 +200,6 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         /// <summary>Absolute path to the theme stylesheet the geometry is measured against.</summary>
         public string ThemeStylesheet { get; }
-
-        /// <summary>
-        /// The package's own stylesheet, which carries the keyboard cursor until Radzen's theme draws
-        /// one. Linked after the theme, which is the order an application links them in.
-        /// </summary>
-        public string PackageStylesheet { get; }
 
         public string DataGridMarkup { get; }
 
@@ -460,7 +449,7 @@ namespace Radzen.Blazor.FastGrid.Tests
             var page = $@"<!doctype html>
 <html><head><meta charset=""utf-8"">
 <link rel=""stylesheet"" href=""{new Uri(ThemeStylesheet).AbsoluteUri}"">
-<link rel=""stylesheet"" href=""{new Uri(PackageStylesheet).AbsoluteUri}"">
+
 <style>
   body {{ margin: 0; padding: 24px; background: #fff; }}
   .pane {{ margin-bottom: 40px; }}
