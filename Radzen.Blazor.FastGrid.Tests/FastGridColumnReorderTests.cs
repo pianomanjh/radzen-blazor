@@ -438,5 +438,41 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(new[] { "First", "Last", "Id" }, Titles(cut));
         }
+
+        [Fact]
+        public void HidingAColumnAfterADragKeepsTheRestInTheOrderTheyWereDraggedTo()
+        {
+            // A reorder writes a complete arrangement - every visible column gets its position. Hiding
+            // one afterwards makes those positions indexes into a set that no longer exists, and the
+            // placement pass used to clamp them into the shorter one and resolve the collisions by
+            // wrapping, which scrambled the columns that had not moved.
+            using var ctx = Context();
+
+            // Four, because three never collide: the clamp only has somewhere wrong to put a column
+            // once two of them want the same slot.
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.AllowColumnPicking, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, title: "First"),
+                    Columns.Property<Person, string>(x => x.Last, title: "Last"),
+                    Columns.Property<Person, int>(x => x.Id, title: "Id"),
+                    Columns.Property<Person, decimal>(x => x.Salary, title: "Salary")));
+            });
+
+            // Salary to the front: Salary, First, Last, Id.
+            cut.InvokeAsync(() => cut.Instance.ReorderColumn(3, 0)).Wait();
+            cut.Render();
+
+            Assert.Equal(new[] { "Salary", "First", "Last", "Id" }, Titles(cut));
+
+            var first = cut.FindComponents<PropertyColumn<Person, string>>()[0].Instance;
+
+            cut.InvokeAsync(() => first.SetPicked(false)).Wait();
+            cut.Render();
+
+            Assert.Equal(new[] { "Salary", "Last", "Id" }, Titles(cut));
+        }
     }
 }

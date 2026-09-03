@@ -458,6 +458,20 @@ namespace Radzen.FastGrid
                 return;
             }
 
+            // A drag and a declared OrderIndex are not the same kind of instruction, and sharing one
+            // rule let them spoil each other. OrderIndex names one position in the whole set, and the
+            // placement below honours that literally. A drag writes the *complete* arrangement of the
+            // columns that were visible at the time - so once one of them is hidden, those numbers are
+            // positions in a set that no longer exists, and clamping them into a shorter one made two
+            // columns want the same slot and sent the loser to the front.
+            //
+            // Only their order was ever meant, so only their order is read: ranking survives the set
+            // changing size, which is the one thing assigning to slots cannot do.
+            if (ReorderedColumnsInPlacementOrder())
+            {
+                return;
+            }
+
             // A column that names an index is placed at it, and the rest fill what is left in the order
             // they were declared. Sorting on a key of "OrderIndex, or where it happens to sit" instead
             // reads the same for one column and differently for two: OrderIndex="0" on the third column
@@ -513,6 +527,55 @@ namespace Radzen.FastGrid
             {
                 visibleColumns[i] = placed[i]!;
             }
+        }
+
+        /// <summary>
+        /// Puts the visible columns in the order a drag left them, when one has happened, and answers
+        /// whether it did. Columns with no dragged position keep their declaration order behind those
+        /// that have one, which is where a column added since the drag belongs.
+        /// </summary>
+        bool ReorderedColumnsInPlacementOrder()
+        {
+            var dragged = false;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                if (visibleColumns[i].ReorderedIndex is not null)
+                {
+                    dragged = true;
+
+                    break;
+                }
+            }
+
+            if (!dragged)
+            {
+                return false;
+            }
+
+            placed.Clear();
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                placed.Add(visibleColumns[i]);
+            }
+
+            // Declaration order is the tiebreak, and the keys are otherwise unique, so an unstable sort
+            // cannot be seen from the outside.
+            placed.Sort((a, b) =>
+            {
+                var left = a!.ReorderedIndex ?? int.MaxValue;
+                var right = b!.ReorderedIndex ?? int.MaxValue;
+
+                return left != right ? left.CompareTo(right) : columns.IndexOf(a).CompareTo(columns.IndexOf(b));
+            });
+
+            for (var i = 0; i < placed.Count; i++)
+            {
+                visibleColumns[i] = placed[i]!;
+            }
+
+            return true;
         }
 
         /// <summary>Sorts by the given column, toggling direction when it is already the sorted one.</summary>
