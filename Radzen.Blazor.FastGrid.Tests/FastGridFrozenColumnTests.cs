@@ -233,11 +233,43 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, string>(x => x.Last, title: "Last")),
                 p => p.Add(g => g.Template, (RenderFragment<Person>)(person => b => b.AddContent(0, person.First))));
 
-            var frozen = cut.FindAll("tbody tr:first-child td")
-                .First(td => (td.GetAttribute("class") ?? "").Contains("rz-frozen-cell", StringComparison.Ordinal));
+            var cells = cut.FindAll("tbody tr:first-child td");
 
+            // The toggle is the first cell of the run and holds at the edge. Reserving its width in
+            // the inset without pinning the cell left it scrolling away under the columns that had
+            // cleared it, with every markup assertion still passing.
+            Assert.Contains("rz-frozen-cell", cells[0].GetAttribute("class") ?? "", StringComparison.Ordinal);
+            Assert.Contains("left:0", cells[0].GetAttribute("style") ?? "", StringComparison.Ordinal);
+
+            // And the data column behind it clears exactly that width.
             Assert.Contains("left:var(--rz-grid-column-icon-width)",
-                frozen.GetAttribute("style") ?? "", StringComparison.Ordinal);
+                cells[1].GetAttribute("style") ?? "", StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void TheToggleIsPinnedInEverySectionOrNoneOfThem()
+        {
+            // Four sections stack against different neighbours - the title row, the filter row, the
+            // body and the footer - and a run that holds in one and not another is the fault this
+            // component has already shipped three times.
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "First", width: "90px", frozen: true,
+                    footerTemplate: _ => b => b.AddContent(0, "total")),
+                Columns.Property<Person, string>(x => x.Last, title: "Last")),
+                p =>
+                {
+                    p.Add(g => g.AllowFiltering, true);
+                    p.Add(g => g.Template, (RenderFragment<Person>)(person => b => b.AddContent(0, person.First)));
+                });
+
+            foreach (var selector in new[] { "thead tr:first-child", "thead tr:nth-child(2)", "tbody tr:first-child", "tfoot tr" })
+            {
+                var first = cut.Find(selector).Children[0];
+
+                Assert.Contains("rz-frozen-cell", first.GetAttribute("class") ?? "", StringComparison.Ordinal);
+            }
         }
 
         [Fact]

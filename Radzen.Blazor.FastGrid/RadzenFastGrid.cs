@@ -1012,9 +1012,11 @@ namespace Radzen.FastGrid
                 }
             }
 
-            // Without a colgroup a resize has nothing to write a width to, so switching resize on is
-            // itself a reason to emit one even when no column declares a width.
-            if (!any && !AllowColumnResize)
+            // Only a declared footer draws one. The colgroup above has a second reason to exist - a
+            // resize needs somewhere to write a width - and that condition was copied down here with
+            // it, which gave every resizable grid an empty footer. The theme makes tfoot sticky at the
+            // bottom with a background, so it was a grey bar pinned over the rows.
+            if (!any)
             {
                 return;
             }
@@ -1093,7 +1095,18 @@ namespace Radzen.FastGrid
 
             builder.OpenRegion(sequence);
             builder.OpenElement(0, element);
-            builder.AddAttribute(1, "class", "rz-col-icon");
+            builder.AddAttribute(1, "class", ToggleFrozenClass is { } frozenSpacer
+                ? "rz-col-icon " + frozenSpacer
+                : "rz-col-icon");
+
+            // The filter row and the footer stack against different neighbours, so each takes its own
+            // raise - the same split the frozen columns beside them already make.
+            var spacerStyle = element == "th" ? ToggleFrozenHeaderStyle : ToggleFrozenFooterStyle;
+
+            if (spacerStyle is not null)
+            {
+                builder.AddAttribute(3, "style", spacerStyle);
+            }
 
             if (NumbersToggle)
             {
@@ -1131,8 +1144,15 @@ namespace Radzen.FastGrid
                 builder.OpenRegion(34);
                 builder.OpenElement(0, "th");
                 builder.AddAttribute(1, "role", "columnheader");
-                builder.AddAttribute(2, "class", "rz-col-icon rz-unselectable-text");
+                builder.AddAttribute(2, "class", ToggleFrozenClass is { } frozenToggleHeader
+                    ? "rz-col-icon rz-unselectable-text " + frozenToggleHeader
+                    : "rz-col-icon rz-unselectable-text");
                 builder.AddAttribute(3, "scope", "col");
+
+                if (ToggleFrozenHeaderStyle is { } toggleHeaderStyle)
+                {
+                    builder.AddAttribute(7, "style", toggleHeaderStyle);
+                }
 
                 if (NumbersToggle)
                 {
@@ -1624,7 +1644,14 @@ namespace Radzen.FastGrid
             {
                 builder.OpenElement(130, "td");
                 builder.AddAttribute(131, "role", "gridcell");
-                builder.AddAttribute(132, "class", "rz-col-icon");
+                builder.AddAttribute(132, "class", ToggleFrozenClass is { } frozenToggle
+                    ? "rz-col-icon " + frozenToggle
+                    : "rz-col-icon");
+
+                if (ToggleFrozenCellStyle is { } toggleStyle)
+                {
+                    builder.AddAttribute(133, "style", toggleStyle);
+                }
 
                 if (NumbersToggle)
                 {

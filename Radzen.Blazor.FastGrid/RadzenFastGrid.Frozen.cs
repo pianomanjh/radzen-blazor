@@ -33,6 +33,33 @@ namespace Radzen.FastGrid
         int frozenEndRun;
 
         /// <summary>
+        /// What the row-detail toggle cell carries when a leading run is pinned past it, or null.
+        /// </summary>
+        /// <remarks>
+        /// The leading inset starts at the toggle's width, because the toggle sits before the first
+        /// data column and the run has to clear it. That reserved the space and pinned nothing: the
+        /// toggle cell is emitted as a bare <c>rz-col-icon</c>, and nothing in the theme makes that
+        /// sticky. So the chevron column scrolled away while the run held, and the unfrozen cells
+        /// scrolled through the strip it had left behind. Pinned at zero, it is the run's first cell -
+        /// which is what the inset has always assumed it was.
+        /// </remarks>
+        internal string? ToggleFrozenClass { get; private set; }
+
+        internal string? ToggleFrozenCellStyle { get; private set; }
+
+        internal string? ToggleFrozenHeaderStyle { get; private set; }
+
+        internal string? ToggleFrozenFooterStyle { get; private set; }
+
+        void PinToggle(bool pinned)
+        {
+            ToggleFrozenClass = pinned ? "rz-frozen-cell rz-frozen-cell-left" : null;
+            ToggleFrozenCellStyle = pinned ? "left:0" : null;
+            ToggleFrozenHeaderStyle = pinned ? "left:0;z-index:2" : null;
+            ToggleFrozenFooterStyle = pinned ? "left:0;z-index:3" : null;
+        }
+
+        /// <summary>
         /// Works out which columns are pinned, to which edge, and how far in - once per render, over the
         /// columns as they are currently drawn, so reordering or hiding one is accounted for.
         /// </summary>
@@ -46,6 +73,8 @@ namespace Radzen.FastGrid
             hasFrozenColumns = false;
             frozenStartRun = 0;
             frozenEndRun = 0;
+
+            PinToggle(false);
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
@@ -111,6 +140,10 @@ namespace Radzen.FastGrid
             // inset has to clear it. Its width is a theme variable rather than a number the server can
             // know, which is exactly what calc() is for.
             var offset = ExpandColumn ? new StringBuilder("var(--rz-grid-column-icon-width)") : new StringBuilder();
+
+            // Reserving the toggle's width is only half of it: the cell itself has to hold still, or
+            // the run is pinned past a column that scrolls away.
+            PinToggle(ExpandColumn);
 
             for (var i = 0; i < count; i++)
             {
