@@ -113,8 +113,8 @@ A feature's marginal cost answers "what did this cost". It does not answer "is t
 using", which is the question anyone reading a commit is actually asking - and the two can point
 different ways. When row detail cost 403 KB it left the grid 33x leaner than `RadzenDataGrid` and, for
 the first time, *heavier* than QuickGrid. Neither of those facts was in the commit that added it. (It
-now costs 16 KB and is 109x leaner, which is the other half of the same argument: the ratio moved
-because the grid changed under it, and only a table carrying both numbers shows that.)
+now costs under a kilobyte and is 119x leaner, which is the other half of the same argument: the ratio
+moved because the grid changed under it, and only a table carrying both numbers shows that.)
 
 So `FastGridFeatureBench` carries the two reference points as rows of its own, in the same table as the
 features rather than in a document beside it, and a commit that changes what the grid costs records
@@ -159,8 +159,10 @@ number here; the totals move whenever the grid underneath them does.
 The gap used to narrow wherever this grid charged for something `RadzenDataGrid` charges for anyway -
 a delegate per row or per cell - and widen wherever the feature is markup the other grid pays per row.
 That has stopped being true, because the delegates have gone. One listener on the tbody answers for
-every row and cell and for the row-detail toggle, so a cell click costs 16 KB rather than 1,483, row
-detail 16 KB rather than 404, and the three of them together cost that 16 KB once rather than each.
+every row and cell and for the row-detail toggle, so a cell click costs 0.78 KB rather than 1,483, row
+detail 0.88 KB rather than 404, and the three of them together cost that once rather than each. Those
+three were 16 KB apiece until the index-string table was grown to fit the rows being rendered; the
+section below on `data-r` has what that was.
 The narrowest row in the table went from 14x to 132x, and no feature here charges a delegate per row
 any more. What is left is the shape of the second half of that sentence only: the gap now widens
 everywhere, because every remaining difference is markup the other grid pays for per row.
@@ -736,11 +738,11 @@ assumed, which is the rule the row above this one exists to enforce.
 **A benchmark row that differs by a parameter is measuring the parameter too.** At a hundred kilobytes
 that is invisible; at one and a half it is a fifth of the reading.
 
-### `data-r` costs 16 KB, and the value is not where it goes
+### `data-r` cost 16 KB, and it was the string table running out
 
 The design had the cursor address rows by the `data-r` attribute that delegated clicks already write,
 on the reasoning that its values are pre-cached strings and so the attribute "costs a frame and no
-allocation". Measured, that is wrong by eight times the feature's whole budget:
+allocation". Measured, that came out wrong by eight times the feature's whole budget:
 
 | | Allocated |
 | --- | ---: |
@@ -749,32 +751,59 @@ allocation". Measured, that is wrong by eight times the feature's whole budget:
 | `+ keyboard navigation`, addressing rows by position | 155.16 KB |
 | `+ row click` (writes `data-r`, binds no delegates) | 169.85 KB |
 
-The strings really are free. The **frame** is not: `RenderTreeBuilder` rents its frame array from a
-pool, and a thousand more frames push that rental into the next bucket. The row-click row is the
-control - it writes the same attribute and binds nothing else - and lands within half a kilobyte of
-the same +16 KB, which says the cost belongs to the attribute rather than to either feature.
+The conclusion drawn at the time was that the strings are free and the **frame** is not -
+`RenderTreeBuilder` rents its frame array from a pool, and a thousand more frames push that rental
+into the next bucket. It was the wrong half.
 
-This is the pooled frame array again, and it is worth putting the two sightings next to each other
-because they look contradictory and are the same mechanism:
+**The table of index strings held 512 entries.** A thousand-row grid therefore called
+`int.ToString()` on 488 rows of every render, which is 488 strings a render and about 16 KB of them.
+The premise - "its values are pre-cached strings" - was true of the first 512 rows and of no others,
+and the benchmark renders a thousand. Growing the table to fit settles it:
 
-- **Frozen columns**: two attribute frames on the cells of a frozen column. Costs **1.10x time and
-  +0.9 KB** - work with no bytes, because the rental did not change bucket.
-- **`data-r`**: one attribute frame per row. Costs **+16 KB and no measurable time** - bytes with no
-  work, because it did.
+| | Allocated |
+| --- | ---: |
+| bare | 153.88 KB |
+| `+ row click`, table of 512 | 169.17 KB |
+| `+ row click`, table grown to fit | **154.66 KB** |
+| `+ cell click`, table grown to fit | 154.66 KB |
+| `+ row detail available`, table grown to fit | 154.76 KB |
 
-Which of the two a change lands on is not predictable from the change; it depends on where the frame
-count already sits relative to a bucket boundary. That is an argument for measuring markup rather than
-reasoning about it, in both directions.
+So an attribute per row costs **+0.78 KB**, not +16, and the frame is nearly free after all. Three of
+the most expensive rows in this document fell by 14 KB each for a change that touches one array.
 
-The fix cost no markup at all. DOM order is not model order - `Virtualize` emits a spacer `tr` and
-every expanded row emits a second `tr` beneath itself - but the rendered *data rows* are model order,
-because both intruders are distinguishable: the detail row carries `rz-expanded-row-content` and the
-spacer carries no class. So the script takes the nth `tr.rz-data-row`. Virtualization keeps the
-attribute, because there the index is a position in the whole data set rather than in the DOM, and
-there it is a window of tens of rows rather than a thousand - the same argument delegated clicks make
-in reverse.
+**How it hid for so long.** Every check that was run pointed at the attribute, and correctly: the
+row-click control writes `data-r` and binds nothing else, and it landed within half a kilobyte of the
+keyboard row. Both features paid the same 16 KB and it really did belong to the attribute - to the
+*value* it wrote rather than the frame that carried it. A control that separates a feature from an
+attribute does not separate an attribute from its value, and nothing here was asking it to.
 
-### The playground grew a Virtualize toggle, and it found a circuit-killing loop
+**What made it findable** was measuring a second attribute per row and getting a different answer.
+`aria-rowindex` writes one attribute per row exactly as `data-r` does, and measured +15.5 KB - the
+same number, which is confirmation. `aria-colindex` writes one per *cell*, six times as many frames,
+and measured **+0.09 KB**. Six times the frames for a twentieth of the cost is not a frame-count
+story, and the one thing the two attributes do not share is the range of their values: row indexes run
+to a thousand and column indexes run to six.
+
+The pooled frame array is still real, and the two sightings that remain are worth keeping side by side:
+
+- **Frozen columns**: two attribute frames on the cells of a frozen column. **1.10x time and +0.9 KB**.
+- **`aria-colindex`**: one attribute frame on every cell. **~1.2x time and +0.09 KB**.
+
+Both are work with no bytes, which is what a pooled rental that does not change bucket looks like.
+What is gone from this list is the case that looked like bytes with no work - that one was never the
+frame array at all. **Markup is paid in render time; the bytes beside it are usually something else,
+and it is worth finding out what before naming a mechanism.**
+
+The addressing decision stands even so, because it is no longer about the cost. DOM order is not model
+order - `Virtualize` emits a spacer `tr` and every expanded row emits a second `tr` beneath itself -
+but the rendered *data rows* are model order, because both intruders are distinguishable: the detail
+row carries `rz-expanded-row-content` and the spacer carries no class. So the script takes the nth
+`tr.rz-data-row`, and virtualization keeps the attribute because there the index is a position in the
+whole data set rather than in the DOM. What has changed is the price of the alternative: writing the
+attribute on every row would now cost 0.78 KB rather than 16, so this is a preference rather than a
+saving, and it is recorded as one.
+
+### The playground grew a Virtualize toggle### The playground grew a Virtualize toggle, and it found a circuit-killing loop
 
 Keyboard navigation needed one - the cursor moves through the whole data set under virtualization
 rather than through the rendered window, and there was no way to drive that in a browser. The toggle
