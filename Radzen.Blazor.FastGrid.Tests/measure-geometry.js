@@ -166,6 +166,12 @@ async function main() {
 
             const elapsed = round(performance.now() - started);
 
+            // Captured here, not at return time. Everything below deliberately disturbs the columns -
+            // stacking the table, squeezing the pane, re-running the fit to watch it animate - and the
+            // survey of what the real fit produced has to be the real fit's, not whatever the last
+            // probe happened to leave behind.
+            const after = { widths: widths(), truncated: truncated(), tableWidth: tableWidth() };
+
             // The Responsive guard, checked against the condition it actually tests rather than by
             // resizing the viewport - the theme's breakpoint is a media query, so a below-breakpoint
             // pane cannot sit on the same page as the others. `display: block` on the table is what
@@ -224,11 +230,36 @@ async function main() {
 
             const animation = { asked: await run(true), automatic: await run(false) };
 
+            // A container too narrow for the fitted columns. The table is meant to overflow and the
+            // wrapper to scroll - but a col with no width in an overflowed table gets nothing at all,
+            // so the bare column would render zero pixels wide and its content would simply not be
+            // there. Squeezed hard enough that no arrangement of these columns could fit.
+            const squeezed = await (async () => {
+                const restore = pane.style.width;
+
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                pane.style.width = '150px';
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => null), bounds, 0, columns - 1, false, false);
+
+                const widths = at();
+                const scrolls = table.scrollWidth > pane.clientWidth;
+
+                pane.style.width = restore;
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                return { widths, bare: round(widths[columns - 1]), scrolls };
+            })();
+
             return {
                 animation,
+                squeezed,
                 stacked,
                 before,
-                after: { widths: widths(), truncated: truncated(), tableWidth: tableWidth() },
+                after,
                 written,
                 elapsed,
                 rowsMeasured: table.querySelectorAll(':scope > tbody > tr.rz-data-row').length,

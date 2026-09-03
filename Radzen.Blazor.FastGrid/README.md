@@ -688,6 +688,12 @@ over 200ms rather than snapping to them, so a re-fit shows what moved. The autom
 settling into its first layout, which reads as a page still loading rather than as an answer to
 anything, so it lands in one frame. `prefers-reduced-motion: reduce` turns the animation off.
 
+**A fit wider than its container overflows rather than compressing back**, and the grid's wrapper
+scrolls - sizing a column to its content is the whole point, so squeezing it again would undo the
+measurement just taken. When the fitted columns already fill the container the last column is sized
+like the rest instead of being left bare: there is no slack for it to absorb, and a column with no
+width in a table that has overflowed is given nothing at all.
+
 **Nothing is fitted below the `Responsive` breakpoint**, where the theme stacks the rows into cards and
 a colgroup width stops deciding anything. A fit taken above it is kept, and is right again when the
 window widens.

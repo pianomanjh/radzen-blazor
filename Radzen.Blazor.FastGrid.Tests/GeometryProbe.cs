@@ -181,6 +181,22 @@ namespace Radzen.Blazor.FastGrid.Tests
                 : string.Join(", ", Truncated.Select(pair => $"column {pair.Key}: {pair.Value}")));
     }
 
+    /// <summary>A fit whose columns cannot fit the container they are in.</summary>
+    public sealed class AutoFitSqueezed
+    {
+        [JsonPropertyName("widths")] public double[] Widths { get; set; }
+
+        /// <summary>The width the bare column ended up with.</summary>
+        [JsonPropertyName("bare")] public double Bare { get; set; }
+
+        /// <summary>Whether the table overflowed its wrapper, which is the intended answer.</summary>
+        [JsonPropertyName("scrolls")] public bool Scrolls { get; set; }
+
+        public override string ToString() =>
+            $"[{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0.#"))))}]" +
+            $", bare {Bare:0.#}px, {(Scrolls ? "scrolls" : "does not scroll")}";
+    }
+
     /// <summary>A fit sampled mid-flight, to see whether it moved or jumped.</summary>
     public sealed class AutoFitMotion
     {
@@ -230,6 +246,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>What a fit did in a container too narrow to hold its own answer.</summary>
+        [JsonPropertyName("squeezed")] public AutoFitSqueezed Squeezed { get; set; }
+
         /// <summary>The same fit run twice, once asked for and once automatic.</summary>
         [JsonPropertyName("animation")] public AutoFitAnimation Animation { get; set; }
 

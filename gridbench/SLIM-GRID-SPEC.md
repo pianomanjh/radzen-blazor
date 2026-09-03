@@ -1568,6 +1568,19 @@ Chromium runs the animation clock free of wall time, and all four transitions st
 90ms of a 200ms run. An intermediate width is correct in a real browser and not observable in that one,
 so the test asserts what is - that a transition ran, and for which caller.
 
+**When the columns cannot fit, the table overflows and the wrapper scrolls.** Sizing a column to its
+content is the point; compressing it again would undo the measurement just taken. But a `col` with no
+width in a table that has overflowed its parent is given *nothing* - the bare column renders zero
+pixels wide and its content is simply not there, which is not part of that answer. So when the fitted
+columns already fill the container, the bare column is sized like the rest: bareness exists to absorb
+slack, and there is none to absorb.
+
+Decided by arithmetic rather than by writing the widths and looking, because looking costs a second
+whole-table layout. **Both figures it needs are read inside the measuring pass, with every other read.**
+Taking them from after the class comes off instead put the pass at 111ms against its own 100ms gate -
+the first thing that gate has caught, and it caught a claim made in a comment that the reads "cost
+nothing".
+
 ### Known consequences, recorded rather than designed around
 
 - **A one-column fit does not move the bare column**, and the first version cleared it - the trailing

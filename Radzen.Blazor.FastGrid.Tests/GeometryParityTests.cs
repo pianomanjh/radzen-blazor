@@ -581,6 +581,30 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void A_container_too_narrow_for_the_fit_scrolls_rather_than_losing_a_column()
+        {
+            // The table overflowing and the wrapper scrolling is the intended answer - the fit sizes
+            // columns to their content and does not compress them back. What is not intended is the
+            // bare column vanishing: a col with no width in an overflowed table is given nothing at
+            // all, so it renders zero pixels wide and its content is simply not there.
+            var fit = Fitted();
+
+            ParityAssert.True(fit.Squeezed is { Scrolls: true },
+                "a fit wider than its container overflows rather than compressing back",
+                "the whole point of fitting is to size a column to its content - compressing it again would undo the measurement that had just been taken",
+                "a table wider than its wrapper",
+                fit.Squeezed?.ToString() ?? "(not measured)",
+                fit.ToString());
+
+            ParityAssert.True(fit.Squeezed is { Bare: > 0 },
+                "the bare column keeps a width when there is no slack left to give it",
+                "bareness exists to absorb slack, and when the fitted columns already fill the container there is none - so the column is fitted like the rest rather than left with nothing",
+                "a bare column wider than zero",
+                fit.Squeezed?.ToString() ?? "(not measured)",
+                fit.ToString());
+        }
+
+        [Fact]
         public void A_table_the_theme_has_stacked_is_not_fitted()
         {
             // Below the Responsive breakpoint the theme gives the table table-layout:auto and
