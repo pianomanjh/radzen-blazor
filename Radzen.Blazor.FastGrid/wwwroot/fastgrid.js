@@ -383,6 +383,10 @@ const ANIMATING = 'rz-fastgrid-animating';
 // the columns leave quickly and settle into the new width rather than stopping dead on it.
 const ANIMATION_MS = 200;
 
+// The narrowest a column is ever left when nothing else says how narrow it may be. Wide enough to see
+// and to grab a resize handle on, narrow enough that it is obviously not the whole column.
+const VESTIGE = 5;
+
 let measuringStyle;
 
 function installMeasuringStyle() {
@@ -686,6 +690,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   let measured = 0;
   let available = 0;
   const pixels = [];
+  const headers = [];
 
   installMeasuringStyle();
   table.classList.add(MEASURING);
@@ -708,6 +713,10 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
         widest = title.scrollWidth + edges(th)
           + (title.parentElement && title.parentElement !== th ? edges(title.parentElement) : 0);
       }
+
+      // Kept before the body can raise it. It is the width at which the column still says what it is,
+      // and it is what a column falls back to when nobody has given it a MinWidth.
+      const headerPx = widest;
 
       if (rows.length > 0) {
         const first = rows[0].children[at];
@@ -741,6 +750,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       // Kept as a number as well as a string: fitting to the container is arithmetic, and it needs
       // the measurement rather than the expression the measurement turns into.
       pixels.push(px);
+      headers.push(Math.ceil(headerPx));
 
       if (indices[k] === bare) {
         bareWidth = bound(px, minWidths[k], maxWidths[k]);
@@ -811,9 +821,17 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       state.content[k] = Math.min(pixels[k], lengthOf(maxWidths[k], Infinity));
       // Where required-ness lives: a floor at the content width, so the distribution has nothing to
       // take. There is no second test for it anywhere.
+      //
+      // Everything else floors at its MinWidth, and a column that was never given one falls back to
+      // the width of its own heading - the point below which it stops saying what it is. Only when
+      // even that cannot be measured does it fall to VESTIGE, which is not a readable column and is
+      // not meant to be: it is the difference between a column the eye can find and one that is
+      // simply gone.
       state.floor[k] = state.required[k]
         ? state.content[k]
-        : Math.min(state.content[k], lengthOf(minWidths[k], 0));
+        : Math.min(
+            state.content[k],
+            lengthOf(minWidths[k], Math.max(VESTIGE, headers[k] || 0)));
 
       floors += state.floor[k];
       needed += state.content[k];

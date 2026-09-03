@@ -181,6 +181,28 @@ namespace Radzen.Blazor.FastGrid.Tests
                 : string.Join(", ", Truncated.Select(pair => $"column {pair.Key}: {pair.Value}")));
     }
 
+    /// <summary>A fit with no MinWidth anywhere, squeezed past what the columns can give.</summary>
+    public sealed class AutoFitDefaultFloor
+    {
+        [JsonPropertyName("widths")] public double[] Widths { get; set; }
+
+        /// <summary>Whether each heading is ellipsised at the squeezed width.</summary>
+        [JsonPropertyName("truncated")] public bool[] Truncated { get; set; }
+
+        /// <summary>The narrowest column, which must never be nothing.</summary>
+        [JsonPropertyName("narrowest")] public double Narrowest { get; set; }
+
+        /// <summary>Whether every column is still wide enough to show its own heading.</summary>
+        [JsonPropertyName("holdsTitles")] public bool HoldsTitles { get; set; }
+
+        public override string ToString() =>
+            $"[{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
+            $", narrowest {Narrowest:0}px" +
+            (HoldsTitles
+                ? ", every heading fits"
+                : $", TRUNCATED at {string.Join(",", Truncated.Select((t, i) => (t, i)).Where(p => p.t).Select(p => p.i))}");
+    }
+
     /// <summary>One container width, and what the columns became at it.</summary>
     public sealed class AutoFitStep
     {
@@ -281,6 +303,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>Where columns stop when nothing has told them how narrow they may go.</summary>
+        [JsonPropertyName("defaultFloor")] public AutoFitDefaultFloor DefaultFloor { get; set; }
+
         /// <summary>What a fit that keeps the table inside its container did as that container shrank.</summary>
         [JsonPropertyName("fittedToContainer")] public AutoFitToContainer FittedToContainer { get; set; }
 

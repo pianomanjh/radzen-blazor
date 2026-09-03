@@ -709,8 +709,9 @@ A `Required` column keeps the width its content needs at every container size. E
 way in proportion to how much it has above its `MinWidth`, and a column that reaches its floor stops
 giving and hands its share to the ones still above theirs.
 
-**Give every best-effort column a `MinWidth`.** Without one its floor is zero, and a container narrow
-enough will take it there - the column is still in the table and is no longer on the screen.
+A column with no `MinWidth` floors at the width of its own heading, so it never shrinks past the point
+where you can tell what it is. Set `MinWidth` where a column needs more room than its title - a date or
+a currency figure usually does.
 
 Below the width where every floor cannot be met at once the grid scrolls, which is the same answer
 `Scroll` gives and is reached only when nothing else is left. A grid whose `Required` columns are on

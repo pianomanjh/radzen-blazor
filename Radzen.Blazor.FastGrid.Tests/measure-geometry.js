@@ -304,8 +304,52 @@ async function main() {
                 return { wide, steps };
             })();
 
+            // No MinWidth on anything, squeezed past what the columns can give. Each one should stop
+            // at the width of its own heading rather than at zero, so a column is always still there
+            // and still says what it is.
+            const defaultFloor = await (async () => {
+                const restore = pane.style.width;
+
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
+                    true, indices.map(() => false));
+
+                pane.style.width = '120px';
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                const widths = at();
+
+                // Asked as "is the heading truncated" rather than by re-deriving what it needs. The
+                // theme makes .rz-column-title `flex: auto`, so its scrollWidth in a laid-out column
+                // reports the column's width and not the title's - measuring it that way answers 600px
+                // for every column on a wide pane and proves nothing.
+                const truncated = [...table.querySelectorAll(':scope > thead > tr:first-child > th')]
+                    .map(th => {
+                        const title = th.querySelector('.rz-column-title');
+                        return title ? title.scrollWidth > title.clientWidth + 1 : false;
+                    });
+
+                window.__fastgrid.releaseFit(table.id);
+                table.style.minWidth = '';
+                pane.style.width = restore;
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                return {
+                    widths,
+                    truncated,
+                    narrowest: round(Math.min(...widths)),
+                    holdsTitles: truncated.every(t => !t)
+                };
+            })();
+
             return {
                 animation,
+                defaultFloor,
                 fittedToContainer,
                 squeezed,
                 stacked,
