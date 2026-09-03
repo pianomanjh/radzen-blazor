@@ -319,6 +319,10 @@ namespace Radzen.FastGrid
 
                 loadDataInvoked = true;
 
+                // A queryable load may still be in flight from before the handler was attached, and
+                // nothing below it will supersede one.
+                CancelLoad();
+
                 // While virtualizing the provider owns fetching, and it asks for a window. Loading here
                 // as well would call the handler once with no window at all and throw the answer away.
                 return AllowVirtualization ? Task.CompletedTask : InvokeLoadDataAsync();
@@ -347,9 +351,24 @@ namespace Radzen.FastGrid
             // back another new queryable, and the grid refreshes again. That ran to 880,000 renders in
             // two and a half seconds with no exception and nothing in the log. The paged branch below
             // never had the fault because BeginAsyncLoad announces nothing.
-            return AllowVirtualization
-                ? RefreshAsync(announce: false)
-                : BeginAsyncLoad() ?? Task.CompletedTask;
+            if (AllowVirtualization)
+            {
+                // A paged load in flight is answering for a grid that no longer pages.
+                CancelLoad();
+
+                return RefreshAsync(announce: false);
+            }
+
+            if (BeginAsyncLoad() is { } load)
+            {
+                return load;
+            }
+
+            // Nothing started, so nothing will supersede a load already running - and the source it was
+            // reading has just been replaced.
+            CancelLoad();
+
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -379,6 +398,16 @@ namespace Radzen.FastGrid
             {
                 await InvokeLoadDataAsync(request.StartIndex, top);
 
+                // The handler answers by assigning Data and Count, which are the component's own
+                // fields rather than anything this call owns. Two overlapping scrolls therefore share
+                // them: whichever handler finishes last leaves its rows there, and the other request
+                // would pair those rows with its own StartIndex - a window that says it begins
+                // somewhere it does not, which is exactly what the keyboard cursor indexes by.
+                if (request.CancellationToken.IsCancellationRequested)
+                {
+                    return new ItemsProviderResult<TItem>(Array.Empty<TItem>(), 0);
+                }
+
                 return Window(request.StartIndex,
                     new ItemsProviderResult<TItem>(Data ?? Enumerable.Empty<TItem>(), Count));
             }
@@ -397,6 +426,15 @@ namespace Radzen.FastGrid
                     if (virtualTotal is null)
                     {
                         virtualTotal = await async.CountAsync(source, request.CancellationToken);
+                    }
+
+                    // Awaiting a cancelled token throws, but a query that had already finished does
+                    // not - it returns normally into a grid that has since scrolled somewhere else.
+                    // Virtualize discards the result either way; Window would keep it, and the window
+                    // it recorded would disagree with the rows on screen.
+                    if (request.CancellationToken.IsCancellationRequested)
+                    {
+                        return new ItemsProviderResult<TItem>(Array.Empty<TItem>(), 0);
                     }
 
                     return Window(request.StartIndex,
@@ -622,7 +660,18 @@ namespace Radzen.FastGrid
 
                 try
                 {
-                    lookups[column] = Ordered(await ToObjectListAsync(async, values, token));
+                    var distinct = await ToObjectListAsync(async, values, token);
+
+                    // Awaiting a cancelled token throws; a query that had already finished does not, and
+                    // the cache it is about to write into may have been emptied while it ran. Writing
+                    // then would leave a check-box list offering the previous source's values with
+                    // nothing to clear it until the next Reload.
+                    if (token.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    lookups[column] = Ordered(distinct);
                     loaded = true;
                 }
                 catch (OperationCanceledException)
@@ -1281,6 +1330,11 @@ namespace Radzen.FastGrid
                 _ = SettingsChanged.InvokeAsync(raisedSettings);
             }
 
+            // Every branch below either starts a load that supersedes the one in flight or starts none
+            // at all, and the second kind would leave it to land. Cancelling here covers all of them;
+            // BeginAsyncLoad installs a fresh token immediately after when there is a load to run.
+            CancelLoad();
+
             if (AllowVirtualization)
             {
                 // A new filter changes how many rows there are, so the cached total goes with it.
@@ -1436,6 +1490,26 @@ namespace Radzen.FastGrid
 
             StateHasChanged();
         }
+
+        /// <summary>
+        /// Cancels whatever load is in flight, for a path that is not going to start another.
+        /// </summary>
+        /// <remarks>
+        /// Starting a load is what supersedes one, so a grid that stops being loadable at all - handed
+        /// an ordinary list, switched to virtualizing, given a <see cref="LoadData" /> handler - leaves
+        /// the old query running with nothing to displace it. It then writes its rows into
+        /// <c>loaded</c> over the source that replaced it, and the grid renders a table that belongs to
+        /// data it no longer has, with no exception anywhere. Cancelling is the whole fix: the load
+        /// already checks its token before it writes.
+        /// <para>
+        /// The source is left in place rather than cleared. Cancelling runs callbacks synchronously, so
+        /// clearing after the cancel would clobber a load one of them started - and clearing before it
+        /// would hand the lookup fetch <see cref="CancellationToken.None" /> at exactly the moment
+        /// everything in flight is meant to stop. A cancelled source answers both correctly, and the
+        /// next <c>BeginLoad</c> replaces it.
+        /// </para>
+        /// </remarks>
+        void CancelLoad() => loadCts?.Cancel();
 
         CancellationToken BeginLoad()
         {

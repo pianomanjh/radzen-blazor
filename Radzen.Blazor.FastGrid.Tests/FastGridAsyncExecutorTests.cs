@@ -347,6 +347,41 @@ namespace Radzen.FastGrid.Tests
         /// cancellation token: a real executor may finish its query before it observes cancellation, so
         /// the grid cannot rely on the await throwing to discard a superseded answer.
         /// </summary>
+        [Fact]
+        public async Task ALoadNothingSupersedesIsCancelledRatherThanLeftToLand()
+        {
+            // Only starting another load cancels the one in flight, so a source that stops being
+            // loadable at all - handed a list, or switched to virtualizing - leaves the old query
+            // running with nothing to supersede it. It then writes its rows over the source that
+            // replaced it, and the grid renders the wrong table with no exception anywhere.
+            using var ctx = new TestContext();
+            var executor = new GatedExecutor();
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            var cut = Render(ctx, People.Many(30).AsQueryable());
+
+            var stale = executor.Pending;
+
+            Assert.NotNull(stale);
+
+            // The same grid, now over an ordinary list that the executor never sees.
+            var replacement = new List<Person>
+            {
+                new() { Id = 1, First = "Replaced" },
+            };
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, replacement));
+
+            Assert.Equal(new[] { "Replaced" }, FirstNames(cut));
+
+            stale!.Release();
+
+            await stale.Completed;
+            await cut.InvokeAsync(() => Task.CompletedTask);
+
+            Assert.Equal(new[] { "Replaced" }, FirstNames(cut));
+        }
+
         sealed class GatedExecutor : IFastGridQueryExecutor
         {
             public Gate? Pending { get; private set; }
