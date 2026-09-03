@@ -527,6 +527,52 @@ Each layer below caught real faults the previous one missed. Use all of them.
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
 
+## 10b. Review status
+
+What has been read by a reviewer other than its author, what that found, and what has not. Recorded
+because the branch is 89 commits long and its last general review pass sits at commit 74 of those:
+**73 commits landed after it**, so "has this been reviewed" is not answerable from the log.
+
+Every pass below ran as a sub-agent against a written brief, reported CONFIRMED or PLAUSIBLE per
+finding, and had its fixes mutation-checked. The count is what each pass found that a green suite did
+not - the whole suite passed before and after every one of them.
+
+| Slice | State | Found |
+| --- | --- | --- |
+| Early core + column faults | reviewed at `a95a32e04` | 7, fixed then |
+| The drop-down | reviewed at `fbc6e9516`; 3 commits since | 15, fixed then |
+| Keyboard, range selection, positional ARIA | reviewed | 4 |
+| `RadzenFastGrid.Data.cs` - lifecycle, async, invalidation | reviewed | 4 |
+| `RadzenFastGrid.Data.cs` - query semantics | reviewed | 5 |
+| Delegated clicks and `fastgrid.js` | reviewed | 4 |
+| Frozen columns, resize, reorder | reviewed | 6 |
+| **`RadzenFastGrid.cs`, the core render path** | **not reviewed** - 2,058 lines, 31 commits since `a95a32e04` | - |
+| **`ColumnBase.cs` and the column types** | **not reviewed** - 833 lines, 14 commits since `a95a32e04` | - |
+
+The two unreviewed rows are the largest and the most-changed things on the branch. The core render
+path carries column registration, the render bracket and its memos, the sorting and filtering UI, the
+column picker, the pager, the loading indicator and the templates. The column model carries expression
+compilation, the filter predicates, the width and style memoization, and the settings identity a
+column is restored by - which is where the one limitation this branch knows about and has not fixed
+lives: a `TemplateColumn` has no property path, so its position in a dragged order is never stored.
+
+**What the passes have taught about where to look**, which is worth more than the counts:
+
+- **Its faults are silent.** A render loop that took 880,000 renders in 2.5s logged nothing. A load
+  that overwrote its successor rendered the wrong table with no exception. A grid rendered zero rows
+  above a pager still counting. Assume a wrong answer or a hang, not a throw.
+- **A class the theme scopes under a parent does nothing until that parent is emitted**, and every
+  markup assertion passes meanwhile. Five instances now. Grep the class in `_grid.scss` and read what
+  it is nested *under*.
+- **A check that looks for the thing being present can only see it once it works.** The frozen-inset
+  test took the first cell carrying `rz-frozen-cell` and asserted about it - correct while one kind of
+  cell could carry it, wrong the moment another did.
+- **Two features sharing one mechanism is where the branch breaks.** A declared `OrderIndex` and a
+  drag shared a placement rule; `View()` and `TotalCount()` asked the same two questions in opposite
+  orders; the click listener and the keyboard cursor share one `locate()`.
+- **A number attributed to a mechanism without a control has not been measured.** §9 has the rule and
+  what it cost to learn.
+
 ## 11. What is next, in the order it was argued
 
 Nothing here is committed to; this is the list as it stood, so it can be picked up cold.
