@@ -530,6 +530,26 @@ Each layer below caught real faults the previous one missed. Use all of them.
   position in a dragged order never survives. `RadzenDataGrid` answers both with `UniqueID`, matched
   ahead of `Property`. Adopting that here is a new public parameter and a settings-format addition,
   which is why it is recorded rather than done. §10b has the failure in full.
+- **Row expansion is keyed on the item instance, which both leaks and loses state.** `expandedRows`
+  is a `HashSet<TItem>` added to by `ToggleRow` and emptied only by an explicit collapse or
+  `ExpandMode.Single`. Over a source that re-materialises - `AsNoTracking()` read per render, or a
+  `LoadData` handler assigning a fresh page - every entity ever expanded is pinned for the life of
+  the circuit, and because the set compares by reference those entries can never match a new instance
+  again: the row draws collapsed while the old one is held. Both halves are the same cause.
+
+  **The obvious fix is wrong.** Clearing it beside `lookups.Clear()` looks right and is not:
+  `dataChanged` is `!ReferenceEquals(lastData, Data)`, which for exactly those re-materialising
+  sources is true on *every* parameter set - so it would collapse every expanded row on every render,
+  for precisely the grids the leak affects. `lookups` tolerates that because rebuilding a check-box
+  list costs nothing; user state does not. The grid already has `ItemKey`, and keying expansion by it
+  would answer the leak and the lost state together. Recorded rather than done, for that reason.
+- **A sortable header that is not currently sorted draws no sort icon.** Guarded on
+  `sortable && sorted >= 0`; `RadzenDataGridHeaderCell` has a third arm emitting the unsorted glyph.
+  Two theme rules want that element - one reveals a transparent `rzi-sort` on hover, and
+  `.rz-column-title` is an `inline-flex` whose `.rzi-grid-sort` carries a reserved width. So hovering
+  a sortable header signals nothing, and on a title long enough to truncate the first click *inserts*
+  the icon into the flex line: the title re-truncates and the header visibly jumps, then jumps back
+  when another column is clicked. Upstream reserves that width permanently and never moves.
 - The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no date
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
@@ -556,17 +576,33 @@ not - the whole suite passed before and after every one of them.
 | The drop-down, re-reviewed | reviewed | 6 |
 | Today's own fixes, re-reviewed | reviewed | 3 |
 | Attribute-run ordering, all render files | mechanically checked | 1 |
-| `ColumnBase.cs` and the column types | reviewed | 2 fixed, 1 open |
-| `RadzenFastGrid.cs`, the core render path | partly reviewed - see below | 2 |
+| `ColumnBase.cs` and the column types | reviewed | 4: 3 fixed, 1 open |
+| `RadzenFastGrid.cs`, the core render path | reviewed | 5: 3 fixed, 2 open |
 
-**Every slice has now been read by someone other than its author**, which was not true until the pass
-that closed the two rows above. The core render path's pass is marked *partly* deliberately: its
-reviewer went idle without reporting, so what stands for it is the mechanical check its brief asked
-for - every attribute run in the file walked and confirmed ascending - and not a reading of the
-sorting UI, the column picker, the pager or the templates. **That reading is still owed.**
+**Every slice has now been read by someone other than its author**, which was not true until the two
+passes that closed the rows above. Between them they found nine, of which six are fixed and three are
+recorded as open because each is a design decision rather than a fix.
 
-The column model's pass found three, of which two are fixed and one is open; both fixed ones were the
-same shape, a rule applied to one case and not to the neighbouring one:
+Both passes independently reported the same two non-ascending attribute runs, which is also what a
+script walking every run in the package found: the footer splat (fixed) and the header title cell (a
+recorded decision, left alone). Nothing else in the package is out of order.
+
+From the core render path, all three fixed ones were a rule applied in one place and not in its
+neighbour:
+
+- **`Responsive` never emitted `rz-datatable-reflow`**, which is the class the theme scopes the entire
+  feature under - both the rule hiding the per-cell title above the breakpoint and the media block
+  that stacks rows into cards below it. So the titles showed beside every value at every width,
+  nothing stacked, and the grid paid 1.40x the render time to be worse than with the feature off.
+  The sixth instance of this failure mode, and its test asserted the span count and the title text -
+  the implementation restated.
+- The footer cell's render hook was numbered below the attributes above it, while the body cell's -
+  the same hook, one method away - was numbered past them and says why.
+- The column picker was written first among the root's children and numbered 700, after everything
+  else. To be written first it needed a number *below* the top pager's 10; the comment had the rule
+  backwards.
+
+From the column model, likewise:
 
 - A declared `SortOrder` was the only route into the sort list that never asked `CanSort`, and
   `PropertyColumn` was the only column whose `ApplySort` overrode the nullable "cannot order by"
@@ -576,12 +612,21 @@ same shape, a rule applied to one case and not to the neighbouring one:
   follows can only name a column by `PropertyPath` - so a column without one lost what its markup
   declared. A `CollectionColumn` has no `PropertyPath` when it has no `SortBy`, and none when its
   `SortBy` is over a computed key, while filtering perfectly well by `FilterPropertyPath` throughout.
+- `In` and `NotIn` read a null string as itself in the delegate builder and as the empty string in the
+  expression builder, so one grid over a `List` and the same grid over a queryable answered one
+  check-box-list filter differently - and the list was the side disagreeing with `QueryableExtension`.
+  Every other operator in that builder already coalesced; `In` was the one missed.
 
 **Open, and a design decision rather than a fix: a column's settings identity is not unique.**
 `ColumnForPath` answers with the first column matching a stored path, and `CaptureSettings` writes
 every column under that same key - so two columns over one property are both restored onto the first.
 Hiding the second and reloading hides the *first* instead, which is a wrong answer on screen and not
-merely lost state. **`RadzenDataGrid` does not have this problem**: it matches on `UniqueID` first and
+merely lost state.
+
+**It does not take a duplicated property to collide.** A `PropertyColumn`'s path is its *sort* path
+when `SortBy` is set, so a column displaying `Last` and sorting by `First` shares an identity with the
+column displaying `First` - two ordinary columns, nothing declared twice. A filter stored for one is
+restored onto the other, and the grid answers with rows neither column asked for. **`RadzenDataGrid` does not have this problem**: it matches on `UniqueID` first and
 falls back to `Property` only when there is none. Adopting the same idea would close this *and* the
 `TemplateColumn` limitation below, which is the same missing concept seen from the other side - a
 column with no property path has no settings identity at all, so its position in a dragged order is
