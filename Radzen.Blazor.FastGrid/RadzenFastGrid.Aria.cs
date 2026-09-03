@@ -82,7 +82,7 @@ namespace Radzen.FastGrid
 
             return total < 0
                 ? "-1"
-                : RowIndexString(total + HeaderRows);
+                : IndexString(total + HeaderRows);
         }
 
         /// <summary>
@@ -91,11 +91,11 @@ namespace Radzen.FastGrid
         /// absolute index.
         /// </summary>
         string AriaRowIndex(int rowIndex) =>
-            RowIndexString((AllowVirtualization ? rowIndex : skip + rowIndex) + HeaderRows + 1);
+            IndexString((AllowVirtualization ? rowIndex : skip + rowIndex) + HeaderRows + 1);
 
         /// <summary>The columns the grid has, counting the toggle and the ones the picker took away.</summary>
         string AriaColCount() =>
-            RowIndexString(columns.Count + (ExpandColumn ? 1 : 0));
+            IndexString(columns.Count + (ExpandColumn ? 1 : 0));
 
         /// <summary>
         /// Works out each visible column's position in the whole set, once per render pass, and only
@@ -138,10 +138,10 @@ namespace Radzen.FastGrid
         /// </summary>
         /// <remarks>
         /// Worth the three cases rather than always writing every cell, and the reason is measured:
-        /// one attribute on every cell of a thousand-row grid allocates nothing and costs about
-        /// **1.2x** the render time - the same shape frozen columns have, where two frames per cell buy
-        /// 1.10x and no bytes. So hiding the last column of a grid, which needs none of this, should
-        /// not pay for hiding the middle one.
+        /// one attribute on every cell of a thousand-row grid allocates nothing and costs about 1.1x
+        /// the render time - the same shape frozen columns have, where two frames per cell buy 1.10x
+        /// and no bytes. So hiding the last column of a grid, which needs none of this, should not pay
+        /// for hiding the middle one.
         /// </remarks>
         ColumnNumbering HowMuchNumbering(int toggle)
         {
@@ -173,7 +173,7 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>The 1-based position of the visible column at <paramref name="index" />.</summary>
-        string AriaColIndex(int index) => RowIndexString(columnIndexes[index]);
+        string AriaColIndex(int index) => IndexString(columnIndexes[index]);
 
         /// <summary>The toggle column, which is always the first of them.</summary>
         static string AriaToggleColIndex => "1";

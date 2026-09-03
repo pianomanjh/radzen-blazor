@@ -1055,6 +1055,8 @@ namespace Radzen.FastGrid
         List<FilterDescriptor>? ActiveFilters() =>
             drawing ? drawingFilters : AllowFiltering ? BuildFilters() : null;
 
+        int? drawingTotal;
+
         void BeginDrawing()
         {
             drawingFilters = AllowFiltering ? BuildFilters() : null;
@@ -1773,8 +1775,6 @@ namespace Radzen.FastGrid
 
             return total;
         }
-
-        int? drawingTotal;
 
         int CountAll()
         {

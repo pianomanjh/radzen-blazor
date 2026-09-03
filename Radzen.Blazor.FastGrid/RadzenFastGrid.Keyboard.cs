@@ -221,6 +221,14 @@ namespace Radzen.FastGrid
             // The position is kept and the paint is not. Tabbing out to a filter box and back is a
             // constant gesture, and starting over each time is the difference between keyboard support
             // existing and anyone using it.
+            //
+            // The Shift run does not survive it. A run holds the selection as it stood when it opened,
+            // and leaving the grid is exactly where that stops being true - the user can select
+            // elsewhere and come back to a range that would restore rows they had since dropped. The
+            // anchor stays, on the same reasoning as the cursor: it is where the next range reaches
+            // from, not a claim about what is selected now.
+            EndRange();
+
             return HideFocusAsync();
         }
 

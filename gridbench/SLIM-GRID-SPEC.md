@@ -748,10 +748,17 @@ widens a cell selection to its row. Where selection is already rows that gesture
 `Shift+Space` takes the meaning it has in every desktop list instead, which is the one users arrive
 with.
 
-**A run ends at the next key without `Shift`, and at a sort, a filter or a page.** Those last three end
-the anchor with it, because both ends of a range are positions in the view and all three are ways a row
-arrives at an index that used to belong to another one. That is one call in `RefreshAsync`, which is
-where every state change a user can make already funnels.
+**A run ends at the next key without `Shift`, at a sort, a filter or a page, and at leaving the grid.**
+The middle three end the anchor with it, because both ends of a range are positions in the view and all
+three are ways a row arrives at an index that used to belong to another one. That is one call in
+`RefreshAsync`, which is where every state change a user can make already funnels.
+
+Leaving is different and ends only the run. A run also carries the selection as it stood when it
+opened, and blur is exactly where that stops being trustworthy - the user can select elsewhere and come
+back, and a surviving run would restore rows they had since dropped. The anchor stays, on the same
+reasoning the cursor's position does: it says where the next range reaches from rather than what is
+selected now. The visible consequence is that a range you tabbed away from is committed - the next
+Shift can extend past it but not take it back - which is the honest reading of a gesture that ended.
 
 **Off under virtualization**, which is the same scope choice delegated clicks make and for a related
 reason. A range is the rows between two positions, and the rows come from `View()` - what the render
