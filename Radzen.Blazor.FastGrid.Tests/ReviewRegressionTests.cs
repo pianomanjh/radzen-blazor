@@ -438,6 +438,60 @@ namespace Radzen.FastGrid.Tests
             }
         }
 
+        // --- A computed column's filter path -----------------------------------------------------
+
+        [Fact]
+        public void AComputedColumnDoesNotFilterByItsSortKey()
+        {
+            // ApplyFilter composes from the display expression; FilterPropertyPath is what the
+            // reflective route filters by, and it fell back to the sort key when the display expression
+            // was computed. So the same column filtered a different member depending on which route the
+            // grid took - and which route it takes is decided by whether some *other* column declined.
+            // A column that cannot name its display member declines to filter, as it already declines
+            // to sort; FilterBy is the way to give it one.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First + " " + x.Last,
+                        sortBy: x => x.Last, filterValue: "Cook")));
+            });
+
+            var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
+
+            Assert.Null(column.FilterPropertyPath);
+            Assert.False(column.CanFilter);
+            Assert.Equal(4, cut.FindAll("tbody tr").Count);
+        }
+
+        [Fact]
+        public void AComputedColumnStillFiltersByAnExplicitFilterBy()
+        {
+            // Declining is only right because there is a way to say what to filter by.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First + " " + x.Last,
+                        sortBy: x => x.Last, filterBy: x => x.Last, filterValue: "Cook")));
+            });
+
+            var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
+
+            Assert.Equal(nameof(Person.Last), column.FilterPropertyPath);
+            Assert.Equal(1, cut.FindAll("tbody tr").Count);
+        }
+
         // --- A settings restore and the columns it cannot name ---------------------------------
 
         [Fact]
