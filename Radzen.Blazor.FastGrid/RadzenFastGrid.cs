@@ -1111,18 +1111,21 @@ namespace Radzen.FastGrid
             builder.OpenElement(32, "tr");
             builder.AddAttribute(33, "role", "row");
 
-            // The header is a row of the grid, so it is numbered with the rest of them. Attributes and
-            // children are diffed as two runs rather than one, so a number above the children's is
-            // free to use here - and the positional ARIA takes a band of its own at 300 because there
-            // is no number free beside any of the roles it sits next to.
+            // The header is a row of the grid, so it is numbered with the rest of them. 302 rather than
+            // 34, and the rule behind that is narrower than it looks: an element's attributes are
+            // diffed against each other and its children against each other, in two separate passes -
+            // RenderTreeDiffBuilder finds where the attributes end and walks only that range - so what
+            // has to ascend is each run on its own. An attribute numbered above a child is nothing.
+            // Two attributes out of order are a dropped fast path.
             if (RowsAreCounted)
             {
                 builder.AddAttribute(302, "aria-rowindex", "1");
             }
 
-            // A region, not a bare cell: a tr's attributes and its children share one ascending sequence
-            // space, and there is no number free between the tr's role attribute and the first column
-            // header. A region opens a space of its own, and costs one frame per render.
+            // A region, not a bare cell, and not for the numbering: the conditional th and the first th
+            // of the loop below are both the tr's first child, so without one they would claim the same
+            // sequence and the diff would read a switched-on toggle column as a changed header. A region
+            // opens a space of its own, and costs one frame per render.
             if (ExpandColumn)
             {
                 builder.OpenRegion(34);

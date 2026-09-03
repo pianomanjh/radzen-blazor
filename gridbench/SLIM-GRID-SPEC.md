@@ -388,6 +388,14 @@ Each layer below caught real faults the previous one missed. Use all of them.
    a frozen column. Frames are pooled, so the work shows up in time and not in bytes - the same
    observation as the bimodal rows, from the other side.
 
+   **Sequence numbers ascend per run, not per element.** `RenderTreeDiffBuilder` finds where an
+   element's attributes end and diffs that range on its own, then diffs the children on their own - so
+   an attribute numbered above a child costs nothing, and two attributes out of order drop the fast
+   attribute path. The comment in `RenderHead` said the two shared one space and was the stated reason
+   for a region; the region is still right, for the other reason (a conditional first child and a
+   loop's first child would claim the same number), but the rule it cited was wider than the truth. A
+   review found seven violations against the wide rule; four were real.
+
    **A control that separates a feature from an attribute does not separate an attribute from its
    value.** `data-r` read +16 KB, and the control that established it - a row-click grid writing the
    same attribute and binding nothing else - was sound and landed within half a kilobyte. It proved the
