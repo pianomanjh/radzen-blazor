@@ -526,6 +526,12 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   const rows = dataRows(table);
   const widths = [];
 
+  // The bare column's own measurement, and the running total of everything being fitted - both only
+  // needed for the no-slack case below.
+  let bareWidth = null;
+  let measured = 0;
+  let available = 0;
+
   installMeasuringStyle();
   table.classList.add(MEASURING);
 
@@ -575,11 +581,46 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       const px = Math.ceil(widest) + 1;
 
       // The bare column takes whatever the fitted ones left, which under table-layout:fixed is what
-      // a col with no width at all means.
-      widths.push(indices[k] === bare ? null : bound(px, minWidths[k], maxWidths[k]));
+      // a col with no width at all means. Its own measurement is kept rather than discarded: it is
+      // what the column needs if it turns out there is nothing left to take.
+      if (indices[k] === bare) {
+        bareWidth = bound(px, minWidths[k], maxWidths[k]);
+        widths.push(null);
+      } else {
+        widths.push(bound(px, minWidths[k], maxWidths[k]));
+      }
+
+      measured += px;
     }
+    // With the other reads, not after them. The measuring class changes what is inside a cell, never
+    // the width of the cell itself - under table-layout:fixed that is the column's to decide - so a
+    // header box measured here is the same box it will be afterwards. A column nobody is fitting keeps
+    // whatever width it has, so its current one is also its final one.
+    const fitting = new Set(indices);
+    const cells = headCells(table);
+
+    for (let i = 0; i < cells.length; i++) {
+      if (!fitting.has(i - toggleOffset)) {
+        measured += cells[i].getBoundingClientRect().width;
+      }
+    }
+
+    available = table.parentElement ? table.parentElement.clientWidth : table.clientWidth;
   } finally {
     table.classList.remove(MEASURING);
+  }
+
+  // Bareness exists to absorb slack. When the fitted columns already fill the container there is none
+  // to absorb, and a col with no width in a table that has overflowed its parent is given nothing at
+  // all - the column renders zero pixels wide and its content is simply not there. The table is
+  // supposed to overflow and the wrapper to scroll; the bare column disappearing is not part of that.
+  //
+  // Decided by arithmetic rather than by writing the widths and looking, because looking would cost a
+  // second whole-table layout. Both figures it needs are read inside the measuring pass above, with
+  // every other read - taking them from here instead put the pass over its own timing gate, which is
+  // what that gate is for.
+  if (bare >= 0 && bareWidth !== null && measured >= available) {
+    widths[indices.indexOf(bare)] = bareWidth;
   }
 
   if (animate) {
