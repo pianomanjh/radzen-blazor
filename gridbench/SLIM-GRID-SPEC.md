@@ -1044,12 +1044,16 @@ source - on a selectable grid, selected, focused and selected-and-focused are by
 after; on a grid without selection, the row background goes from nothing to `rgba(53,160,215,.2)` and
 the cell from no outline to `solid 2px` inset by `-2px`.
 
-The package carries the same rules meanwhile so the grid does not depend on a version bump, and the
-styling section says so rather than quietly weakening its claim that no stylesheet is needed.
+**Both halves have now landed and the stand-in is gone.** #2698 merged, and a follow-up moved the
+frozen-cell pseudo-element block out of `.rz-selectable` as well - without it a read-only grid tinted
+the focused row everywhere except its frozen cells, which stayed white. `Radzen.Blazor` 11.3.1 carries
+both, so the package no longer ships `fastgrid.css`, the playground no longer links it, and the parity
+fixture measures against the theme alone. The suite passes unchanged, which is what says the theme's
+rules and the stand-in's were the same rules.
 
-A read-only grid is the *only* configuration this component promises, so until one of the two lands
-this feature has no visible cursor at all. That makes the upstream fix a prerequisite rather than a
-courtesy, which is why it is first in the order below.
+A read-only grid is the *only* configuration this component promises, so before that landed the
+feature had no visible cursor at all. That made the upstream fix a prerequisite rather than a courtesy,
+which is why it was first in the order below.
 
 ### The ARIA that costs something, and when it is paid
 
