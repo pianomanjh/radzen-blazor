@@ -536,19 +536,21 @@ namespace Radzen.FastGrid
         /// </summary>
         bool ReorderedColumnsInPlacementOrder()
         {
-            var dragged = false;
-
+            // Every one of them, not any. A drag writes a position for each visible column, so a
+            // complete set is what a drag looks like - and only a complete set can be ranked, because
+            // ranking a partial one puts the columns that have a number in front of the ones that do
+            // not. A settings restore is exactly that partial case: a template column has no property
+            // path, so its order is never stored, and what comes back names some columns and not
+            // others. Those still go through the placement below, which is built to fill holes.
             for (var i = 0; i < visibleColumns.Count; i++)
             {
-                if (visibleColumns[i].ReorderedIndex is not null)
+                if (visibleColumns[i].ReorderedIndex is null)
                 {
-                    dragged = true;
-
-                    break;
+                    return false;
                 }
             }
 
-            if (!dragged)
+            if (visibleColumns.Count == 0)
             {
                 return false;
             }
