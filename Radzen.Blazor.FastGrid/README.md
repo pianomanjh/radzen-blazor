@@ -637,8 +637,9 @@ last row `Space` or `Enter` acted on - to wherever the cursor is now, so `Shift+
 row selects everything between the two, and `Shift+Arrow` grows and shrinks that range as the cursor
 moves. It is recomputed from the anchor every time rather than accumulated, so backing up gives back
 exactly the rows it covered, and rows chosen before the run began are left alone. Any key pressed
-without `Shift` ends the run, and a sort, a filter or a page change ends it too - both ends of a range
-are positions in the view, and those three are what make row 4 belong to a different item.
+without `Shift` ends the run, and so does leaving the grid, a sort, a filter or a page change - both
+ends of a range are positions in the view, and a run also holds the selection as it stood when it
+opened, which stops being true the moment you can go and change it somewhere else.
 
 Two limits, both deliberate. `Shift` with `ArrowLeft` or `ArrowRight` moves without extending: the
 WAI-ARIA pattern extends a *cell* selection with them, and what this grid selects is rows. And range

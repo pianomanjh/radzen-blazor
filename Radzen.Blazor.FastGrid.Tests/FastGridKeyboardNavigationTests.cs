@@ -624,6 +624,32 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void LeavingTheGridEndsTheRunButKeepsTheAnchor()
+        {
+            // A run holds the selection as it stood when it opened, and leaving is where that stops
+            // being true. The anchor stays: it says where the next range reaches from, not what is
+            // selected now.
+            using var grid = new Selecting();
+
+            grid.Press(" ");
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol" }, grid.Rows());
+
+            grid.Grid.Find(".rz-data-grid-data").Blur();
+            grid.Grid.Find(".rz-data-grid-data").Focus();
+
+            // Back to the anchor. A run that had survived would give Alice back, because she would
+            // still be inside the range it was reaching over. The run ended, so the range that opens
+            // here reads the selection as it stands and Alice is part of it - the gesture that added
+            // her is finished business rather than something the next Shift can still take back.
+            grid.Press("ArrowUp", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol" }, grid.Rows());
+            Assert.Equal((0, 0), grid.Grid.Instance.FocusedCell);
+        }
+
+        [Fact]
         public void CtrlEndExtendsToTheLastRow()
         {
             // Every key that moves the cursor extends, because extending is what the move does on the

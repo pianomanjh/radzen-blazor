@@ -69,8 +69,10 @@ namespace Radzen.FastGrid
         /// <summary>The id of the tbody the listener is attached to.</summary>
         internal string BodyElementId => ElementId + "-body";
 
-        // Index strings for the rows' data-r and aria-rowindex, so writing one costs a frame and not an
-        // allocation.
+        // Small-integer strings, so writing one into the markup costs a frame and not an allocation.
+        // Shared: the rows' data-r, aria-rowindex, aria-colindex and aria-colcount all draw on it -
+        // which is why it is not named for rows any more, even though it lives beside the feature that
+        // needed it first.
         //
         // It grows to fit rather than stopping at a fixed size, and the reason is a measurement: the
         // table used to hold 512, a thousand-row grid therefore called ToString on 488 rows of every
@@ -82,11 +84,11 @@ namespace Radzen.FastGrid
         // does not build nine hundred thousand strings for the tens of rows it can show. Past the
         // bound it is ToString again, which is where it started - but a virtualized window is tens of
         // rows and a page is a page, so nothing renders enough of them for that to matter.
-        const int MaxRowIndexStrings = 16384;
+        const int MaxIndexStrings = 16384;
 
-        static string[] rowIndexStrings = CreateRowIndexStrings(512);
+        static string[] indexStrings = CreateIndexStrings(512);
 
-        static string[] CreateRowIndexStrings(int count)
+        static string[] CreateIndexStrings(int count)
         {
             var indexes = new string[count];
 
@@ -98,18 +100,18 @@ namespace Radzen.FastGrid
             return indexes;
         }
 
-        internal static string RowIndexString(int index)
+        internal static string IndexString(int index)
         {
             // Read once. Another circuit may swap the table in between, and either the old one or the
             // new one answers correctly - they hold the same strings for the same indexes.
-            var cache = rowIndexStrings;
+            var cache = indexStrings;
 
             if ((uint)index < (uint)cache.Length)
             {
                 return cache[index];
             }
 
-            if (index < 0 || index >= MaxRowIndexStrings)
+            if (index < 0 || index >= MaxIndexStrings)
             {
                 return index.ToString(CultureInfo.InvariantCulture);
             }
@@ -122,8 +124,8 @@ namespace Radzen.FastGrid
             }
 
             // Last writer wins, and a race costs a duplicate table rather than a wrong answer.
-            cache = CreateRowIndexStrings(size);
-            rowIndexStrings = cache;
+            cache = CreateIndexStrings(size);
+            indexStrings = cache;
 
             return cache[index];
         }

@@ -365,20 +365,20 @@ namespace Radzen.FastGrid.Tests
             // of every render - 16 KB that this branch spent a while attributing to the render frame
             // instead. Asserted on identity: a cached index is the same string object every time, and
             // one built on the spot is not.
-            Assert.Same(RadzenFastGrid<Person>.RowIndexString(3),
-                RadzenFastGrid<Person>.RowIndexString(3));
+            Assert.Same(RadzenFastGrid<Person>.IndexString(3),
+                RadzenFastGrid<Person>.IndexString(3));
 
-            Assert.Same(RadzenFastGrid<Person>.RowIndexString(900),
-                RadzenFastGrid<Person>.RowIndexString(900));
+            Assert.Same(RadzenFastGrid<Person>.IndexString(900),
+                RadzenFastGrid<Person>.IndexString(900));
 
-            Assert.Equal("900", RadzenFastGrid<Person>.RowIndexString(900));
+            Assert.Equal("900", RadzenFastGrid<Person>.IndexString(900));
 
             // Growth is bounded, so a grid scrolled to row 900,000 does not build the table to reach
             // it. Past the bound the answer is still right, it just costs a string.
-            Assert.Equal("900000", RadzenFastGrid<Person>.RowIndexString(900000));
+            Assert.Equal("900000", RadzenFastGrid<Person>.IndexString(900000));
 
-            Assert.NotSame(RadzenFastGrid<Person>.RowIndexString(900000),
-                RadzenFastGrid<Person>.RowIndexString(900000));
+            Assert.NotSame(RadzenFastGrid<Person>.IndexString(900000),
+                RadzenFastGrid<Person>.IndexString(900000));
         }
     }
 }
