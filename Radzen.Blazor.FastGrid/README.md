@@ -210,8 +210,9 @@ time against the same baseline:
 | keyboard navigation and range selection | 155.75 KB | +0 KB *over navigation* | 0.99x |
 | a pager and row numbers over one page | 155.81 KB | +1.93 KB, all of it the pager | 1.01x |
 | six columns with the middle one hidden, and column numbers | 159.87 KB | +5.99 KB, almost all of it the sixth column | 1.20x |
-| `ItemKey` | 175.28 KB | **+23.5 KB** | 1.05x |
-| cell tooltip | 267.63 KB | **+115.9 KB** | 1.45x |
+| `ItemKey` | 177.37 KB | **+23.5 KB** | 1.07x |
+| `ItemKey` over a reference-typed key | 153.93 KB | +0.04 KB | 1.13x |
+| cell tooltip | 270.59 KB | **+116.7 KB** | 1.46x |
 | row click | 154.66 KB | +0.78 KB | 1.03x |
 | row detail with its toggle column | 154.76 KB | +0.88 KB | 1.10x |
 | cell click | 154.66 KB | +0.78 KB | 1.10x |
@@ -252,9 +253,17 @@ Two rows are worth reading carefully rather than at face value:
   drawn. What column numbers do cost is **about 1.1x the render time**, one attribute frame on every
   cell, which is the shape frozen columns already have. That measurement is why the grid writes them on
   every cell only when it has to.
-- **`ItemKey`'s 23.5 KB is the boxing.** A `Func<TItem, object>` over an `int` key boxes once per row,
-  which is 24 bytes a thousand times. A reference-typed key costs nothing here. This is the one feature
-  on the list whose price is paid in the key's type rather than in the grid.
+- **`ItemKey`'s 23.5 KB is the boxing, and there is now a row that proves it.** A
+  `Func<TItem, object>` over an `int` key boxes once per row, which is 24 bytes a thousand times. The
+  claim that follows - that a reference-typed key costs nothing - used to be an inference; the control
+  row measures it at **+0.04 KB**. This is the one feature on the list whose price is paid in the key's
+  type rather than in the grid, and the only one you can make free by changing what you pass it.
+- **Markup is paid in the values, not the frames.** Every large per-row or per-cell cost on this list
+  turned out to be a string once a control was put behind it, and every frame-shaped cost turned out to
+  be time: the tooltip is 116 KB of derived text and a free attribute; `data-r` was 16 KB of uncached
+  `ToString` and a 0.78 KB frame; `aria-colindex` on five thousand cells is 0.09 KB and 1.1x; frozen
+  columns are 0.9 KB and 1.10x; responsive titles are 0.17 KB and 1.40x. If a number here is large and
+  attributed to a frame, it has not been measured yet.
 - **An attribute per row costs 0.78 KB, and it used to read 16.** The row index every delegated click
   resolves a row by was measured at +16 KB at 1000 rows and written up as the render *frame* - the
   values being pre-cached strings, the frame was what was left. It was the other half: the table of
@@ -272,8 +281,11 @@ Two rows are worth reading carefully rather than at face value:
   the split was wrong in the direction the pooled frame array predicted, and the part left unattributed
   was more delegate than anything else.
 
-The tooltip's 116 KB is the `title` attribute plus deriving each cell's text a second time, since
-`RenderCell` writes into the builder rather than returning a string.
+**The tooltip's 116 KB is the text, and none of it is the attribute.** Writing a constant `title` on
+every cell without deriving anything measures 154.03 KB against a bare 154.03 - the attribute frame is
+free. All of it is `CellTextOf` allocating a string per cell, because `RenderCell` writes into the
+builder rather than returning one. That is the same shape as the `data-r` correction above, found the
+same way, and it is why the rule below is worth stating outright.
 
 The filter row is per column and stays per column: `+2.56 KB` for the row itself and `+1.32 KB` for the
 second event handler that filtering-as-you-type binds to each of the five boxes - about 0.26 KB a box,
@@ -296,7 +308,7 @@ and deliberately so: the honest comparison is against the best version of the th
 | Feature on both | `RadzenFastGrid` | `RadzenDataGrid` | Gap | Costs RadzenDataGrid |
 | --- | ---: | ---: | ---: | ---: |
 | *nothing* | 152.92 KB | 13,172 KB | 86x | - |
-| cell tooltip | 269.62 KB | 13,172 KB | **49x** | +0 KB |
+| cell tooltip | 270.59 KB | 13,172 KB | **49x** | +0 KB |
 | row class | 153.17 KB | 14,087 KB | 92x | +914 KB |
 | row click | 154.66 KB | 14,834 KB | **96x** | +1,662 KB |
 | a filter row | 157.14 KB | 16,098 KB | **102x** | +2,926 KB |

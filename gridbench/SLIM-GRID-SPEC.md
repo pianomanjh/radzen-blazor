@@ -396,6 +396,14 @@ Each layer below caught real faults the previous one missed. Use all of them.
    loop's first child would claim the same number), but the rule it cited was wider than the truth. A
    review found seven violations against the wide rule; four were real.
 
+   **Markup is paid in the values, not the frames.** Three large costs on this branch were attributed
+   to render-tree frames and all three were strings: `data-r`'s 16 KB was uncached `ToString`, the cell
+   tooltip's 116 KB is text derived per cell with a *free* attribute, and `ItemKey`'s 23.5 KB is
+   boxing - the one of the three whose stated cause survived a control, at +0.04 KB for a
+   reference-typed key. What frames actually cost is time: `aria-colindex` 1.1x, frozen columns 1.10x,
+   responsive titles 1.40x, each for under a kilobyte. **A large allocation attributed to a frame has
+   not been measured yet.**
+
    **A control that separates a feature from an attribute does not separate an attribute from its
    value.** `data-r` read +16 KB, and the control that established it - a row-click grid writing the
    same attribute and binding nothing else - was sound and landed within half a kilobyte. It proved the

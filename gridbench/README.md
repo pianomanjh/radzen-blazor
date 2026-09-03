@@ -772,6 +772,47 @@ Row numbers under a hundred: the grid still emits them per row, and they are sti
 index-string table now covers whatever is being rendered. Before it was grown, this same row read
 171.29 KB - which is how the table's size came to be looked at at all.
 
+### The measurement audit: two claims checked with controls, one of them wrong
+
+Prompted by the `data-r` correction below. The question asked of every large recorded cost was the one
+that would have caught it: **is the stated cause isolated by a control, or inferred?** Two claims were
+attributed to a mechanism by reasoning alone.
+
+**`ItemKey`'s 23.5 KB is the boxing — confirmed.** The claim was that a `Func<TItem, object>` over an
+`int` boxes once per row, 24 bytes a thousand times, and therefore "a reference-typed key costs nothing
+here". That second half is a testable prediction and it had never been run. It is now a permanent row:
+
+| | Allocated |
+| --- | ---: |
+| bare | 153.89 KB |
+| `+ ItemKey` (an `int` key) | 177.37 KB |
+| `+ ItemKey over a reference-typed key` | **153.93 KB** |
+
++0.04 KB. The attribution holds, and the claim is now measured rather than reasoned.
+
+**The cell tooltip's 116 KB is the text, not the attribute — corrected.** The write-up read "the `title`
+attribute plus deriving each cell's text a second time", crediting the attribute with a share. Writing a
+constant `title` on every cell and skipping the derivation entirely:
+
+| | Allocated |
+| --- | ---: |
+| bare | 154.03 KB |
+| `+ cell tooltip`, constant title, nothing derived | **154.03 KB** |
+| `+ cell tooltip`, as shipped | 270.59 KB |
+
+The attribute frame is **free**. All 116.7 KB is `CellTextOf` allocating a string per cell. Same shape
+as the `data-r` error, found the same way.
+
+**The rule that comes out of all of it:** *markup is paid in the values, not the frames.* Every large
+per-row or per-cell allocation on this branch has turned out to be a string once a control was put
+behind it, and every frame-shaped cost has turned out to be time — `aria-colindex` 1.1x, frozen columns
+1.10x, responsive titles 1.40x, each under a kilobyte. **A large allocation attributed to a frame has
+not been measured yet.**
+
+Also checked and clear: no other per-row or per-cell string is built in the render path. `RowClassFor`
+returns constants in the common case and memoizes otherwise, and the only concatenations left are per
+column, in the header and footer.
+
 ### `data-r` cost 16 KB, and it was the string table running out
 
 The design had the cursor address rows by the `data-r` attribute that delegated clicks already write,
