@@ -546,6 +546,8 @@ not - the whole suite passed before and after every one of them.
 | `RadzenFastGrid.Data.cs` - query semantics | reviewed | 5 |
 | Delegated clicks and `fastgrid.js` | reviewed | 4 |
 | Frozen columns, resize, reorder | reviewed | 6 |
+| The drop-down, re-reviewed | reviewed | 6 |
+| Today's own fixes, re-reviewed | reviewed | 3 |
 | **`RadzenFastGrid.cs`, the core render path** | **not reviewed** - 2,058 lines, 31 commits since `a95a32e04` | - |
 | **`ColumnBase.cs` and the column types** | **not reviewed** - 833 lines, 14 commits since `a95a32e04` | - |
 
@@ -572,6 +574,16 @@ lives: a `TemplateColumn` has no property path, so its position in a dragged ord
   orders; the click listener and the keyboard cursor share one `locate()`.
 - **A number attributed to a mechanism without a control has not been measured.** §9 has the rule and
   what it cost to learn.
+- **A fix is right for the case that motivated it and has to be checked against the neighbouring
+  one.** Reviewing a day of fixes found three faults in them: a listener that let go without
+  forgetting it had attached, so the grid could not take it up again; `default(TItem) is not null`,
+  which answers null for a `Nullable<T>` as well as for a class; and three attribute runs left
+  descending by the commits that documented the rule against it. Every one was the other half of a
+  conditional the fix had only read one way.
+- **"It was reviewed once" and "little has changed since" predict nothing.** The drop-down had its own
+  15-fault pass and 3 commits after it, and was ranked last for that reason; re-reading it found six,
+  including a validator that never fired and a multiple selection that lost a tick when the user
+  turned the page.
 
 ## 11. What is next, in the order it was argued
 
