@@ -1140,7 +1140,10 @@ namespace Radzen.FastGrid
         {
             if (settings.PageSize is { } size and > 0)
             {
-                declaredPageSize = size;
+                // Not declaredPageSize, which is what the *markup* asked for and exists only to notice
+                // that changing. Writing a restored size there makes the next parameter set read it as
+                // an outside change, throw the restored size away and go back to page one - and the
+                // settings raised after that persist the wrong size, so it never comes back.
                 pageSize = size;
             }
 
@@ -1620,20 +1623,26 @@ namespace Radzen.FastGrid
                 return loaded;
             }
 
+            var data = Data ?? Enumerable.Empty<TItem>();
+
+            // Before the executor check, and in the same order TotalCount and ProvideRows read the two.
+            // A handler is free to assign a queryable rather than a list - it has already sorted and
+            // paged, so what it leaves behind is one page - and taking the executor branch first
+            // rendered nothing while the pager, which checks the handler first, went on counting the
+            // handler's rows. A grid reading "1-10 of 500" above an empty table, with no reload able to
+            // fix it.
+            if (LoadData.HasDelegate)
+            {
+                // The handler sorted and paged already; sorting or paging it again would be wrong.
+                return data;
+            }
+
             // Nothing has loaded yet and the query belongs to the executor. Composing over it here
             // enumerates it on the render thread - a whole unpaged table pulled synchronously, for rows
             // the awaited load is about to replace.
             if (AsyncOwnsData)
             {
                 return Array.Empty<TItem>();
-            }
-
-            var data = Data ?? Enumerable.Empty<TItem>();
-
-            if (LoadData.HasDelegate)
-            {
-                // The handler sorted and paged already; sorting or paging it again would be wrong.
-                return data;
             }
 
             data = Composed(data);

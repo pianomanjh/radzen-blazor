@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Radzen.FastGrid.Tests
@@ -413,6 +416,35 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(0, calls[^1].Skip);
         }
+        [Fact]
+        public void AHandlerMayServeAQueryableRatherThanAList()
+        {
+            // A handler is free to assign the page it built without materializing it. The grid used to
+            // check "does an executor own this queryable" before "is there a handler", so it rendered
+            // nothing - while the pager, which checks the handler first, went on counting the handler's
+            // rows. A grid reading its count above an empty table, and no reload could fix it.
+            using var ctx = new TestContext();
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(new PassThroughExecutor());
+
+            // Unpaged, because the host materializes a paged answer into a List and the queryable is
+            // the whole point of this case.
+            var cut = Render(ctx, source: rows => rows.AsQueryable());
+
+            Assert.Equal(30, cut.FindAll("tbody tr").Count);
+        }
+
+        /// <summary>An executor that claims every queryable, so AsyncOwnsData is true for one.</summary>
+        sealed class PassThroughExecutor : IFastGridQueryExecutor
+        {
+            public bool IsSupported<T>(IQueryable<T> queryable) => true;
+
+            public Task<int> CountAsync<T>(IQueryable<T> queryable, CancellationToken cancellationToken = default)
+                => Task.FromResult(queryable.Count());
+
+            public Task<List<T>> ToListAsync<T>(IQueryable<T> queryable, CancellationToken cancellationToken = default)
+                => Task.FromResult(queryable.ToList());
+        }
     }
 
     /// <summary>Holds Data and Count for the grid, the way a page using LoadData does.</summary>
@@ -462,5 +494,6 @@ namespace Radzen.FastGrid.Tests
             builder.AddComponentReferenceCapture(9, o => Grid = (RadzenFastGrid<Person>)o);
             builder.CloseComponent();
         }
+
     }
 }
