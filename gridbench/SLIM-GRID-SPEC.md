@@ -565,7 +565,11 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 All four steps of the order below are built: the theme fix upstream, the cursor itself - the C#
 algorithm, the JavaScript effect layer, the re-assert after every render, and the package's interim
 stylesheet - range selection, and positional ARIA. **Measured at +1.4 KB and 1.00x** for the cursor,
-**+0 KB** for range selection and **+0.1 KB and ~1.1x** for the ARIA, all inside the gate. Everything below carries the reason it was decided that way, so it can be re-argued rather
+**+0 KB** for range selection and **+0.1 KB** for the ARIA. Three of the four are inside the gate; the
+fourth is not, and deliberately. **`aria-colindex` on every cell runs at ~1.1x against a gate of
+1.02x** - brought back as a number to decide on, as the budget section requires, and kept: the tiers
+below confine it to a grid whose user has hidden a column that is not at the end, and the alternative
+was gating a screen reader's correctness behind a switch aimed at sighted keyboard users. Everything below carries the reason it was decided that way, so it can be re-argued rather
 than merely obeyed; where it diverges from `RadzenDataGrid` the divergence is deliberate and the reason
 is given. Two of the decisions did not survive contact with a measurement, and both are marked where
 they stand rather than quietly rewritten.
