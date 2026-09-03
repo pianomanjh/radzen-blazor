@@ -438,6 +438,78 @@ namespace Radzen.FastGrid.Tests
             }
         }
 
+        // --- A settings restore and the columns it cannot name ---------------------------------
+
+        [Fact]
+        public void ASettingsRestoreDoesNotClearTheFilterOfAColumnItCannotName()
+        {
+            // Settings identify a column by PropertyPath, but a column filters by FilterPropertyPath,
+            // and for a CollectionColumn without SortBy those disagree: it has no PropertyPath, so it
+            // is never stored - yet the restore cleared every column's filter before putting back the
+            // ones it could name. A reset must not reach further than the restore that follows it.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var settings = new FastGridSettings
+            {
+                Columns = new List<FastGridColumnSettings>
+                {
+                    new() { Property = nameof(Person.First), Visible = true },
+                },
+            };
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.Settings, settings);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Collection<Person, string>(x => x.Regions, filterValue: "South")));
+            });
+
+            // Alice and Bob list South. Cleared, all four rows come back.
+            Assert.Equal(
+                new[] { "Alice", "Bob" },
+                cut.FindAll("tbody tr").Select(r => r.QuerySelectorAll("td")[0].TextContent).ToArray());
+        }
+
+        [Fact]
+        public void ASettingsRestoreDoesNotDropASortItCannotName()
+        {
+            // The same reach problem on the sort side. A FastGridSort over a computed key has no Path -
+            // the type documents that as "nothing to write down" - but the column can still sort by it,
+            // so clearing the list wholesale threw away a sort the restore had no way to re-add.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var settings = new FastGridSettings
+            {
+                Columns = new List<FastGridColumnSettings>
+                {
+                    new() { Property = nameof(Person.First), Visible = true },
+                },
+            };
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.Settings, settings);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Collection<Person, string>(x => x.Regions,
+                        sortBy: FastGridSort<Person>.By(x => x.Salary * 2),
+                        sortOrder: SortOrder.Ascending)));
+            });
+
+            // Salary ascending: Dave 1000, Alice 2000, Bob 3000, Carol 4000.
+            Assert.Equal(
+                new[] { "Dave", "Alice", "Bob", "Carol" },
+                cut.FindAll("tbody tr").Select(r => r.QuerySelectorAll("td")[0].TextContent).ToArray());
+        }
+
         // --- A declared sort on a column that cannot be sorted by ------------------------------
 
         [Fact]
