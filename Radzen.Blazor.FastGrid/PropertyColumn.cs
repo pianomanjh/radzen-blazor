@@ -401,17 +401,23 @@ namespace Radzen.FastGrid
         }
 
         /// <inheritdoc />
-        public override IOrderedQueryable<TItem> ApplySort(IQueryable<TItem> source, bool descending)
+        public override IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending)
         {
-            var expression = SortBy ?? Property;
+            if (!CanSort || (SortBy ?? Property) is not { } expression)
+            {
+                return null;
+            }
 
             return descending ? source.OrderByDescending(expression) : source.OrderBy(expression);
         }
 
         /// <inheritdoc />
-        public override IOrderedQueryable<TItem> ApplyThenBy(IOrderedQueryable<TItem> source, bool descending)
+        public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending)
         {
-            var expression = SortBy ?? Property;
+            if (!CanSort || (SortBy ?? Property) is not { } expression)
+            {
+                return null;
+            }
 
             return descending ? source.ThenByDescending(expression) : source.ThenBy(expression);
         }
