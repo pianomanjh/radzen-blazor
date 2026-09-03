@@ -576,16 +576,23 @@ not - the whole suite passed before and after every one of them.
 | The drop-down, re-reviewed | reviewed | 6 |
 | Today's own fixes, re-reviewed | reviewed | 3 |
 | Attribute-run ordering, all render files | mechanically checked | 1 |
-| `ColumnBase.cs` and the column types | reviewed | 4: 3 fixed, 1 open |
-| `RadzenFastGrid.cs`, the core render path | reviewed | 5: 3 fixed, 2 open |
+| `ColumnBase.cs` and the column types | reviewed | 5: 4 fixed, 1 open |
+| `RadzenFastGrid.cs`, the core render path | reviewed | 5: 4 fixed, 2 open |
 
 **Every slice has now been read by someone other than its author**, which was not true until the two
-passes that closed the rows above. Between them they found nine, of which six are fixed and three are
-recorded as open because each is a design decision rather than a fix.
+passes that closed the rows above. Between them they found ten, of which eight are fixed and three are
+recorded as open because each is a design decision rather than a fix - one finding was two symptoms of
+a single cause, fixed once.
 
 Both passes independently reported the same two non-ascending attribute runs, which is also what a
-script walking every run in the package found: the footer splat (fixed) and the header title cell (a
-recorded decision, left alone). Nothing else in the package is out of order.
+script walking every run in the package found: the footer splat and the header title cell. **Both are
+now fixed, and every attribute run in the package ascends.**
+
+The header cell is the more interesting of the two. It had been left alone twice on the strength of a
+comment saying the element *could not* be fixed, only declined to add to - a claim about the framework
+rather than about the schedule, and false: the reorder pair drops into the gap the class and
+`aria-sort` leave by moving up. **A recorded decision is only as good as the reason recorded with it**,
+and "we chose not to" and "it cannot be done" are worth checking apart before either is inherited.
 
 From the core render path, all three fixed ones were a rule applied in one place and not in its
 neighbour:
@@ -612,6 +619,10 @@ From the column model, likewise:
   follows can only name a column by `PropertyPath` - so a column without one lost what its markup
   declared. A `CollectionColumn` has no `PropertyPath` when it has no `SortBy`, and none when its
   `SortBy` is over a computed key, while filtering perfectly well by `FilterPropertyPath` throughout.
+- A computed column borrowed its sort key as a filter path. `ApplyFilter` composes from the display
+  expression and the reflective route filters by the path, so the column filtered two different
+  members depending on which route ran - and which one runs is decided by whether some *other* column
+  declined. It declines to filter now, as it already declines to sort.
 - `In` and `NotIn` read a null string as itself in the delegate builder and as the empty string in the
   expression builder, so one grid over a `List` and the same grid over a queryable answered one
   check-box-list filter differently - and the list was the side disagreeing with `QueryableExtension`.
@@ -648,6 +659,10 @@ never stored. Both are open; neither should be closed by guessing at the identit
   orders; the click listener and the keyboard cursor share one `locate()`.
 - **A number attributed to a mechanism without a control has not been measured.** §9 has the rule and
   what it cost to learn.
+- **A comment that states a constraint is a claim to be checked, not a fact to be inherited.** Two
+  separate ones on this branch were wrong in the same direction - both said something was impossible
+  when it was merely undone, and both were believed twice. See the header cell above and the sequence
+  rule below.
 - **A rule stated in a comment is only as good as the comment.** `d9992eaaf` corrected the sequence
   rule where it was argued and left one instance of the old, wider claim standing - ten lines above a
   comment stating the true one, and directly above numbering that is only correct under the new rule.
