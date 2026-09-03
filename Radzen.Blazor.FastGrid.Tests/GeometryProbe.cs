@@ -194,11 +194,18 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// <summary>The width strings the script wrote, in the order it was given the columns.</summary>
         [JsonPropertyName("written")] public string[] Written { get; set; }
 
+        /// <summary>How long the whole measure-and-write pass took, in milliseconds.</summary>
+        [JsonPropertyName("elapsed")] public double Elapsed { get; set; }
+
+        /// <summary>How many rows it walked, so a fast number cannot come from an empty table.</summary>
+        [JsonPropertyName("rowsMeasured")] public int RowsMeasured { get; set; }
+
         [JsonPropertyName("paneWidth")] public double PaneWidth { get; set; }
 
         public override string ToString() =>
             $"before: {Before}; after: {After}; wrote [{string.Join(", ", Written ?? Array.Empty<string>())}]; " +
-            string.Create(CultureInfo.InvariantCulture, $"in a {PaneWidth}px pane");
+            string.Create(CultureInfo.InvariantCulture,
+                $"{Elapsed}ms over {RowsMeasured} rows in a {PaneWidth}px pane");
     }
 
     /// <summary>What one measurement run read back out of the browser.</summary>

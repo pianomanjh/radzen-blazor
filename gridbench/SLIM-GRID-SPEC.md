@@ -38,6 +38,8 @@ was re-measured with it, and two runs of it agreed to within 0.71 KB.
 | positional ARIA, row numbers | **+0 KB** |
 | positional ARIA, column numbers on every cell | **+0.1 KB, ~1.1x** |
 | responsive titles | **+0 KB, 1.40x** |
+| column auto-fit, off | **0 KB** - 154.04 against a 154.09 bare |
+| column auto-fit, on demand | **+0.2 KB**, and ~1.7ms + 0.03ms a rendered row in the browser (§13) |
 | the scroll container and `role="grid"` | 0 |
 
 Resize and reorder are measured together as well as apart: 158.9 KB and 160.8 KB on their own, 162.9 KB
@@ -81,9 +83,9 @@ took the `data-r` number down with it: **the row attribute is free and the cell 
 bytes and not in time**. §12 had them the other way round, on a frame-count argument that turned out to
 be about string values instead.
 
-**Not built**: editing, grouping, composite headers, and column auto-fit - which is designed in §13 and
-is the only one of them with a design. Keyboard navigation is built in full - the cursor, the keys,
-range selection and positional ARIA. §10 has what is still open.
+**Not built**: editing, grouping, composite headers. Keyboard navigation is built in full - the cursor,
+the keys, range selection and positional ARIA, and so is column auto-fit (§13). §10 has what is still
+open.
 
 ## 1. Why a separate component
 
@@ -714,8 +716,8 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
   stays on `.rz-data-grid-data` and the active cell is named by `aria-activedescendant`. What the design
   had to settle instead was where the algorithm lives, what paints a focused cell when the theme has no
   rule for one, and what a keystroke costs on a server-rendered circuit.
-- **Column auto-fit** - designed in §13, not built. The one prerequisite is the sort glyph a sortable
-  header now reserves: a header measured without it fits a glyph too narrow and jumps on first sort.
+- ~~**Column auto-fit**~~ - **built**, as §13 designed it, and the sort glyph it needed went up first
+  on its own. Two of that section's decisions did not survive being measured; both are marked there.
 - **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
 
 **Measurement debt:**
@@ -1227,9 +1229,14 @@ reorder and frozen columns have separate numbers at all.
 
 ## 13. Column auto-fit - the design
 
-Not built. Everything below carries the reason it was decided that way, so it can be re-argued rather
+**Built.** Everything below carries the reason it was decided that way, so it can be re-argued rather
 than merely obeyed. Three of the decisions come from facts about the shipped theme rather than from
 preference, and those are marked, because a theme change invalidates them and nothing else here.
+
+Two of the things written here before the code did not survive being measured, and both are marked
+where they stand rather than quietly rewritten: the header's `max-content` flip needed its flex growth
+turned off as well, and the one-frame gate was a guess that the pass does not meet at a thousand
+rendered rows and comfortably meets at every size a paged or virtualized grid reaches.
 
 ### What it is for
 
@@ -1297,9 +1304,20 @@ this feature exists to remove is what makes it measurable.
 **The header is not, and reading it the same way returns a plausible wrong answer.**
 `.rz-column-title` is an `inline-flex` at `width: 100%` with `overflow: hidden`, and its content child
 carries `overflow: hidden` too - which zeroes that child's automatic minimum size. A flex container
-whose items shrink to nothing has `scrollWidth == clientWidth`, so the header would measure as *the
-width it currently has*. Every column would fit to itself and the feature would appear to do nothing on
-a grid whose headers are the widest thing in the column.
+whose items shrink to nothing has `scrollWidth == clientWidth`, so the header measures as *the width it
+currently has*. Every column fits to itself, the numbers move a pixel or two, and nothing about the
+result says it is wrong.
+
+**And `width: max-content` on its own does not fix it - that was written here before it was tried, and
+the probe caught it.** `.rz-column-title` is `flex: auto` inside the header's flex line, and a flex
+item's used main size comes from its flex properties rather than from `width`, so setting the width
+changes nothing at all. The measuring rule has to turn the growth off with it. The first run measured
+every column at 226px against a 224.5px starting width - five columns agreeing to within a pixel, which
+is what a fit that has measured nothing looks like from the outside.
+
+**A specificity argument was the wrong diagnosis and would have survived review.** `!important` is
+needed, but it was needed against `flex`, not against `width: 100%`, and a fix aimed at the second one
+passes every markup assertion while measuring the same wrong number.
 
 So the header gets the `max-content` flip, and only the header: N elements rather than N x rows, so the
 second reflow is paid over a handful of nodes. The alternative - reading the content child and adding
@@ -1407,14 +1425,29 @@ So two channels, and **a browser millisecond must not be written into the alloca
 every other figure is a KB from a bUnit render. §9 already has "a number attributed to a mechanism
 without a control has not been measured"; this is its sibling, and the failure is quieter.
 
-| Channel | What it answers | Gate |
-| --- | --- | --- |
-| gridbench, `AutoFitColumns = None` | that the feature off costs nothing | identical to bare: 0 KB, 1.00x |
-| gridbench, `OnDemand` on | the render-side delta - an element id and an object reference | under 0.5 KB |
-| Chromium harness, `performance.now()` around the pass | the actual cost | under one frame, ~16ms at 1000 x 5 |
+| Channel | What it answers | Gate | Measured |
+| --- | --- | --- | --- |
+| gridbench, `AutoFitColumns = None` | that the feature off costs nothing | identical to bare | **154.04 KB against a 154.09 KB bare - free** |
+| gridbench, `OnDemand` on | the render-side delta - an element id and a colgroup | under 0.5 KB | **154.33 KB, +0.24 KB** |
+| Chromium harness, `performance.now()` around the pass | the actual cost | see below | **~1.7ms + ~0.03ms a rendered row** |
+
+Allocation from `--job short`, so no time ratio is quoted from it.
+
+**The one-frame gate this section first wrote down was a guess, and the measurement replaced it.** The
+pass reads 3.2ms at 50 rendered rows, 7.1ms at 200 and ~32ms at 1000 - a straight line through a ~1.7ms
+fixed cost and ~0.03ms a row. So it is inside a frame for any paged or virtualized grid, which is every
+grid this feature is aimed at, and two frames for one rendering a thousand rows at once. That last
+configuration has neither paging nor virtualization, and it is the one where the pass is also doing the
+most work it will ever be asked to do.
+
+Replacing the per-cell `querySelector` with a sibling walk changed nothing measurable, which says where
+the time actually is: not the read loop but the **two forced layouts** of the whole table, one when the
+measuring class goes on and one when it comes off. That is the cost of measuring a table that sizes
+nothing to its content, and it does not go away by reading faster.
 
 The browser figure carries the machine it was taken on. Unlike an allocation number it does not travel,
-and quoting it without one invites the comparison it cannot support.
+and quoting it without one invites the comparison it cannot support. These were taken on an M-series
+Mac with the suite running alongside.
 
 ### How it is verified
 
@@ -1432,7 +1465,22 @@ three width layers, which column is left bare, and the all-frozen fallback.
 every column measured identically, it was asserting the implementation rather than the behaviour, which
 is what §9 exists for.
 
+**As built: 19 bUnit tests and 7 Chromium panes.** The probe runs the shipped `fastgrid.js` itself
+rather than a transcription of it - the export keywords come off so a `file://` page can call it, and
+nothing else about the source is touched. Its pane holds two columns with identical values and
+different titles, which is what separates the header half of the measurement from the body half: a
+width difference between those two can only have come from the header, and that is the assertion the
+flex fault failed. It carries its own control - the pane starts with every column equally wide, so a
+fit that does nothing fails rather than passes.
+
+The recorded answer at 1000 x 5, for the record and so a change to it is visible:
+`[43, 281, 159, 40, 375]` from a starting `[179.6 x 5]`, with `min(81px,40px)` written for the clamped
+column, 1000 cells truncated in that column and none in any other, and the table the same 898px before
+and after.
+
 ### The order it lands in
+
+Landed as three commits, in this order.
 
 1. **The sort glyph**, on its own and first. It is a prerequisite of measuring a header, but it also
    changes header geometry for every grid and fixes a jump that exists today - so it must not hide

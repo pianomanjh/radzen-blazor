@@ -410,6 +410,19 @@ function installMeasuringStyle() {
   document.head.appendChild(measuringStyle);
 }
 
+// The cell's text span, found by walking siblings rather than by asking the selector engine. This
+// runs once per rendered cell - five thousand times at a thousand rows - and it is the only part of
+// the pass that scales with the grid, so what it costs each time is the whole cost of the feature.
+function cellData(cell) {
+  for (let child = cell.firstElementChild; child; child = child.nextElementSibling) {
+    if (child.classList.contains('rz-cell-data')) {
+      return child;
+    }
+  }
+
+  return null;
+}
+
 function dataRows(table) {
   const body = table.querySelector(':scope > tbody');
 
@@ -497,7 +510,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
 
         for (let r = 0; r < rows.length; r++) {
           const cell = rows[r].children[at];
-          const span = cell ? cell.querySelector(':scope > .rz-cell-data') : null;
+          const span = cell ? cellData(cell) : null;
 
           if (span && span.scrollWidth > content) {
             content = span.scrollWidth;

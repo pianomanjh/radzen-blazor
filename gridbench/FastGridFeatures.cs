@@ -453,6 +453,17 @@ public class FastGridFeatureBench
     [Benchmark(Description = "= RadzenDataGrid + column resize")]
     public Task ReferenceColumnResize() => Reference(p => p["AllowColumnResize"] = true);
 
+    // Auto-fit is the one feature here whose cost this harness cannot see: the reflow, the scrollWidth
+    // pass and the getComputedStyle calls all happen in a browser, and this is bUnit. What these two
+    // rows can answer is the half a render is responsible for - that the feature off is free, and that
+    // the feature on adds an element id and an object reference and nothing per row. The browser number
+    // is taken separately, through the Chromium probe, and belongs in its own table.
+    [Benchmark(Description = "+ auto-fit off (control)")]
+    public Task AutoFitOff() => Render(p => p["AutoFitColumns"] = AutoFitMode.None);
+
+    [Benchmark(Description = "+ auto-fit on demand")]
+    public Task AutoFitOnDemand() => Render(p => p["AutoFitColumns"] = AutoFitMode.OnDemand);
+
     // Reorder is resize's sibling: a handle and a pair of callbacks per header, never per row. These
     // two rows are what says so - if either drifts towards the row-click rows, something has leaked
     // into the body.
