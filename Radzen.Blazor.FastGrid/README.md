@@ -252,14 +252,6 @@ Two rows are worth reading carefully rather than at face value:
   drawn. What column numbers do cost is **about 1.1x the render time**, one attribute frame on every
   cell, which is the shape frozen columns already have. That measurement is why the grid writes them on
   every cell only when it has to.
-- **Positional ARIA is free in bytes and not in time, and the two rows say different things.** Row
-  numbers cost nothing at all: the pager row measures 155.81 KB with them and 155.80 KB with the
-  emission taken out, so all 1.93 KB of its marginal is the pager component. Column numbers cost
-  nothing either - forcing the attribute onto every cell of the bare grid moves it 153.88 to 153.97 KB
-  - and the column row's 5.99 KB is the sixth declared column, which registers whether or not it is
-  drawn. What column numbers do cost is **about 1.1x the render time**, one attribute frame on every
-  cell, which is the shape frozen columns already have. That measurement is why the grid writes them on
-  every cell only when it has to.
 - **`ItemKey`'s 23.5 KB is the boxing.** A `Func<TItem, object>` over an `int` key boxes once per row,
   which is 24 bytes a thousand times. A reference-typed key costs nothing here. This is the one feature
   on the list whose price is paid in the key's type rather than in the grid.
@@ -705,48 +697,9 @@ keeping all three is measured: one attribute on every cell of a thousand-row gri
 costs **about 1.1x** the render time. Hiding the last column of a grid should not pay for hiding the
 middle one - and since none of this is opt-in, the tiers are what keep the bill on the configuration
 that earns it. The last row of that table is the only per-cell attribute this component emits by
-default, and a grid reaches it by having a user hide a column that is not at the end. A row-detail toggle pins the first cell to column one, so any run that starts later already
-has a hole before it and every cell is numbered.
-
-Column numbers are read against the columns as they were **declared**, which is the only ordering a
-hidden column has a place in - a reorder index is a position among the columns that are visible, and a
-column nobody can see was never given one. A grid that both hides and reorders therefore has cells
-carrying their declared positions rather than their drawn ones.
-
-## Positional ARIA
-
-A grid holding every row and every column needs nothing here: a browser can count what it has, and the
-ARIA specification says as much - "if all of the columns are present in the DOM, including
-`aria-colindex` is not necessary". So nothing is emitted until the DOM stops being the whole table,
-which is exactly two things.
-
-**Paging or virtualization windows the rows.** The grid then carries `aria-rowcount` and every row its
-`aria-rowindex`, counting from one and including the header rows - the title row is row 1, the filter
-row is row 2 where there is one, and the first data row follows. The number is the row's place in the
-**data set**, so page three of a hundred starts at 201 rather than at 1, and a virtualized grid numbers
-by where the row sits in the whole source rather than in the window it scrolled into. A total that is
-not known yet - a virtualized grid before its first count, an asynchronous source before it loads -
-reads `-1`, which is what the attribute defines for it, rather than a zero that would be a claim.
-
-A row-detail row repeats its parent's number rather than taking one of its own. It is the row's content
-in a second `tr` because a table cannot nest one, and numbering it separately would push every row
-below it out of step with the data set - the one thing the attribute exists to keep true.
-
-**The column picker hides a column.** The grid then carries `aria-colcount`, and how much more depends
-on what hiding did to the run:
-
-| What is hidden | What is written |
-| --- | --- |
-| nothing | nothing; the browser counts the cells and is right |
-| the last columns | `aria-colcount` only - what is left is still columns one upward |
-| the first columns | one `aria-colindex` per row, on the first cell, to say where the run starts |
-| a column in the middle | `aria-colindex` on every cell, because the run has a hole in it |
-
-Those are the specification's own three cases rather than a simplification of them, and the reason for
-keeping all three is measured: one attribute on every cell of a thousand-row grid allocates nothing and
-costs **about 1.1x** the render time. Hiding the last column of a grid should not pay for hiding the
-middle one. A row-detail toggle pins the first cell to column one, so any run that starts later already
-has a hole before it and every cell is numbered.
+default, and a grid reaches it by having a user hide a column that is not at the end. A row-detail
+toggle pins the first cell to column one, so any run that starts later already has a hole before it
+and every cell is numbered.
 
 Column numbers are read against the columns as they were **declared**, which is the only ordering a
 hidden column has a place in - a reorder index is a position among the columns that are visible, and a

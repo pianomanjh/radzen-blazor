@@ -837,7 +837,7 @@ whole data set rather than in the DOM. What has changed is the price of the alte
 attribute on every row would now cost 0.78 KB rather than 16, so this is a preference rather than a
 saving, and it is recorded as one.
 
-### The playground grew a Virtualize toggle### The playground grew a Virtualize toggle, and it found a circuit-killing loop
+### The playground grew a Virtualize toggle, and it found a circuit-killing loop
 
 Keyboard navigation needed one - the cursor moves through the whole data set under virtualization
 rather than through the rendered window, and there was no way to drive that in a browser. The toggle

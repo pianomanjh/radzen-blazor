@@ -604,6 +604,26 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ASidewaysMoveDoesNotEndTheRun()
+        {
+            // Shift with Left or Right extends nothing, because what this grid selects is rows - but it
+            // is still a Shift key, and ending the run there would re-anchor the next one at the cursor
+            // and freeze everything chosen so far into its base. The row that shrinking should give
+            // back would then never come out again.
+            using var grid = new Selecting();
+
+            grid.Press("ArrowDown", shift: true);
+            grid.Press("ArrowDown", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol", "Dave" }, grid.Rows());
+
+            grid.Press("ArrowRight", shift: true);
+            grid.Press("ArrowUp", shift: true);
+
+            Assert.Equal(new[] { "Alice", "Carol" }, grid.Rows());
+        }
+
+        [Fact]
         public void CtrlEndExtendsToTheLastRow()
         {
             // Every key that moves the cursor extends, because extending is what the move does on the

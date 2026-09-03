@@ -296,13 +296,18 @@ namespace Radzen.FastGrid
 
                     break;
 
+                // Sideways moves carry the Shift too, even though they extend nothing: the run has to
+                // survive one. MoveAsync only reaches for the selection when the row changes, so what
+                // this passes on is the run staying open - dropping it would re-anchor the next Shift
+                // at the cursor and freeze everything chosen so far into its base, and the row that
+                // shrinking should give back would never come out again.
                 case "ArrowLeft":
-                    await MoveAsync(row, Step(cell, rtl ? 1 : -1, cells)).ConfigureAwait(false);
+                    await MoveAsync(row, Step(cell, rtl ? 1 : -1, cells), extend).ConfigureAwait(false);
 
                     break;
 
                 case "ArrowRight":
-                    await MoveAsync(row, Step(cell, rtl ? -1 : 1, cells)).ConfigureAwait(false);
+                    await MoveAsync(row, Step(cell, rtl ? -1 : 1, cells), extend).ConfigureAwait(false);
 
                     break;
 
