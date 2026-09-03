@@ -17,14 +17,20 @@ faster than the previous run recorded for all three grids alike, which is the ma
 Allocation is stable across the same move - `QuickGrid`, whose code did not change at all, came back
 within 1.2 KB - so treat differences under about 1.5 KB at this scale as drift.
 
-**Read a row's marginal, not its absolute, and read it against the bare of its own era.** The rows
-below were re-measured as the work that changed them landed, against whatever the bare grid cost at
-the time - so the table is not one run and its *bare* is the oldest number in it. Re-measured whole at
-`32d5200bc`, bare is **154.03 KB** and every row's marginal holds to under half a kilobyte, except
-sorting, which improved by 3.7 KB on one key and 5.4 KB on two. Two row names there had also drifted
-from what the benchmark calls them, which is its own trap: the benchmark's "+ a filter row" is the
-as-you-type one, and it reads *higher* than "not as you type" rather than lower. They are named here
-the way the benchmark names them now.
+The feature table below is **one run**, re-measured whole at `2e7f756dc`, so its marginals are
+comparable with each other. It had drifted out of that state: rows used to be re-measured individually
+as the work that changed them landed, against whatever the bare grid cost at the time, which left its
+*bare* the oldest number in it - and subtracting that stale bare from a freshly updated row invents a
+regression that is not there. **A row's marginal is only meaningful against the bare of its own run.**
+
+Two rows were also named the opposite way round from the benchmark that produces them. The benchmark's
+"+ a filter row" is the as-you-type one, so it reads *higher* than "not as you type", not lower. They
+are named here the way the benchmark names them.
+
+The analyses further down cite **control pairs** - a figure measured with a feature's emission taken
+out, beside the same figure with it in - and each pair is its own experiment, run together. Read those
+two numbers against each other and never against this table's bare, which is a different run. The same
+goes for the second cost table near the end of this file, which has a bare of its own.
 
 It gets there by not doing three things a general-purpose grid has to: no component per row, no cascading
 value per row, no render fragment per cell. Those are what inline editing needs, and this grid does not
@@ -201,53 +207,62 @@ time against the same baseline:
 
 | | Allocated | Marginal | Time |
 | --- | ---: | ---: | ---: |
-| *bare* | 151.78 KB | - | 1.00x |
-| widths and alignment | 152.13 KB | +0.35 KB | 1.11x |
-| selection (1 row in 4) | 151.89 KB | +0.11 KB | 1.06x |
-| `RowClass` | 151.88 KB | +0.10 KB | 0.98x |
-| `Settings` / `SettingsChanged` | 151.85 KB | +0.07 KB | 1.00x |
-| a filter row, on change only | 154.34 KB | +2.56 KB | 1.01x |
-| a column picker | 174.02 KB | **+22.2 KB** | 1.04x |
-| a filter row, filtering as you type | 155.66 KB | +1.32 KB *over on-change* | 1.04x |
-| header and footer templates | 153.34 KB | +1.56 KB | 1.00x |
-| footer templates that aggregate | 153.54 KB | +0.20 KB *over the templates* | 1.05x |
-| responsive titles | 151.95 KB | +0.17 KB | 1.40x |
-| sorted by one column | 178.88 KB | **+27.1 KB** | 1.50x |
-| sorted by two columns | 200.86 KB | **+22 KB** *over one* | 1.05x *over one* |
-| row detail, driven through the API | 152.13 KB | +0.35 KB | 1.02x |
-| keyboard navigation | 155.25 KB | +1.42 KB | 1.00x |
-| keyboard navigation and range selection | 155.75 KB | +0 KB *over navigation* | 0.99x |
-| a pager and row numbers over one page | 155.81 KB | +1.93 KB, all of it the pager | 1.01x |
-| six columns with the middle one hidden, and column numbers | 159.87 KB | +5.99 KB, almost all of it the sixth column | 1.20x |
-| `ItemKey` | 177.37 KB | **+23.5 KB** | 1.07x |
-| `ItemKey` over a reference-typed key | 153.93 KB | +0.04 KB | 1.13x |
-| cell tooltip | 270.59 KB | **+116.7 KB** | 1.46x |
-| row click | 154.66 KB | +0.78 KB | 1.03x |
-| row detail with its toggle column | 154.76 KB | +0.88 KB | 1.10x |
-| cell click | 154.66 KB | +0.78 KB | 1.10x |
+| *bare* | 154.03 KB | - | 1.00x |
+| widths and alignment | 154.33 KB | +0.30 KB | 1.11x |
+| selection (1 row in 4) | 154.02 KB | -0.01 KB | 1.06x |
+| `RowClass` | 154.13 KB | +0.10 KB | 0.98x |
+| `Settings` / `SettingsChanged` | 153.99 KB | -0.04 KB | 1.00x |
+| row click | 154.70 KB | +0.67 KB | 1.03x |
+| cell click | 154.70 KB | +0.67 KB | 1.10x |
+| row detail, driven through the API | 154.37 KB | +0.34 KB | 1.02x |
+| row detail with its toggle column | 154.80 KB | +0.77 KB | 1.10x |
+| responsive titles | 153.98 KB | -0.05 KB | 1.40x |
+| header and footer templates | 155.51 KB | +1.48 KB | 1.00x |
+| footer templates that aggregate | 155.60 KB | +0.09 KB *over header and footer templates* | 1.05x |
+| a filter row, on change only | 156.79 KB | +2.76 KB | 1.01x |
+| a filter row, filtering as you type | 158.25 KB | +1.46 KB *over a filter row, not as you type* | 1.04x |
+| a column picker | 176.48 KB | +22.45 KB | 1.04x |
+| sorted by one column | 175.15 KB | +21.12 KB | 1.50x |
+| sorted by two columns | 195.48 KB | +20.33 KB *over sorted by one column* | 1.05x |
+| column resize | 158.95 KB | +4.92 KB | - |
+| column reorder | 160.75 KB | +6.72 KB | 0.93x |
+| column resize and reorder | 162.91 KB | +8.88 KB | - |
+| two frozen columns | 155.11 KB | +1.08 KB | 1.10x |
+| keyboard navigation | 155.26 KB | +1.23 KB | 1.00x |
+| keyboard navigation and range selection | 155.57 KB | +0.31 KB *over keyboard navigation* | 0.99x |
+| a pager and row numbers over one page | 155.84 KB | +1.81 KB | 1.01x |
+| six columns with the middle one hidden, and column numbers | 159.85 KB | +5.82 KB | 1.20x |
+| `ItemKey` | 177.51 KB | +23.48 KB | 1.07x |
+| `ItemKey` over a reference-typed key | 153.96 KB | -0.07 KB | 1.13x |
+| cell tooltip | 270.62 KB | +116.59 KB | 1.46x |
+| `CellRender` that adds nothing | 154.00 KB | -0.03 KB | - |
+| `CellRender` that writes one attribute | 427.97 KB | +273.94 KB | - |
+| `HeaderCellRender` that writes one attribute | 155.04 KB | +1.01 KB | - |
 
-Every row is from one run, so the marginals are comparable with each other; the time ratios move a few
-points between runs on a shared machine, the allocation figures barely at all.
+The time column is not from this run. `--job short` measures allocation, not time - see the
+verification protocol - so the ratios above are the ones settled by full-length runs, and the rows
+added since carry no ratio rather than a short-run guess. Allocation was confirmed across two runs
+that disagreed by at most 0.71 KB, one of them on a machine with a compile running alongside it.
 
 The layout, selection, row-styling, template and settings features are free, as designed: a couple of
-kilobytes at most across a whole render, against a 151 KB baseline. What is not free is a delegate, and
+kilobytes at most across a whole render, against a 154 KB baseline. What is not free is a delegate, and
 a delegate per *cell* least of all - a cell click costs five times a row click on five columns, and
 eleven times the whole rest of the component. Every expensive row is opt-in and costs nothing until you
 opt in.
 
 Two rows are worth reading carefully rather than at face value:
 
-- **Sorting is what costs, not sorting by two things.** Sorting at all is +27 KB and 50% more time -
+- **Sorting is what costs, not sorting by two things.** Sorting at all is +21 KB and 50% more time -
   `OrderBy` over a thousand rows buys a key buffer and does its comparisons whichever grid asked for
-  it. The *second* sort key adds 22 KB and 5% on top of that. Measured against the bare grid instead,
-  multi-column sorting would look like +49 KB and 57%, and almost all of it would belong to the first
+  it. The *second* sort key adds 20 KB and 5% on top of that. Measured against the bare grid instead,
+  multi-column sorting would look like +41 KB and 57%, and almost all of it would belong to the first
   sort.
 - **Responsive titles allocate nothing and still cost 40% more time.** A span and a text frame per cell
   is work even when it is not memory.
 - **Row detail has no idle state.** Declaring a `Template` draws a toggle on every row, so the feature
   costs from the moment it is available rather than when a row is expanded - there is no "switched on
   but not in use" for it, because a row that can be expanded has to show that it can. What it costs is
-  now 0.88 KB rather than 404, because the toggle goes through the grid's one pointer listener instead
+  now 0.77 KB rather than 404, because the toggle goes through the grid's one pointer listener instead
   of carrying a delegate of its own.
 - **Range selection's 0.23 KB is the benchmark, not the feature.** The row reads 155.48 KB against
   navigation's 155.25, and the difference is one more parameter passed to the component rather than

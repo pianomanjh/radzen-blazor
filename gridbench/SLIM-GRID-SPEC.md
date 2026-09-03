@@ -22,29 +22,36 @@ is up as #2698 and is the one piece not yet merged.
 
 **Built and measured** (1000 x 5, allocation, modal of several runs):
 
+All from one run at `2e7f756dc`, against that run's own bare - the whole feature table in `README.md`
+was re-measured with it, and two runs of it agreed to within 0.71 KB.
+
 | | Costs |
 | --- | ---: |
-| bare | 153 KB |
+| bare | 154.0 KB |
 | sorting, filtering, paging, virtualization, column picking, settings, templates, `ItemKey` | see `README.md` |
-| row click, cell click, cell context menu, row detail - **all four together** | **+0.9 KB** |
-| column resize | +4.1 KB |
+| row click, cell click, cell context menu, row detail - **all four together** | **+0.7 KB** |
+| column resize | +4.9 KB |
 | column reorder | +6.7 KB |
-| two frozen columns | +0.9 KB |
-| keyboard navigation | **+1.4 KB, 1.00x** |
-| range selection, on top of navigation | **+0 KB** |
+| two frozen columns | +1.1 KB |
+| keyboard navigation | **+1.2 KB, 1.00x** |
+| range selection, on top of navigation | **+0.3 KB** |
 | positional ARIA, row numbers | **+0 KB** |
 | positional ARIA, column numbers on every cell | **+0.1 KB, ~1.1x** |
+| responsive titles | **+0 KB, 1.40x** |
 | the scroll container and `role="grid"` | 0 |
 
-Resize and reorder re-measured together in one run, against a 153.3 KB bare grid: resize 158.3 KB,
-reorder 160.0 KB, both at once 162.3 KB. They are additive because they are the same kind of cost -
-a handle and a pair of callbacks per *header*. Against `RadzenDataGrid` with reorder on both sides,
-which allocates 13,184 KB for it, that is **82x**.
+Resize and reorder are measured together as well as apart: 158.9 KB and 160.8 KB on their own, 162.9 KB
+at once. They are additive because they are the same kind of cost - a handle and a pair of callbacks
+per *header*. Against `RadzenDataGrid` with reorder on both sides, which allocates 13,184 KB for it,
+that is **82x**.
 
-Frozen columns measured 154.4 KB and 154.6 KB across two runs against a 153.6 KB bare grid - the inset
-belongs to the column rather than the cell, so what is paid is one memoized string for the whole grid
-plus a class and a style frame on the cells of a frozen column. `RadzenDataGrid` allocates 19,785 KB
-for the same two frozen columns, which is **128x**.
+Frozen columns cost +1.1 KB - the inset belongs to the column rather than the cell, so what is paid is
+one memoized string for the whole grid plus a class and a style frame on the cells of a frozen column.
+`RadzenDataGrid` allocates 19,785 KB for the same two frozen columns, which is **128x**.
+
+Every figure above is allocation. `--job short` does not measure time, so the ratios quoted here and in
+`README.md` are the ones settled by full-length runs; a feature added since carries no ratio rather
+than a short-run guess.
 
 Frozen is the one feature here that costs measurably more *time* than it does memory: a full-length run
 puts it at **1.10x** (478.0us to 525.0us, error 3.7 and 10.5), which is those two frames on two
@@ -55,7 +62,8 @@ Against `RadzenDataGrid` with the same feature on both sides, the narrowest row 
 **132x** and row detail is **109x**. Nothing in the grid charges a delegate per row any more.
 
 Keyboard navigation measured 155.2 KB against a 153.85 KB bare grid over three full-length runs, inside
-the +2 KB and 1.02x gate §12 set for it. It cost eight times that until an assumption in §12 was
+the +2 KB and 1.02x gate §12 set for it, and the re-measurement above puts it at +1.2 KB against a
+154.0 KB bare - the same answer from a different baseline, which is what a marginal is for. It cost eight times that until an assumption in §12 was
 measured rather than believed: `data-r` on every row read **+16 KB at a thousand rows**. That number
 has since been taken apart and it was never the frame - the table of cached index strings held 512
 entries, so 488 rows of every render called `ToString`. Growing it to fit took row click, cell click
