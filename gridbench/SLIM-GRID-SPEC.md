@@ -81,8 +81,9 @@ took the `data-r` number down with it: **the row attribute is free and the cell 
 bytes and not in time**. §12 had them the other way round, on a frame-count argument that turned out to
 be about string values instead.
 
-**Not built**: editing, grouping, composite headers. Keyboard navigation is built in full - the cursor,
-the keys, range selection and positional ARIA. §10 has what is still open.
+**Not built**: editing, grouping, composite headers, and column auto-fit - which is designed in §13 and
+is the only one of them with a design. Keyboard navigation is built in full - the cursor, the keys,
+range selection and positional ARIA. §10 has what is still open.
 
 ## 1. Why a separate component
 
@@ -564,13 +565,14 @@ Each layer below caught real faults the previous one missed. Use all of them.
   for precisely the grids the leak affects. `lookups` tolerates that because rebuilding a check-box
   list costs nothing; user state does not. The grid already has `ItemKey`, and keying expansion by it
   would answer the leak and the lost state together. Recorded rather than done, for that reason.
-- **A sortable header that is not currently sorted draws no sort icon.** Guarded on
-  `sortable && sorted >= 0`; `RadzenDataGridHeaderCell` has a third arm emitting the unsorted glyph.
-  Two theme rules want that element - one reveals a transparent `rzi-sort` on hover, and
-  `.rz-column-title` is an `inline-flex` whose `.rzi-grid-sort` carries a reserved width. So hovering
-  a sortable header signals nothing, and on a title long enough to truncate the first click *inserts*
-  the icon into the flex line: the title re-truncates and the header visibly jumps, then jumps back
-  when another column is clicked. Upstream reserves that width permanently and never moves.
+- ~~**A sortable header that is not currently sorted draws no sort icon.**~~ - **done.** The glyph is
+  now reserved the way upstream reserves it, so hovering signals something and the first click no
+  longer inserts an element into the flex line and re-truncates the title. It became urgent rather
+  than cosmetic once §13 needed to measure a header: a header measured around a missing glyph fits a
+  glyph too narrow, which makes the jump permanent instead of momentary.
+- **Column auto-fit for `RadzenFastDropDownDataGrid`**, deferred out of §13 with the question it is
+  waiting on stated: does the popup grow to the fitted content, or does the grid fit within the width
+  the popup already has? Both are defensible and they are different features.
 - The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no date
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
@@ -712,6 +714,8 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
   stays on `.rz-data-grid-data` and the active cell is named by `aria-activedescendant`. What the design
   had to settle instead was where the algorithm lives, what paints a focused cell when the theme has no
   rule for one, and what a keystroke costs on a server-rendered circuit.
+- **Column auto-fit** - designed in §13, not built. The one prerequisite is the sort glyph a sortable
+  header now reserves: a header measured without it fits a glyph too narrow and jumps on first sort.
 - **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
 
 **Measurement debt:**
@@ -1218,3 +1222,249 @@ reorder and frozen columns have separate numbers at all.
   hatch is moving the algorithm into JavaScript, which reverses the decision that made it testable -
   a rewrite of the tested part, not a tweak, and one that should be taken on a measurement rather than
   a guess.
+
+---
+
+## 13. Column auto-fit - the design
+
+Not built. Everything below carries the reason it was decided that way, so it can be re-argued rather
+than merely obeyed. Three of the decisions come from facts about the shipped theme rather than from
+preference, and those are marked, because a theme change invalidates them and nothing else here.
+
+### What it is for
+
+**A column as wide as what is in it.** The table is `table-layout: fixed`, so a column that declares no
+width gets an equal share and every value longer than that share truncates to an ellipsis. The consuming
+application's grids are the shape this is aimed at - `Cartons.razor` and its neighbours, eight-plus
+columns of very unevenly sized text, where an equal share is wrong for every column at once.
+
+**It is not a fill-the-width feature**, though it ends up doing that too. Fitting to content is the part
+that needs a measurement; distributing what is left over is arithmetic on the answer, and under this
+theme it turns out to need no arithmetic at all (see *Who absorbs the slack*).
+
+### The surface
+
+`AutoFitColumns`, typed `AutoFitMode { None, Once, OnDemand }`, `None` by default. `AutoFit` on the
+column, a `bool` defaulting to `true`, opts one column out.
+
+**`Once` fires on the first render that has rows in the DOM, and never again.** It is deliberately not
+keyed on the data changing. `dataChanged` here is `!ReferenceEquals(lastData, Data)`, which for the
+sources this matters to - `context.Rows.AsNoTracking()` read per render, a `LoadData` handler assigning a
+fresh page - is true on *every* parameter set, so a re-fit keyed on it is the continuous mode arrived at
+by accident. §10b records the same trap taking down row expansion. A consumer who wants a re-fit when
+their data changes calls the API from their own handler, where they know something actually changed and
+the grid cannot.
+
+**`OnDemand` is a double-click on the resize handle**, which fits that column and requires
+`AllowColumnResize` because there is otherwise no handle to double-click. That requirement is
+documented rather than worked around: the alternatives were a modifier key, which is undiscoverable and
+untestable, and an item in the column picker, which is a menu about visibility.
+
+**`AutoFitAsync()` and `AutoFitAsync(column)` are the whole rest of the surface.** No event: a fit is
+awaitable, and `Once` has no audience for a notification. Recorded as a decision so it is not later read
+as an oversight.
+
+### Where the work happens
+
+One round trip per trigger, and **the script both measures and writes**. C# storing the widths and
+re-rendering would cost a full pass over every row to change N `col` elements, and would show a reflow
+between the measure and the paint. Resize already has this shape - the drag writes widths in the browser
+and calls back afterwards - so this is the existing mechanism, not a second one.
+
+1. **C# to the script**, with the target column indices, each column's `MinWidth` and `MaxWidth` strings
+   as authored, which columns are frozen, and the current load generation.
+2. **The header row**, N elements: set `width: max-content`, force one reflow, read, revert.
+3. **The body**, the maximum `scrollWidth` over the rendered `.rz-cell-data` spans of each column.
+4. **The chrome**: `getComputedStyle` on each column's own first cell for horizontal padding and
+   borders. Per column rather than per grid, because `CssClass` can change them.
+5. **Compose and write**, then hand the widths back with the generation they were measured under.
+6. **C#** discards a stale generation, stores into `autoFitWidth`, and renders only under the condition
+   in *What it collides with*.
+
+`EffectiveWidth` becomes `resizedWidth ?? autoFitWidth ?? Width`. A drag beats a fit; a fit fills in
+where neither a drag nor the markup has spoken. **A fitted width is not captured into the settings**: a
+drag is a choice a user made, a fit is derived from the data, and restoring a fit computed against a
+different result set is worse than recomputing it. It also keeps the settings-identity collision of
+§10b from acquiring another participant.
+
+### Measuring a cell is free; measuring a header is not
+
+**The body is free because of a theme rule.** `.rz-cell-data` is `display: block; overflow: hidden;
+text-overflow: ellipsis; white-space: nowrap`, so a truncated cell's `scrollWidth` already *is* its
+untruncated content width. No `table-layout: auto` flip, no clone, no offscreen probe - the ellipsis
+this feature exists to remove is what makes it measurable.
+
+**The header is not, and reading it the same way returns a plausible wrong answer.**
+`.rz-column-title` is an `inline-flex` at `width: 100%` with `overflow: hidden`, and its content child
+carries `overflow: hidden` too - which zeroes that child's automatic minimum size. A flex container
+whose items shrink to nothing has `scrollWidth == clientWidth`, so the header would measure as *the
+width it currently has*. Every column would fit to itself and the feature would appear to do nothing on
+a grid whose headers are the widest thing in the column.
+
+So the header gets the `max-content` flip, and only the header: N elements rather than N x rows, so the
+second reflow is paid over a handful of nodes. The alternative - reading the content child and adding
+the glyph width, the flex `gap` and the title's `padding-inline` back from computed styles - is
+arithmetic against the theme's current internals, and it is the shape of thing that has now been wrong
+six times on this branch without any test noticing.
+
+**The header must reserve its sort glyph**, which is why that fix lands first and on its own. A header
+measured without it fits one glyph too narrow and jumps on the first sort - the same jump §10 recorded,
+made permanent by a width computed around its absence.
+
+### Turning a measurement into a width
+
+`ceil(max(header, cells)) + padding + border + 1`.
+
+The `+1` is for `scrollWidth` rounding to an integer. A fitted column one pixel short shows an ellipsis,
+which is the single outcome that makes the whole feature look broken.
+
+**No over-fit percentage.** `RadzenSpreadsheet` adds 3% because it measures on a canvas and the result
+has to survive being drawn by something else, including Excel after an export. Here the measurement
+comes from the renderer that will draw it, so the same 3% on a 400px description column is twelve
+pixels of visible slack bought against a mismatch that does not exist.
+
+**`MinWidth` and `MaxWidth` are applied by the browser, not by us.** The fitted number is pixels and
+those parameters are arbitrary CSS - `10rem`, `30%`, `4em`. So the `col` is written as
+`clamp(<MinWidth>, <fitted>px, <MaxWidth>)` when either bound is set, and as the bare pixel width when
+neither is. This is the argument frozen insets already won: they are summed with `calc()` rather than
+parsed, precisely so a column may be sized in any unit or a mixture of them. Parsing CSS is the option
+that works for pixels and is quietly wrong for everything else.
+
+`MaxWidth` matters more than it looks. Without an upper bound one four-hundred-character value takes the
+whole table and every other column truncates to nothing - the state the feature was meant to leave.
+
+### Who absorbs the slack
+
+**The last visible non-frozen column is left with no width at all.** Under `table-layout: fixed` a `col`
+with no width absorbs the remainder, so the browser does the distribution: no slack arithmetic, no
+container measurement, and it stays right through a window resize with no observer and no second round
+trip. The whole distribution pass deletes itself.
+
+Two constraints come with it. It must never be a frozen column, because §10's rule is that a frozen run
+ends at the first frozen column declaring no width. And if every column is frozen there is no candidate,
+so the fallback is pixels everywhere and a table that scrolls.
+
+**The last column rather than the widest one**, though the widest is what a distribution pass would pick.
+"Widest" is a property of the data, so a filter changes which column stretches and the layout rearranges
+itself under a reader for no visible reason. The trailing edge is where slack is expected to be, it is
+stable across re-fits, and it needs no parameter.
+
+**A fitted total wider than the container scrolls; it does not shrink.** The `.rz-data-grid-data`
+container that resize needed is already there. Shrinking columns back to fit a viewport truncates every
+one of them, which is the state this feature exists to escape - "always fill the width, never scroll" is
+a different mode, not a fallback inside this one.
+
+### What it collides with
+
+**Frozen columns, and this one is not optional.** The frozen inset is composed *on the server*:
+`PinLeftRun` and `PinRightRun` build a `calc()` sum from `EffectiveWidth` and hand it to `SetFrozen`,
+which feeds the memoized style emitted on every frozen cell. So a script that writes new `col` widths
+while C# records them without rendering leaves every frozen cell carrying an inset computed from the
+*old* widths - wrong on screen, and invisible to any test that asserts markup. **An auto-fit renders
+when the grid has a frozen column and skips the render when it does not.** The cost belongs to frozen,
+not to auto-fit, and resize pays it unconditionally today.
+
+That collision has an upside worth banking in the same commit: because a run stops at the first frozen
+column with no declared width, fitting one *extends* runs that currently give up and draw unfrozen.
+
+**The toggle column.** The colgroup emits a bare `col` standing in for it, with no column of its own in
+`visibleColumns`. Any mapping between a measured cell and a `col` has to account for that offset - it is
+the off-by-one that once drew every column one position left.
+
+**`Responsive` below its breakpoint** stacks rows into cards and the colgroup means nothing, so no fit
+runs there. A fit taken above the breakpoint stays stored and is correct again when the window widens.
+This needs its own test rather than an argument: `Responsive` shipped broken on this branch for exactly
+the neighbouring reason.
+
+**Virtualization.** The script sees the current window and nothing else, so `Once` fits the first window
+and `OnDemand` fits the one on screen. That is documented rather than hidden, and it is what the user can
+see. Refusing to run under `AllowVirtualization` was considered and rejected: those are the grids that
+want this most.
+
+### What invalidates a fit, and what supersedes one
+
+**Nothing invalidates it.** A filter that removes the one long value leaves the column wide, and that is
+the wanted behaviour: narrowing a column while a reader is looking at it is the jumping this design has
+now rejected in three separate places. Widths are stored per column, so a reorder carries them and a
+hide-then-show restores them for free. The README says that after a filter the columns may be wider than
+they need to be, and that the answer is to re-fit.
+
+**A newer trigger supersedes an older one, and a fit is stamped with the grid's load generation.** A
+result whose generation is stale is discarded - it was measured against rows that have since been
+filtered, sorted or paged away. This deliberately reuses the coordinator that `RadzenFastGrid.Data.cs`
+already owns rather than adding a second notion of "is this still current" beside it; §10b's standing
+lesson is that two features sharing one mechanism is where this branch breaks, and two mechanisms
+answering one question is how `View()` and `TotalCount()` came to ask theirs in opposite orders.
+
+### Budget, and which harness reports which number
+
+**The cost of this feature is in a place gridbench cannot see.** gridbench is BenchmarkDotNet over
+bUnit: it renders and measures allocation, and it cannot execute `fastgrid.js`, cannot reflow and cannot
+measure a node. It will report the reflow, the `scrollWidth` pass and the `getComputedStyle` calls as
+zero.
+
+So two channels, and **a browser millisecond must not be written into the allocation table**, where
+every other figure is a KB from a bUnit render. §9 already has "a number attributed to a mechanism
+without a control has not been measured"; this is its sibling, and the failure is quieter.
+
+| Channel | What it answers | Gate |
+| --- | --- | --- |
+| gridbench, `AutoFitColumns = None` | that the feature off costs nothing | identical to bare: 0 KB, 1.00x |
+| gridbench, `OnDemand` on | the render-side delta - an element id and an object reference | under 0.5 KB |
+| Chromium harness, `performance.now()` around the pass | the actual cost | under one frame, ~16ms at 1000 x 5 |
+
+The browser figure carries the machine it was taken on. Unlike an allocation number it does not travel,
+and quoting it without one invites the comparison it cannot support.
+
+### How it is verified
+
+**There is no `RadzenDataGrid` parity pane available** - upstream has no auto-fit at all, so there is
+nothing to compare against and a pane asserting agreement would be asserting agreement with a grid that
+does nothing. That is the same reasoning that left the keyboard cursor without one.
+
+The Chromium probe carries it alone: a fitted column's rendered width equals its widest cell's content
+plus the cell padding; a column of short values comes out narrower than one of long values; `MaxWidth`
+clamps; the bare trailing column absorbs the remainder; a grid below the responsive breakpoint fits
+nothing. bUnit covers the decision half with the measurement stubbed - eligibility, the precedence of the
+three width layers, which column is left bare, and the all-frozen fallback.
+
+**Prove it discriminates by making the measurement return a constant.** If the probe still passes with
+every column measured identically, it was asserting the implementation rather than the behaviour, which
+is what §9 exists for.
+
+### The order it lands in
+
+1. **The sort glyph**, on its own and first. It is a prerequisite of measuring a header, but it also
+   changes header geometry for every grid and fixes a jump that exists today - so it must not hide
+   inside a feature commit for a feature that is off by default.
+2. **This section**, before the code.
+3. **The feature**: the mode and the API, the script's measure-and-write, the third width layer, the
+   frozen render condition.
+4. **README, the cost rows, and §10.**
+
+### Recorded open
+
+- **`RadzenFastDropDownDataGrid` does not get this in v1, and the question it is waiting on is: does
+  the popup grow to the fitted content, or does the grid fit within the width the popup already has?**
+  Both are defensible and they are different features. It is also the slice with the worst review
+  history on this branch - fifteen findings, then six more on a re-read three commits later - so a
+  change to its layout is the wrong place to spend that risk before the question is answered.
+- **No event.** Above, with its reason.
+
+### Where this could still be wrong
+
+- **"Fits what is rendered" is a caveat, not a guarantee, and a paged or virtualized grid is the common
+  case.** A user fits a column on page 1 and meets a longer value on page 7. The honest alternatives are
+  both worse - re-fitting on every page turn is the jumping already rejected, and asking the server for
+  the longest value per column is a query per column that only works for a property column and cannot
+  rank a template at all. Recorded so that the first complaint about it is met with the decision rather
+  than a fix.
+- **The header's `max-content` flip mutates layout mid-pass.** It is reverted before anything is read
+  from the body, and it is N elements - but it is still a write between two reads, which is the shape
+  that produces layout thrash. If the browser figure comes in near the gate, this is the first place to
+  look and the first thing to try moving to a separate frame.
+- **The three theme facts this rests on.** The body being free rests on `.rz-cell-data` truncating; the
+  header needing a flip rests on `.rz-column-title` being an `inline-flex` with a shrinkable child; the
+  slack column rests on `table-layout: fixed`. All three are read out of the shipped theme rather than
+  assumed, and all three would change silently under a custom one. The probe is what would catch it,
+  and only if it is run against that theme.
