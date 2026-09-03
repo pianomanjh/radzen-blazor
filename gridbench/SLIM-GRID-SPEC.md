@@ -32,6 +32,8 @@ is up as #2698 and is the one piece not yet merged.
 | two frozen columns | +0.9 KB |
 | keyboard navigation | **+1.4 KB, 1.00x** |
 | range selection, on top of navigation | **+0 KB** |
+| positional ARIA, row numbers | **+0 KB** |
+| positional ARIA, column numbers on every cell | **+0.1 KB, ~1.1x** |
 | the scroll container and `role="grid"` | 0 |
 
 Resize and reorder re-measured together in one run, against a 153.3 KB bare grid: resize 158.3 KB,
@@ -66,8 +68,13 @@ proves it reads 0.23 KB above the navigation row, and setting `SelectionMode` to
 `Multiple` - the feature off, the parameter still passed - reads the same 0.23 KB. **A benchmark row
 that differs by a parameter is measuring the parameter too**, and at this resolution that is visible.
 
-**Not built**: editing, grouping, composite headers. Keyboard navigation is built as far as the cursor,
-the keys and range selection; positional ARIA is step 4 of §12. §10 has what is still open.
+Positional ARIA landed on the other side of the budget from where §12 put it, and for a reason that
+took the `data-r` number down with it: **the row attribute is free and the cell attribute is free in
+bytes and not in time**. §12 had them the other way round, on a frame-count argument that turned out to
+be about string values instead.
+
+**Not built**: editing, grouping, composite headers. Keyboard navigation is built in full - the cursor,
+the keys, range selection and positional ARIA. §10 has what is still open.
 
 ## 1. Why a separate component
 
@@ -510,7 +517,7 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 **Not built:**
 
-- **Keyboard navigation** - **designed in §12, not built.** It is the last of the three the scroll
+- ~~**Keyboard navigation**~~ - **built, all four steps of §12.** It is the last of the three the scroll
   container unblocked; resize, reorder and frozen columns are all built. The roving-focus model turned
   out not to be the obstacle it looked like, because `RadzenDataGrid` does not use one either: focus
   stays on `.rz-data-grid-data` and the active cell is named by `aria-activedescendant`. What the design
@@ -555,10 +562,10 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 ## 12. Keyboard navigation - the design
 
-Steps 1 to 3 of the order below are built: the theme fix upstream, the cursor itself - the C#
+All four steps of the order below are built: the theme fix upstream, the cursor itself - the C#
 algorithm, the JavaScript effect layer, the re-assert after every render, and the package's interim
-stylesheet - and range selection. **Measured at +1.4 KB and 1.00x** for the cursor and **+0 KB** for
-range selection, inside the gate. Positional ARIA is still ahead. Everything below carries the reason it was decided that way, so it can be re-argued rather
+stylesheet - range selection, and positional ARIA. **Measured at +1.4 KB and 1.00x** for the cursor,
+**+0 KB** for range selection and **+0.1 KB and ~1.1x** for the ARIA, all inside the gate. Everything below carries the reason it was decided that way, so it can be re-argued rather
 than merely obeyed; where it diverges from `RadzenDataGrid` the divergence is deliberate and the reason
 is given. Two of the decisions did not survive contact with a measurement, and both are marked where
 they stand rather than quietly rewritten.
@@ -834,15 +841,53 @@ With paging or virtualization the DOM holds a window - a hundred rows of 11,700 
 screen reader which. The pattern's answer is `aria-rowcount` and `aria-rowindex`; for hidden columns it
 is `aria-colcount` and `aria-colindex`.
 
-These land on opposite sides of the budget. `aria-rowindex` is a frame **per row**, roughly a tenth of
-what frozen columns cost, comfortably inside. `aria-colindex` is a frame **per cell**, about half of
-frozen's cost, which is outside.
+These were predicted to land on opposite sides of the budget: `aria-rowindex` a frame **per row**,
+roughly a tenth of what frozen columns cost and comfortably inside; `aria-colindex` a frame **per cell**,
+about half of frozen's cost, which is outside.
 
-So **each is emitted only where it is needed**, which is §3 rule 3 applied literally: `aria-rowindex`
-and `aria-rowcount` only when paging or virtualization makes the DOM a window; `aria-colindex` and
-`aria-colcount` only when the picker has hidden a column, so that rendered position and logical position
-have actually diverged. An unpaged grid showing every column pays nothing - which is the configuration
-the 153 KB baseline measures - and the grid that pays is the one that would otherwise be wrong.
+> **Both halves of that were wrong, and finding out why corrected a number this branch had been
+> quoting for weeks.** Measured, `aria-rowindex` on every row costs **nothing** and `aria-colindex` on
+> every cell costs **+0.09 KB** - six times the frames for a twentieth of the cost, which cannot be a
+> frame-count story at all. What the per-row attribute had actually been paying for was its *value*:
+> the table of cached index strings held 512 entries, a thousand-row grid called `ToString` on 488 rows
+> of every render, and that was the +16 KB `data-r` had been charged for and attributed to the frame.
+> Grown to fit, both attributes are free in bytes.
+>
+> The cell attribute is not free in **time**: one frame on every cell of a thousand-row grid runs at
+> **about 1.1x**, which is exactly the shape frozen columns already had at 1.10x for two frames on the
+> cells of one column. So the conclusion §12 reached - that the per-cell attribute is the expensive one
+> - survives; only the currency and the mechanism were wrong.
+
+So **each is emitted only where it is needed**, which is §3 rule 3 applied literally and, as it turns
+out, the specification's own rule quoted back: "if all of the columns are present in the DOM, including
+`aria-colindex` is not necessary as user agents can calculate the column index". `aria-rowindex` and
+`aria-rowcount` only when paging or virtualization makes the DOM a window; `aria-colcount` only when the
+picker has hidden a column. An unpaged grid showing every column pays nothing, which is the
+configuration the 153 KB baseline measures.
+
+**And `aria-colindex` in three tiers rather than one**, because the specification has three cases and
+the 1.1x is what makes the difference between them worth having:
+
+| What the picker has hidden | What is written |
+| --- | --- |
+| nothing | nothing |
+| the trailing columns | `aria-colcount` alone - what is left is still columns one upward |
+| the leading columns | one index per row, on the first cell, naming where the run starts |
+| a column in the middle | an index on every cell, because the run has a hole in it |
+
+A row-detail toggle pins the first cell to column one, so any run starting later already has a hole
+before it and falls into the last case. **The frame is the declared column order**, which is the only
+ordering a hidden column has a place in: a reorder index is a position among the *visible* columns and a
+column nobody can see was never given one. A grid that both hides and reorders therefore numbers cells
+by where they were declared rather than where they are drawn - which is the case the specification
+already requires every cell to be numbered for, so it is the honest answer rather than a drawn position
+invented for a column that has none.
+
+**Row numbers include the header rows**, which are rows of the grid: the title row is 1, the filter row
+is 2 where there is one, and the data rows follow. A detail row repeats its parent's number instead of
+taking one of its own - numbering it separately would push every row below it out of step with the data
+set, which is the one thing the attribute exists to keep true. A total not yet known reads `-1`, the
+value defined for it, rather than a zero that would be a claim.
 
 ### The drop-down
 
@@ -926,7 +971,11 @@ that paints nothing.
    one. `Shift+Space` is aimed at the row the cursor is already on, so a run anchored where the cursor
    stands reaches nowhere - the anchor has to be the last row `Space` or `Enter` acted on, and only
    falls back to the cursor on a grid that has not selected anything yet. See below.
-4. Positional ARIA.
+4. ~~Positional ARIA.~~ - **done, and it measured on the opposite side of the budget from where this
+   section put it.** The per-row attribute is free, the per-cell one is free in bytes and about 1.1x in
+   time, and chasing the difference is what took `data-r`'s +16 KB apart. It also gained a tier the
+   design had not: the specification asks for the index on every cell only where the drawn columns have
+   a hole in them, and the 1.1x is what makes the cheaper cases worth telling apart.
 
 One commit each, which is what every other feature on this branch did, and the only reason resize,
 reorder and frozen columns have separate numbers at all.

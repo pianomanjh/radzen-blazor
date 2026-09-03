@@ -427,6 +427,14 @@ namespace Radzen.FastGrid
         // declaring an OrderIndex - skips the ordering pass entirely.
         void RefreshVisibleColumns()
         {
+            PlaceVisibleColumns();
+
+            // After the placement, because a drawn position is what the indexes are read against.
+            RefreshColumnIndexes();
+        }
+
+        void PlaceVisibleColumns()
+        {
             visibleColumns.Clear();
 
             var ordered = false;
@@ -658,6 +666,19 @@ namespace Radzen.FastGrid
             builder.OpenElement(21, "div");
             builder.AddAttribute(22, "class", "rz-data-grid-data");
             builder.AddAttribute(23, "role", "grid");
+
+            // Where the window sits in the whole table, on the element that is the table to a screen
+            // reader. Only for a grid whose DOM is a window: an unpaged grid showing every column has
+            // all of it in the markup and the browser can count what it has.
+            if (RowsAreCounted)
+            {
+                builder.AddAttribute(300, "aria-rowcount", AriaRowCount());
+            }
+
+            if (ColumnsAreCounted)
+            {
+                builder.AddAttribute(301, "aria-colcount", AriaColCount());
+            }
 
             // 24 to 28, so the table below moves to 29: an element's attributes and its children share
             // one ascending sequence, and a region cannot be opened between the two - attributes may
@@ -1069,6 +1090,12 @@ namespace Radzen.FastGrid
             builder.OpenRegion(sequence);
             builder.OpenElement(0, element);
             builder.AddAttribute(1, "class", "rz-col-icon");
+
+            if (NumbersToggle)
+            {
+                builder.AddAttribute(2, "aria-colindex", AriaToggleColIndex);
+            }
+
             builder.CloseElement();
             builder.CloseRegion();
         }
@@ -1080,6 +1107,15 @@ namespace Radzen.FastGrid
             builder.OpenElement(32, "tr");
             builder.AddAttribute(33, "role", "row");
 
+            // The header is a row of the grid, so it is numbered with the rest of them. Attributes and
+            // children are diffed as two runs rather than one, so a number above the children's is
+            // free to use here - and the positional ARIA takes a band of its own at 300 because there
+            // is no number free beside any of the roles it sits next to.
+            if (RowsAreCounted)
+            {
+                builder.AddAttribute(302, "aria-rowindex", "1");
+            }
+
             // A region, not a bare cell: a tr's attributes and its children share one ascending sequence
             // space, and there is no number free between the tr's role attribute and the first column
             // header. A region opens a space of its own, and costs one frame per render.
@@ -1090,6 +1126,12 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(1, "role", "columnheader");
                 builder.AddAttribute(2, "class", "rz-col-icon rz-unselectable-text");
                 builder.AddAttribute(3, "scope", "col");
+
+                if (NumbersToggle)
+                {
+                    builder.AddAttribute(6, "aria-colindex", AriaToggleColIndex);
+                }
+
                 builder.OpenElement(4, "span");
                 builder.AddAttribute(5, "class", "rz-column-title");
                 builder.CloseElement();
@@ -1106,6 +1148,12 @@ namespace Radzen.FastGrid
                 builder.OpenElement(34, "th");
                 builder.AddAttribute(35, "role", "columnheader");
                 builder.AddAttribute(36, "scope", "col");
+
+                if (NumbersCell(i))
+                {
+                    builder.AddAttribute(303, "aria-colindex", AriaColIndex(i));
+                }
+
                 var resizable = AllowColumnResize && column.Resizable;
 
                 // Both halves of the drop, and neither exists unless the grid reorders. The mouseup is
@@ -1291,6 +1339,12 @@ namespace Radzen.FastGrid
             builder.OpenElement(50, "tr");
             builder.AddAttribute(51, "role", "row");
 
+            // The second row of the header, and so the second row of the grid.
+            if (RowsAreCounted)
+            {
+                builder.AddAttribute(304, "aria-rowindex", "2");
+            }
+
             RenderExpandSpacer(builder, 53, "th");
 
             for (var i = 0; i < visibleColumns.Count; i++)
@@ -1300,6 +1354,11 @@ namespace Radzen.FastGrid
                 builder.OpenElement(52, "th");
                 builder.AddAttribute(53, "role", "columnheader");
                 builder.AddAttribute(54, "scope", "col");
+
+                if (NumbersCell(i))
+                {
+                    builder.AddAttribute(305, "aria-colindex", AriaColIndex(i));
+                }
 
                 // The filter row is a second row of the same header, so a frozen column has to pin here
                 // too - otherwise its title holds still and the box you type in slides out from under it.
@@ -1518,6 +1577,14 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(125, "data-r", RowIndexString(rowIndex));
             }
 
+            // Where this row is in the data set rather than in the DOM, which is the whole point of it:
+            // the DOM holds a page or a scrolled window. One frame per row - about a tenth of what a
+            // frozen column costs - and none at all on a grid that renders every row.
+            if (rowIndex >= 0 && RowsAreCounted)
+            {
+                builder.AddAttribute(128, "aria-rowindex", AriaRowIndex(rowIndex));
+            }
+
             // A per-row delegate costs about 310 bytes, so it is only bound when something listens and
             // the listener that would have answered instead did not attach.
             if (!delegated)
@@ -1548,6 +1615,11 @@ namespace Radzen.FastGrid
                 builder.OpenElement(130, "td");
                 builder.AddAttribute(131, "role", "gridcell");
                 builder.AddAttribute(132, "class", "rz-col-icon");
+
+                if (NumbersToggle)
+                {
+                    builder.AddAttribute(307, "aria-colindex", AriaToggleColIndex);
+                }
                 builder.OpenElement(135, "button");
                 builder.AddAttribute(136, "type", "button");
                 builder.AddAttribute(137, "tabindex", "-1");
@@ -1584,6 +1656,14 @@ namespace Radzen.FastGrid
 
                 builder.OpenElement(145, "td");
                 builder.AddAttribute(146, "role", "gridcell");
+
+                // A frame per cell, which is the shape the budget rules out - so it is written only
+                // where the picker has taken a column away and the browser can no longer count the
+                // rendered cells to reach the right answer.
+                if (NumbersCell(i))
+                {
+                    builder.AddAttribute(308, "aria-colindex", AriaColIndex(i));
+                }
 
                 // rz-cell-data belongs on the span, not here: the theme's rules for it are all
                 // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
@@ -1672,6 +1752,15 @@ namespace Radzen.FastGrid
                 builder.OpenElement(172, "tr");
                 builder.AddAttribute(173, "role", "row");
                 builder.AddAttribute(174, "class", "rz-expanded-row-content");
+
+                // Its parent's number rather than one of its own. A detail row is the row's content in
+                // a second tr because a table cannot nest one, and numbering it separately would push
+                // every row below it out of step with the data set - which is the one thing this
+                // attribute exists to keep true.
+                if (rowIndex >= 0 && RowsAreCounted)
+                {
+                    builder.AddAttribute(309, "aria-rowindex", AriaRowIndex(rowIndex));
+                }
 
                 builder.OpenElement(175, "td");
                 builder.AddAttribute(176, "role", "gridcell");

@@ -72,6 +72,41 @@ public class FastGridFeatureBench
         Column<decimal>(x => x.Salary, "Salary", "120px", TextAlign.Right);
     };
 
+    // Six columns with one of them hidden, so five are drawn. Rendered geometry identical to the bare
+    // grid's - same five columns, same thousand rows - and the only difference is that the grid is no
+    // longer showing all of what it has, which is the condition aria-colindex is written under. That is
+    // what makes this row's marginal the cost of the attribute rather than the cost of a column.
+    static readonly RenderFragment PickedColumnSet = b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title, bool visible = true)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+
+            if (!visible)
+            {
+                b.AddAttribute(s++, "Visible", false);
+            }
+
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id");
+        Column<string>(x => x.Name, "Name");
+
+        // In the middle, which is the case that costs: the drawn columns are then 1, 2, 4, 5, 6 and a
+        // browser counting them would answer wrong, so every cell has to carry its own. Hiding the
+        // last column instead leaves 1..5 and needs nothing at all.
+        Column<int>(x => x.Age, "Hidden", visible: false);
+
+        Column<int>(x => x.Age, "Age");
+        Column<DateTime>(x => x.Hired, "Hired");
+        Column<decimal>(x => x.Salary, "Salary");
+    };
+
     // The same five columns with the first two pinned to the left edge. Widths are required to pin
     // anything, so this row carries them and is read against the sized baseline rather than the bare one.
     static readonly RenderFragment FrozenColumnSet = b =>
@@ -452,6 +487,25 @@ public class FastGridFeatureBench
         p["AllowKeyboardNavigation"] = true;
         p["SelectionMode"] = DataGridSelectionMode.Multiple;
     });
+
+    // Positional ARIA, in the two halves it is paid in. Row numbers come with paging, which draws a
+    // pager as well - the two cannot be told apart by a parameter, because the grid emits the numbers
+    // exactly when the DOM stops being the whole table. gridbench/README.md splits them with a control.
+    //
+    // One page of every row, so the same thousand rows are rendered as everywhere else in this table.
+    [Benchmark(Description = "+ a pager and row numbers over one page")]
+    public Task PositionalAriaRows() => Render(p =>
+    {
+        p["AllowPaging"] = true;
+        p["PageSize"] = N;
+    });
+
+    // Six columns declared and five drawn, which is the condition column numbers are written under.
+    // Its marginal is mostly the sixth column rather than the attribute - a hidden column still
+    // registers - so the attribute's own cost was isolated separately by forcing the emission on the
+    // bare grid, which is in gridbench/README.md. This row is the realistic configuration.
+    [Benchmark(Description = "+ six columns with the middle one hidden, and column numbers")]
+    public Task PositionalAriaColumns() => Render(p => p["ChildContent"] = PickedColumnSet);
 
     [Benchmark(Description = "+ a column picker")]
     public Task ColumnPicking() => Render(p => p["AllowColumnPicking"] = true);
