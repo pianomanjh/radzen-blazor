@@ -534,6 +534,53 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void A_fit_the_user_asked_for_moves_the_columns_rather_than_jumping_them()
+        {
+            // Sampled mid-flight rather than by reading the stylesheet: a transition that is declared
+            // and not running looks identical to one that is. This run starts from no width at all,
+            // which is the case that does not interpolate on its own - `auto` has nothing to leave
+            // from - so it also covers the pin.
+            var fit = Fitted();
+
+            // Counted rather than sampled part-way: headless Chromium runs the animation clock free of
+            // wall time, so an intermediate width is not observable here even though it is correct in a
+            // real browser. Whether a transition ran, and for which caller, is the contract anyway.
+            //
+            // This run starts from no width at all, which is the case that cannot interpolate on its
+            // own - `auto` gives the transition nothing to leave from - so a count above zero is also
+            // what proves the pin works.
+            ParityAssert.True(fit.Animation is { Asked.Started: > 0 },
+                "a fit somebody asked for transitions the columns it sizes",
+                "auto does not interpolate, so without pinning each column to the width it already has the first fit would land in one frame while every later one glided",
+                "a transition on each column being sized",
+                fit.Animation?.Asked?.ToString() ?? "(not measured)",
+                fit.ToString());
+
+            ParityAssert.True(fit.Animation is { Asked.StillAnimating: false },
+                "the transition comes off the table once the fit has settled",
+                "the class is on the table, so anything else that writes a column width inherits it - a resize drag most of all, which would then lag 200ms behind the pointer",
+                "the class removed",
+                fit.Animation?.Asked?.ToString() ?? "(not measured)",
+                fit.ToString());
+        }
+
+        [Fact]
+        public void The_automatic_fit_does_not_animate()
+        {
+            // The other half of the rule, and the reason the parameter exists at all. The fit Once
+            // runs is the grid settling into its first layout; animating that reads as a page still
+            // loading rather than as an answer to anything.
+            var fit = Fitted();
+
+            ParityAssert.True(fit.Animation is { Automatic.Started: 0 },
+                "the fit a grid runs on its own transitions nothing",
+                "an animation is a response to something a user did, and there is nothing here for it to be a response to - the grid is settling into its first layout, which reads as a page still loading",
+                "no transitions at all",
+                fit.Animation?.Automatic?.ToString() ?? "(not measured)",
+                fit.ToString());
+        }
+
+        [Fact]
         public void A_table_the_theme_has_stacked_is_not_fitted()
         {
             // Below the Responsive breakpoint the theme gives the table table-layout:auto and
