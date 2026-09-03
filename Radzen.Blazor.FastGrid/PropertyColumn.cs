@@ -136,9 +136,15 @@ namespace Radzen.FastGrid
             path = SortBy is null ? propertyPath : PropertyPathResolver.For(SortBy);
 
             // Filtering follows the displayed property, not the sort key: a column that displays First
-            // and sorts by Last still filters on what the reader can see. A computed column has no path
-            // of its own, so an explicit sort key is the only one it can offer.
-            filterPath = FilterBy is not null ? PropertyPathResolver.For(FilterBy) : propertyPath ?? path;
+            // and sorts by Last still filters on what the reader can see.
+            //
+            // A computed column therefore has no filter path at all, and must not borrow the sort key
+            // as one. ApplyFilter composes its predicate from the display expression while this path is
+            // what the reflective route filters by, so borrowing made the column filter a different
+            // member depending on which route ran - and which route runs is decided by whether some
+            // other column declined. It declines to filter instead, as it already declines to sort,
+            // and FilterBy is how such a column is given something to filter on.
+            filterPath = FilterBy is not null ? PropertyPathResolver.For(FilterBy) : propertyPath;
 
             // The compiled getters are derived state like everything else here, and stale ones would
             // filter and sort by the expression the column used to have.
