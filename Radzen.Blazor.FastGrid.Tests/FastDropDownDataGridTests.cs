@@ -517,5 +517,34 @@ namespace Radzen.FastGrid.Tests
 
             System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
         }
+
+        [Fact]
+        public void APagedSourceDoesNotLoseTheRowsChosenOnOtherPages()
+        {
+            // Data is one page under LoadData, so a row chosen on another page is not in it. Rebuilding
+            // the selection from the page alone dropped that row - and the next choice published a
+            // Value without it, so a tick vanished because the user turned the page.
+            using var ctx = new TestContext();
+
+            var all = People.Sample();
+            var wanted = new object[] { all[0].Id, all[1].Id };
+
+            var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
+            {
+                p.Add(d => d.Data, new[] { all[0] });
+                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.ValueProperty, (Expression<Func<Person, object>>)(x => x.Id));
+                p.Add(d => d.Multiple, true);
+                p.Add(d => d.Value, wanted);
+            });
+
+            Assert.Equal(1, cut.Instance.SelectedItems.Count);
+
+            // The next page: the first row is gone from Data, the second arrives.
+            cut.SetParametersAndRender(p => p.Add(d => d.Data, new[] { all[1] }));
+
+            Assert.Equal(2, cut.Instance.SelectedItems.Count);
+        }
     }
 }

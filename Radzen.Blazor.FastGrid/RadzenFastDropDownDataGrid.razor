@@ -11,7 +11,7 @@
 <div @ref="element" id="@Id" class="@RootCssClass" style="@Style" tabindex="@(Disabled ? "-1" : $"{TabIndex}")"
      role="combobox" aria-haspopup="grid" aria-expanded="@Open.ToString().ToLowerInvariant()"
      aria-disabled="@Disabled.ToString().ToLowerInvariant()" aria-label="@Label"
-     @onclick="@TogglePopup" @onclick:stopPropagation @onkeydown="@OnKeyDown">
+     @onclick="@TogglePopup" @onclick:stopPropagation @onkeydown="@OnKeyDown" @onkeydown:preventDefault="@preventKeydown">
 
     @if (ShowsSelection)
     {
