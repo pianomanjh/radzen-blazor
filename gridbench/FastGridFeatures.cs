@@ -415,6 +415,15 @@ public class FastGridFeatureBench
     [Benchmark(Description = "+ ItemKey")]
     public Task ItemKeyed() => Render(p => p["ItemKey"] = (Func<Person, object>)(x => x.Id));
 
+    // The control for the row above. Its 23.5 KB is attributed to boxing - a Func<TItem, object> over
+    // an int boxes once per row, 24 bytes a thousand times - and the claim that follows from that is
+    // "a reference-typed key costs nothing here". This row is that claim: same feature, same thousand
+    // rows, a key that is already a reference. If it lands near the bare grid the attribution holds; if
+    // it lands near the row above, the cost was never the boxing.
+    [Benchmark(Description = "+ ItemKey over a reference-typed key")]
+    public Task ItemKeyedByReference() =>
+        Render(p => p["ItemKey"] = (Func<Person, object>)(x => x.Name));
+
     [Benchmark(Description = "+ settings raised on every reload")]
     public Task Settings() => Render(p =>
         p["SettingsChanged"] = EventCallback.Factory.Create<FastGridSettings>(new object(), _ => { }));
