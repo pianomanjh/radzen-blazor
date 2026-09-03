@@ -1181,12 +1181,12 @@ namespace Radzen.FastGrid
 
             if (spacerStyle is not null)
             {
-                builder.AddAttribute(3, "style", spacerStyle);
+                builder.AddAttribute(2, "style", spacerStyle);
             }
 
             if (NumbersToggle)
             {
-                builder.AddAttribute(2, "aria-colindex", AriaToggleColIndex);
+                builder.AddAttribute(3, "aria-colindex", AriaToggleColIndex);
             }
 
             builder.CloseElement();
@@ -1227,12 +1227,12 @@ namespace Radzen.FastGrid
 
                 if (ToggleFrozenHeaderStyle is { } toggleHeaderStyle)
                 {
-                    builder.AddAttribute(7, "style", toggleHeaderStyle);
+                    builder.AddAttribute(6, "style", toggleHeaderStyle);
                 }
 
                 if (NumbersToggle)
                 {
-                    builder.AddAttribute(6, "aria-colindex", AriaToggleColIndex);
+                    builder.AddAttribute(7, "aria-colindex", AriaToggleColIndex);
                 }
 
                 builder.OpenElement(4, "span");
@@ -1251,11 +1251,6 @@ namespace Radzen.FastGrid
                 builder.OpenElement(34, "th");
                 builder.AddAttribute(35, "role", "columnheader");
                 builder.AddAttribute(36, "scope", "col");
-
-                if (NumbersCell(i))
-                {
-                    builder.AddAttribute(303, "aria-colindex", AriaColIndex(i));
-                }
 
                 var resizable = AllowColumnResize && column.Resizable;
 
@@ -1301,6 +1296,14 @@ namespace Radzen.FastGrid
                 if (column.FrozenHeaderStyle is { } headerStyle)
                 {
                     builder.AddAttribute(48, "style", headerStyle);
+                }
+
+                // Last of this header's attributes and numbered past them. The run above it is not
+                // ascending and has not been since long before this - AddMultipleAttributes below
+                // writes 33 - so this cannot fix the element, only decline to add to it.
+                if (NumbersCell(i))
+                {
+                    builder.AddAttribute(303, "aria-colindex", AriaColIndex(i));
                 }
 
                 if (HeaderCellRender is { } headerCellRender)

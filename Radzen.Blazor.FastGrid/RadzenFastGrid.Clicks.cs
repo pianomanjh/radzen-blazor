@@ -219,6 +219,14 @@ namespace Radzen.FastGrid
 
             clicksAttached = false;
 
+            // The attempt is forgotten with the listener. Left set, a grid that starts delegating
+            // again - virtualization switched back off - reaches the guard above with unchanged kinds
+            // and returns, having neither a listener nor the per-cell handlers the delegating markup
+            // leaves out. Every click, double click and toggle would be dead until something else
+            // changed what the grid listens for.
+            clickAttachAttempted = false;
+            attachedKinds = default;
+
             try
             {
                 if (await ModuleAsync().ConfigureAwait(false) is { } script)

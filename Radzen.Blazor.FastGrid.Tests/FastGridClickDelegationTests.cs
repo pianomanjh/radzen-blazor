@@ -371,6 +371,13 @@ namespace Radzen.FastGrid.Tests
             cut.SetParametersAndRender(p => p.Add(g => g.AllowVirtualization, true));
 
             Assert.Single(detach.Invocations);
+
+            // And takes it up again. Letting go has to forget the attempt too: the delegating markup
+            // leaves the per-cell handlers out, so a grid that neither re-attaches nor re-renders them
+            // has no answer to a click at all.
+            cut.SetParametersAndRender(p => p.Add(g => g.AllowVirtualization, false));
+
+            Assert.Equal(2, attach.Invocations.Count);
         }
 
         [Fact]
