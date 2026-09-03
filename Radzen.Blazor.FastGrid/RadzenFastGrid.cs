@@ -743,9 +743,9 @@ namespace Radzen.FastGrid
             builder.AddAttribute(22, "class", "rz-data-grid-data");
             builder.AddAttribute(23, "role", "grid");
 
-            // 24 to 28, so the table below moves to 29: an element's attributes and its children share
-            // one ascending sequence, and a region cannot be opened between the two - attributes may
-            // only follow the frame that opened the element.
+            // 24 to 28 is the band RenderNavigation writes into, which is why the table below starts at
+            // 29. The band cannot be isolated in a region: attributes may only follow the frame that
+            // opened the element, and a region opened here would sit between the two.
             if (AllowKeyboardNavigation)
             {
                 RenderNavigation(builder, 24);
