@@ -588,22 +588,39 @@ namespace Radzen.Blazor.FastGrid.Tests
             // falls back to the width of its own heading: the point below which it stops saying what
             // it is, and a number the grid already has rather than one invented for the purpose.
             var floor = Fitted().DefaultFloor;
+            var seen = floor?.ToString() ?? "(not measured)";
 
-            ParityAssert.True(floor is { HoldsTitles: true },
-                "a column with no MinWidth is never taken below its own heading",
-                "a column squeezed past its title is a column the user cannot identify, which is worse than the scrollbar the fit was avoiding",
-                "every column at least as wide as its title",
-                floor?.ToString() ?? "(not measured)",
-                floor?.ToString() ?? "(not measured)");
+            ParityAssert.True(floor is { HeadingsHoldWhenEased: true },
+                "under ordinary pressure a column is not taken below its own heading",
+                "the heading is the cheapest thing to spend and the last thing worth spending - a column that cannot be identified is worse than one whose values are clipped",
+                "every heading still readable",
+                seen,
+                seen);
 
-            // The backstop under the backstop: a heading that cannot be measured still leaves
-            // something to see.
+            // Without this the two above pass on a grid that never reached its second tier, and the
+            // reserve they are about would be untested. A heading clipped here is the reserve being
+            // spent, which is the whole point of holding it separately from the values.
+            ParityAssert.True(floor is { RestsOnItsFloor: true },
+                "past what the columns can give, every column stands on its hard floor",
+                "if the second round never runs the table stops at the soft floors and stays wider than its own min-width - a column headed far wider than its values goes on holding width it never needed, which is the case this tier exists for",
+                "a total within a pixel per column of the floor total",
+                seen,
+                seen);
+
+            // The second tier. Past this there is nothing left to take that is not a value.
+            ParityAssert.True(floor is { ValuesHoldWhenHard: true },
+                "a heading is spent before the values under it are",
+                "a heading is learned once and a value is read every time - which is why the width between them is the reserve, and why the reserve is spent in that order",
+                "values readable even where headings are clipped",
+                seen,
+                seen);
+
             ParityAssert.True(floor is { Narrowest: >= 5 },
                 "no column is ever left at nothing",
                 "a column of zero pixels is indistinguishable from a column that is not there, and the user has no way to find it again",
                 "at least 5px",
-                floor?.ToString() ?? "(not measured)",
-                floor?.ToString() ?? "(not measured)");
+                seen,
+                seen);
         }
 
         [Fact]

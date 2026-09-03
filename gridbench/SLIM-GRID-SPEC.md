@@ -1630,6 +1630,21 @@ Two things the design has to keep holding:
 - **Changing `AutoFitOverflow` re-arms a `Once` fit.** The two modes produce different widths, and the
   fit that already ran produced the other ones.
 
+**There are two floors, and they are spent in order.** A column headed "Manufacturing Code" over
+six-character codes carries width its values never needed, and holding that width while the grid
+scrolls is the wrong trade. So the distribution runs twice:
+
+1. Down to the **soft floor** - the width at which a column still shows its own heading. Everything
+   with ordinary slack gives here first.
+2. Then, only if the table still does not fit, down to the **hard floor** - what the values themselves
+   need. This is the round that spends the gap between a heading and its content, and a column whose
+   heading is about as wide as its values has almost nothing here and gives almost nothing.
+
+The order is the point: a heading is learned once and a value is read every time, so the heading is the
+cheaper thing to spend - but only after the columns with real slack have given theirs. Measured on the
+probe pane at 120px: `[38/38/158/80/30]` with two rounds against `[42/280/158/80/51]` with one, where
+the long-headed column goes on holding 280px it does not need.
+
 **A best-effort column with no `MinWidth` floors at the width of its own heading.** That is the point
 below which it stops saying what it is, and it is a number the grid already has - the header half of the
 measurement it just took - rather than one invented for the purpose. The first version floored such a
@@ -1640,10 +1655,19 @@ readable column and is not meant to be; it is the difference between a column th
 that is simply gone. **It has no test of its own** - the probe page cannot produce a header with no
 title to measure - so it is a guard, not a guarantee.
 
-Its test asks whether the heading is *truncated* rather than re-deriving what the heading needs. The
-theme makes `.rz-column-title` `flex: auto`, so its `scrollWidth` in a laid-out column reports the
-column's width and not the title's: measuring it that way answers 600px for every column on a wide pane
-and proves nothing. That trap has now cost this branch twice.
+Its test asks whether the heading is *truncated* rather than re-deriving what the heading needs, and
+**the element that clips is `.rz-column-title-content`, not `.rz-column-title`**. The title is
+`flex: auto; width: 100%`, so it never overflows and always reports its column's width - measured on it
+the answer is "nothing is clipped" at every width, 38px included. The same `flex: auto` also makes
+`scrollWidth` useless for deriving what a heading needs: it answers 600px for every column on a wide
+pane. Two separate ways to measure the wrong thing, both of which this branch has now paid for.
+
+**What the tiers are tested for, and what they are not.** The test asserts that the hardest squeeze
+leaves every column on its hard floor - within a pixel per column of the table's own `min-width`, which
+is the sum of them - and that catches a second round that never runs. It does **not** catch the two
+rounds being run in the wrong order: at every pressure this probe pane can produce, spending the
+headings first and the slack first land in the same place, and separating them would need a pane built
+for that alone. The order is a claim the code makes and the spec explains; it is not one a test holds.
 
 ### Known consequences, recorded rather than designed around
 

@@ -182,25 +182,49 @@ namespace Radzen.Blazor.FastGrid.Tests
     }
 
     /// <summary>A fit with no MinWidth anywhere, squeezed past what the columns can give.</summary>
-    public sealed class AutoFitDefaultFloor
+    public sealed class AutoFitSqueeze
     {
+        [JsonPropertyName("pane")] public int Pane { get; set; }
         [JsonPropertyName("widths")] public double[] Widths { get; set; }
-
-        /// <summary>Whether each heading is ellipsised at the squeezed width.</summary>
-        [JsonPropertyName("truncated")] public bool[] Truncated { get; set; }
-
-        /// <summary>The narrowest column, which must never be nothing.</summary>
         [JsonPropertyName("narrowest")] public double Narrowest { get; set; }
+        [JsonPropertyName("total")] public double Total { get; set; }
 
-        /// <summary>Whether every column is still wide enough to show its own heading.</summary>
-        [JsonPropertyName("holdsTitles")] public bool HoldsTitles { get; set; }
+        /// <summary>The table's min-width: the sum of every hard floor.</summary>
+        [JsonPropertyName("floorTotal")] public double FloorTotal { get; set; }
+
+        /// <summary>Which headings are ellipsised at this width.</summary>
+        [JsonPropertyName("headings")] public bool[] Headings { get; set; }
+
+        /// <summary>Which values are ellipsised at this width.</summary>
+        [JsonPropertyName("values")] public bool[] Values { get; set; }
+
+        static string Clipped(bool[] flags) =>
+            flags is null || !flags.Any(f => f)
+                ? "none"
+                : string.Join(",", flags.Select((f, i) => (f, i)).Where(p => p.f).Select(p => p.i));
 
         public override string ToString() =>
-            $"[{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
-            $", narrowest {Narrowest:0}px" +
-            (HoldsTitles
-                ? ", every heading fits"
-                : $", TRUNCATED at {string.Join(",", Truncated.Select((t, i) => (t, i)).Where(p => p.t).Select(p => p.i))}");
+            $"{Pane}px [{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
+            $" total {Total:0} against floor {FloorTotal:0}," +
+            $" headings clipped {Clipped(Headings)}, values clipped {Clipped(Values)}";
+    }
+
+    public sealed class AutoFitDefaultFloor
+    {
+        /// <summary>Under mild pressure, where the soft floor should still hold every heading.</summary>
+        [JsonPropertyName("eased")] public AutoFitSqueeze Eased { get; set; }
+
+        /// <summary>Past what the columns can give, where a heading may be spent but a value may not.</summary>
+        [JsonPropertyName("hard")] public AutoFitSqueeze Hard { get; set; }
+
+        /// <summary>Whether the hardest squeeze actually reached every hard floor.</summary>
+        [JsonPropertyName("restsOnItsFloor")] public bool RestsOnItsFloor { get; set; }
+
+        [JsonPropertyName("headingsHoldWhenEased")] public bool HeadingsHoldWhenEased { get; set; }
+        [JsonPropertyName("valuesHoldWhenHard")] public bool ValuesHoldWhenHard { get; set; }
+        [JsonPropertyName("narrowest")] public double Narrowest { get; set; }
+
+        public override string ToString() => $"eased {Eased}; hard {Hard}";
     }
 
     /// <summary>One container width, and what the columns became at it.</summary>
