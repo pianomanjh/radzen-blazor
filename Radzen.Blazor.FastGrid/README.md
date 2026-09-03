@@ -17,6 +17,15 @@ faster than the previous run recorded for all three grids alike, which is the ma
 Allocation is stable across the same move - `QuickGrid`, whose code did not change at all, came back
 within 1.2 KB - so treat differences under about 1.5 KB at this scale as drift.
 
+**Read a row's marginal, not its absolute, and read it against the bare of its own era.** The rows
+below were re-measured as the work that changed them landed, against whatever the bare grid cost at
+the time - so the table is not one run and its *bare* is the oldest number in it. Re-measured whole at
+`32d5200bc`, bare is **154.03 KB** and every row's marginal holds to under half a kilobyte, except
+sorting, which improved by 3.7 KB on one key and 5.4 KB on two. Two row names there had also drifted
+from what the benchmark calls them, which is its own trap: the benchmark's "+ a filter row" is the
+as-you-type one, and it reads *higher* than "not as you type" rather than lower. They are named here
+the way the benchmark names them now.
+
 It gets there by not doing three things a general-purpose grid has to: no component per row, no cascading
 value per row, no render fragment per cell. Those are what inline editing needs, and this grid does not
 edit. Everything else it does costs what it costs only when you switch it on - measured, not assumed:
@@ -197,9 +206,9 @@ time against the same baseline:
 | selection (1 row in 4) | 151.89 KB | +0.11 KB | 1.06x |
 | `RowClass` | 151.88 KB | +0.10 KB | 0.98x |
 | `Settings` / `SettingsChanged` | 151.85 KB | +0.07 KB | 1.00x |
-| a filter row | 154.34 KB | +2.56 KB | 1.01x |
+| a filter row, on change only | 154.34 KB | +2.56 KB | 1.01x |
 | a column picker | 174.02 KB | **+22.2 KB** | 1.04x |
-| filtering as you type | 155.66 KB | +1.32 KB *over the filter row* | 1.04x |
+| a filter row, filtering as you type | 155.66 KB | +1.32 KB *over on-change* | 1.04x |
 | header and footer templates | 153.34 KB | +1.56 KB | 1.00x |
 | footer templates that aggregate | 153.54 KB | +0.20 KB *over the templates* | 1.05x |
 | responsive titles | 151.95 KB | +0.17 KB | 1.40x |
