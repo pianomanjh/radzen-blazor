@@ -77,6 +77,46 @@ namespace Radzen.FastGrid.Tests
             }
         }
 
+        [Fact]
+        public void ResponsiveEmitsTheClassTheThemeScopesTheWholeFeatureUnder()
+        {
+            // The per-cell titles are only half of Responsive, and the half that does nothing alone.
+            // Both theme rules are nested under .rz-datatable-reflow - the one hiding the title on a
+            // wide screen (_grid.scss "rz-datatable-reflow tbody td > .rz-column-title { display:none }")
+            // and the max-width:768px block that stacks the rows into cards. RadzenDataGrid sets it
+            // from the same parameter. Without it the titles show beside every value at every width and
+            // nothing ever stacks, so the feature is worse than leaving it off - and it costs 1.40x.
+            using var ctx = Context();
+
+            Assert.DoesNotContain("rz-datatable-reflow", Render(ctx).Find("div.rz-data-grid").ClassName);
+
+            Assert.Contains("rz-datatable-reflow",
+                Render(ctx, p => p.Add(g => g.Responsive, true)).Find("div.rz-data-grid").ClassName);
+        }
+
+        [Fact]
+        public void ResponsiveKeepsTheGridsOtherRootClasses()
+        {
+            // The class is added to a switch that returns whole literals, so the arm a grid lands on
+            // has to carry everything the other arms do.
+            using var ctx = Context();
+
+            var className = Render(ctx, p =>
+            {
+                p.Add(g => g.Responsive, true);
+                // Both halves: the grid only counts as showing a selection when something is listening
+                // for one, which is what SelectsOnRowClick asks.
+                p.Add(g => g.AllowRowSelectOnRowClick, true);
+                p.Add(g => g.SelectionChanged, (ICollection<Person> _) => { });
+                p.Add(g => g.CssClass, "mine");
+            }).Find("div.rz-data-grid").ClassName;
+
+            Assert.Contains("rz-datatable", className);
+            Assert.Contains("rz-selectable", className);
+            Assert.Contains("rz-datatable-reflow", className);
+            Assert.Contains("mine", className);
+        }
+
         // The title a narrow-screen theme shows once the table is stacked into cards.
         [Fact]
         public void ResponsiveRepeatsTheColumnTitleInEachCell()
