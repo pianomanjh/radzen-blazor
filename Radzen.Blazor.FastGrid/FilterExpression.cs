@@ -459,9 +459,31 @@ namespace Radzen.FastGrid
 
             var values = Listed(sequence);
 
+            // The rule NotNull applies on the expression side, and that every other predicate in this
+            // builder applies inline: a null string is the empty string to every operator but IsNull.
+            // In was the one that did not, so a grid over a List answered a check-box-list filter
+            // differently from the same grid over a queryable - and the list was the side disagreeing
+            // with QueryableExtension.
+            var read = NotNullRead(selector);
+
             return negate
-                ? item => !values.Contains(selector(item))
-                : item => values.Contains(selector(item));
+                ? item => !values.Contains(read(item))
+                : item => values.Contains(read(item));
+        }
+
+        /// <summary>
+        /// <see cref="NotNull" /> for a delegate: the selector, reading a null string as the empty one.
+        /// </summary>
+        static Func<TItem, TProp> NotNullRead(Func<TItem, TProp> selector)
+        {
+            if (typeof(TProp) != typeof(string))
+            {
+                return selector;
+            }
+
+            var empty = (TProp)(object)string.Empty;
+
+            return item => selector(item) is { } read ? read : empty;
         }
 
         static readonly MethodInfo ListContains =

@@ -206,6 +206,17 @@ namespace Radzen.FastGrid.Tests
         public void OnAListOfStrings(FilterOperator op) =>
             Same(p => p.Last, nameof(Person.Last), op, new object[] { "Last3", "Last5" });
 
+        // The empty string among the ticked values, which is what a check-box-list offers for a column
+        // holding nulls: the lookup drops the nulls and keeps the "". Every other operator treats a null
+        // string as the empty one, so In has to as well - and the list route was the only builder here
+        // not doing it, which made a grid over a List answer differently from the same grid over a
+        // queryable.
+        [Theory]
+        [InlineData(FilterOperator.In)]
+        [InlineData(FilterOperator.NotIn)]
+        public void OnAListOfStringsIncludingTheEmptyOne(FilterOperator op) =>
+            Same(p => p.Last, nameof(Person.Last), op, new object[] { string.Empty, "Last3" });
+
         [Theory]
         [InlineData(FilterOperator.In)]
         [InlineData(FilterOperator.NotIn)]
