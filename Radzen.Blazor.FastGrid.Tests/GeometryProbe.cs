@@ -181,6 +181,35 @@ namespace Radzen.Blazor.FastGrid.Tests
                 : string.Join(", ", Truncated.Select(pair => $"column {pair.Key}: {pair.Value}")));
     }
 
+    /// <summary>A fit sampled mid-flight, to see whether it moved or jumped.</summary>
+    public sealed class AutoFitMotion
+    {
+        [JsonPropertyName("from")] public double[] From { get; set; }
+        [JsonPropertyName("settled")] public double[] Settled { get; set; }
+
+        /// <summary>How many columns actually began a width transition.</summary>
+        [JsonPropertyName("started")] public int Started { get; set; }
+
+        /// <summary>Whether the transition class was still on the table after it should have come off.</summary>
+        [JsonPropertyName("stillAnimating")] public bool StillAnimating { get; set; }
+
+        public override string ToString() =>
+            $"{Show(From)} -> {Show(Settled)}, {Started} transitioned" +
+            (StillAnimating ? ", CLASS STILL ON" : string.Empty);
+
+        static string Show(double[] widths) =>
+            widths is null ? "-" : string.Join("/", widths.Select(w => w.ToString("0.#")));
+    }
+
+    /// <summary>Both halves of the animation rule: an asked-for fit moves, an automatic one does not.</summary>
+    public sealed class AutoFitAnimation
+    {
+        [JsonPropertyName("asked")] public AutoFitMotion Asked { get; set; }
+        [JsonPropertyName("automatic")] public AutoFitMotion Automatic { get; set; }
+
+        public override string ToString() => $"asked: {Asked}; automatic: {Automatic}";
+    }
+
     /// <summary>What a fit did when asked to size a table the theme had stacked into cards.</summary>
     public sealed class AutoFitStacked
     {
@@ -201,6 +230,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>The same fit run twice, once asked for and once automatic.</summary>
+        [JsonPropertyName("animation")] public AutoFitAnimation Animation { get; set; }
+
         /// <summary>What the fit did when the table was no longer laid out as one.</summary>
         [JsonPropertyName("stacked")] public AutoFitStacked Stacked { get; set; }
 

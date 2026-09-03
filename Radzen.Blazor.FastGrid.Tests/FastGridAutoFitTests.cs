@@ -36,14 +36,15 @@ namespace Radzen.FastGrid.Tests
 
         /// <summary>The call's arguments, named the way the design names them.</summary>
         sealed record Ask(string Table, int[] Indices, string[] Min, string[] Max, int ToggleOffset,
-            int Bare, bool Wait);
+            int Bare, bool Wait, bool Animate);
 
         static Ask Read(JSRuntimeInvocation invocation)
         {
             var args = invocation.Arguments;
 
             return new Ask((string)args[0], ((IEnumerable<int>)args[1]).ToArray(),
-                (string[])args[2], (string[])args[3], (int)args[4], (int)args[5], (bool)args[6]);
+                (string[])args[2], (string[])args[3], (int)args[4], (int)args[5], (bool)args[6],
+                (bool)args[7]);
         }
 
         // --- A grid that does not fit -----------------------------------------------------------
@@ -370,6 +371,35 @@ namespace Radzen.FastGrid.Tests
             cut.Render();
 
             Assert.Null(cut.FindAll("colgroup col")[2].GetAttribute("style"));
+        }
+
+        [Fact]
+        public void OnlyAFitTheUserAskedForIsAnimated()
+        {
+            // The browser honours this flag - a separate test covers that - but only the grid knows
+            // which kind of fit it is running, so what it sends is the whole of its side of the rule.
+            // The fit Once runs is the grid settling into its first layout, and animating that reads
+            // as a page still loading rather than as an answer to anything the user did.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "40px", "50px", null });
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.Once);
+                p.Add(g => g.AllowColumnResize, true);
+            });
+
+            cut.Render();
+            Assert.False(Read(module.Invocations["autoFit"].First()).Animate);
+
+            cut.InvokeAsync(() => cut.Instance.AutoFitAsync()).Wait();
+            Assert.True(Read(module.Invocations["autoFit"].Last()).Animate);
+
+            cut.FindAll(".rz-column-resizer")[0].DoubleClick();
+            Assert.True(Read(module.Invocations["autoFit"].Last()).Animate);
         }
 
         [Fact]

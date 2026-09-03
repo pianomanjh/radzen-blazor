@@ -683,6 +683,11 @@ stays right through a window resize with nothing watching for one. It is the las
 widest deliberately: which column is widest is a property of the data, so filtering would change which
 one stretches and the table would rearrange itself for no reason a reader can see.
 
+**A fit you ask for animates; the one `Once` runs does not.** The columns ease into their new widths
+over 200ms rather than snapping to them, so a re-fit shows what moved. The automatic fit is the grid
+settling into its first layout, which reads as a page still loading rather than as an answer to
+anything, so it lands in one frame. `prefers-reduced-motion: reduce` turns the animation off.
+
 **Nothing is fitted below the `Responsive` breakpoint**, where the theme stacks the rows into cards and
 a colgroup width stops deciding anything. A fit taken above it is kept, and is right again when the
 window widens.

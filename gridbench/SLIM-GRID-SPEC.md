@@ -1386,7 +1386,11 @@ whole table and every other column truncates to nothing - the state the feature 
 
 ### Who absorbs the slack
 
-**The last visible non-frozen column is left with no width at all.** Under `table-layout: fixed` a `col`
+**The last non-frozen column *being fitted* is left with no width at all.** The last *visible* one is
+what this section first said, and the two differ when the trailing column declares its own `Width` - a
+column the markup has sized cannot also be the one with no width, so the code takes the last of the
+columns it is actually fitting. The consequence is that slack can land mid-table on a grid whose last
+column is declared, which is a real cost of "a declared width wins" rather than a separate decision. Under `table-layout: fixed` a `col`
 with no width absorbs the remainder, so the browser does the distribution: no slack arithmetic, no
 container measurement, and it stays right through a window resize with no observer and no second round
 trip. The whole distribution pass deletes itself.
@@ -1423,7 +1427,12 @@ column with no declared width, fitting one *extends* runs that currently give up
 the off-by-one that once drew every column one position left.
 
 **`Responsive` below its breakpoint** stacks rows into cards and the colgroup means nothing, so no fit
-runs there. A fit taken above the breakpoint stays stored and is correct again when the window widens.
+runs there. It is asked as **"is this still a table"** - `getComputedStyle(table).display !== 'table'` -
+rather than by comparing a width against 768px: the breakpoint is the theme's number to change, and
+every other reason a table might stop being one has the same consequence for a colgroup. Its test
+applies the `display: block` that media query applies and asserts the fit answers null **and leaves
+every `col` exactly as it found it** - declining after writing would be the worst of both. This guard
+was specified here, left unbuilt in the first version, and caught by review. A fit taken above the breakpoint stays stored and is correct again when the window widens.
 This needs its own test rather than an argument: `Responsive` shipped broken on this branch for exactly
 the neighbouring reason.
 
@@ -1531,6 +1540,48 @@ Landed as three commits, in this order.
   history on this branch - fifteen findings, then six more on a re-read three commits later - so a
   change to its layout is the wrong place to spend that risk before the question is answered.
 - **No event.** Above, with its reason.
+
+**A fit somebody asked for animates.** `transition: width` on a `col` works - worth stating because it
+reads like it should not, and was measured twice before being believed. A transition declared on a `th`
+or `td` animates nothing: under `table-layout: fixed` the column decides the width, so the cells have
+nothing of their own to interpolate.
+
+- **It costs less than not animating.** Over a thousand rendered rows and five columns: 60fps held,
+  worst frame **17.5ms against 29.4ms for the instant jump**. The per-frame relayout only moves boxes -
+  the cells are `nowrap` with `overflow: hidden`, so no text re-wraps, and only visible rows paint.
+- **The bare column glides without being animated.** It is the remainder, so the browser recomputes it
+  from its neighbours on every frame of theirs. Worth recording because the obvious test of this - to
+  transition the bare column's own width - answers a question a re-fit never asks, and says it jumps.
+- **`auto` does not interpolate**, so a first fit would land in one frame while every later one glided.
+  Each column being sized is pinned to the width it already has and the style flushed, giving the
+  transition somewhere to leave from. **2.5ms over a thousand rows**, because the pin writes what is
+  already there and the layout it forces has nothing to move.
+- **Only a fit the user asked for is animated.** The one `Once` runs is the grid settling into its first
+  layout; animating that reads as a page still loading rather than as an answer to anything.
+- **The transition is scoped to a class the fit adds and removes.** A permanent rule on `col` would put
+  200ms between a resize drag and the pointer.
+- `prefers-reduced-motion: reduce` turns it off - which is also why the headless probe must ask for
+  `no-preference` before it can observe the feature at all.
+
+The browser test counts transitions rather than sampling a width part-way through one: headless
+Chromium runs the animation clock free of wall time, and all four transitions start *and finish* inside
+90ms of a 200ms run. An intermediate width is correct in a real browser and not observable in that one,
+so the test asserts what is - that a transition ran, and for which caller.
+
+### Known consequences, recorded rather than designed around
+
+- **A one-column fit does not move the bare column**, and the first version cleared it - the trailing
+  column silently regained the grid's `ColumnWidth` on some later unrelated render. Both review axes
+  found it independently. The test that missed it asserted what was *sent* to the browser rather than
+  what the grid recorded.
+- **Hiding the bare column leaves the table narrower until the next fit.** The reference is kept, so
+  showing the column again restores it. Re-picking on every render was considered and refused: the
+  fit's other widths are stale the moment a column is hidden anyway, so the honest answer is to fit
+  again rather than keep one number fresh among several that are not.
+- **A reorder does not bump the view generation.** `RadzenFastGrid.Reorder.cs` deliberately skips
+  `RefreshAsync`, so a fit in flight during a drag can land against positions that have moved. Narrow -
+  it needs a reorder to complete inside one round trip - but recorded, because the generation is
+  documented above as covering "a sort, a filter or a page turn", and a reorder is none of those.
 
 ### Where this could still be wrong
 

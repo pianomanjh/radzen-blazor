@@ -73,7 +73,13 @@ async function main() {
     }
 
     try {
-        const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+        // Headless Chromium reports `prefers-reduced-motion: reduce` by default, which the auto-fit
+        // transition honours - so without this the animation probe measures the guard rather than the
+        // animation, and reads as a feature that never ran.
+        const page = await browser.newPage({
+            viewport: { width: 1100, height: 900 },
+            reducedMotion: 'no-preference'
+        });
 
         const failures = [];
         page.on('requestfailed', request => failures.push(`${request.url()} (${request.failure()?.errorText})`));
@@ -144,6 +150,7 @@ async function main() {
                 return cell && cell.style.maxWidth ? cell.style.maxWidth : null;
             });
 
+            const cols = table.querySelector(':scope > colgroup');
             const tableWidth = () => round(table.getBoundingClientRect().width);
             const before = { widths: widths(), truncated: truncated(), tableWidth: tableWidth() };
 
@@ -155,7 +162,7 @@ async function main() {
             const started = performance.now();
 
             const written = await window.__fastgrid.autoFit(table.id, indices,
-                indices.map(() => null), bounds, 0, columns - 1, false);
+                indices.map(() => null), bounds, 0, columns - 1, false, false);
 
             const elapsed = round(performance.now() - started);
 
@@ -163,27 +170,63 @@ async function main() {
             // resizing the viewport - the theme's breakpoint is a media query, so a below-breakpoint
             // pane cannot sit on the same page as the others. `display: block` on the table is what
             // that media query applies, and it is what makes a colgroup width stop deciding anything.
-            const stacked = (() => {
-                const cols = table.querySelector(':scope > colgroup');
-                const widthsThen = [...cols.children].map(col => col.style.width);
+            const widthsThen = [...cols.children].map(col => col.style.width);
 
-                table.style.display = 'block';
+            table.style.display = 'block';
 
-                return window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), bounds, 0, columns - 1, false).then(answer => {
-                        const widthsNow = [...cols.children].map(col => col.style.width);
+            const declined = await window.__fastgrid.autoFit(table.id, indices,
+                indices.map(() => null), bounds, 0, columns - 1, false, false);
 
-                        table.style.display = '';
+            const widthsNow = [...cols.children].map(col => col.style.width);
 
-                        return {
-                            answered: answer,
-                            wroteNothing: widthsNow.every((w, i) => w === widthsThen[i])
-                        };
-                    });
-            })();
+            table.style.display = '';
+
+            const stacked = {
+                answered: declined,
+                wroteNothing: widthsNow.every((w, i) => w === widthsThen[i])
+            };
+
+            // The animation, on the run that is supposed to have one. Sampled mid-flight rather than
+            // by asking what CSS is declared: a transition that is declared and not running looks
+            // identical to one that is, from the stylesheet.
+            const at = () => [...table.querySelectorAll(':scope > thead > tr:first-child > th')]
+                .map(cell => round(cell.getBoundingClientRect().width));
+
+            // Counted rather than sampled mid-flight. Headless Chromium runs the animation clock free
+            // of wall time - all four transitions here start and finish inside 90ms of a 200ms run -
+            // so an intermediate width is not observable in this environment even though it is correct
+            // in a real browser. What is observable, and is the whole contract, is whether a transition
+            // ran at all and for which caller.
+            const run = async (animate) => {
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                const from = at();
+
+                let started = 0;
+                const count = () => { started++; };
+                table.addEventListener('transitionstart', count, true);
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => null), bounds, 0, columns - 1, false, animate);
+
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                table.removeEventListener('transitionstart', count, true);
+
+                return {
+                    from,
+                    settled: at(),
+                    started,
+                    stillAnimating: table.classList.contains('rz-fastgrid-animating')
+                };
+            };
+
+            const animation = { asked: await run(true), automatic: await run(false) };
 
             return {
-                stacked: await stacked,
+                animation,
+                stacked,
                 before,
                 after: { widths: widths(), truncated: truncated(), tableWidth: tableWidth() },
                 written,

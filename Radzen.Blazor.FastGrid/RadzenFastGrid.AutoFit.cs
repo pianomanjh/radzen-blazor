@@ -143,8 +143,12 @@ namespace Radzen.FastGrid
 
             try
             {
+                // Animated only for a fit somebody asked for. The one Once runs is the grid settling
+                // into its first layout, and animating that reads as a page still loading rather than
+                // as an answer to anything - where a re-fit is exactly the case where showing what
+                // moved is the point.
                 widths = await script.InvokeAsync<string?[]?>("autoFit", TableElementId, targets,
-                    minimums, maximums, ExpandColumn ? 1 : 0, bare, wait);
+                    minimums, maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic);
             }
 #pragma warning disable CA1031
             catch (Exception)
