@@ -157,14 +157,14 @@ namespace Radzen.FastGrid.Tests
                 builder.AddAttribute(seq + 44, nameof(PropertyColumn<TItem, TProp>.Frozen), true);
             }
 
-            if (!autoFit)
-            {
-                builder.AddAttribute(seq + 46, nameof(PropertyColumn<TItem, TProp>.AutoFit), false);
-            }
-
             if (frozenPosition != FrozenColumnPosition.Left)
             {
                 builder.AddAttribute(seq + 45, nameof(PropertyColumn<TItem, TProp>.FrozenPosition), frozenPosition);
+            }
+
+            if (!autoFit)
+            {
+                builder.AddAttribute(seq + 46, nameof(PropertyColumn<TItem, TProp>.AutoFit), false);
             }
 
             if (cssClass is not null)

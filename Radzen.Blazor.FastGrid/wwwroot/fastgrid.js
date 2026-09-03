@@ -454,10 +454,15 @@ function bound(px, min, max) {
 // measure. Bounded, and it gives up into a header-only fit rather than never landing - an empty grid
 // would otherwise re-arm on every render and wait again.
 async function ready(tableId, wait) {
-  for (let attempt = 0; ; attempt++) {
+  // Bounded by the clock as well as by frames. requestAnimationFrame does not fire in a backgrounded
+  // tab, so a frame count alone can wait for as long as the tab stays hidden - and the server has
+  // already disarmed by then, so nothing would ever ask again.
+  const deadline = performance.now() + 1000;
+
+  for (;;) {
     const table = document.getElementById(tableId);
 
-    if (!table || !wait || attempt >= 60 || dataRows(table).length > 0) {
+    if (!table || !wait || dataRows(table).length > 0 || performance.now() >= deadline) {
       return table;
     }
 
@@ -475,6 +480,15 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   const colgroup = table.querySelector(':scope > colgroup');
 
   if (!colgroup) {
+    return null;
+  }
+
+  // Below the Responsive breakpoint the theme gives the table `table-layout: auto` and `display:
+  // block`, hides the header row and stacks the body into cards - so a colgroup width is no longer
+  // what decides a column, and there are no header cells to measure. Asked as "is this still a
+  // table" rather than by checking a width against 768px: the breakpoint is the theme's number to
+  // change, and any other reason the table stopped being one has the same consequence here.
+  if (getComputedStyle(table).display !== 'table') {
     return null;
   }
 

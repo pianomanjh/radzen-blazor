@@ -154,6 +154,40 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void FittingOneColumnLeavesTheBareColumnWhereTheLastFullFitPutIt()
+        {
+            // Sending -1 is only half of it. Recording -1 clears the column the last full fit left
+            // bare, so the trailing column quietly regains the grid's ColumnWidth on some later
+            // unrelated render - and with nothing frozen there is no render here to make it visible.
+            // The test that only checked what was sent passed while that was happening.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            var planned = module.Setup<string[]>("autoFit", _ => true);
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand);
+                p.Add(g => g.AllowColumnResize, true);
+                p.Add(g => g.ColumnWidth, "150px");
+            });
+
+            planned.SetResult(new[] { "40px", "50px", null });
+            cut.InvokeAsync(() => cut.Instance.AutoFitAsync()).Wait();
+            cut.Render();
+            Assert.Null(cut.FindAll("colgroup col")[2].GetAttribute("style"));
+
+            var single = module.Setup<string[]>("autoFit", i => ((IEnumerable<int>)i.Arguments[1]).Count() == 1);
+            single.SetResult(new[] { "44px" });
+            cut.FindAll(".rz-column-resizer")[0].DoubleClick();
+            cut.Render();
+
+            Assert.Equal("width:44px", cut.FindAll("colgroup col")[0].GetAttribute("style"));
+            Assert.Null(cut.FindAll("colgroup col")[2].GetAttribute("style"));
+        }
+
+        [Fact]
         public void AGridThatDoesNotFitPutsNoHandlerOnTheHandle()
         {
             using var ctx = new TestContext();
@@ -339,7 +373,50 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void AFitTakesOverFromADragAndADragTakesItBack()
+        public void TheAutomaticFitLeavesAWidthTheUserChoseAlone()
+        {
+            // resizedWidth is where a width restored from the settings lands as well as where a drag
+            // does - a restored width being a drag from a previous visit. So a Once fit that cleared
+            // it would wipe every width a user had saved, and because the settings capture reads that
+            // same slot the next sort or page turn would then persist the absence. The width would be
+            // gone rather than overridden.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "60px", "70px" });
+
+            FastGridSettings captured = null;
+
+            var restored = new FastGridSettings
+            {
+                Columns = new List<FastGridColumnSettings>
+                {
+                    new() { Property = "First", Width = "333px" }
+                }
+            };
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.Once);
+                p.Add(g => g.Settings, restored);
+                p.Add(g => g.SettingsChanged, EventCallback.Factory
+                    .Create<FastGridSettings>(this, s => captured = s));
+            });
+
+            cut.Render();
+
+            // Not measured at all: it already carries a width somebody chose.
+            Assert.Equal(new[] { 1, 2 }, Read(Assert.Single(module.Invocations["autoFit"])).Indices);
+            Assert.Equal("width:333px", cut.FindAll("colgroup col")[0].GetAttribute("style"));
+
+            // And still there to be saved again.
+            cut.Find("thead th div").Click();
+            Assert.Equal("333px", captured.Columns.Single(c => c.Property == "First").Width);
+        }
+
+        [Fact]
+        public void AFitTheUserAsksForTakesTheColumnBackFromADrag()
         {
             using var ctx = new TestContext();
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -360,6 +437,9 @@ namespace Radzen.FastGrid.Tests
             // to the page, and there is no inset composed here that would go stale. So the next render
             // is what shows the server agreeing with what it was told - which is the property that
             // matters, since a server that re-derived the width would drift from the page.
+            //
+            // This one is asked for rather than automatic, so it does take the column back: a fit that
+            // visibly did nothing to the column under the pointer is the worse answer.
             cut.InvokeAsync(() => cut.Instance.AutoFitAsync()).Wait();
             cut.Render();
             Assert.Equal("width:60px", cut.FindAll("colgroup col")[0].GetAttribute("style"));

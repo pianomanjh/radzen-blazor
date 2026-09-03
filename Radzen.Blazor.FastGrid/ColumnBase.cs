@@ -461,21 +461,40 @@ namespace Radzen.FastGrid
         [Parameter] public bool AutoFit { get; set; } = true;
 
         /// <summary>Whether an auto-fit is allowed to measure and size this column.</summary>
-        internal bool CanAutoFit => AutoFit && string.IsNullOrEmpty(Width);
+        /// <param name="automatic">
+        /// True for the one fit <c>AutoFitMode.Once</c> runs on its own, false when a user asked. An
+        /// automatic fit leaves alone any column already carrying a width the user chose - a drag, or
+        /// one restored from the settings, which is a drag from a previous visit. A fit somebody asked
+        /// for takes that column too, because a fit that visibly did nothing to the column under the
+        /// pointer is the worse answer.
+        /// </param>
+        internal bool CanAutoFit(bool automatic) =>
+            AutoFit && string.IsNullOrEmpty(Width) && (!automatic || resizedWidth is null);
 
-        /// <summary>
-        /// Records the width an auto-fit measured, and drops any width a drag had settled on.
-        /// </summary>
+        /// <summary>Records the width an auto-fit measured.</summary>
+        /// <param name="width">The measured width, or null for the column left bare.</param>
+        /// <param name="replacingUserWidth">
+        /// Whether to drop a width the user had chosen. True only for a fit a user asked for: a drag
+        /// outranks a fit, so without this the column under the pointer would not move.
+        /// </param>
         /// <remarks>
-        /// The two are stored apart rather than in one slot because only one of them is a choice the
-        /// user made: a drag is captured into the settings and a fit is not, being derived from data
-        /// that will not be the same data next time. Clearing the drag is what makes fitting a column
-        /// the user has already dragged do something visible, since the drag would otherwise win.
+        /// The two widths are stored apart rather than in one slot because only one of them is a
+        /// choice somebody made: a drag is captured into the settings and a fit is not, being derived
+        /// from data that will not be the same data next time.
+        /// <para>
+        /// <c>resizedWidth</c> is also where a width restored from the settings lands, which is what
+        /// makes clearing it unconditionally so expensive: the automatic fit would wipe every width a
+        /// user had saved, and the next capture would then persist the absence.
+        /// </para>
         /// </remarks>
-        internal void SetAutoFitWidth(string? width)
+        internal void SetAutoFitWidth(string? width, bool replacingUserWidth)
         {
             autoFitWidth = width;
-            resizedWidth = null;
+
+            if (replacingUserWidth)
+            {
+                resizedWidth = null;
+            }
         }
 
         int elementIdIndex = -1;

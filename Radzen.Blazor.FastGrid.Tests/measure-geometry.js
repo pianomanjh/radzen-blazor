@@ -159,7 +159,31 @@ async function main() {
 
             const elapsed = round(performance.now() - started);
 
+            // The Responsive guard, checked against the condition it actually tests rather than by
+            // resizing the viewport - the theme's breakpoint is a media query, so a below-breakpoint
+            // pane cannot sit on the same page as the others. `display: block` on the table is what
+            // that media query applies, and it is what makes a colgroup width stop deciding anything.
+            const stacked = (() => {
+                const cols = table.querySelector(':scope > colgroup');
+                const widthsThen = [...cols.children].map(col => col.style.width);
+
+                table.style.display = 'block';
+
+                return window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => null), bounds, 0, columns - 1, false).then(answer => {
+                        const widthsNow = [...cols.children].map(col => col.style.width);
+
+                        table.style.display = '';
+
+                        return {
+                            answered: answer,
+                            wroteNothing: widthsNow.every((w, i) => w === widthsThen[i])
+                        };
+                    });
+            })();
+
             return {
+                stacked: await stacked,
                 before,
                 after: { widths: widths(), truncated: truncated(), tableWidth: tableWidth() },
                 written,

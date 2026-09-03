@@ -1288,18 +1288,50 @@ and calls back afterwards - so this is the existing mechanism, not a second one.
 6. **C#** discards a stale generation, stores into `autoFitWidth`, and renders only under the condition
    in *What it collides with*.
 
-`EffectiveWidth` becomes `resizedWidth ?? autoFitWidth ?? Width`. A drag beats a fit; a fit fills in
-where neither a drag nor the markup has spoken. **A fitted width is not captured into the settings**: a
-drag is a choice a user made, a fit is derived from the data, and restoring a fit computed against a
-different result set is worse than recomputing it. It also keeps the settings-identity collision of
-§10b from acquiring another participant.
+`EffectiveWidth` becomes `resizedWidth ?? autoFitWidth ?? Width`. **A fitted width is not captured into
+the settings**: a drag is a choice a user made, a fit is derived from the data, and restoring a fit
+computed against a different result set is worse than recomputing it. It also keeps the
+settings-identity collision of §10b from acquiring another participant.
+
+**Which of a drag and a fit wins depends on who asked, and the first version of this got it wrong in a
+way that destroyed user state.** This section originally said only "a drag beats a fit". The code then
+did the opposite - a fit cleared `resizedWidth` outright, so that fitting a column somebody had already
+dragged would do something visible - and the section was never amended to say so. What that missed is
+that **`resizedWidth` is also where a width restored from the settings lands**, a restored width being
+a drag from a previous visit. So `AutoFitMode.Once` wiped every saved width on first render, and
+because `CaptureSettings` reads that same slot, the next sort or page turn persisted the absence. The
+width was not overridden; it was deleted.
+
+The rule now distinguishes the two callers, which is the distinction that was missing:
+
+- **The automatic fit** (`Once`) does not measure a column that already carries a width the user chose.
+  It is not a target at all, so nothing is written and nothing is cleared.
+- **A fit somebody asked for** (`AutoFitAsync`, the double-click) does take that column, and clears the
+  drag with it - because a fit that visibly did nothing to the column under the pointer is worse.
+
+Two tests hold it, both confirmed to fail against the original code.
 
 ### Measuring a cell is free; measuring a header is not
 
-**The body is free because of a theme rule.** `.rz-cell-data` is `display: block; overflow: hidden;
-text-overflow: ellipsis; white-space: nowrap`, so a truncated cell's `scrollWidth` already *is* its
-untruncated content width. No `table-layout: auto` flip, no clone, no offscreen probe - the ellipsis
-this feature exists to remove is what makes it measurable.
+**The body needs no clone and no offscreen probe**, because of a theme rule: `.rz-cell-data` is
+`display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`, so a truncated cell's
+`scrollWidth` already *is* its untruncated content width. The ellipsis this feature exists to remove is
+what makes it measurable.
+
+**But "the body is free" was written here before it was tried, and it is wrong.** That same
+`display: block` means the span fills its column, so its `scrollWidth` is never *less* than the column
+it sits in - a column wider than its content measures as itself, and a fit built on that could only
+ever grow a column, never shrink one. The body gets the `max-content` flip too. The shipped rule covers
+both elements:
+
+```css
+.rz-fastgrid-measuring .rz-cell-data { width: max-content !important }
+.rz-fastgrid-measuring .rz-column-title { width: max-content !important; flex: 0 0 max-content !important }
+```
+
+**The consequence is the performance one**, and it is why the gate below is what it is rather than what
+this section first guessed: both forced layouts are over N x rows, not over N header elements. One
+class toggle still buys one layout each way - that part holds - but they are whole-table layouts.
 
 **The header is not, and reading it the same way returns a plausible wrong answer.**
 `.rz-column-title` is an `inline-flex` at `width: 100%` with `overflow: hidden`, and its content child
@@ -1319,8 +1351,9 @@ is what a fit that has measured nothing looks like from the outside.
 needed, but it was needed against `flex`, not against `width: 100%`, and a fix aimed at the second one
 passes every markup assertion while measuring the same wrong number.
 
-So the header gets the `max-content` flip, and only the header: N elements rather than N x rows, so the
-second reflow is paid over a handful of nodes. The alternative - reading the content child and adding
+The header therefore needs a flip of its own, with the flex growth turned off. It is one rule beside the
+body's rather than a pass of its own - the class goes on once and both elements answer it. The
+alternative - reading the content child and adding
 the glyph width, the flex `gap` and the title's `padding-inline` back from computed styles - is
 arithmetic against the theme's current internals, and it is the shape of thing that has now been wrong
 six times on this branch without any test noticing.
@@ -1507,10 +1540,10 @@ Landed as three commits, in this order.
   the longest value per column is a query per column that only works for a property column and cannot
   rank a template at all. Recorded so that the first complaint about it is met with the decision rather
   than a fix.
-- **The header's `max-content` flip mutates layout mid-pass.** It is reverted before anything is read
-  from the body, and it is N elements - but it is still a write between two reads, which is the shape
-  that produces layout thrash. If the browser figure comes in near the gate, this is the first place to
-  look and the first thing to try moving to a separate frame.
+- **The measuring class is a write between two reads**, which is the shape that produces layout thrash.
+  It is one toggle rather than one per element, so the pass costs two whole-table layouts rather than
+  thousands - but two is where the ~32ms at a thousand rendered rows goes, and reading faster does not
+  touch it. If that ever needs to come down, this is the only place with anything in it.
 - **The three theme facts this rests on.** The body being free rests on `.rz-cell-data` truncating; the
   header needing a flip rests on `.rz-column-title` being an `inline-flex` with a shrinkable child; the
   slack column rests on `table-layout: fixed`. All three are read out of the shipped theme rather than
