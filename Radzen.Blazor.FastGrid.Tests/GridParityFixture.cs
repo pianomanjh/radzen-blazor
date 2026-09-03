@@ -51,6 +51,9 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// <summary>Rows and columns the recorded geometry baseline was taken at.</summary>
         public const int RowCount = 8;
 
+        /// <summary>Rows in the auto-fit pane, which is the size §13's gate for the pass is written at.</summary>
+        public const int AutoFitRowCount = 1000;
+
         /// <summary>Column titles, in order. Both grids get exactly these.</summary>
         public static readonly string[] ColumnTitles = { "Id", "Name", "Age", "Hired", "Salary" };
 
@@ -180,7 +183,10 @@ namespace Radzen.Blazor.FastGrid.Tests
                 // what puts the colgroup and the table's id on the page.
                 FastGridAutoFitMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
                 {
-                    p.Add(g => g.Data, people);
+                    // The one pane not rendered at RowCount. The fit's cost is a walk over every
+                    // rendered cell, and §13 states its gate at a thousand rows - a number taken over
+                    // eight would not be the number that gate is about.
+                    p.Add(g => g.Data, Person.Make(AutoFitRowCount));
                     p.Add(g => g.ChildContent, FastGridAutoFitColumns);
                     p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand);
                     p.Add(g => g.AllowSorting, true);

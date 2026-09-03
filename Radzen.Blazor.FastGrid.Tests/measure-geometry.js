@@ -149,13 +149,22 @@ async function main() {
 
             // Standing in for the server, which passes the same things: no toggle column on this pane,
             // and the last column left bare so the browser hands it the remainder.
+            // The pass itself, timed. This is the only channel that can answer what auto-fit costs:
+            // gridbench is bUnit, so the reflow, the scrollWidth walk and the getComputedStyle calls
+            // all read as zero there.
+            const started = performance.now();
+
             const written = await window.__fastgrid.autoFit(table.id, indices,
                 indices.map(() => null), bounds, 0, columns - 1, false);
+
+            const elapsed = round(performance.now() - started);
 
             return {
                 before,
                 after: { widths: widths(), truncated: truncated(), tableWidth: tableWidth() },
                 written,
+                elapsed,
+                rowsMeasured: table.querySelectorAll(':scope > tbody > tr.rz-data-row').length,
                 paneWidth: round(pane.getBoundingClientRect().width)
             };
         });

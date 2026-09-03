@@ -238,6 +238,18 @@ time against the same baseline:
 | `CellRender` that adds nothing | 154.00 KB | -0.03 KB | - |
 | `CellRender` that writes one attribute | 427.97 KB | +273.94 KB | - |
 | `HeaderCellRender` that writes one attribute | 155.04 KB | +1.01 KB | - |
+| column auto-fit, off | 154.04 KB | 0.00 KB | - |
+| column auto-fit, on demand | 154.33 KB | +0.24 KB | - |
+
+The two auto-fit rows come from a run of their own whose bare read 154.09 KB, which is what their
+marginals are against - subtracting this table's bare from them invents a difference that is not
+there. **And neither of them is what the feature costs.** Auto-fit does its work in the browser, and
+this harness is bUnit: the reflow, the `scrollWidth` walk and the `getComputedStyle` calls all read as
+zero here. What these two rows can say is that having the feature off is free and that having it on
+adds a colgroup and an element id - a fixed cost, not a per-row one. The pass itself is timed through
+Chromium and is **~1.7ms plus ~0.03ms a rendered row**: 3.2ms over 50 rows, 7.1ms over 200, ~32ms over
+a thousand. A browser millisecond does not belong in a table of allocations, which is why it is here
+in words rather than in a column.
 
 The time column is not from this run. `--job short` measures allocation, not time - see the
 verification protocol - so the ratios above are the ones settled by full-length runs, and the rows
@@ -635,6 +647,60 @@ frozen cell in every row - which is a DOM write per frozen cell per row, and wou
 after every render. Composing it per column instead costs one string for the whole grid, is right on
 the first paint, and needs nothing on a scroll, a page change or a virtualized window.
 
+## Sizing a column to what is in it
+
+`AutoFitColumns` measures the content and writes each column a width. It takes three values:
+
+```razor
+<RadzenFastGrid Data="@orders" AutoFitColumns="AutoFitMode.Once">
+    <PropertyColumn Property="@(o => o.Number)" Title="Order" />
+    <PropertyColumn Property="@(o => o.Customer)" Title="Customer" MaxWidth="24rem" />
+    <PropertyColumn Property="@(o => o.Notes)" Title="Notes" AutoFit="false" />
+</RadzenFastGrid>
+```
+
+- **`None`**, the default. Nothing is emitted and no script is imported.
+- **`Once`** fits when rows first reach the page, and never again on its own.
+- **`OnDemand`** fits only when asked.
+
+Either way `AutoFitAsync()` fits the grid and `AutoFitAsync(column)` fits one column, and with
+`AllowColumnResize` on, **double-clicking a resize handle fits that column** - the spreadsheet
+convention. That is the only pointer route in, so a grid that does not allow resizing has no handle to
+double-click and the API is the whole surface.
+
+**A column that declares a `Width` is left alone** - the markup is an instruction, not a suggestion -
+and `AutoFit="false"` opts out a column that declares none. `MinWidth` and `MaxWidth` bound the result,
+and `MaxWidth` is the one worth setting: without it a single four-hundred-character value takes the
+whole table and everything else truncates to nothing. They may be in any unit, including a different
+one from each other, because the bound is applied by the browser through `clamp()` rather than by
+anything here parsing the string. (Worth knowing that `max-width` on a *cell* does nothing at all under
+`table-layout: fixed`, so the `col` is the only place a bound has ever been able to apply.)
+
+**The last column that is neither frozen nor declared is left with no width**, so the browser hands it
+whatever the fitted columns did not take. That is what keeps the table filling its container, and it
+stays right through a window resize with nothing watching for one. It is the last rather than the
+widest deliberately: which column is widest is a property of the data, so filtering would change which
+one stretches and the table would rearrange itself for no reason a reader can see.
+
+**It fits what is rendered.** Under paging that is the current page; under virtualization the current
+window. A grid that has never scrolled past the widest value in a column has not seen it, and neither
+has this - the answer is to fit again once it is on screen. Nothing re-fits on a scroll, a page turn, a
+sort or a filter: a column that narrows while somebody is reading it is worse than one that is wider
+than it needs to be.
+
+A fitted width is **not** stored in `Settings`. A drag is a choice the user made and is remembered; a
+fit is derived from data that will not be the same data next time, so `Once` measures again rather than
+restoring a number computed against a different result set. A drag beats a fit, and fitting a column
+that has been dragged clears the drag - otherwise it would do nothing visible.
+
+The measuring and the writing both happen in the browser, in one pass, the way the resize drag already
+works: a feature whose whole job is to set a handful of strings should not cost a render of every row
+to deliver them. The exception is a grid with a frozen column, which does render - the frozen inset is
+a `calc()` sum composed on the server from those same widths, and leaving it alone would pin every
+frozen cell to what the columns used to be. The same rule pays for itself: a frozen run ends at the
+first frozen column declaring no width, so fitting one **extends** runs that would otherwise give up
+and draw unfrozen.
+
 ## Keyboard navigation
 
 `AllowKeyboardNavigation` puts a cursor in the grid. The whole grid is **one tab stop**, on the
@@ -1024,6 +1090,13 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
   this grid exists to avoid. Use `RadzenDataGrid`.
 - **Grouping and composite headers.** Column resize, reorder and frozen columns were all on this list
   until the scroll container that gated them landed; all three now ship.
+- **Auto-fitting a column to rows that are not on the page.** A fit measures what is rendered, so a
+  paged or virtualized grid is fitted to the page or the window it is showing. Asking the server for
+  the longest value per column would need a query per column and could not rank a `TemplateColumn` at
+  all, and re-fitting as the user scrolls is a round trip per scroll.
+- **Auto-fit in the drop-down grid.** Its popup sets the width, so "fit to content" has two defensible
+  meanings there - the popup grows, or the grid fits inside what the popup already has - and neither
+  should be picked by accident.
 - **The nested scrollable structure.** No `rz-datatable-scrollable`. The ordinary
   `.rz-data-grid-data` container is emitted instead, and it is what resize overflows into, what frozen
   columns are pinned against, and what carries the keyboard cursor's tab stop.

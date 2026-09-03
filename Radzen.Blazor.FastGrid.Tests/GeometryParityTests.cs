@@ -533,6 +533,31 @@ namespace Radzen.Blazor.FastGrid.Tests
                 fit.ToString());
         }
 
+        [Fact]
+        public void The_pass_costs_about_what_it_should()
+        {
+            var fit = Fitted();
+
+            ParityAssert.True(fit.RowsMeasured > 0,
+                "the timed pass had rows to walk",
+                "a pass over an empty table is fast for a reason that has nothing to do with the feature",
+                "rows in the measured table",
+                fit.RowsMeasured.ToString(CultureInfo.InvariantCulture),
+                fit.ToString());
+
+            // Deliberately loose. §13 records the pass at ~1.7ms plus ~0.03ms a rendered row, which
+            // puts this pane near 32ms - but those are numbers to read off a quiet machine, and a CI
+            // box asserting one of them is a flaky test rather than a budget. What this catches is the
+            // order-of-magnitude regression: a write left inside a read loop, which turns the pass's
+            // one layout into one per cell.
+            ParityAssert.True(fit.Elapsed < 100,
+                "the measure-and-write pass is not an order of magnitude off",
+                "every read is batched behind one class toggle, and moving a single write between two of them turns one layout into thousands",
+                "under 100ms",
+                string.Create(CultureInfo.InvariantCulture, $"{fit.Elapsed}ms"),
+                fit.ToString());
+        }
+
         static string Describe(double[] widths) =>
             widths is null ? "(none)" : "[" + string.Join(", ", widths.Select(w => w.ToString(CultureInfo.InvariantCulture))) + "]";
 
