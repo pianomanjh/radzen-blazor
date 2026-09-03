@@ -526,7 +526,10 @@ namespace Radzen.FastGrid
         /// </remarks>
         int IndexInWindow(TItem item)
         {
-            if (default(TItem) is not null)
+            // typeof rather than `default(TItem) is not null`, which answers null for a Nullable<T>
+            // and would send every int? row down the identity path to be compared against freshly
+            // boxed values it can never be the same object as. Those grids resolved no row at all.
+            if (typeof(TItem).IsValueType)
             {
                 return virtualWindow!.IndexOf(item);
             }

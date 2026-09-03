@@ -247,6 +247,29 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ANullableValueTypeStillResolvesItsRows()
+        {
+            // `default(TItem) is not null` answers null for a Nullable<T> as well as for a class, so
+            // an int? grid took the identity path and compared against freshly boxed values it could
+            // never be the same object as - resolving no row, and emitting no index for any of them.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<int?>>(p =>
+            {
+                p.Add(g => g.Data, new int?[] { 1, 2, 3 });
+                p.Add(g => g.AllowVirtualization, true);
+                p.Add(g => g.AllowKeyboardNavigation, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<int?, string>(x => x.ToString())));
+            });
+
+            Assert.Equal(new[] { "0", "1", "2" },
+                cut.FindAll("tbody tr[data-r]").Select(r => r.GetAttribute("data-r")).ToArray());
+        }
+
+        [Fact]
         public void TheTotalIsCountedWithoutTheOrdering()
         {
             // A count wraps the query in GroupBy(_ => 1).Select(g => g.Count()), and an ORDER BY inside
