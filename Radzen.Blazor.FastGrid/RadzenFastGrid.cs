@@ -880,8 +880,12 @@ namespace Radzen.FastGrid
         }
 
         // The picker: one drop-down above the table, in RadzenDataGrid's own wrapper elements so the
-        // themes style it unchanged. Sequence 700+ because it sits before everything else the grid
-        // draws and must not collide with the pager beside it.
+        // themes style it unchanged.
+        //
+        // Its root frame is numbered 5 because it is written first among the grid's children, and the
+        // numbers a run is written in have to ascend - so sitting before the top pager's 10 means a
+        // number below it, not above everything else. Everything inside keeps the 700 band: those are
+        // nested runs, diffed against each other and never against this one.
         //
         // RadzenDropDown in Multiple mode already draws a checkbox per item with a select-all and an
         // optional filter box, which is the whole control - the same reasoning as the check-box-list
@@ -890,7 +894,7 @@ namespace Radzen.FastGrid
         {
             RefreshPickable();
 
-            builder.OpenElement(700, "div");
+            builder.OpenElement(5, "div");
             builder.AddAttribute(701, "class", "rz-group-header");
             builder.OpenElement(702, "div");
             builder.AddAttribute(703, "class", "rz-column-picker");
