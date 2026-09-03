@@ -1630,9 +1630,20 @@ Two things the design has to keep holding:
 - **Changing `AutoFitOverflow` re-arms a `Once` fit.** The two modes produce different widths, and the
   fit that already ran produced the other ones.
 
-**A best-effort column with no `MinWidth` has a floor of zero** and a narrow enough container will take
-it there. Left as it is rather than given a made-up default: the honest floor is the one the author
-knows, and inventing one would silently overrule a column that really should collapse.
+**A best-effort column with no `MinWidth` floors at the width of its own heading.** That is the point
+below which it stops saying what it is, and it is a number the grid already has - the header half of the
+measurement it just took - rather than one invented for the purpose. The first version floored such a
+column at zero and a narrow enough container took it there: still in the table, no longer on the screen.
+
+Under that sits a 5px backstop for a column whose heading cannot be measured at all. It is not a
+readable column and is not meant to be; it is the difference between a column the eye can find and one
+that is simply gone. **It has no test of its own** - the probe page cannot produce a header with no
+title to measure - so it is a guard, not a guarantee.
+
+Its test asks whether the heading is *truncated* rather than re-deriving what the heading needs. The
+theme makes `.rz-column-title` `flex: auto`, so its `scrollWidth` in a laid-out column reports the
+column's width and not the title's: measuring it that way answers 600px for every column on a wide pane
+and proves nothing. That trap has now cost this branch twice.
 
 ### Known consequences, recorded rather than designed around
 

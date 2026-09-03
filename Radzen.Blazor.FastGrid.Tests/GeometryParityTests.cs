@@ -581,6 +581,32 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void A_column_nobody_gave_a_MinWidth_stops_at_its_own_heading()
+        {
+            // The default floor. A column with no MinWidth used to have none at all, so a narrow
+            // enough container took it to zero - still in the table, no longer on the screen. It now
+            // falls back to the width of its own heading: the point below which it stops saying what
+            // it is, and a number the grid already has rather than one invented for the purpose.
+            var floor = Fitted().DefaultFloor;
+
+            ParityAssert.True(floor is { HoldsTitles: true },
+                "a column with no MinWidth is never taken below its own heading",
+                "a column squeezed past its title is a column the user cannot identify, which is worse than the scrollbar the fit was avoiding",
+                "every column at least as wide as its title",
+                floor?.ToString() ?? "(not measured)",
+                floor?.ToString() ?? "(not measured)");
+
+            // The backstop under the backstop: a heading that cannot be measured still leaves
+            // something to see.
+            ParityAssert.True(floor is { Narrowest: >= 5 },
+                "no column is ever left at nothing",
+                "a column of zero pixels is indistinguishable from a column that is not there, and the user has no way to find it again",
+                "at least 5px",
+                floor?.ToString() ?? "(not measured)",
+                floor?.ToString() ?? "(not measured)");
+        }
+
+        [Fact]
         public void Fitting_to_the_container_keeps_the_required_columns_and_takes_it_out_of_the_rest()
         {
             // The case a grid on a laptop and the same grid on a desktop are the same grid. Required
