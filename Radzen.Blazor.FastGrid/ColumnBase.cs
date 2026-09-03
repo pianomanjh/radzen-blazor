@@ -434,8 +434,8 @@ namespace Radzen.FastGrid
         string? resizedWidth;
 
         /// <summary>
-        /// The width the column actually renders at: what a user dragged it to, else what the markup
-        /// said.
+        /// The width the column actually renders at: what a user dragged it to, else what an auto-fit
+        /// measured, else what the markup said.
         /// </summary>
         /// <remarks>
         /// A drag cannot write to <see cref="Width" />. It is a parameter, so the next time the grid's
@@ -443,10 +443,40 @@ namespace Radzen.FastGrid
         /// declared width - which is the ordinary Blazor rule about not treating a parameter as state,
         /// and here the symptom would be a resize that survives until the next unrelated re-render.
         /// </remarks>
-        internal string? EffectiveWidth => resizedWidth ?? Width;
+        internal string? EffectiveWidth => resizedWidth ?? autoFitWidth ?? Width;
 
         /// <summary>The width a drag settled on, or null when none has.</summary>
         internal string? ResizedWidth => resizedWidth;
+
+        string? autoFitWidth;
+
+        /// <summary>The width an auto-fit measured, or null when none has.</summary>
+        internal string? AutoFitWidth => autoFitWidth;
+
+        /// <summary>
+        /// Whether this column takes part in an auto-fit. Ignored unless the grid sets
+        /// <c>AutoFitColumns</c>, and ignored for a column that declares its own <see cref="Width" />:
+        /// the markup is an instruction and the grid does not overrule it.
+        /// </summary>
+        [Parameter] public bool AutoFit { get; set; } = true;
+
+        /// <summary>Whether an auto-fit is allowed to measure and size this column.</summary>
+        internal bool CanAutoFit => AutoFit && string.IsNullOrEmpty(Width);
+
+        /// <summary>
+        /// Records the width an auto-fit measured, and drops any width a drag had settled on.
+        /// </summary>
+        /// <remarks>
+        /// The two are stored apart rather than in one slot because only one of them is a choice the
+        /// user made: a drag is captured into the settings and a fit is not, being derived from data
+        /// that will not be the same data next time. Clearing the drag is what makes fitting a column
+        /// the user has already dragged do something visible, since the drag would otherwise win.
+        /// </remarks>
+        internal void SetAutoFitWidth(string? width)
+        {
+            autoFitWidth = width;
+            resizedWidth = null;
+        }
 
         int elementIdIndex = -1;
         string? baseElementId;

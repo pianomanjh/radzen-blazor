@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -152,6 +153,54 @@ namespace Radzen.Blazor.FastGrid.Tests
         public override string ToString() => $"{Status} {Url}";
     }
 
+    /// <summary>One survey of the auto-fit pane: what its columns are, and what is truncated in them.</summary>
+    public sealed class AutoFitSurvey
+    {
+        /// <summary>Rendered width of each column, taken off the header row.</summary>
+        [JsonPropertyName("widths")] public double[] Widths { get; set; }
+
+        /// <summary>The table's own rendered width, which is what the bare column keeps constant.</summary>
+        [JsonPropertyName("tableWidth")] public double TableWidth { get; set; }
+
+        /// <summary>
+        /// How many cells of each column are drawing an ellipsis, by column index. Absent means none,
+        /// which is what a fitted column is supposed to be.
+        /// </summary>
+        [JsonPropertyName("truncated")] public Dictionary<string, int> Truncated { get; set; } = new();
+
+        public int TruncatedIn(int column) =>
+            Truncated is not null && Truncated.TryGetValue(column.ToString(CultureInfo.InvariantCulture), out var n)
+                ? n
+                : 0;
+
+        public override string ToString() =>
+            string.Create(CultureInfo.InvariantCulture, $"table {TableWidth}px, ") +
+            "widths [" + string.Join(", ", Widths ?? Array.Empty<double>()) + "], truncated " +
+            (Truncated is null || Truncated.Count == 0
+                ? "nowhere"
+                : string.Join(", ", Truncated.Select(pair => $"column {pair.Key}: {pair.Value}")));
+    }
+
+    /// <summary>
+    /// The auto-fit pane before and after the shipped script was run against it. Null when the page
+    /// carried no such pane, which the tests treat as a failure rather than a skip.
+    /// </summary>
+    public sealed class AutoFitRun
+    {
+        [JsonPropertyName("before")] public AutoFitSurvey Before { get; set; }
+
+        [JsonPropertyName("after")] public AutoFitSurvey After { get; set; }
+
+        /// <summary>The width strings the script wrote, in the order it was given the columns.</summary>
+        [JsonPropertyName("written")] public string[] Written { get; set; }
+
+        [JsonPropertyName("paneWidth")] public double PaneWidth { get; set; }
+
+        public override string ToString() =>
+            $"before: {Before}; after: {After}; wrote [{string.Join(", ", Written ?? Array.Empty<string>())}]; " +
+            string.Create(CultureInfo.InvariantCulture, $"in a {PaneWidth}px pane");
+    }
+
     /// <summary>What one measurement run read back out of the browser.</summary>
     public sealed class GeometryReport
     {
@@ -164,6 +213,8 @@ namespace Radzen.Blazor.FastGrid.Tests
         [JsonPropertyName("stylesheets")] public List<StylesheetLoad> Stylesheets { get; set; } = new();
 
         [JsonPropertyName("grids")] public List<GridGeometry> Grids { get; set; } = new();
+
+        [JsonPropertyName("autoFit")] public AutoFitRun AutoFit { get; set; }
 
         public GridGeometry this[string grid] =>
             Grids.Find(g => g.Grid == grid)

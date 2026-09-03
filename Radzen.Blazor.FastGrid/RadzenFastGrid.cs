@@ -789,6 +789,14 @@ namespace Radzen.FastGrid
             // implicit table role would otherwise sit between the grid and its rows.
             builder.AddAttribute(27, "role", "presentation");
 
+            // The script walks the colgroup, the header row and the body rows together, so it is handed
+            // the one element all three hang off rather than an id apiece. 28, because the table's own
+            // attributes ascend among themselves - the 24 to 28 band above belongs to the div.
+            if (AutoFitEnabled)
+            {
+                builder.AddAttribute(28, "id", TableElementId);
+            }
+
             RenderColumnGroup(builder);
 
             if (ShowHeader)
@@ -1020,8 +1028,9 @@ namespace Radzen.FastGrid
             }
 
             // Without a colgroup a resize has nothing to write a width to, so switching resize on is
-            // itself a reason to emit one even when no column declares a width.
-            if (!any && !AllowColumnResize)
+            // itself a reason to emit one even when no column declares a width. An auto-fit writes to
+            // the same elements, and a grid that fits is exactly a grid whose columns declare nothing.
+            if (!any && !AllowColumnResize && !AutoFitEnabled)
             {
                 return;
             }
@@ -1051,7 +1060,12 @@ namespace Radzen.FastGrid
                     builder.AddAttribute(29, "id", ColumnElementIds(i).Col);
                 }
 
-                if (column.ColStyle(column.EffectiveWidth ?? ColumnWidth) is { } style)
+                // The column an auto-fit left bare takes what the fitted ones did not, which under
+                // table-layout:fixed is what a col with no width means. It has to be skipped here
+                // rather than merely left without a fitted width of its own: the grid's ColumnWidth
+                // would otherwise come back and give it one.
+                if (!ReferenceEquals(column, bareColumn)
+                    && column.ColStyle(column.EffectiveWidth ?? ColumnWidth) is { } style)
                 {
                     builder.AddAttribute(30, "style", style);
                 }
@@ -1442,6 +1456,15 @@ namespace Radzen.FastGrid
                     builder.AddAttribute(56, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(
                         this, args => StartColumnResize(index, args.ClientX)));
                     builder.AddEventPreventDefaultAttribute(57, "onmousedown", true);
+
+                    // Double-clicking the edge of a header to fit its column is the spreadsheet
+                    // convention, and RadzenSpreadsheet already reads it off this same handle. Only for
+                    // a grid that fits: a callback per column is what rule 3 is about.
+                    if (AutoFitEnabled)
+                    {
+                        builder.AddAttribute(58, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(
+                            this, () => AutoFitAsync(visibleColumns[index])));
+                    }
 
                     // The handle sits inside the header's click target, and a drag that ends on it must
                     // not also sort the column.
