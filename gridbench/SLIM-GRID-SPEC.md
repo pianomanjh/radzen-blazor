@@ -523,6 +523,13 @@ Each layer below caught real faults the previous one missed. Use all of them.
 - ~~Whether to support `RadzenDataFilter` interop in v1~~ - **resolved.** The grid speaks
   `FilterDescriptor` in both directions, which is what `RadzenDataFilter` emits. The path derivation of
   §4 is what makes that possible.
+- **A column's settings identity is not unique, and a column may have none.** Both are the same gap:
+  settings key a column by its property path. Two columns over one property are restored onto the
+  first of them, so hiding the second and reloading hides the first; a column with no path - a
+  `TemplateColumn`, or a `CollectionColumn` with no `SortBy` - cannot be stored at all, so its
+  position in a dragged order never survives. `RadzenDataGrid` answers both with `UniqueID`, matched
+  ahead of `Property`. Adopting that here is a new public parameter and a settings-format addition,
+  which is why it is recorded rather than done. §10b has the failure in full.
 - The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no date
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
@@ -530,8 +537,8 @@ Each layer below caught real faults the previous one missed. Use all of them.
 ## 10b. Review status
 
 What has been read by a reviewer other than its author, what that found, and what has not. Recorded
-because the branch is 89 commits long and its last general review pass sits at commit 74 of those:
-**73 commits landed after it**, so "has this been reviewed" is not answerable from the log.
+because the branch is 106 commits long and "has this been reviewed" is not answerable from the log -
+its first general pass sits a long way back, and the slices below were read at very different points.
 
 Every pass below ran as a sub-agent against a written brief, reported CONFIRMED or PLAUSIBLE per
 finding, and had its fixes mutation-checked. The count is what each pass found that a green suite did
@@ -548,15 +555,37 @@ not - the whole suite passed before and after every one of them.
 | Frozen columns, resize, reorder | reviewed | 6 |
 | The drop-down, re-reviewed | reviewed | 6 |
 | Today's own fixes, re-reviewed | reviewed | 3 |
-| **`RadzenFastGrid.cs`, the core render path** | **not reviewed** - 2,058 lines, 31 commits since `a95a32e04` | - |
-| **`ColumnBase.cs` and the column types** | **not reviewed** - 833 lines, 14 commits since `a95a32e04` | - |
+| Attribute-run ordering, all render files | mechanically checked | 1 |
+| `ColumnBase.cs` and the column types | reviewed | 2 fixed, 1 open |
+| `RadzenFastGrid.cs`, the core render path | partly reviewed - see below | 2 |
 
-The two unreviewed rows are the largest and the most-changed things on the branch. The core render
-path carries column registration, the render bracket and its memos, the sorting and filtering UI, the
-column picker, the pager, the loading indicator and the templates. The column model carries expression
-compilation, the filter predicates, the width and style memoization, and the settings identity a
-column is restored by - which is where the one limitation this branch knows about and has not fixed
-lives: a `TemplateColumn` has no property path, so its position in a dragged order is never stored.
+**Every slice has now been read by someone other than its author**, which was not true until the pass
+that closed the two rows above. The core render path's pass is marked *partly* deliberately: its
+reviewer went idle without reporting, so what stands for it is the mechanical check its brief asked
+for - every attribute run in the file walked and confirmed ascending - and not a reading of the
+sorting UI, the column picker, the pager or the templates. **That reading is still owed.**
+
+The column model's pass found three, of which two are fixed and one is open; both fixed ones were the
+same shape, a rule applied to one case and not to the neighbouring one:
+
+- A declared `SortOrder` was the only route into the sort list that never asked `CanSort`, and
+  `PropertyColumn` was the only column whose `ApplySort` overrode the nullable "cannot order by"
+  contract its own base declares. Together they ordered a grid by a `List<string>`, which has no
+  comparer: the render threw and drew nothing.
+- A settings reset cleared every column's filter and the whole sort list, but the restore that
+  follows can only name a column by `PropertyPath` - so a column without one lost what its markup
+  declared. A `CollectionColumn` has no `PropertyPath` when it has no `SortBy`, and none when its
+  `SortBy` is over a computed key, while filtering perfectly well by `FilterPropertyPath` throughout.
+
+**Open, and a design decision rather than a fix: a column's settings identity is not unique.**
+`ColumnForPath` answers with the first column matching a stored path, and `CaptureSettings` writes
+every column under that same key - so two columns over one property are both restored onto the first.
+Hiding the second and reloading hides the *first* instead, which is a wrong answer on screen and not
+merely lost state. **`RadzenDataGrid` does not have this problem**: it matches on `UniqueID` first and
+falls back to `Property` only when there is none. Adopting the same idea would close this *and* the
+`TemplateColumn` limitation below, which is the same missing concept seen from the other side - a
+column with no property path has no settings identity at all, so its position in a dragged order is
+never stored. Both are open; neither should be closed by guessing at the identity model.
 
 **What the passes have taught about where to look**, which is worth more than the counts:
 
@@ -574,6 +603,11 @@ lives: a `TemplateColumn` has no property path, so its position in a dragged ord
   orders; the click listener and the keyboard cursor share one `locate()`.
 - **A number attributed to a mechanism without a control has not been measured.** §9 has the rule and
   what it cost to learn.
+- **A rule stated in a comment is only as good as the comment.** `d9992eaaf` corrected the sequence
+  rule where it was argued and left one instance of the old, wider claim standing - ten lines above a
+  comment stating the true one, and directly above numbering that is only correct under the new rule.
+  A reviewer citing it would have read working code as a fault. Fix the rule everywhere it is written
+  down, not only where it was being argued.
 - **A fix is right for the case that motivated it and has to be checked against the neighbouring
   one.** Reviewing a day of fixes found three faults in them: a listener that let go without
   forgetting it had attached, so the grid could not take it up again; `default(TItem) is not null`,
