@@ -387,6 +387,152 @@ namespace Radzen.Blazor.FastGrid.Tests
                 report.Describe());
         }
 
+        // --- Column auto-fit --------------------------------------------------------------------
+        //
+        // No RadzenDataGrid pane here, and not for want of trying: upstream has no auto-fit at all, so
+        // a parity pane would assert agreement with a grid that does nothing. The same reason the
+        // keyboard cursor has none.
+        //
+        // Every assertion below is read off the page rather than off the fit's own arithmetic. A check
+        // that asks the fit what it computed and then agrees with it has measured nothing.
+
+        /// <summary>Column indices in the auto-fit pane, which is the only thing the tests name.</summary>
+        const int ShortTitle = 0;
+        const int LongTitle = 1;
+        const int LongValues = 2;
+        const int Clamped = 3;
+        const int Bare = 4;
+
+        AutoFitRun Fitted()
+        {
+            var report = fixtures.Geometry;
+
+            ParityAssert.True(report.AutoFit is not null,
+                "the auto-fit pane was measured at all",
+                "a pane that never ran the script reports nothing, and nothing must not read as a pass",
+                "a survey of the auto-fit pane",
+                "(none)",
+                report.Describe());
+
+            return report.AutoFit;
+        }
+
+        [Fact]
+        public void A_fit_changes_what_the_columns_were()
+        {
+            // The control. Every assertion below compares one column with another, and columns that
+            // were already the right widths would satisfy all of them without the fit doing anything.
+            var fit = Fitted();
+
+            // Within a pixel of each other rather than identical: an equal division of a table width
+            // that does not divide evenly lands on either side of the same number.
+            ParityAssert.True(fit.Before.Widths.Max() - fit.Before.Widths.Min() <= 1,
+                "the pane starts with every column the same width",
+                "table-layout:fixed divides the table equally when no column declares a width, and a pane that did not start there proves nothing about what the fit did",
+                "one width shared by every column",
+                Describe(fit.Before.Widths),
+                fit.ToString());
+
+            ParityAssert.True(!fit.After.Widths.SequenceEqual(fit.Before.Widths),
+                "the fit moved the columns",
+                "a fit that writes nothing passes every comparison below by leaving them equal",
+                "column widths different from where they started",
+                Describe(fit.After.Widths),
+                fit.ToString());
+        }
+
+        [Fact]
+        public void A_column_of_long_values_comes_out_wider_than_one_of_short_values()
+        {
+            var fit = Fitted();
+
+            ParityAssert.True(fit.After.Widths[LongValues] > fit.After.Widths[ShortTitle],
+                "the column holding dates is wider than the column holding single digits",
+                "this is the body half of the measurement, and it is the half a max-content flip on .rz-cell-data is what makes possible - a block cell's scrollWidth is never less than its column, so without it a fit could only ever grow",
+                "the long-valued column wider than the short-valued one",
+                Describe(fit.After.Widths),
+                fit.ToString());
+        }
+
+        [Fact]
+        public void A_long_heading_widens_its_column_even_though_the_values_are_short()
+        {
+            // The two columns hold the same values and differ only in their titles, so this can only
+            // have come from the header. It is the assertion the flex trap fails: .rz-column-title is
+            // an inline-flex whose content child can shrink to nothing, so a header read without the
+            // flip reports the width it already has and both columns come out identical.
+            var fit = Fitted();
+
+            ParityAssert.True(fit.After.Widths[LongTitle] > fit.After.Widths[ShortTitle],
+                "a long heading widens its column",
+                "both columns hold the same values, so a difference between them can only be the header - and a header measured through .rz-column-title without a max-content flip answers with the width it already has",
+                "the long-titled column wider than the short-titled one",
+                Describe(fit.After.Widths),
+                fit.ToString());
+        }
+
+        [Fact]
+        public void A_fitted_column_draws_no_ellipsis()
+        {
+            var fit = Fitted();
+
+            foreach (var column in new[] { ShortTitle, LongTitle, LongValues })
+            {
+                ParityAssert.True(fit.After.TruncatedIn(column) == 0,
+                    $"column {column} is not truncated after the fit",
+                    "a fitted column showing an ellipsis is the one outcome that makes this look broken, and scrollWidth rounding to an integer is how it happens a pixel at a time",
+                    "no cell wider than its box",
+                    fit.After.TruncatedIn(column).ToString(CultureInfo.InvariantCulture) + " truncated",
+                    fit.ToString());
+            }
+        }
+
+        [Fact]
+        public void A_max_width_is_what_stops_one_column_taking_the_table()
+        {
+            var fit = Fitted();
+
+            ParityAssert.True(fit.After.Widths[Clamped] <= 41,
+                "the clamped column stays inside its MaxWidth",
+                "the fitted width is pixels and MaxWidth is authored CSS in any unit, so it is clamp() in the browser that compares them rather than anything parsing the string",
+                "the clamped column at 40px or under",
+                Describe(fit.After.Widths),
+                fit.ToString());
+
+            // And it is still truncated, which is the point: a column allowed to say how wide it may
+            // get is a column that has accepted an ellipsis.
+            ParityAssert.True(fit.After.TruncatedIn(Clamped) > 0,
+                "the clamped column is the one that is still truncated",
+                "a clamp that let the column through would satisfy the width assertion above by never having applied",
+                "cells truncated in the clamped column",
+                fit.After.TruncatedIn(Clamped).ToString(CultureInfo.InvariantCulture),
+                fit.ToString());
+        }
+
+        [Fact]
+        public void The_bare_column_takes_what_the_fitted_ones_left()
+        {
+            var fit = Fitted();
+
+            ParityAssert.True(fit.Written is { Length: 5 } && fit.Written[4] is null,
+                "the last column is the one written with no width",
+                "under table-layout:fixed a col with no width is what absorbs the remainder, which is the whole of the distribution pass",
+                "no width written for the last column",
+                "[" + string.Join(", ", (fit.Written ?? Array.Empty<string>()).Select(w => w ?? "(none)")) + "]",
+                fit.ToString());
+
+            // The table being exactly as wide after the fit as before it is what the bare column buys,
+            // and it is why there is no slack arithmetic anywhere: the browser did the division.
+            // Against the table's own earlier width rather than the pane's, because the two differ by
+            // the container's own box and that difference is not what this is about.
+            ParityAssert.True(Math.Abs(fit.After.TableWidth - fit.Before.TableWidth) <= 0.5,
+                "the table is the same width after the fit as before it",
+                "fitting every column to its content leaves the table narrower than the space it has unless something absorbs the difference",
+                string.Create(CultureInfo.InvariantCulture, $"{fit.Before.TableWidth}px"),
+                string.Create(CultureInfo.InvariantCulture, $"{fit.After.TableWidth}px"),
+                fit.ToString());
+        }
+
         static string Describe(double[] widths) =>
             widths is null ? "(none)" : "[" + string.Join(", ", widths.Select(w => w.ToString(CultureInfo.InvariantCulture))) + "]";
 

@@ -366,3 +366,174 @@ function runWidth(row, count, fromEnd) {
 
   return width;
 }
+
+// Column auto-fit.
+//
+// The table is table-layout:fixed, so nothing here sizes itself to its content and there is no layout
+// to read back: a width has to be worked out and written. This does both in the same pass, because the
+// alternative is the server rendering every row again to deliver a handful of strings.
+//
+// Everything is batched. A read after a write costs a layout, so the measuring class goes on once,
+// every measurement is taken, and only then does it come off and the widths go on.
+
+const MEASURING = 'rz-fastgrid-measuring';
+
+let measuringStyle;
+
+function installMeasuringStyle() {
+  if (measuringStyle) {
+    return;
+  }
+
+  measuringStyle = document.createElement('style');
+
+  // width:max-content is what makes either element measurable at all.
+  //
+  // .rz-cell-data is a block filling its column, so its scrollWidth is never less than the column it
+  // sits in: a column wider than its content measures as itself, and a fit could only ever grow one.
+  // .rz-column-title is worse - an inline-flex whose content child carries overflow:hidden, which
+  // zeroes that child's automatic minimum size, so the line shrinks to whatever it has been given and
+  // reports exactly that back.
+  //
+  // The title needs its flex growth turned off as well as its width set, and that is the half that is
+  // easy to miss: it is `flex: auto` inside the header's flex line, and a flex item's used main size
+  // comes from its flex properties rather than from `width`. Setting only the width leaves it filling
+  // the line exactly as before, and measures every column at the width it already has - which is the
+  // wrong answer that looks like a working one, because every column then fits to itself.
+  //
+  // !important on both, because these are the theme's own declarations being overridden rather than
+  // an empty slot being filled, and a rule that loses is indistinguishable from one never written.
+  measuringStyle.textContent =
+    `.${MEASURING} .rz-cell-data{width:max-content !important;}`
+    + `.${MEASURING} .rz-column-title{width:max-content !important;flex:0 0 max-content !important;}`;
+
+  document.head.appendChild(measuringStyle);
+}
+
+function dataRows(table) {
+  const body = table.querySelector(':scope > tbody');
+
+  return body ? body.querySelectorAll(':scope > tr.rz-data-row') : [];
+}
+
+// Horizontal padding and borders: the difference between what a cell's content needs and what its
+// column has to be. Read per column rather than per grid, because a column's CssClass can change it.
+function edges(element) {
+  const style = getComputedStyle(element);
+
+  return (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+    + (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.borderRightWidth) || 0);
+}
+
+// clamp() rather than arithmetic. MinWidth and MaxWidth are authored CSS and may be in any unit, and
+// the browser is the only thing that can compare a rem with a pixel - the same argument that has
+// frozen insets summing their widths with calc() instead of parsing them.
+function bound(px, min, max) {
+  if (min && max) {
+    return `clamp(${min},${px}px,${max})`;
+  }
+
+  return min ? `max(${min},${px}px)` : max ? `min(${px}px,${max})` : `${px}px`;
+}
+
+// The automatic fit is armed by a render and fired here, because Virtualize re-renders itself: its
+// window arrives without a render of the grid, so the server cannot tell when there is anything to
+// measure. Bounded, and it gives up into a header-only fit rather than never landing - an empty grid
+// would otherwise re-arm on every render and wait again.
+async function ready(tableId, wait) {
+  for (let attempt = 0; ; attempt++) {
+    const table = document.getElementById(tableId);
+
+    if (!table || !wait || attempt >= 60 || dataRows(table).length > 0) {
+      return table;
+    }
+
+    await new Promise(resolve => requestAnimationFrame(resolve));
+  }
+}
+
+export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffset, bare, wait) {
+  const table = await ready(tableId, wait);
+
+  if (!table) {
+    return null;
+  }
+
+  const colgroup = table.querySelector(':scope > colgroup');
+
+  if (!colgroup) {
+    return null;
+  }
+
+  const headRow = table.querySelector(':scope > thead > tr');
+  const rows = dataRows(table);
+  const widths = [];
+
+  installMeasuringStyle();
+  table.classList.add(MEASURING);
+
+  try {
+    for (let k = 0; k < indices.length; k++) {
+      // The toggle column is a cell in every row and has a col of its own standing in for it, but no
+      // column in the grid's own list - so every position the server names is that many further along.
+      const at = toggleOffset + indices[k];
+
+      let widest = 0;
+
+      const th = headRow ? headRow.children[at] : null;
+      const title = th ? th.querySelector('.rz-column-title') : null;
+
+      if (title) {
+        // The theme gives th padding:0 and hangs the header's padding off the div inside it, so a
+        // header's chrome is that div's as well as the cell's. scrollWidth already covers the title's
+        // own padding-inline, and the reserved sort glyph is a flex child of it.
+        widest = title.scrollWidth + edges(th)
+          + (title.parentElement && title.parentElement !== th ? edges(title.parentElement) : 0);
+      }
+
+      if (rows.length > 0) {
+        const first = rows[0].children[at];
+        let content = 0;
+
+        for (let r = 0; r < rows.length; r++) {
+          const cell = rows[r].children[at];
+          const span = cell ? cell.querySelector(':scope > .rz-cell-data') : null;
+
+          if (span && span.scrollWidth > content) {
+            content = span.scrollWidth;
+          }
+        }
+
+        const needed = content + (first ? edges(first) : 0);
+
+        if (needed > widest) {
+          widest = needed;
+        }
+      }
+
+      // scrollWidth rounds to an integer, and a fitted column one pixel short draws an ellipsis -
+      // the single outcome that makes this look like it did not work. No over-fit beyond that: the
+      // 3% RadzenSpreadsheet adds is for surviving a renderer other than the one that measured, and
+      // here they are the same renderer.
+      const px = Math.ceil(widest) + 1;
+
+      // The bare column takes whatever the fitted ones left, which under table-layout:fixed is what
+      // a col with no width at all means.
+      widths.push(indices[k] === bare ? null : bound(px, minWidths[k], maxWidths[k]));
+    }
+  } finally {
+    table.classList.remove(MEASURING);
+  }
+
+  for (let k = 0; k < indices.length; k++) {
+    const col = colgroup.children[toggleOffset + indices[k]];
+
+    if (col) {
+      col.style.width = widths[k] === null ? '' : widths[k];
+    }
+  }
+
+  // The strings that were written, not the numbers behind them: the server stores these and re-emits
+  // them on its next render, and anything it derives differently is a width that drifts from the page.
+  return widths;
+}

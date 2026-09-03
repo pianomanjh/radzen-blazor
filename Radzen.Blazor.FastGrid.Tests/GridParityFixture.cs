@@ -173,6 +173,18 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(g => g.RowClass, Focused(people[1]));
                     p.Add(g => g.CellRender, FocusedCell(people[1], "Id"));
                 }).Markup;
+
+                // The pane the script is run against. Nothing here declares a width, which is both the
+                // grid that wants fitting and - because a colgroup is otherwise only emitted when
+                // something has a width - the grid that has nowhere to write one. AutoFitColumns is
+                // what puts the colgroup and the table's id on the page.
+                FastGridAutoFitMarkup = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+                {
+                    p.Add(g => g.Data, people);
+                    p.Add(g => g.ChildContent, FastGridAutoFitColumns);
+                    p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand);
+                    p.Add(g => g.AllowSorting, true);
+                }).Markup;
             }
 
             var parser = new HtmlParser();
@@ -212,6 +224,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         public string FastGridFrozenFocusMarkup { get; }
 
+        public string FastGridAutoFitMarkup { get; }
+
         /// <summary>Names of the two panes rendered with row detail.</summary>
         public const string DataGridDetail = "RadzenDataGrid detail";
 
@@ -229,6 +243,9 @@ namespace Radzen.Blazor.FastGrid.Tests
         public const string FastGridFocus = "RadzenFastGrid focus";
 
         public const string FastGridFrozenFocus = "RadzenFastGrid frozen focus";
+
+        /// <summary>The pane the auto-fit script is actually run against.</summary>
+        public const string FastGridAutoFit = "RadzenFastGrid auto-fit";
 
         static Func<Person, string> Focused(Person row) =>
             person => ReferenceEquals(person, row) ? "rz-state-focused" : null;
@@ -318,6 +335,30 @@ namespace Radzen.Blazor.FastGrid.Tests
             Column<decimal>(builder, ref s, x => x.Salary, "Salary", ColumnWidths[4]);
         };
 
+        /// <summary>
+        /// Columns chosen so that each half of the measurement has something only it can explain.
+        /// Two columns hold the same values and differ only in their titles, so a width difference
+        /// between them can only have come from the header - which is the half that needs a
+        /// max-content flip to be measurable at all. Hired holds much the longest values, so a width
+        /// difference from Id can only have come from the body. Name is clamped, so the one column
+        /// allowed to stay truncated is the one that said it could be, and Age follows it only so that
+        /// the clamped column is not the trailing one - which is left bare, and a bare column has no
+        /// width for a clamp to apply to.
+        /// </summary>
+        static readonly RenderFragment FastGridAutoFitColumns = builder =>
+        {
+            var s = 0;
+
+            Column<int>(builder, ref s, x => x.Id, "Id");
+            Column<int>(builder, ref s, x => x.Id, "An extremely long column heading indeed");
+            Column<DateTime>(builder, ref s, x => x.Hired, "Hired");
+            Column<string>(builder, ref s, x => x.Name, "Name", maxWidth: "40px");
+
+            // Last, and only so that the clamped column is not: the trailing column is the one left
+            // bare, and a bare column has no width for a clamp to apply to.
+            Column<int>(builder, ref s, x => x.Age, "Age");
+        };
+
         static readonly RenderFragment FastGridColumns = builder =>
         {
             var s = 0;
@@ -331,11 +372,16 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         static void Column<TProp>(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder,
             ref int sequence, Expression<Func<Person, TProp>> property, string title, string width = null,
-            bool frozen = false, bool footer = false)
+            bool frozen = false, bool footer = false, string maxWidth = null)
         {
             builder.OpenComponent<PropertyColumn<Person, TProp>>(sequence++);
             builder.AddAttribute(sequence++, "Property", property);
             builder.AddAttribute(sequence++, "Title", title);
+
+            if (maxWidth is not null)
+            {
+                builder.AddAttribute(sequence++, "MaxWidth", maxWidth);
+            }
 
             if (width is not null)
             {
@@ -354,6 +400,24 @@ namespace Radzen.Blazor.FastGrid.Tests
             }
 
             builder.CloseComponent();
+        }
+
+        /// <summary>
+        /// The shipped <c>fastgrid.js</c>, made callable from a page with no module loader.
+        /// </summary>
+        /// <remarks>
+        /// The file the package ships, not a copy of it: a check that measures a transcription proves
+        /// only that the transcription is right. It is loaded off a file:// page, where an ES module
+        /// import is refused, so the export keywords come off and the one function under test is hung
+        /// on the window instead. Nothing else about the source is touched.
+        /// </remarks>
+        string AutoFitScript()
+        {
+            var source = File.ReadAllText(
+                Path.Combine(RepositoryRoot, "Radzen.Blazor.FastGrid", "wwwroot", "fastgrid.js"));
+
+            return System.Text.RegularExpressions.Regex.Replace(source, "(?m)^export ", "")
+                + "\nwindow.__fastgrid = { autoFit };";
         }
 
         static string FindRepositoryRoot()
@@ -395,6 +459,7 @@ namespace Radzen.Blazor.FastGrid.Tests
   body {{ margin: 0; padding: 24px; background: #fff; }}
   .pane {{ margin-bottom: 40px; }}
   .pane-narrow {{ width: 500px; }}
+  .pane-fit {{ width: 900px; }}
 </style>
 </head><body>
 <div class=""pane"" data-grid=""{DataGrid.Name}"">{DataGridMarkup}</div>
@@ -406,6 +471,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 <div class=""pane pane-narrow"" data-grid=""{FastGridFrozen}"">{FastGridFrozenMarkup}</div>
 <div class=""pane"" data-grid=""{FastGridFocus}"">{FastGridFocusMarkup}</div>
 <div class=""pane pane-narrow"" data-grid=""{FastGridFrozenFocus}"">{FastGridFrozenFocusMarkup}</div>
+<div class=""pane pane-fit"" data-grid=""{FastGridAutoFit}"" data-autofit=""1"">{FastGridAutoFitMarkup}</div>
+<script>{AutoFitScript()}</script>
 </body></html>";
 
             File.WriteAllText(pagePath, page);

@@ -1,0 +1,421 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using Bunit;
+using Microsoft.AspNetCore.Components;
+using Xunit;
+
+namespace Radzen.FastGrid.Tests
+{
+    /// <summary>
+    /// Column auto-fit, with the measurement stubbed. What can be tested here is every decision either
+    /// side of the browser: which columns are offered to it, what it is told about them, what is done
+    /// with the answer, and that a grid which does not fit asks nothing at all. The measurement itself
+    /// is layout, and layout is GeometryParityTests.
+    /// </summary>
+    public class FastGridAutoFitTests
+    {
+        const string ModulePath = "./_content/Radzen.Blazor.FastGrid/fastgrid.js";
+
+        static RenderFragment ThreeColumns() => Columns.Of(
+            Columns.Property<Person, string>(x => x.First, title: "First"),
+            Columns.Property<Person, string>(x => x.Last, title: "Last"),
+            Columns.Property<Person, int>(x => x.Id, title: "Id"));
+
+        static IRenderedComponent<RadzenFastGrid<Person>> Render(TestContext ctx,
+            Action<ComponentParameterCollectionBuilder<RadzenFastGrid<Person>>> extra = null,
+            RenderFragment columns = null) =>
+            ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.AllowSorting, true);
+                p.Add(g => g.ChildContent, columns ?? ThreeColumns());
+                extra?.Invoke(p);
+            });
+
+        /// <summary>The call's arguments, named the way the design names them.</summary>
+        sealed record Ask(string Table, int[] Indices, string[] Min, string[] Max, int ToggleOffset,
+            int Bare, bool Wait);
+
+        static Ask Read(JSRuntimeInvocation invocation)
+        {
+            var args = invocation.Arguments;
+
+            return new Ask((string)args[0], ((IEnumerable<int>)args[1]).ToArray(),
+                (string[])args[2], (string[])args[3], (int)args[4], (int)args[5], (bool)args[6]);
+        }
+
+        // --- A grid that does not fit -----------------------------------------------------------
+
+        [Fact]
+        public void AGridThatDoesNotFitAsksTheBrowserForNothing()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            var cut = Render(ctx);
+
+            Assert.Empty(module.Invocations["autoFit"]);
+            Assert.Empty(cut.FindAll("table[id]"));
+            Assert.Empty(cut.FindAll("colgroup"));
+        }
+
+        [Fact]
+        public void AGridThatFitsEmitsTheTableAndTheColgroupItNeeds()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+            ctx.JSInterop.SetupModule(ModulePath);
+
+            // No column declares a width, which is exactly the grid that wants fitting - and exactly
+            // the grid that would otherwise emit no colgroup for the widths to be written into.
+            var cut = Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand));
+
+            Assert.Single(cut.FindAll("table[id]"));
+            Assert.Equal(3, cut.FindAll("colgroup col").Count);
+        }
+
+        // --- When it fires ----------------------------------------------------------------------
+
+        [Fact]
+        public void OnceFitsWithoutBeingAsked()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once));
+
+            var ask = Assert.Single(module.Invocations["autoFit"]);
+
+            // The script waits for rows rather than the server deciding there are any: Virtualize
+            // re-renders itself, so its window arrives without a render of the grid.
+            Assert.True(Read(ask).Wait);
+        }
+
+        [Fact]
+        public void OnceFitsOnlyOnce()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "10px", "20px", null });
+
+            var cut = Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once));
+
+            cut.Find("thead th div").Click();
+            cut.Render();
+
+            Assert.Single(module.Invocations["autoFit"]);
+        }
+
+        [Fact]
+        public void OnDemandDoesNotFitUntilItIsAsked()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            var cut = Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand));
+
+            Assert.Empty(module.Invocations["autoFit"]);
+
+            cut.InvokeAsync(() => cut.Instance.AutoFitAsync()).Wait();
+
+            Assert.Single(module.Invocations["autoFit"]);
+        }
+
+        [Fact]
+        public void DoubleClickingAResizeHandleFitsThatColumnAlone()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand);
+                p.Add(g => g.AllowColumnResize, true);
+            });
+
+            cut.FindAll(".rz-column-resizer")[1].DoubleClick();
+
+            var ask = Read(Assert.Single(module.Invocations["autoFit"]));
+
+            Assert.Equal(new[] { 1 }, ask.Indices);
+
+            // Fitting one column must not move the stretch to it from wherever it currently sits.
+            Assert.Equal(-1, ask.Bare);
+        }
+
+        [Fact]
+        public void AGridThatDoesNotFitPutsNoHandlerOnTheHandle()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            var cut = Render(ctx, p => p.Add(g => g.AllowColumnResize, true));
+
+            // bUnit refuses an event the element has no handler for, which is the assertion: the
+            // handle is there for the drag and carries nothing for a fit.
+            Assert.Throws<MissingEventHandlerException>(
+                () => cut.FindAll(".rz-column-resizer")[1].DoubleClick());
+
+            Assert.Empty(module.Invocations["autoFit"]);
+        }
+
+        // --- Which columns are offered ----------------------------------------------------------
+
+        [Fact]
+        public void AColumnThatDeclaresItsOwnWidthIsLeftAlone()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, string>(x => x.Last, width: "300px"),
+                Columns.Property<Person, int>(x => x.Id)));
+
+            Assert.Equal(new[] { 0, 2 }, Read(Assert.Single(module.Invocations["autoFit"])).Indices);
+        }
+
+        [Fact]
+        public void AColumnThatOptsOutIsLeftAlone()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, string>(x => x.Last, autoFit: false),
+                Columns.Property<Person, int>(x => x.Id)));
+
+            Assert.Equal(new[] { 0, 2 }, Read(Assert.Single(module.Invocations["autoFit"])).Indices);
+        }
+
+        [Fact]
+        public void TheBoundsGoOverAsTheyWereAuthored()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), Columns.Of(
+                Columns.Property<Person, string>(x => x.First, minWidth: "10rem", maxWidth: "30%"),
+                Columns.Property<Person, string>(x => x.Last)));
+
+            var ask = Read(Assert.Single(module.Invocations["autoFit"]));
+
+            // Not parsed into pixels here, and not parsed there either: clamp() is what compares a rem
+            // with a percentage, for the same reason a frozen inset is summed with calc().
+            Assert.Equal(new[] { "10rem", null }, ask.Min);
+            Assert.Equal(new[] { "30%", null }, ask.Max);
+        }
+
+        [Fact]
+        public void TheToggleColumnShiftsEveryPositionAlong()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.Once);
+                p.Add(g => g.Template, (RenderFragment<Person>)(_ => b => b.AddContent(0, "detail")));
+            });
+
+            Assert.Equal(1, Read(Assert.Single(module.Invocations["autoFit"])).ToggleOffset);
+        }
+
+        // --- The bare column --------------------------------------------------------------------
+
+        [Fact]
+        public void TheLastFittedColumnIsLeftBare()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once));
+
+            Assert.Equal(2, Read(Assert.Single(module.Invocations["autoFit"])).Bare);
+        }
+
+        [Fact]
+        public void AFrozenColumnIsNeverTheBareOne()
+        {
+            // A frozen run ends at the first frozen column declaring no width, so leaving one bare
+            // would unpin every column after it.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, string>(x => x.Last),
+                Columns.Property<Person, int>(x => x.Id, frozen: true,
+                    frozenPosition: FrozenColumnPosition.Right)));
+
+            Assert.Equal(1, Read(Assert.Single(module.Invocations["autoFit"])).Bare);
+        }
+
+        [Fact]
+        public void EveryColumnBeingFrozenLeavesNoneBare()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), Columns.Of(
+                Columns.Property<Person, string>(x => x.First, frozen: true),
+                Columns.Property<Person, string>(x => x.Last, frozen: true)));
+
+            Assert.Equal(-1, Read(Assert.Single(module.Invocations["autoFit"])).Bare);
+        }
+
+        // --- What comes back --------------------------------------------------------------------
+
+        [Fact]
+        public void TheWidthsThatComeBackAreTheWidthsThatAreReEmitted()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true)
+                .SetResult(new[] { "clamp(10rem,120px,30%)", "88px", null });
+
+            var cut = Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once));
+
+            cut.Render();
+
+            var cols = cut.FindAll("colgroup col");
+
+            Assert.Equal("width:clamp(10rem,120px,30%)", cols[0].GetAttribute("style"));
+            Assert.Equal("width:88px", cols[1].GetAttribute("style"));
+
+            // The bare one carries no width, so the browser hands it what the others did not take.
+            Assert.Null(cols[2].GetAttribute("style"));
+        }
+
+        [Fact]
+        public void TheBareColumnStaysBareUnderAGridWideColumnWidth()
+        {
+            // Skipping the column is not the same as storing no width for it: ColumnWidth would
+            // otherwise come back and give it one on the very next render.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "40px", "50px", null });
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.Once);
+                p.Add(g => g.ColumnWidth, "150px");
+            });
+
+            cut.Render();
+
+            Assert.Null(cut.FindAll("colgroup col")[2].GetAttribute("style"));
+        }
+
+        [Fact]
+        public void AFitTakesOverFromADragAndADragTakesItBack()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "60px", "70px", null });
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand);
+                p.Add(g => g.AllowColumnResize, true);
+            });
+
+            cut.InvokeAsync(() => cut.Instance.OnColumnsResized(0, 400, new[] { 400d, 0, 0 })).Wait();
+            Assert.Equal("width:400px", cut.FindAll("colgroup col")[0].GetAttribute("style"));
+
+            // A fit of a grid with nothing frozen does not render: the script already wrote the widths
+            // to the page, and there is no inset composed here that would go stale. So the next render
+            // is what shows the server agreeing with what it was told - which is the property that
+            // matters, since a server that re-derived the width would drift from the page.
+            cut.InvokeAsync(() => cut.Instance.AutoFitAsync()).Wait();
+            cut.Render();
+            Assert.Equal("width:60px", cut.FindAll("colgroup col")[0].GetAttribute("style"));
+
+            cut.InvokeAsync(() => cut.Instance.OnColumnsResized(0, 500, new[] { 500d, 0, 0 })).Wait();
+            Assert.Equal("width:500px", cut.FindAll("colgroup col")[0].GetAttribute("style"));
+        }
+
+        [Fact]
+        public void AFittedWidthIsNotCapturedIntoTheSettings()
+        {
+            // A drag is a choice a user made; a fit is derived from data that will not be the same data
+            // next time, and restoring one computed against a different result set is worse than
+            // measuring again.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "60px", "70px", null });
+
+            FastGridSettings settings = null;
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand);
+                p.Add(g => g.SettingsChanged, EventCallback.Factory
+                    .Create<FastGridSettings>(this, s => settings = s));
+            });
+
+            cut.InvokeAsync(() => cut.Instance.AutoFitAsync()).Wait();
+            cut.Find("thead th div").Click();
+
+            Assert.NotNull(settings);
+            Assert.All(settings.Columns, c => Assert.Null(c.Width));
+        }
+
+        [Fact]
+        public void AFitThatLandsInADifferentViewIsThrownAway()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            var planned = module.Setup<string[]>("autoFit", _ => true);
+
+            var cut = Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.OnDemand));
+
+            var fit = cut.InvokeAsync(() => cut.Instance.AutoFitAsync());
+
+            // The rows it measured are not the rows the grid is showing by the time it answers.
+            cut.Find("thead th div").Click();
+
+            planned.SetResult(new[] { "60px", "70px", null });
+            fit.Wait();
+
+            Assert.All(cut.FindAll("colgroup col"), col => Assert.Null(col.GetAttribute("style")));
+        }
+    }
+}

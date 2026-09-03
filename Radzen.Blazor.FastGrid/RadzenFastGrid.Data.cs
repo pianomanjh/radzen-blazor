@@ -116,6 +116,13 @@ namespace Radzen.FastGrid
         // own, cancel or dispose. A timer that fires and returns costs less than the lifetime rules.
         int filterGeneration;
 
+        // Which view the grid is currently showing, counted rather than described. Anything measured
+        // against the rows on screen - so far, an auto-fit - stamps itself with this and throws its
+        // answer away if it comes back into a different one. Incremented in RefreshAsync because that
+        // is already the single funnel every sort, filter, page and data change goes through, which is
+        // what keeps this from being a second opinion about what is current.
+        int viewGeneration;
+
         /// <summary>
         /// Applies a filter after the typing pause, unless another keystroke arrives first.
         /// </summary>
@@ -860,6 +867,10 @@ namespace Radzen.FastGrid
 
             await AttachNavigationAsync();
 
+            // Before the focus is put back, because a fit changes how wide every column is and
+            // bringing the cursor's cell into view is measured against exactly that.
+            await AutoFitOnFirstRenderAsync();
+
             // Last, and after every path above that can reload: this is the render the cursor has to be
             // put back on, and a reload started here would move the rows out from under it.
             await ReassertFocusAsync();
@@ -1371,6 +1382,8 @@ namespace Radzen.FastGrid
             // covers the sort, the filter and the page together, which is all three ways a row can
             // arrive at an index that used to belong to another one.
             ForgetRange();
+
+            viewGeneration++;
 
             // Every state change a user can make funnels through here, so this is the one place the
             // grid has to say so - and it is not the render path, which is what keeps a grid nobody is

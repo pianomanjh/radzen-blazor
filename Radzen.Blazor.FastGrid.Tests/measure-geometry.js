@@ -94,6 +94,72 @@ async function main() {
         // racing them, so the numbers are stable run to run.
         await page.evaluate(() => document.fonts.ready.then(() => true));
 
+        // The auto-fit pane is the one place this script runs the component's own code rather than only
+        // looking at what that code produced. A fit is a measurement written in JavaScript, so the only
+        // honest check of it is to run the shipped function against the real theme and read what the
+        // columns became - and to read it off the page, never off the fit's own arithmetic.
+        const autoFit = await page.evaluate(async () => {
+            const pane = document.querySelector('.pane[data-autofit]');
+
+            if (!pane || !window.__fastgrid) {
+                return null;
+            }
+
+            const table = pane.querySelector('table');
+            const round = value => Math.round(value * 100) / 100;
+
+            // Header widths rather than body ones: under table-layout:fixed they are the column, and
+            // the header row is the one row every pane has.
+            const widths = () => [...table.querySelectorAll(':scope > thead > tr:first-child > th')]
+                .map(th => round(th.getBoundingClientRect().width));
+
+            // How many cells in each column are drawing an ellipsis - content wider than the box it
+            // has. This is the state a fit exists to leave, and it is the browser's answer rather than
+            // a restatement of what the fit computed.
+            const truncated = () => {
+                const counts = {};
+
+                for (const row of table.querySelectorAll(':scope > tbody > tr.rz-data-row')) {
+                    [...row.children].forEach((cell, index) => {
+                        const span = cell.querySelector(':scope > .rz-cell-data');
+
+                        if (span && span.scrollWidth > span.clientWidth + 1) {
+                            counts[index] = (counts[index] || 0) + 1;
+                        }
+                    });
+                }
+
+                return counts;
+            };
+
+            const columns = [...table.querySelectorAll(':scope > colgroup > col')].length;
+            const indices = [...Array(columns).keys()];
+
+            // MaxWidth read back off the cell the server wrote it to, rather than restated here: a
+            // check that tells the function what to clamp to has agreed with itself about the number.
+            const bounds = indices.map(index => {
+                const cell = table.querySelector(
+                    `:scope > tbody > tr.rz-data-row > td:nth-child(${index + 1})`);
+
+                return cell && cell.style.maxWidth ? cell.style.maxWidth : null;
+            });
+
+            const tableWidth = () => round(table.getBoundingClientRect().width);
+            const before = { widths: widths(), truncated: truncated(), tableWidth: tableWidth() };
+
+            // Standing in for the server, which passes the same things: no toggle column on this pane,
+            // and the last column left bare so the browser hands it the remainder.
+            const written = await window.__fastgrid.autoFit(table.id, indices,
+                indices.map(() => null), bounds, 0, columns - 1, false);
+
+            return {
+                before,
+                after: { widths: widths(), truncated: truncated(), tableWidth: tableWidth() },
+                written,
+                paneWidth: round(pane.getBoundingClientRect().width)
+            };
+        });
+
         const report = await page.evaluate(() => {
             const round = value => Math.round(value * 100) / 100;
             const height = element => (element ? round(element.getBoundingClientRect().height) : null);
@@ -332,6 +398,7 @@ async function main() {
         }
 
         report.stylesheets = stylesheets;
+        report.autoFit = autoFit;
 
         process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     } finally {
