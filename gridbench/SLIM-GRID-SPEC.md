@@ -364,6 +364,19 @@ Each layer below caught real faults the previous one missed. Use all of them.
    | A virtualized grid over an asynchronous source refreshing itself forever | `RefreshAsync` announced a data change as a settings change; the application stored it, re-rendered, and its `Data` property answered with a new queryable - which is what `AsNoTracking()` does on every read. 880,000 renders in 2.5s, no exception, nothing in the log. Every existing test passed: bUnit's `Virtualize` fetches once, and nothing tested a parent that hands the settings back. |
    | The keyboard cursor vanishing on `PageDown` under virtualization | The jump lands on a row outside the rendered window, so the script has nothing to focus; it scrolls to where the row will be and the re-assert after the next render was to catch it. There is no next render - `Virtualize` re-renders *itself* when the window arrives, and the grid's `OnAfterRenderAsync` never runs. The fix waits for the row in the script instead, bounded and superseded by the next keystroke. Every bUnit test passed throughout: there the window is the whole data set, so the row is always already there. |
 
+   **The browser pass on the review fixes (Sep 3 2026) found nothing new broken and confirmed two
+   things nothing above could see.** `Responsive` renders correctly for the first time: above the
+   breakpoint a cell reads `0` where it used to read `Id 0`, and below it the rows stack into cards
+   with the headers hidden - the card layout had never once rendered, because the class the theme
+   scopes it under was never emitted. And the column picker's renumbering was proved with a control
+   rather than argued: tag the scroller and `tbody` with an expando, toggle `AllowColumnPicking`, and
+   at the old sequence both come back **undefined** - the whole table was destroyed and rebuilt to
+   show a drop-down - while at the new one both survive. That is the discrimination check §9 asks for,
+   applied to a browser rather than a test.
+
+   The playground had no `Responsive` toggle until this pass, which is why the feature could ship
+   broken and stay broken: **a feature the playground cannot drive is a feature nobody looks at.**
+
    Watch **renders/sec** on the metrics strip: a grid at rest is 0, and the panel turns it red above
    five. That reading alone names a render loop in a glance - **while the circuit is answering.** Once
    it is not, the strip freezes at its last value and a stopped counter reads exactly like a quiet one.
