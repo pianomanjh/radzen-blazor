@@ -1008,6 +1008,9 @@ Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the reposit
 - **Range selection under virtualization, and across a page.** `Shift` extends a selection on the
   rendered view; a virtualized grid has only the window it drew, and both ends of a range are positions
   in one page. `Shift` moves the cursor in both cases without extending.
+- **Multiple selection has no unresolved-value text.** A single-value lookup bound to a row that has
+  not loaded shows the value; a multiple one shows the placeholder, because what it asks is whether
+  it holds rows rather than whether it has a value.
 - **A template column's position is not stored.** Settings identify a column by its property path,
   and a `TemplateColumn` has none - so a grid whose columns were dragged into a new order restores
   only the ones that carry a property. With a single template column the rest still lands correctly,

@@ -142,6 +142,12 @@ namespace Radzen.FastGrid
         bool SelectsOnRowClick => AllowRowSelectOnRowClick
             && (SelectionChanged.HasDelegate || RowSelect.HasDelegate || RowDeselect.HasDelegate);
 
+        /// <summary>
+        /// Whether the grid draws a selection at all - because it makes one, or because it was handed
+        /// one to show. What the theme keys its selected-row and hover rules off.
+        /// </summary>
+        bool ShowsSelection => SelectsOnRowClick || Selection is not null;
+
         /// <summary>Extra CSS class for the grid element.</summary>
         [Parameter] public string? CssClass { get; set; }
 
@@ -695,7 +701,12 @@ namespace Radzen.FastGrid
             // rz-selectable is load-bearing, not decoration: the theme nests the selected-row and
             // row-hover rules inside it - `.rz-selectable tbody tr.rz-data-row.rz-state-highlight > td`
             // - so without it a clicked row carries rz-state-highlight and nothing paints it.
-            builder.AddAttribute(1, "class", (string.IsNullOrEmpty(CssClass), SelectsOnRowClick) switch
+            //
+            // Bound to whether the grid *shows* a selection rather than whether it makes one. A caller
+            // can hand over a Selection and own the clicking itself - which is exactly what the
+            // drop-down does, and it spent this branch's life displaying a chosen row that nothing
+            // painted, ten lines from this comment.
+            builder.AddAttribute(1, "class", (string.IsNullOrEmpty(CssClass), ShowsSelection) switch
             {
                 (true, false) => "rz-data-grid rz-datatable",
                 (true, true) => "rz-data-grid rz-datatable rz-selectable",

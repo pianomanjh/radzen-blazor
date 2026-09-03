@@ -252,6 +252,15 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override void OnParametersSet()
         {
+            // Without this a validator attached to this component silently passes: ValidatorBase gates
+            // its whole body on FieldIdentifier.FieldName being set, and an auto-property is never set
+            // by anything. FormComponent<T> does the same assignment; this component is not one, so it
+            // has to do it itself.
+            if (ValueExpression is not null && FieldIdentifier.FieldName is null)
+            {
+                FieldIdentifier = FieldIdentifier.Create(ValueExpression);
+            }
+
             // On a Data change as well as a Value change. A value is routinely bound before its rows
             // arrive - the model is known and the lookup's source is still loading - and adopting only
             // on a value change left such a drop-down showing its placeholder for good.
@@ -278,6 +287,12 @@ namespace Radzen.FastGrid
         /// </summary>
         void Adopt(TValue? value)
         {
+            // Kept before the clear. With LoadData, Data is one page, so a row chosen on another page
+            // is not here to be found again - and rebuilding the set from this page alone dropped it,
+            // which dropped it from Value the next time a choice was published. The user watched a
+            // tick disappear because they turned the page.
+            var carried = SelectedItems.Count > 0 ? SelectedItems.ToList() : null;
+
             SelectedItems.Clear();
             selected = default;
 
@@ -298,6 +313,19 @@ namespace Radzen.FastGrid
             if (Multiple && value is System.Collections.IEnumerable many && value is not string)
             {
                 var wanted = many.Cast<object>().ToHashSet();
+
+                // The rows already held come first, so a value the current page cannot explain keeps
+                // the row that explained it before.
+                if (carried is not null)
+                {
+                    foreach (var item in carried)
+                    {
+                        if (ValueOf(item) is { } held && wanted.Remove(held))
+                        {
+                            SelectedItems.Add(item);
+                        }
+                    }
+                }
 
                 foreach (var item in Data)
                 {
@@ -626,6 +654,10 @@ namespace Radzen.FastGrid
         public async ValueTask DisposeAsync()
         {
             GC.SuppressFinalize(this);
+
+            // A conditionally rendered lookup otherwise stays in the form's list after it is gone, and
+            // a validator looking a component up by name finds a disposed one.
+            Form?.RemoveComponent(this);
 
             await Interop("Radzen.destroyPopup", PopupId);
 
