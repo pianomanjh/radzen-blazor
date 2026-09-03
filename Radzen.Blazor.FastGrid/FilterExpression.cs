@@ -464,26 +464,23 @@ namespace Radzen.FastGrid
             // In was the one that did not, so a grid over a List answered a check-box-list filter
             // differently from the same grid over a queryable - and the list was the side disagreeing
             // with QueryableExtension.
-            var read = NotNullRead(selector);
-
-            return negate
-                ? item => !values.Contains(read(item))
-                : item => values.Contains(read(item));
-        }
-
-        /// <summary>
-        /// <see cref="NotNull" /> for a delegate: the selector, reading a null string as the empty one.
-        /// </summary>
-        static Func<TItem, TProp> NotNullRead(Func<TItem, TProp> selector)
-        {
-            if (typeof(TProp) != typeof(string))
+            //
+            // Inlined into each lambda rather than wrapped around the selector, which is why this is
+            // written twice: a wrapper would be a second delegate call on every row of every filter,
+            // and it would be paid by the columns that need no coalescing at all. TextPredicate spells
+            // its own out for the same reason.
+            if (typeof(TProp) == typeof(string))
             {
-                return selector;
+                var empty = (TProp)(object)string.Empty;
+
+                return negate
+                    ? item => !values.Contains(selector(item) is { } read ? read : empty)
+                    : item => values.Contains(selector(item) is { } read ? read : empty);
             }
 
-            var empty = (TProp)(object)string.Empty;
-
-            return item => selector(item) is { } read ? read : empty;
+            return negate
+                ? item => !values.Contains(selector(item))
+                : item => values.Contains(selector(item));
         }
 
         static readonly MethodInfo ListContains =
