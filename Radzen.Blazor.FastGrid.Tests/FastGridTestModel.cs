@@ -289,7 +289,8 @@ namespace Radzen.FastGrid.Tests
             string separator = null,
             FilterMode? filterMode = null,
             bool filterable = true,
-            object filterValue = null) => (builder, seq) =>
+            object filterValue = null,
+            SortOrder? sortOrder = null) => (builder, seq) =>
         {
             builder.OpenComponent<CollectionColumn<TItem, TElement>>(seq);
             builder.AddAttribute(seq + 1, nameof(CollectionColumn<TItem, TElement>.Property), property);
@@ -337,6 +338,11 @@ namespace Radzen.FastGrid.Tests
             if (filterValue is not null)
             {
                 builder.AddAttribute(seq + 10, nameof(CollectionColumn<TItem, TElement>.FilterValue), filterValue);
+            }
+
+            if (sortOrder is not null)
+            {
+                builder.AddAttribute(seq + 11, nameof(CollectionColumn<TItem, TElement>.SortOrder), sortOrder);
             }
 
             builder.CloseComponent();

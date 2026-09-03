@@ -1200,11 +1200,21 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            sorts.Clear();
+            // A reset must not reach further than the restore below it. Both are keyed on PropertyPath,
+            // and a column without one is never stored - so clearing its filter or its sort discards
+            // state that nothing below can put back, and the column loses what its markup declared.
+            //
+            // A CollectionColumn reaches this twice over: its PropertyPath is its sort's, so a column
+            // with no SortBy has none at all, and one whose SortBy is a computed key has none either -
+            // while both still filter, by FilterPropertyPath, which is a different path.
+            sorts.RemoveAll(entry => entry.Column.PropertyPath is { Length: > 0 });
 
             for (var i = 0; i < columns.Count; i++)
             {
-                columns[i].SetFilter(null, null);
+                if (columns[i].PropertyPath is { Length: > 0 })
+                {
+                    columns[i].SetFilter(null, null);
+                }
             }
 
             // Walked in the stored order, not the columns' - it is what records the sort's precedence.
