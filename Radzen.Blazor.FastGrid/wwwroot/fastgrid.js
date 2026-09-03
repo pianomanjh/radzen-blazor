@@ -23,7 +23,13 @@ export function attach(bodyId, dotNetRef, kinds) {
   const locate = (event) => {
     const row = event.target.closest('tr[data-r]');
 
-    if (!row || !tbody.contains(row)) {
+    // The row must be *this* tbody's own child, not merely inside it. A grid rendered into a row
+    // detail template sits in this tbody too, and closest() finds its rows first - so a click on the
+    // inner grid resolved to an outer row with the inner grid's index, raised the outer grid's
+    // RowClick against an unrelated item, and matched the inner toggle well enough to collapse the
+    // detail row the user was working in. The per-cell fallback never had this: its handler is on the
+    // data tr and the detail row is a sibling, so nothing bubbles to it.
+    if (!row || row.parentNode !== tbody) {
       return null;
     }
 
@@ -42,7 +48,10 @@ export function attach(bodyId, dotNetRef, kinds) {
       return;
     }
 
-    if (preventDefault) {
+    // Only where a cell of this row resolved. Suppressing the browser menu over the padding between
+    // cells - or over the row-detail toggle, which resolves to no column - would take the menu away
+    // and raise nothing in its place, which is not what the per-cell binding this replaced did.
+    if (preventDefault && at.cell >= 0) {
       event.preventDefault();
     }
 

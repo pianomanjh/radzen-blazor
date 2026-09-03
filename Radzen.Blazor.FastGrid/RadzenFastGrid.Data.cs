@@ -509,9 +509,37 @@ namespace Radzen.FastGrid
                 return -1;
             }
 
-            var index = virtualWindow.IndexOf(item);
+            var index = IndexInWindow(item);
 
             return index < 0 ? -1 : virtualWindowStart + index;
+        }
+
+        /// <summary>Where an item sits in the rendered window, or -1.</summary>
+        /// <remarks>
+        /// By identity for a reference type rather than by <c>IndexOf</c>, which compares with
+        /// <see cref="EqualityComparer{T}.Default" />: a record - or anything else overriding Equals -
+        /// makes two distinct rows of one window answer to the same index. The second then takes the
+        /// first's number and the index it should have had is never written at all, so the cursor
+        /// lands on the wrong row, or on a row that cannot be found and none at all. A value type has
+        /// nothing but its value to be told apart by, so there this is IndexOf and the ambiguity
+        /// belongs to the data.
+        /// </remarks>
+        int IndexInWindow(TItem item)
+        {
+            if (default(TItem) is not null)
+            {
+                return virtualWindow!.IndexOf(item);
+            }
+
+            for (var i = 0; i < virtualWindow!.Count; i++)
+            {
+                if (ReferenceEquals(virtualWindow[i], item))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         /// <summary>

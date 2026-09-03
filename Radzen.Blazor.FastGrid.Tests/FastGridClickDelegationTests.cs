@@ -345,6 +345,35 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void AGridThatStopsDelegatingLetsGoOfItsListener()
+        {
+            // Switching virtualization on sends the clicks back to per-cell handlers, and only attach()
+            // ever detaches. Left bound, the listener answers every click a second time.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule("./_content/Radzen.Blazor.FastGrid/fastgrid.js");
+            var attach = module.Setup<bool>("attach", _ => true);
+            var detach = module.SetupVoid("detach", _ => true);
+
+            attach.SetResult(true);
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Many(4));
+                p.Add(g => g.ChildContent, TwoColumns());
+                p.Add(g => g.RowClick, EventCallback.Factory.Create<Person>(this, _ => { }));
+            });
+
+            Assert.Single(attach.Invocations);
+            Assert.Empty(detach.Invocations);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.AllowVirtualization, true));
+
+            Assert.Single(detach.Invocations);
+        }
+
+        [Fact]
         public void AnOutOfRangeRowRaisesNothing()
         {
             using var ctx = new TestContext();

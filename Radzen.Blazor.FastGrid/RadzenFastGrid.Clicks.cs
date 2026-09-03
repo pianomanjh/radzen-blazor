@@ -130,10 +130,18 @@ namespace Radzen.FastGrid
             return cache[index];
         }
 
+        /// <summary>Whether a listener is currently bound to this grid's tbody.</summary>
+        bool clicksAttached;
+
         async Task AttachClicksAsync()
         {
             if (!ClicksAreLive || AllowVirtualization || JSRuntime is null)
             {
+                // A listener bound by an earlier render is still on the tbody while the markup has gone
+                // back to per-cell handlers - switching virtualization on does exactly that - and every
+                // click would then be raised twice. Only attach() detaches, and it is not going to run.
+                await DetachClicksAsync().ConfigureAwait(false);
+
                 return;
             }
 
@@ -148,7 +156,6 @@ namespace Radzen.FastGrid
             }
 
             clickAttachAttempted = true;
-            attachedKinds = kinds;
 
             try
             {
@@ -169,6 +176,11 @@ namespace Radzen.FastGrid
                         contextMenu = kinds.ContextMenu,
                     });
 
+                // Recorded once it is true of the DOM rather than before the call. Recorded first, a
+                // re-attach that failed left the grid believing it listens for something it does not.
+                attachedKinds = kinds;
+                clicksAttached = attached;
+
                 if (attached)
                 {
                     return;
@@ -188,7 +200,37 @@ namespace Radzen.FastGrid
                 // is what every consumer's test suite runs, raises a bUnit type this package cannot
                 // name. Narrowing this once let that last one escape OnAfterRenderAsync and fail every
                 // test that rendered a grid with a click handler.
+                //
+                // Detached first: a re-attach that threw leaves whatever the last successful one bound,
+                // and the handlers below would then be the second answer to every click.
+                await DetachClicksAsync().ConfigureAwait(false);
+
                 FallBackToHandlers();
+            }
+        }
+
+        /// <summary>Removes the listener, for a grid that has stopped delegating its clicks.</summary>
+        async Task DetachClicksAsync()
+        {
+            if (!clicksAttached)
+            {
+                return;
+            }
+
+            clicksAttached = false;
+
+            try
+            {
+                if (await ModuleAsync().ConfigureAwait(false) is { } script)
+                {
+                    await script.InvokeVoidAsync("detach", BodyElementId);
+                }
+            }
+#pragma warning disable CA1031
+            catch (Exception)
+#pragma warning restore CA1031
+            {
+                // As above: a circuit that cannot be reached has no listener left to remove.
             }
         }
 
