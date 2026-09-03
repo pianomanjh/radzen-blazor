@@ -664,7 +664,13 @@ namespace Radzen.FastGrid
                 // Only here, and deliberately. A declared sort is the grid's starting state, not a live
                 // binding: honouring later changes would mean re-sorting - and, on the async path,
                 // reloading - from inside the grid's own render pass.
-                if (SortOrder is { } order)
+                //
+                // CanSort, like the two other routes into the sort list. A column that cannot be
+                // ordered by has no header control, no icon and no aria-sort, so a sort declared beside
+                // one is invisible and the user has no way to clear it - and for a collection-valued
+                // property there is no comparer to order by at all. CanSort is readable here because
+                // both derived columns resolve their paths before calling this.
+                if (SortOrder is { } order && CanSort)
                 {
                     Grid?.ApplyDeclaredSort(this, order);
                 }

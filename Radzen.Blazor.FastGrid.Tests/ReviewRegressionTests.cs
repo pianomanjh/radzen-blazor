@@ -437,6 +437,104 @@ namespace Radzen.FastGrid.Tests
                 return Task.FromResult(queryable.ToList());
             }
         }
+
+        // --- A declared sort on a column that cannot be sorted by ------------------------------
+
+        [Fact]
+        public void ADeclaredSortOnACollectionColumnDoesNotOrderTheGrid()
+        {
+            // CanSort is false for a collection-typed property - no provider can order rows by a list -
+            // but a declared SortOrder was the one route into the sort list that never asked. The grid
+            // then ordered by it, and LINQ has no comparer for a List<string>: the whole render threw.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Property<Person, List<string>>(x => x.Regions,
+                        sortOrder: SortOrder.Ascending)));
+            });
+
+            // Declaration order, because the declared sort was refused rather than applied.
+            Assert.Equal(
+                new[] { "Carol", "Alice", "Dave", "Bob" },
+                cut.FindAll("tbody tr").Select(r => r.QuerySelectorAll("td")[0].TextContent).ToArray());
+        }
+
+        [Fact]
+        public void ADeclaredSortOnAnUnsortableColumnDoesNotOrderTheGrid()
+        {
+            // Sortable="false" removes the header control, the icon and aria-sort - so a sort declared
+            // beside it is one the user can see no sign of and has no way to clear.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First,
+                        sortable: false, sortOrder: SortOrder.Descending)));
+            });
+
+            Assert.Equal(
+                new[] { "Carol", "Alice", "Dave", "Bob" },
+                cut.FindAll("tbody tr").Select(r => r.QuerySelectorAll("td")[0].TextContent).ToArray());
+        }
+
+        [Fact]
+        public void AnUnsortableColumnDoesNotDisplaceADeclaredSortThatWorks()
+        {
+            // Single-column sorting means the last declaration wins, so a declared sort clears the
+            // list before adding itself. A column that cannot be ordered by therefore has to be
+            // refused before that clear and not after it: refusing it later leaves the grid with no
+            // sort at all, having thrown away the one the markup above it asked for.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, sortOrder: SortOrder.Ascending),
+                    Columns.Property<Person, List<string>>(x => x.Regions,
+                        sortOrder: SortOrder.Ascending)));
+            });
+
+            Assert.Equal(
+                new[] { "Alice", "Bob", "Carol", "Dave" },
+                cut.FindAll("tbody tr").Select(r => r.QuerySelectorAll("td")[0].TextContent).ToArray());
+        }
+
+        [Fact]
+        public void APropertyColumnThatCannotSortAnswersNullLikeEveryOtherColumn()
+        {
+            // ColumnBase declares ApplySort nullable and documents null as "cannot be ordered by";
+            // CollectionColumn and TemplateColumn both honour it. PropertyColumn overrode it
+            // non-nullable and ordered regardless, which is what let the declared sort through.
+            using var ctx = new TestContext();
+            var data = People.Sample();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, data);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, sortable: false)));
+            });
+
+            var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
+
+            Assert.Null(column.ApplySort(data.AsQueryable(), descending: false));
+            Assert.Null(column.ApplyThenBy(data.AsQueryable().OrderBy(x => x.Id), descending: false));
+        }
     }
 
     /// <summary>Rebuilds its column expressions on every render, the way Razor does.</summary>
