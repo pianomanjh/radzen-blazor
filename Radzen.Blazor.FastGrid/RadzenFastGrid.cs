@@ -706,13 +706,27 @@ namespace Radzen.FastGrid
             // can hand over a Selection and own the clicking itself - which is exactly what the
             // drop-down does, and it spent this branch's life displaying a chosen row that nothing
             // painted, ten lines from this comment.
-            builder.AddAttribute(1, "class", (string.IsNullOrEmpty(CssClass), ShowsSelection) switch
-            {
-                (true, false) => "rz-data-grid rz-datatable",
-                (true, true) => "rz-data-grid rz-datatable rz-selectable",
-                (false, false) => "rz-data-grid rz-datatable " + CssClass,
-                (false, true) => "rz-data-grid rz-datatable rz-selectable " + CssClass,
-            });
+            // rz-datatable-reflow is Responsive, as far as the theme is concerned: both the rule that
+            // hides the per-cell title above the breakpoint and the media block that stacks the rows
+            // into cards below it are nested under this class. The titles alone do nothing - they show
+            // beside every value at every width - so a grid that emits them without this is worse off
+            // than one with Responsive off, and pays 1.40x the render time to be.
+            //
+            // Written out per arm rather than concatenated, so a grid that declares no CssClass still
+            // takes a literal and allocates nothing, which is what this switch is for.
+            builder.AddAttribute(1, "class",
+                (string.IsNullOrEmpty(CssClass), ShowsSelection, Responsive) switch
+                {
+                    (true, false, false) => "rz-data-grid rz-datatable",
+                    (true, true, false) => "rz-data-grid rz-datatable rz-selectable",
+                    (true, false, true) => "rz-data-grid rz-datatable rz-datatable-reflow",
+                    (true, true, true) => "rz-data-grid rz-datatable rz-selectable rz-datatable-reflow",
+                    (false, false, false) => "rz-data-grid rz-datatable " + CssClass,
+                    (false, true, false) => "rz-data-grid rz-datatable rz-selectable " + CssClass,
+                    (false, false, true) => "rz-data-grid rz-datatable rz-datatable-reflow " + CssClass,
+                    (false, true, true) =>
+                        "rz-data-grid rz-datatable rz-selectable rz-datatable-reflow " + CssClass,
+                });
 
             // The reorder script attaches its pointer tracking to the grid rather than to the header,
             // so a drag that wanders off the row it started on keeps following the pointer. That is the
