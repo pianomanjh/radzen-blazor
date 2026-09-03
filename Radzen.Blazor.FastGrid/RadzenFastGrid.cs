@@ -1129,6 +1129,9 @@ namespace Radzen.FastGrid
                     builder.AddAttribute(189, "style", footerStyle);
                 }
 
+                // Last of the td's attributes and numbered past them, so the run stays ascending and a
+                // handler can still override any of them - the same shape as the body cell's hook. The
+                // span below opens the children's run at 190, which is diffed separately.
                 if (FooterCellRender is { } footerCellRender)
                 {
                     var args = CellRenderArgs(default, column);
@@ -1137,7 +1140,7 @@ namespace Radzen.FastGrid
 
                     if (args.Written is { } written)
                     {
-                        builder.AddMultipleAttributes(178, written);
+                        builder.AddMultipleAttributes(193, written);
                     }
                 }
 
