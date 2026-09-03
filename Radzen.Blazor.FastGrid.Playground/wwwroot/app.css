@@ -3,6 +3,10 @@ h1 { font-size: 1.1rem; margin: 0 0 1rem; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-bottom: 1rem; padding: .75rem;
            border: 1px solid var(--rz-base-300, #ddd); border-radius: 4px; }
 .toolbar label { display: flex; gap: .35rem; align-items: center; font-size: .85rem; }
+.toolbar fieldset { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center;
+    border: 1px solid var(--rz-base-300, #d0d0d0); border-radius: 4px; padding: .5rem .75rem; margin: 0; }
+.toolbar legend { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; padding: 0 .35rem;
+    color: var(--rz-text-secondary-color, #666); }
 .readout { margin-top: 1rem; font-size: .8rem; font-family: ui-monospace, monospace; white-space: pre-wrap; }
 /* The grid needs a bounded height for the scroll container to have anything to do. */
 .stage { height: 60vh; display: flex; }

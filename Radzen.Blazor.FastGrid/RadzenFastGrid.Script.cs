@@ -47,6 +47,15 @@ namespace Radzen.FastGrid
                     await module.InvokeVoidAsync("detachNavigation", ViewElementId);
                 }
 
+                // A grid fitting to its container is watching that container. Nothing else releases
+                // it: the observer is held by the script rather than by anything the circuit owns, so
+                // a grid that went away without this would keep redistributing a table nobody is
+                // looking at for as long as the page lives.
+                if (AutoFitOverflow == AutoFitOverflow.Fit && AutoFitEnabled)
+                {
+                    await module.InvokeVoidAsync("releaseFit", TableElementId);
+                }
+
                 await module.DisposeAsync();
             }
 #pragma warning disable CA1031

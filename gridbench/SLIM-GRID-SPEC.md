@@ -1581,6 +1581,55 @@ Taking them from after the class comes off instead put the pass at 111ms against
 the first thing that gate has caught, and it caught a claim made in a comment that the reads "cost
 nothing".
 
+**`AutoFitOverflow.Fit` keeps the table inside its container and follows it.** Columns marked
+`AutoFitPriority.Required` keep their measured width; the rest give way in proportion to what they hold
+above their `MinWidth`, iteratively, so a column that reaches its floor hands its share to the ones
+still above theirs.
+
+**Required-ness is a floor, not a flag.** A required column is given a floor equal to its content
+width, so it arrives at the distribution with nothing to take and the ordinary arithmetic leaves it
+alone. The first version also tested a `required` flag inside the loop, and a mutation deleting that
+flag passed every test - because the floor was already doing the work. Two mechanisms for one rule is
+how §10b says this branch breaks; the flag is gone.
+
+**A pure-CSS version of this does not exist, and the first design said it did.** `<col>` width takes a
+pure length or a pure percentage. Anything mixing the two - `min()`, `max()`, `clamp()`, or
+`calc((100% - 120px) * 0.6)` - parses, survives in the style attribute, and then **falls back to `auto`
+at layout**. A sweep that appeared to show proportional shrinking was the browser splitting leftover
+space between columns it was treating as `auto`, with the required ones holding only because they were
+plain px. Read the numbers against the expression before believing them: a `min(300px, ...)` reporting
+490px is the tell.
+
+So it needs JS, and what that costs was measured rather than argued (1000 rows x 8 columns, six
+resizes):
+
+| | wall | callbacks | in callbacks |
+| --- | --- | --- | --- |
+| no observer | 327ms | - | - |
+| observer redistributing | 464ms | 7 | **0.3ms** |
+
+The observer and the arithmetic are free. The cost is the second table layout each write forces -
+~23ms per step at a thousand rendered rows, ~1ms under paging - which is why the callback is throttled
+to one redistribution per animation frame.
+
+**Allocation is the part that matters on Blazor Server, and it is nothing.** 2000 redistributions and
+16,008 column writes moved the JS heap by 0 bytes. Per-column arrays are typed and built once at fit
+time; a column is written only when its value changed; and the observer never calls back into .NET, so
+no interop, no render and no managed allocation - the cost does not multiply by the number of circuits.
+
+Two things the design has to keep holding:
+
+- **The surplus still goes to one column.** Handing every column its content width leaves the table
+  narrower than its container, and `table-layout: fixed` then shares the difference across *every*
+  column in proportion - including the required ones, which is the one thing the mode promises not to
+  do. So while there is surplus the bare column absorbs it, exactly as under `Scroll`.
+- **Changing `AutoFitOverflow` re-arms a `Once` fit.** The two modes produce different widths, and the
+  fit that already ran produced the other ones.
+
+**A best-effort column with no `MinWidth` has a floor of zero** and a narrow enough container will take
+it there. Left as it is rather than given a made-up default: the honest floor is the one the author
+knows, and inventing one would silently overrule a column that really should collapse.
+
 ### Known consequences, recorded rather than designed around
 
 - **A one-column fit does not move the bare column**, and the first version cleared it - the trailing

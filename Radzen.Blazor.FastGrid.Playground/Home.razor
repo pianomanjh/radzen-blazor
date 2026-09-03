@@ -5,34 +5,72 @@
 <h1>RadzenFastGrid playground</h1>
 
 <div class="toolbar">
-    <label><input type="checkbox" @bind="allowResize" /> Resize</label>
-    <label><input type="checkbox" @bind="allowReorder" /> Reorder</label>
-    <label><input type="checkbox" @bind="frozen" /> Freeze Id + Name</label>
-    <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
-    <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
-    <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
-    <label><input type="checkbox" @bind="virtualize" /> Virtualize</label>
-    <label><input type="checkbox" @bind="allowPicking" /> Column picker</label>
-    <label><input type="checkbox" @bind="alternating" /> Alternating</label>
-    <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
-    <label><input type="checkbox" @bind="keyboard" /> Keyboard</label>
-    <label><input type="checkbox" @bind="responsive" /> Responsive</label>
-    <label>Auto-fit
-        <select @bind="autoFit">
-            <option value="@AutoFitMode.None">off</option>
-            <option value="@AutoFitMode.Once">once</option>
-            <option value="@AutoFitMode.OnDemand">on demand</option>
-        </select>
-    </label>
-    <label><input type="checkbox" @bind="declaredWidths" /> Declared widths</label>
-    <label><input type="checkbox" checked="@selectable" @onchange="SelectableChanged" /> Selection</label>
-    <label><input type="checkbox" @bind="multiSelect" /> Multi-select</label>
-    <label><input type="checkbox" checked="@useEf" @onchange="UseEfChanged" /> Entity Framework</label>
-    <label>Rows <input type="number" @bind="rowCount" style="width:6rem" min="1" max="200000" /></label>
-    <button @onclick="Rebuild">Apply</button>
-    <button @onclick="ResetWidths">Reset widths</button>
-    <button @onclick="FitColumns" disabled="@(autoFit == AutoFitMode.None)">Fit columns</button>
-    <button @onclick="@(() => metrics.Reset())">Reset metrics</button>
+    <fieldset>
+        <legend>Columns</legend>
+        <label><input type="checkbox" @bind="allowResize" /> Resize</label>
+        <label><input type="checkbox" @bind="allowReorder" /> Reorder</label>
+        <label><input type="checkbox" @bind="frozen" /> Freeze Id + Name</label>
+        <label><input type="checkbox" @bind="allowPicking" /> Column picker</label>
+        <label><input type="checkbox" @bind="declaredWidths" /> Declared widths</label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Auto-fit</legend>
+        <label>When
+            <select @bind="autoFit">
+                <option value="@AutoFitMode.None">off</option>
+                <option value="@AutoFitMode.Once">once</option>
+                <option value="@AutoFitMode.OnDemand">on demand</option>
+            </select>
+        </label>
+        <label>Too wide
+            <select @bind="autoFitOverflow">
+                <option value="@AutoFitOverflow.Scroll">scroll</option>
+                <option value="@AutoFitOverflow.Fit">fit container</option>
+            </select>
+        </label>
+        <label><input type="checkbox" @bind="requireIdentity" /> Id + Name required</label>
+        <label title="Best-effort columns are never taken below this">Floor
+            <input type="number" @bind="floorPx" style="width:5rem" min="0" max="400" step="10" />
+        </label>
+        <button @onclick="FitColumns" disabled="@(autoFit == AutoFitMode.None)">Fit columns</button>
+        <button @onclick="ResetWidths">Reset widths</button>
+    </fieldset>
+
+    <fieldset>
+        <legend>Stage width</legend>
+        <label>
+            <input type="range" min="320" max="1600" step="20" @bind="stageWidth" @bind:event="oninput" />
+            @(stageWidth)px
+        </label>
+        <label><input type="checkbox" @bind="stageFull" /> Full width</label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Rows</legend>
+        <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
+        <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
+        <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
+        <label><input type="checkbox" @bind="virtualize" /> Virtualize</label>
+        <label><input type="checkbox" @bind="alternating" /> Alternating</label>
+        <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
+        <label>Count <input type="number" @bind="rowCount" style="width:6rem" min="1" max="200000" /></label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Interaction</legend>
+        <label><input type="checkbox" @bind="keyboard" /> Keyboard</label>
+        <label><input type="checkbox" @bind="responsive" /> Responsive</label>
+        <label><input type="checkbox" checked="@selectable" @onchange="SelectableChanged" /> Selection</label>
+        <label><input type="checkbox" @bind="multiSelect" /> Multi-select</label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Source</legend>
+        <label><input type="checkbox" checked="@useEf" @onchange="UseEfChanged" /> Entity Framework</label>
+        <button @onclick="Rebuild">Apply</button>
+        <button @onclick="@(() => metrics.Reset())">Reset metrics</button>
+    </fieldset>
 </div>
 
 <div class="metrics">
@@ -46,9 +84,10 @@
     <span>settings raised <b>@settingsRaised</b></span>
 </div>
 
-<div class="stage">
+<div class="stage" style="@StageStyle">
     <RadzenFastGrid TItem="Row" Data="@Data" @ref="grid"
                     AutoFitColumns="@autoFit"
+                    AutoFitOverflow="@autoFitOverflow"
                     AllowColumnResize="@allowResize"
                     AllowColumnReorder="@allowReorder"
                     AllowSorting="@allowSorting"
@@ -76,15 +115,15 @@
                     SettingsChanged="@OnSettingsChanged">
         <ChildContent>
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="@Wide("80px")"
-                            Frozen="@frozen" />
+                            AutoFitPriority="@Identity" MinWidth="@Floor" Frozen="@frozen" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="@Wide("220px")"
-                            Frozen="@frozen" />
-            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" Width="@Wide("260px")" />
-            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" Width="@Wide("90px")" />
-            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" Format="d" Width="@Wide("180px")" />
-            <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" Format="C0" Width="@Wide("180px")" />
+                            AutoFitPriority="@Identity" MinWidth="@Floor" Frozen="@frozen" />
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" MinWidth="@Floor" Width="@Wide("260px")" />
+            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" MinWidth="@Floor" Width="@Wide("90px")" />
+            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" MinWidth="@Floor" Format="d" Width="@Wide("180px")" />
+            <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" MinWidth="@Floor" Format="C0" Width="@Wide("180px")" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (fixed)"
-                            Width="@Wide("260px")" Resizable="false" Reorderable="false"
+                            Width="@Wide("260px")" MinWidth="@Floor" Resizable="false" Reorderable="false"
                             Frozen="@frozen" FrozenPosition="FrozenColumnPosition.Right" />
         </ChildContent>
     </RadzenFastGrid>
@@ -112,6 +151,21 @@
     // something to do, and is why the two controls sit beside each other.
     AutoFitMode autoFit = AutoFitMode.None;
     bool declaredWidths = true;
+
+    // Fit mode is only visible while the columns cannot all fit, so the stage carries its own width
+    // control: dragging the browser window works too, but it is a poor way to find the edges.
+    AutoFitOverflow autoFitOverflow = AutoFitOverflow.Scroll;
+    bool requireIdentity = true;
+    int floorPx = 80;
+    int stageWidth = 900;
+    bool stageFull = true;
+
+    string? StageStyle => stageFull ? null : $"width:{stageWidth}px";
+
+    AutoFitPriority Identity =>
+        requireIdentity ? AutoFitPriority.Required : AutoFitPriority.BestEffort;
+
+    string Floor => $"{floorPx}px";
 
     RadzenFastGrid<Row>? grid;
 

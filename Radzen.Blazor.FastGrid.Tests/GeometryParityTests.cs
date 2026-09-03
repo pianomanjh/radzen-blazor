@@ -581,6 +581,47 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void Fitting_to_the_container_keeps_the_required_columns_and_takes_it_out_of_the_rest()
+        {
+            // The case a grid on a laptop and the same grid on a desktop are the same grid. Required
+            // columns are the ones a row is identified by; they keep the width their content needs at
+            // every container size, and the difference comes out of the columns that can spare it.
+            var fit = Fitted();
+            var steps = fit.FittedToContainer?.Steps;
+
+            ParityAssert.True(steps is { Length: > 0 },
+                "the fit-to-container sweep ran at all",
+                "a sweep that never ran reports nothing, and nothing must not read as a pass",
+                "one row per container width",
+                fit.FittedToContainer?.ToString() ?? "(not measured)",
+                fit.ToString());
+
+            ParityAssert.True(steps!.All(step => step.RequiredHeld),
+                "a required column keeps its measured width at every container size",
+                "it is the column the row is identified by - giving its width away is what a scrollbar was there to avoid",
+                "the same width at every step",
+                fit.FittedToContainer!.ToString(),
+                fit.ToString());
+
+            ParityAssert.True(steps.All(step => step.AboveFloor),
+                "no column is taken below its MinWidth",
+                "a column squeezed past its floor stops being readable, and a fit that produces an unreadable column has done the thing it exists to prevent",
+                "every best-effort column at or above its floor",
+                fit.FittedToContainer!.ToString(),
+                fit.ToString());
+
+            // Above the cliff it fits; below it, it scrolls. Both halves matter: fitting that never
+            // scrolls has squeezed something to nothing, and scrolling that starts early has given up
+            // while there was still room to take.
+            ParityAssert.True(steps.Any(step => !step.Scrolls) && steps.Any(step => step.Scrolls),
+                "it fits while it can and scrolls once it cannot",
+                "there is a width below which every floor cannot be met at once - reaching it is when scrolling becomes the honest answer rather than the first one",
+                "wide steps that fit and narrow steps that scroll",
+                fit.FittedToContainer!.ToString(),
+                fit.ToString());
+        }
+
+        [Fact]
         public void A_container_too_narrow_for_the_fit_scrolls_rather_than_losing_a_column()
         {
             // The table overflowing and the wrapper scrolling is the intended answer - the fit sizes

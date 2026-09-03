@@ -423,7 +423,7 @@ namespace Radzen.Blazor.FastGrid.Tests
                 Path.Combine(RepositoryRoot, "Radzen.Blazor.FastGrid", "wwwroot", "fastgrid.js"));
 
             return System.Text.RegularExpressions.Regex.Replace(source, "(?m)^export ", "")
-                + "\nwindow.__fastgrid = { autoFit };";
+                + "\nwindow.__fastgrid = { autoFit, releaseFit };";
         }
 
         static string FindRepositoryRoot()
