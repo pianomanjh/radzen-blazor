@@ -285,6 +285,35 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ARestoredPageSizeSurvivesTheNextParameterSet()
+        {
+            // The restored size used to be written into the field that tracks what the *markup*
+            // declared, so the very next parameter set read it as an outside change, threw it away and
+            // went back to page one. A sort is enough to trigger that, and the settings it then raises
+            // persist the wrong size - so the user's page size never comes back.
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(p => p.First, title: "First")),
+                p =>
+                {
+                    p.Add(g => g.AllowPaging, true);
+                    p.Add(g => g.PageSize, 10);
+                    p.Add(g => g.Settings, new FastGridSettings { PageSize = 25, CurrentPage = 2 });
+                },
+                People.Many(100));
+
+            Assert.Equal(25, cut.FindAll("tbody tr").Count);
+            Assert.Equal(2, cut.Instance.CurrentPage);
+
+            // What a parent does after storing the settings the grid raised.
+            cut.SetParametersAndRender(p => p.Add(g => g.AllowPaging, true));
+
+            Assert.Equal(25, cut.FindAll("tbody tr").Count);
+            Assert.Equal(2, cut.Instance.CurrentPage);
+        }
+
+        [Fact]
         public void StoredSettingsAreRestoredOnTheFirstRender()
         {
             using var ctx = Context();
