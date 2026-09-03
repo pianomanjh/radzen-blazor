@@ -676,11 +676,16 @@ one from each other, because the bound is applied by the browser through `clamp(
 anything here parsing the string. (Worth knowing that `max-width` on a *cell* does nothing at all under
 `table-layout: fixed`, so the `col` is the only place a bound has ever been able to apply.)
 
-**The last column that is neither frozen nor declared is left with no width**, so the browser hands it
-whatever the fitted columns did not take. That is what keeps the table filling its container, and it
+**The last column being fitted that is not frozen is left with no width**, so the browser hands it
+whatever the other fitted columns did not take. A column the markup has sized is never the bare one, so
+on a grid whose last column declares a `Width` the slack lands further left. That is what keeps the table filling its container, and it
 stays right through a window resize with nothing watching for one. It is the last rather than the
 widest deliberately: which column is widest is a property of the data, so filtering would change which
 one stretches and the table would rearrange itself for no reason a reader can see.
+
+**Nothing is fitted below the `Responsive` breakpoint**, where the theme stacks the rows into cards and
+a colgroup width stops deciding anything. A fit taken above it is kept, and is right again when the
+window widens.
 
 **It fits what is rendered.** Under paging that is the current page; under virtualization the current
 window. A grid that has never scrolled past the widest value in a column has not seen it, and neither
@@ -690,8 +695,13 @@ than it needs to be.
 
 A fitted width is **not** stored in `Settings`. A drag is a choice the user made and is remembered; a
 fit is derived from data that will not be the same data next time, so `Once` measures again rather than
-restoring a number computed against a different result set. A drag beats a fit, and fitting a column
-that has been dragged clears the drag - otherwise it would do nothing visible.
+restoring a number computed against a different result set.
+
+Which of the two wins depends on who asked. **`Once` leaves alone any column that already carries a
+width the user chose** - a drag, or one restored from the settings, which is a drag from a previous
+visit - so an automatic fit can never cost somebody a width they saved. **A fit you ask for takes that
+column too**, and clears the drag, because a fit that visibly did nothing to the column under the
+pointer would be the worse answer.
 
 The measuring and the writing both happen in the browser, in one pass, the way the resize drag already
 works: a feature whose whole job is to set a handful of strings should not cost a render of every row

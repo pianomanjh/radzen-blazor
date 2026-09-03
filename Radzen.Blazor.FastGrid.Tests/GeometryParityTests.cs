@@ -534,6 +534,31 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void A_table_the_theme_has_stacked_is_not_fitted()
+        {
+            // Below the Responsive breakpoint the theme gives the table table-layout:auto and
+            // display:block, hides the header and stacks the rows into cards - so a colgroup width
+            // decides nothing and there are no header cells to measure. §13 asked for this and the
+            // first version of the feature shipped without it.
+            var fit = Fitted();
+
+            ParityAssert.True(fit.Stacked is { Answered: null },
+                "a fit declines a table that is no longer laid out as one",
+                "the sixth instance of this branch's oldest failure was Responsive, whose whole feature the theme scopes under a class - a fit that runs there writes widths nothing reads",
+                "null, the answer for a grid there is nothing to measure",
+                fit.Stacked?.ToString() ?? "(not measured)",
+                fit.ToString());
+
+            // Declining has to mean touching nothing, not answering null after writing.
+            ParityAssert.True(fit.Stacked is { WroteNothing: true },
+                "declining leaves every column exactly as it found it",
+                "an answer of null with widths written is the worst of both - the caller records nothing and the page has changed anyway",
+                "every col at the width it had",
+                fit.Stacked?.ToString() ?? "(not measured)",
+                fit.ToString());
+        }
+
+        [Fact]
         public void The_pass_costs_about_what_it_should()
         {
             var fit = Fitted();

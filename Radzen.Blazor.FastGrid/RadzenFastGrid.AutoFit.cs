@@ -72,7 +72,7 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            await RunAutoFitAsync(column, wait: false);
+            await RunAutoFitAsync(column, wait: false, automatic: false);
         }
 
         /// <summary>
@@ -93,10 +93,10 @@ namespace Radzen.FastGrid
             // render it ever does.
             autoFitPending = false;
 
-            await RunAutoFitAsync(null, wait: true);
+            await RunAutoFitAsync(null, wait: true, automatic: true);
         }
 
-        async Task RunAutoFitAsync(ColumnBase<TItem>? column, bool wait)
+        async Task RunAutoFitAsync(ColumnBase<TItem>? column, bool wait, bool automatic)
         {
             var script = await ModuleAsync();
 
@@ -109,7 +109,8 @@ namespace Radzen.FastGrid
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
-                if (visibleColumns[i].CanAutoFit && (column is null || ReferenceEquals(visibleColumns[i], column)))
+                if (visibleColumns[i].CanAutoFit(automatic)
+                    && (column is null || ReferenceEquals(visibleColumns[i], column)))
                 {
                     targets.Add(i);
                 }
@@ -162,10 +163,16 @@ namespace Radzen.FastGrid
 
             for (var i = 0; i < widths.Length && i < targets.Count; i++)
             {
-                visibleColumns[targets[i]].SetAutoFitWidth(widths[i]);
+                visibleColumns[targets[i]].SetAutoFitWidth(widths[i], replacingUserWidth: !automatic);
             }
 
-            bareColumn = bare >= 0 && bare < visibleColumns.Count ? visibleColumns[bare] : null;
+            // Only a fit of the whole grid places it. A one-column fit sends -1, and assigning that
+            // unconditionally would clear the bare column the last full fit chose - taking the stretch
+            // away from a column nobody touched, on some later unrelated render.
+            if (column is null)
+            {
+                bareColumn = bare >= 0 && bare < visibleColumns.Count ? visibleColumns[bare] : null;
+            }
 
             // The widths are already on the page - the script wrote them. What is not is the frozen
             // inset: it is a calc() sum composed here from those same widths and emitted on every

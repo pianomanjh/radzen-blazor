@@ -181,12 +181,29 @@ namespace Radzen.Blazor.FastGrid.Tests
                 : string.Join(", ", Truncated.Select(pair => $"column {pair.Key}: {pair.Value}")));
     }
 
+    /// <summary>What a fit did when asked to size a table the theme had stacked into cards.</summary>
+    public sealed class AutoFitStacked
+    {
+        /// <summary>The widths it answered with. Declining is null.</summary>
+        [JsonPropertyName("answered")] public string[] Answered { get; set; }
+
+        /// <summary>Whether every col came through the attempt with the width it went in with.</summary>
+        [JsonPropertyName("wroteNothing")] public bool WroteNothing { get; set; }
+
+        public override string ToString() =>
+            $"answered {(Answered is null ? "null" : "[" + string.Join(", ", Answered) + "]")}, " +
+            (WroteNothing ? "wrote nothing" : "WROTE WIDTHS");
+    }
+
     /// <summary>
     /// The auto-fit pane before and after the shipped script was run against it. Null when the page
     /// carried no such pane, which the tests treat as a failure rather than a skip.
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>What the fit did when the table was no longer laid out as one.</summary>
+        [JsonPropertyName("stacked")] public AutoFitStacked Stacked { get; set; }
+
         [JsonPropertyName("before")] public AutoFitSurvey Before { get; set; }
 
         [JsonPropertyName("after")] public AutoFitSurvey After { get; set; }
