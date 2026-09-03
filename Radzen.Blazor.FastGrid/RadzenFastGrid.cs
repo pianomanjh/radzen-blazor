@@ -1284,8 +1284,8 @@ namespace Radzen.FastGrid
                 {
                     var dropIndex = i;
 
-                    builder.AddAttribute(61, "data-column-index", dropIndex);
-                    builder.AddAttribute(62, "onmouseup", EventCallback.Factory.Create<MouseEventArgs>(
+                    builder.AddAttribute(37, "data-column-index", dropIndex);
+                    builder.AddAttribute(38, "onmouseup", EventCallback.Factory.Create<MouseEventArgs>(
                         this, _ => EndColumnReorder(dropIndex)));
                 }
 
@@ -1301,7 +1301,7 @@ namespace Radzen.FastGrid
 
                 // The header has to be pinned along with the body, or a frozen column's title scrolls
                 // away from its own cells. Per column, so the concat here is not per-row work.
-                builder.AddAttribute(37, "class",
+                builder.AddAttribute(53, "class",
                     column.FrozenClass is { } frozen ? headerClass + " " + frozen : headerClass);
 
                 // Only while sorting is offered. A grid with AllowSorting off still applies a sort it
@@ -1310,18 +1310,18 @@ namespace Radzen.FastGrid
                 // header nothing can activate tells a screen reader about a control that is not there.
                 if (sortable && sorted >= 0)
                 {
-                    builder.AddAttribute(38, "aria-sort",
+                    builder.AddAttribute(54, "aria-sort",
                         sorts[sorted].Descending ? "descending" : "ascending");
                 }
 
                 if (column.FrozenHeaderStyle is { } headerStyle)
                 {
-                    builder.AddAttribute(48, "style", headerStyle);
+                    builder.AddAttribute(55, "style", headerStyle);
                 }
 
-                // Last of this header's attributes and numbered past them. The run above it is not
-                // ascending and has not been since long before this - AddMultipleAttributes below
-                // writes 33 - so this cannot fix the element, only decline to add to it.
+                // Last but one of this header's attributes, and numbered past everything before it.
+                // The whole run ascends now: the reorder pair moved down into the 37-38 gap the class
+                // and aria-sort left when they moved up to 53-54, and the hook below closes it at 304.
                 if (NumbersCell(i))
                 {
                     builder.AddAttribute(303, "aria-colindex", AriaColIndex(i));
@@ -1335,7 +1335,7 @@ namespace Radzen.FastGrid
 
                     if (args.Written is { } written)
                     {
-                        builder.AddMultipleAttributes(33, written);
+                        builder.AddMultipleAttributes(304, written);
                     }
                 }
 
