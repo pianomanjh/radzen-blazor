@@ -17,12 +17,21 @@
     <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
     <label><input type="checkbox" @bind="keyboard" /> Keyboard</label>
     <label><input type="checkbox" @bind="responsive" /> Responsive</label>
+    <label>Auto-fit
+        <select @bind="autoFit">
+            <option value="@AutoFitMode.None">off</option>
+            <option value="@AutoFitMode.Once">once</option>
+            <option value="@AutoFitMode.OnDemand">on demand</option>
+        </select>
+    </label>
+    <label><input type="checkbox" @bind="declaredWidths" /> Declared widths</label>
     <label><input type="checkbox" checked="@selectable" @onchange="SelectableChanged" /> Selection</label>
     <label><input type="checkbox" @bind="multiSelect" /> Multi-select</label>
     <label><input type="checkbox" checked="@useEf" @onchange="UseEfChanged" /> Entity Framework</label>
     <label>Rows <input type="number" @bind="rowCount" style="width:6rem" min="1" max="200000" /></label>
     <button @onclick="Rebuild">Apply</button>
     <button @onclick="ResetWidths">Reset widths</button>
+    <button @onclick="FitColumns" disabled="@(autoFit == AutoFitMode.None)">Fit columns</button>
     <button @onclick="@(() => metrics.Reset())">Reset metrics</button>
 </div>
 
@@ -38,7 +47,8 @@
 </div>
 
 <div class="stage">
-    <RadzenFastGrid TItem="Row" Data="@Data"
+    <RadzenFastGrid TItem="Row" Data="@Data" @ref="grid"
+                    AutoFitColumns="@autoFit"
                     AllowColumnResize="@allowResize"
                     AllowColumnReorder="@allowReorder"
                     AllowSorting="@allowSorting"
@@ -65,16 +75,16 @@
                     Settings="@settings"
                     SettingsChanged="@OnSettingsChanged">
         <ChildContent>
-            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="80px"
+            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="@Wide("80px")"
                             Frozen="@frozen" />
-            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="220px"
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="@Wide("220px")"
                             Frozen="@frozen" />
-            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" Width="260px" />
-            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" Width="90px" />
-            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" Format="d" Width="180px" />
-            <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" Format="C0" Width="180px" />
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" Width="@Wide("260px")" />
+            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" Width="@Wide("90px")" />
+            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" Format="d" Width="@Wide("180px")" />
+            <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" Format="C0" Width="@Wide("180px")" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (fixed)"
-                            Width="260px" Resizable="false" Reorderable="false"
+                            Width="@Wide("260px")" Resizable="false" Reorderable="false"
                             Frozen="@frozen" FrozenPosition="FrozenColumnPosition.Right" />
         </ChildContent>
     </RadzenFastGrid>
@@ -97,6 +107,14 @@
     // Off by default: it repeats a title in every cell, so it changes what the other toggles look
     // like. Narrow the window under 768px to see it stack the rows into cards.
     bool responsive;
+    // Auto-fit measures what is rendered, so it can only widen a column the markup has not already
+    // pinned - which is every column on this page. Turning the declared widths off is what gives it
+    // something to do, and is why the two controls sit beside each other.
+    AutoFitMode autoFit = AutoFitMode.None;
+    bool declaredWidths = true;
+
+    RadzenFastGrid<Row>? grid;
+
     bool selectable = true;
     bool multiSelect;
     bool useEf;
@@ -154,6 +172,20 @@
         if (useEf)
         {
             ef.Prepare(rowCount);
+        }
+    }
+
+    // The declared width, or nothing, so auto-fit has columns it is allowed to size. A column that
+    // declares a Width is left alone by a fit, which is every column here until this is switched off.
+    string? Wide(string width) => declaredWidths ? width : null;
+
+    async Task FitColumns()
+    {
+        if (grid is not null)
+        {
+            await grid.AutoFitAsync();
+
+            Log("fitted every column to what is in it");
         }
     }
 
