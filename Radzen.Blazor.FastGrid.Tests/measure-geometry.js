@@ -254,8 +254,59 @@ async function main() {
                 return { widths, bare: round(widths[columns - 1]), scrolls };
             })();
 
+            // Fitting to the container instead of overflowing it. The first two columns are required
+            // and must keep their measured width at every size; the rest give way down to their floor,
+            // and below the point where every floor is met the grid scrolls instead.
+            const fittedToContainer = await (async () => {
+                const restore = pane.style.width;
+                const floor = 50;
+                const required = indices.map((_, k) => k < 2);
+
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => floor + 'px'), bounds, 0, columns - 1, false, false,
+                    true, required);
+
+                // What the required columns settled on at full width is what they must keep.
+                const wide = at();
+
+                const steps = [];
+
+                for (const width of [900, 700, 550, 460, 400, 320]) {
+                    pane.style.width = width + 'px';
+                    // One frame, because the observer answers on the next one rather than inline.
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+
+                    const widths = at();
+
+                    steps.push({
+                        pane: width,
+                        widths,
+                        requiredHeld: widths[0] === wide[0] && widths[1] === wide[1],
+                        // A column whose content is narrower than the floor is not widened to reach
+                        // it, so its effective floor is its own content width.
+                        aboveFloor: widths.slice(2)
+                            .every((w, i) => w >= Math.min(wide[i + 2], floor) - 1),
+                        scrolls: table.scrollWidth > pane.clientWidth + 1,
+                        total: round(widths.reduce((a, b) => a + b, 0))
+                    });
+                }
+
+                window.__fastgrid.releaseFit(table.id);
+                table.style.minWidth = '';
+                pane.style.width = restore;
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                return { wide, steps };
+            })();
+
             return {
                 animation,
+                fittedToContainer,
                 squeezed,
                 stacked,
                 before,

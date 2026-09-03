@@ -688,6 +688,38 @@ over 200ms rather than snapping to them, so a re-fit shows what moved. The autom
 settling into its first layout, which reads as a page still loading rather than as an answer to
 anything, so it lands in one frame. `prefers-reduced-motion: reduce` turns the animation off.
 
+### Fitting the container instead of scrolling
+
+`AutoFitOverflow="AutoFitOverflow.Fit"` keeps the table inside its container and follows it as that
+container changes size - the case where the same grid is opened on a laptop and on a desktop.
+
+Mark the columns a row is identified by:
+
+```razor
+<RadzenFastGrid AutoFitColumns="AutoFitMode.Once" AutoFitOverflow="AutoFitOverflow.Fit">
+    <PropertyColumn Property="@(x => x.Sku)"  Title="SKU"
+                    AutoFitPriority="AutoFitPriority.Required" />
+    <PropertyColumn Property="@(x => x.Name)" Title="Name"
+                    AutoFitPriority="AutoFitPriority.Required" />
+    <PropertyColumn Property="@(x => x.Notes)" Title="Notes" MinWidth="80px" />
+</RadzenFastGrid>
+```
+
+A `Required` column keeps the width its content needs at every container size. Everything else gives
+way in proportion to how much it has above its `MinWidth`, and a column that reaches its floor stops
+giving and hands its share to the ones still above theirs.
+
+**Give every best-effort column a `MinWidth`.** Without one its floor is zero, and a container narrow
+enough will take it there - the column is still in the table and is no longer on the screen.
+
+Below the width where every floor cannot be met at once the grid scrolls, which is the same answer
+`Scroll` gives and is reached only when nothing else is left. A grid whose `Required` columns are on
+their own wider than the container scrolls at every size; there is no arrangement that would not.
+
+Following the container is free of the server: the measurement is taken once, and a resize is
+arithmetic over the widths already in hand plus one layout the browser was doing anyway. Nothing calls
+back into .NET, so the cost does not multiply by the number of open circuits.
+
 **A fit wider than its container overflows rather than compressing back**, and the grid's wrapper
 scrolls - sizing a column to its content is the whole point, so squeezing it again would undo the
 measurement just taken. When the fitted columns already fill the container the last column is sized

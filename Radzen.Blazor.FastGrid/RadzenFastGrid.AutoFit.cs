@@ -21,6 +21,41 @@ namespace Radzen.FastGrid
         OnDemand
     }
 
+    /// <summary>What a fit does when the columns it sized do not fit the space there is.</summary>
+    public enum AutoFitOverflow
+    {
+        /// <summary>
+        /// Let the table be as wide as its columns need and the grid scroll sideways. Every column is
+        /// readable and some of them are off-screen.
+        /// </summary>
+        Scroll,
+
+        /// <summary>
+        /// Keep the table inside its container by taking the difference out of the columns that can
+        /// spare it, down to each one's <c>MinWidth</c>. Columns marked
+        /// <see cref="AutoFitPriority.Required" /> keep their measured width and give up nothing, so a
+        /// grid with more required width than container still scrolls - there is no arrangement that
+        /// would not.
+        /// </summary>
+        Fit
+    }
+
+    /// <summary>How hard a column argues for its measured width when there is not enough room.</summary>
+    public enum AutoFitPriority
+    {
+        /// <summary>
+        /// Gives up width, proportionally to how much it has to spare, down to its <c>MinWidth</c>.
+        /// Its content truncates the way it did before being fitted at all.
+        /// </summary>
+        BestEffort,
+
+        /// <summary>
+        /// Keeps the width its content needs. Use it for the columns a row is identified by - the ones
+        /// that make a scrollbar worth having rather than the ones a scrollbar is hiding.
+        /// </summary>
+        Required
+    }
+
     // Sizing a column to what is in it. The measurement has to happen in the browser: the table is
     // table-layout:fixed, so nothing sizes itself to its content and there is no layout to read back -
     // the width has to be worked out and written. The script does both in one pass, for the same reason
@@ -35,6 +70,22 @@ namespace Radzen.FastGrid
         /// <see cref="AutoFitMode.None" />.
         /// </remarks>
         [Parameter] public AutoFitMode AutoFitColumns { get; set; }
+
+        /// <summary>What a fit does when its columns do not fit the space there is.</summary>
+        /// <remarks>
+        /// <see cref="AutoFitOverflow.Scroll" /> is the default and is what a grid did before this
+        /// existed. <see cref="AutoFitOverflow.Fit" /> keeps the table inside its container and follows
+        /// it as that container changes size, which is the case for the same grid on a laptop and on a
+        /// desktop.
+        /// </remarks>
+        [Parameter] public AutoFitOverflow AutoFitOverflow { get; set; }
+
+        /// <summary>
+        /// The overflow the last fit was run under. Changing the mode has to re-arm a
+        /// <see cref="AutoFitMode.Once" /> grid: the two answers are different widths, and the fit
+        /// that already happened produced the other one.
+        /// </summary>
+        AutoFitOverflow lastOverflow;
 
         bool AutoFitEnabled => AutoFitColumns != AutoFitMode.None;
 
@@ -82,6 +133,12 @@ namespace Radzen.FastGrid
         /// </summary>
         async Task AutoFitOnFirstRenderAsync()
         {
+            if (AutoFitColumns == AutoFitMode.Once && lastOverflow != AutoFitOverflow)
+            {
+                lastOverflow = AutoFitOverflow;
+                autoFitPending = true;
+            }
+
             if (AutoFitColumns != AutoFitMode.Once || !autoFitPending)
             {
                 return;
@@ -123,11 +180,13 @@ namespace Radzen.FastGrid
 
             var minimums = new string?[targets.Count];
             var maximums = new string?[targets.Count];
+            var required = new bool[targets.Count];
 
             for (var i = 0; i < targets.Count; i++)
             {
                 minimums[i] = visibleColumns[targets[i]].MinWidth;
                 maximums[i] = visibleColumns[targets[i]].MaxWidth;
+                required[i] = visibleColumns[targets[i]].AutoFitPriority == AutoFitPriority.Required;
             }
 
             // Only a fit of the whole grid places the bare column: fitting one column in isolation must
@@ -147,8 +206,14 @@ namespace Radzen.FastGrid
                 // into its first layout, and animating that reads as a page still loading rather than
                 // as an answer to anything - where a re-fit is exactly the case where showing what
                 // moved is the point.
+                // Fitting to the container is only ever a whole-grid answer: one column cannot be
+                // redistributed against, and a single-column fit is a user pointing at that column
+                // rather than at the layout.
+                var fitting = AutoFitOverflow == AutoFitOverflow.Fit && column is null;
+
                 widths = await script.InvokeAsync<string?[]?>("autoFit", TableElementId, targets,
-                    minimums, maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic);
+                    minimums, maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic, fitting,
+                    required);
             }
 #pragma warning disable CA1031
             catch (Exception)

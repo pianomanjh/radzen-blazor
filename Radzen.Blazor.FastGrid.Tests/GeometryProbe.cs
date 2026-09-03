@@ -181,6 +181,41 @@ namespace Radzen.Blazor.FastGrid.Tests
                 : string.Join(", ", Truncated.Select(pair => $"column {pair.Key}: {pair.Value}")));
     }
 
+    /// <summary>One container width, and what the columns became at it.</summary>
+    public sealed class AutoFitStep
+    {
+        [JsonPropertyName("pane")] public int Pane { get; set; }
+        [JsonPropertyName("widths")] public double[] Widths { get; set; }
+
+        /// <summary>Whether the required columns still have the width they were measured at.</summary>
+        [JsonPropertyName("requiredHeld")] public bool RequiredHeld { get; set; }
+
+        /// <summary>Whether every best-effort column is still at or above its floor.</summary>
+        [JsonPropertyName("aboveFloor")] public bool AboveFloor { get; set; }
+
+        [JsonPropertyName("scrolls")] public bool Scrolls { get; set; }
+        [JsonPropertyName("total")] public double Total { get; set; }
+
+        public override string ToString() =>
+            $"{Pane}px -> [{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
+            $" total {Total:0}" +
+            (RequiredHeld ? string.Empty : ", REQUIRED MOVED") +
+            (AboveFloor ? string.Empty : ", BELOW FLOOR") +
+            (Scrolls ? ", scrolls" : string.Empty);
+    }
+
+    /// <summary>A fit that keeps the table inside its container, swept across container widths.</summary>
+    public sealed class AutoFitToContainer
+    {
+        /// <summary>The widths at full size, which the required columns must keep at every step.</summary>
+        [JsonPropertyName("wide")] public double[] Wide { get; set; }
+
+        [JsonPropertyName("steps")] public AutoFitStep[] Steps { get; set; }
+
+        public override string ToString() =>
+            Steps is null ? "(none)" : string.Join("; ", Steps.Select(s => s.ToString()));
+    }
+
     /// <summary>A fit whose columns cannot fit the container they are in.</summary>
     public sealed class AutoFitSqueezed
     {
@@ -246,6 +281,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>What a fit that keeps the table inside its container did as that container shrank.</summary>
+        [JsonPropertyName("fittedToContainer")] public AutoFitToContainer FittedToContainer { get; set; }
+
         /// <summary>What a fit did in a container too narrow to hold its own answer.</summary>
         [JsonPropertyName("squeezed")] public AutoFitSqueezed Squeezed { get; set; }
 

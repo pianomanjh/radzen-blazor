@@ -460,6 +460,12 @@ namespace Radzen.FastGrid
         /// </summary>
         [Parameter] public bool AutoFit { get; set; } = true;
 
+        /// <summary>
+        /// How hard this column argues for its measured width when the grid is fitting to its container
+        /// and there is not enough room. Only consulted under <c>AutoFitOverflow.Fit</c>.
+        /// </summary>
+        [Parameter] public AutoFitPriority AutoFitPriority { get; set; }
+
         /// <summary>Whether an auto-fit is allowed to measure and size this column.</summary>
         /// <param name="automatic">
         /// True for the one fit <c>AutoFitMode.Once</c> runs on its own, false when a user asked. An

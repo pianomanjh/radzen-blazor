@@ -446,6 +446,20 @@ function cellData(cell) {
   return null;
 }
 
+// A CSS length as a number, or the fallback when it is not one this can use. MinWidth and MaxWidth are
+// free-form CSS - `50%`, `4rem`, `min(...)` - and only px can be arithmetic here.
+function lengthOf(value, fallback) {
+  if (typeof value === 'string' && value.endsWith('px')) {
+    const parsed = parseFloat(value);
+
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+
+  return fallback;
+}
+
 function headCells(table) {
   const row = table.querySelector(':scope > thead > tr');
 
@@ -499,7 +513,147 @@ async function ready(tableId, wait) {
   }
 }
 
-export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffset, bare, wait, animate) {
+// Everything a fitted grid needs to redistribute itself when its container changes size, kept per
+// table so a resize costs arithmetic rather than another measuring pass. Content widths do not change
+// when the window does - only the room to put them in - so the expensive half is never repeated.
+const fitted = new Map();
+
+/// Splits `available` across the columns, taking what is missing out of the ones that can spare it.
+// A column gives up in proportion to how much it has above its floor, and one that reaches its floor
+// stops giving and hands its share to the ones still above theirs - which is why this iterates rather
+// than dividing once.
+//
+// Required columns are not a case here. They are given a floor equal to their content width, so they
+// arrive with nothing above it and the same arithmetic leaves them alone. Saying it twice - a floor and
+// a flag - is what let a mutation that deleted the flag pass every test.
+function distribute(state, available) {
+    const { content, floor, out, last, cols, bare } = state;
+    const n = content.length;
+
+    let deficit = -available;
+
+    for (let i = 0; i < n; i++) {
+        out[i] = content[i];
+        deficit += content[i];
+    }
+
+    // More room than the columns need. Handing every column its content width would leave the table
+    // narrower than its container, and under table-layout:fixed the browser then shares the surplus
+    // across every column in proportion - including the required ones, which is the one thing this
+    // mode promises not to do. So the surplus goes to a single column with no width of its own, the
+    // same way it does when the grid is not fitting at all.
+    if (deficit <= 0 && bare >= 0) {
+        for (let i = 0; i < n; i++) {
+            if (i === bare) {
+                if (last[i] !== -1) {
+                    cols[i].style.width = '';
+                    last[i] = -1;
+                }
+            } else if (out[i] !== last[i]) {
+                cols[i].style.width = out[i].toFixed(1) + 'px';
+                last[i] = out[i];
+            }
+        }
+
+        return;
+    }
+
+    for (let pass = 0; pass < 8 && deficit > 0.5; pass++) {
+        let pool = 0;
+
+        for (let i = 0; i < n; i++) {
+            if (out[i] > floor[i]) {
+                pool += out[i] - floor[i];
+            }
+        }
+
+        if (pool <= 0) {
+            break;
+        }
+
+        const wanted = Math.min(deficit, pool);
+        let took = 0;
+
+        for (let i = 0; i < n; i++) {
+            if (out[i] <= floor[i]) {
+                continue;
+            }
+
+            const give = Math.min(out[i] - floor[i], wanted * ((out[i] - floor[i]) / pool));
+
+            out[i] -= give;
+            took += give;
+        }
+
+        if (took <= 0) {
+            break;
+        }
+
+        deficit -= took;
+    }
+
+    // Written only where it changed. During a drag most columns move every frame, but the required ones
+    // never do, and neither does anything already sitting on its floor.
+    for (let i = 0; i < n; i++) {
+        if (out[i] !== last[i]) {
+            cols[i].style.width = out[i].toFixed(1) + 'px';
+            last[i] = out[i];
+        }
+    }
+}
+
+// Follows the container. Throttled to one redistribution per frame: the arithmetic is free but each
+// write forces the table to lay out again, and at a thousand rendered rows that is the whole cost.
+function watch(table, state) {
+    const wrapper = table.parentElement;
+
+    if (!wrapper || typeof ResizeObserver === 'undefined') {
+        return;
+    }
+
+    state.observer = new ResizeObserver(() => {
+        if (state.queued) {
+            return;
+        }
+
+        state.queued = requestAnimationFrame(() => {
+            state.queued = 0;
+
+            const available = wrapper.clientWidth;
+
+            // The guard against feeding ourselves: writing column widths can change the table's width,
+            // and a wrapper that sizes to its content would then report a new size and ask again. A
+            // width we have already answered for is not a new question.
+            if (available !== state.available && available > 0) {
+                state.available = available;
+                distribute(state, available);
+            }
+        });
+    });
+
+    state.observer.observe(wrapper);
+}
+
+/// Stops following a table's container. Called when the grid goes away; a grid that is merely
+// re-rendered keeps its observer, because the table element and the content widths are both still good.
+export function releaseFit(tableId) {
+    const state = fitted.get(tableId);
+
+    if (state) {
+        if (state.queued) {
+            cancelAnimationFrame(state.queued);
+        }
+
+        if (state.observer) {
+            state.observer.disconnect();
+        }
+
+        fitted.delete(tableId);
+    }
+}
+
+export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffset, bare, wait, animate,
+    fitting, required) {
   const table = await ready(tableId, wait);
 
   if (!table) {
@@ -531,6 +685,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   let bareWidth = null;
   let measured = 0;
   let available = 0;
+  const pixels = [];
 
   installMeasuringStyle();
   table.classList.add(MEASURING);
@@ -583,6 +738,10 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       // The bare column takes whatever the fitted ones left, which under table-layout:fixed is what
       // a col with no width at all means. Its own measurement is kept rather than discarded: it is
       // what the column needs if it turns out there is nothing left to take.
+      // Kept as a number as well as a string: fitting to the container is arithmetic, and it needs
+      // the measurement rather than the expression the measurement turns into.
+      pixels.push(px);
+
       if (indices[k] === bare) {
         bareWidth = bound(px, minWidths[k], maxWidths[k]);
         widths.push(null);
@@ -596,11 +755,11 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     // the width of the cell itself - under table-layout:fixed that is the column's to decide - so a
     // header box measured here is the same box it will be afterwards. A column nobody is fitting keeps
     // whatever width it has, so its current one is also its final one.
-    const fitting = new Set(indices);
+    const beingFitted = new Set(indices);
     const cells = headCells(table);
 
     for (let i = 0; i < cells.length; i++) {
-      if (!fitting.has(i - toggleOffset)) {
+      if (!beingFitted.has(i - toggleOffset)) {
         measured += cells[i].getBoundingClientRect().width;
       }
     }
@@ -621,6 +780,70 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   // what that gate is for.
   if (bare >= 0 && bareWidth !== null && measured >= available) {
     widths[indices.indexOf(bare)] = bareWidth;
+  }
+
+  if (fitting) {
+    // Keeping the table inside its container instead of letting it overflow. Nothing is left bare -
+    // bareness hands leftover space to one column, and here the leftover is being shared out on
+    // purpose - so every column is given a width and the arithmetic decides what it is.
+    const n = indices.length;
+    const state = {
+      cols: new Array(n),
+      content: new Float64Array(n),
+      floor: new Float64Array(n),
+      required: new Array(n),
+      // Which column absorbs the surplus while there is one. Index into the fitted set, not the grid.
+      bare: bare >= 0 ? indices.indexOf(bare) : -1,
+      out: new Float64Array(n),
+      // Deliberately NaN so the first pass writes every column: 0 would look like a width already set.
+      last: new Float64Array(n).fill(NaN),
+      available: 0,
+      observer: null,
+      queued: 0
+    };
+
+    let floors = 0;
+    let needed = 0;
+
+    for (let k = 0; k < n; k++) {
+      state.cols[k] = colgroup.children[toggleOffset + indices[k]];
+      state.required[k] = !!(required && required[k]);
+      state.content[k] = Math.min(pixels[k], lengthOf(maxWidths[k], Infinity));
+      // Where required-ness lives: a floor at the content width, so the distribution has nothing to
+      // take. There is no second test for it anywhere.
+      state.floor[k] = state.required[k]
+        ? state.content[k]
+        : Math.min(state.content[k], lengthOf(minWidths[k], 0));
+
+      floors += state.floor[k];
+      needed += state.content[k];
+    }
+
+    // Below this there is no arrangement that honours every floor, so the table stops shrinking and
+    // the grid scrolls - the same answer Scroll gives, arrived at only once nothing else is left.
+    table.style.minWidth = Math.ceil(floors) + 'px';
+
+    releaseFit(tableId);
+    fitted.set(tableId, state);
+
+    const room = table.parentElement ? table.parentElement.clientWidth : needed;
+
+    state.available = room;
+    distribute(state, room);
+    watch(table, state);
+
+    // What the columns actually became, so the grid's own model agrees with the page it is looking at.
+    // A null where the surplus is being absorbed, which is a width the model already knows how to hold.
+    for (let k = 0; k < n; k++) {
+      widths[k] = state.last[k] === -1 ? null : state.out[k].toFixed(1) + 'px';
+    }
+  } else {
+    // Leaving Fit is as much a change as entering it: the floor and the observer both have to go, or a
+    // grid switched back to Scroll would keep following its container and refuse to shrink.
+    if (fitted.has(tableId)) {
+      table.style.minWidth = '';
+      releaseFit(tableId);
+    }
   }
 
   if (animate) {
