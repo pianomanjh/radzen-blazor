@@ -215,5 +215,29 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(180, seen.Width);
             Assert.Equal("Last", seen.Column.Title);
         }
+
+        [Fact]
+        public void ResizingDoesNotGiveTheGridAFooterItNeverAskedFor()
+        {
+            // The colgroup has a second reason to exist - a resize needs somewhere to write a width -
+            // and that condition was copied into the footer with it. The theme makes tfoot sticky at
+            // the bottom over a background, so it drew a grey bar across every resizable grid.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Many(4));
+                p.Add(g => g.AllowColumnResize, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First)));
+            });
+
+            Assert.Empty(cut.FindAll("tfoot"));
+
+            // The colgroup still is emitted, which is the reason the condition was there at all.
+            Assert.Single(cut.FindAll("colgroup"));
+        }
     }
 }
