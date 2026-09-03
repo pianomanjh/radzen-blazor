@@ -668,6 +668,11 @@ surface.
 
 ## Positional ARIA
 
+**Not tied to `AllowKeyboardNavigation`.** It is a property of the markup rather than of the cursor: a
+screen reader on a paged grid needs to know where the window sits whether or not a sighted user can
+arrow around it, and gating that behind an unrelated switch is how it ends up off everywhere. So it is
+on for every grid, and the cost lands where the grid would otherwise be lying.
+
 A grid holding every row and every column needs nothing here: a browser can count what it has, and the
 ARIA specification says as much - "if all of the columns are present in the DOM, including
 `aria-colindex` is not necessary". So nothing is emitted until the DOM stops being the whole table,
@@ -698,7 +703,9 @@ on what hiding did to the run:
 Those are the specification's own three cases rather than a simplification of them, and the reason for
 keeping all three is measured: one attribute on every cell of a thousand-row grid allocates nothing and
 costs **about 1.1x** the render time. Hiding the last column of a grid should not pay for hiding the
-middle one. A row-detail toggle pins the first cell to column one, so any run that starts later already
+middle one - and since none of this is opt-in, the tiers are what keep the bill on the configuration
+that earns it. The last row of that table is the only per-cell attribute this component emits by
+default, and a grid reaches it by having a user hide a column that is not at the end. A row-detail toggle pins the first cell to column one, so any run that starts later already
 has a hole before it and every cell is numbered.
 
 Column numbers are read against the columns as they were **declared**, which is the only ordering a

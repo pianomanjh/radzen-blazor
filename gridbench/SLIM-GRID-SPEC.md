@@ -837,6 +837,18 @@ courtesy, which is why it is first in the order below.
 
 ### The ARIA that costs something, and when it is paid
 
+**It is designed here and gated nowhere near here.** This is step 4 of the keyboard work because that
+is the order it was argued in, but the emission conditions are `Paging || AllowVirtualization` for the
+rows and "a column is hidden" for the columns - `AllowKeyboardNavigation` appears in neither. A screen
+reader on a paged grid needs to know where the window sits whether or not a sighted user can arrow
+around it, and gating that behind a switch aimed at sighted keyboard users is how accessibility ends up
+off everywhere.
+
+The consequence is that the per-cell tier is a cost a grid can reach without opting into anything - a
+user hides a middle column and the render goes to ~1.1x. **That is the decision, taken knowingly**, and
+it is what makes the three tiers load-bearing rather than a refinement: they keep the bill on the one
+configuration that earns it, and leave the baseline and the two cheaper cases at zero.
+
 With paging or virtualization the DOM holds a window - a hundred rows of 11,700 - and nothing tells a
 screen reader which. The pattern's answer is `aria-rowcount` and `aria-rowindex`; for hidden columns it
 is `aria-colcount` and `aria-colindex`.
