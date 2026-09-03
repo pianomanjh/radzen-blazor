@@ -69,9 +69,22 @@ namespace Radzen.FastGrid
         /// <summary>The id of the tbody the listener is attached to.</summary>
         internal string BodyElementId => ElementId + "-body";
 
-        // Index strings for the rows' data-r, so writing one costs a frame and not an allocation. A grid
-        // paging beyond this falls back to ToString for the rows past it rather than growing the table.
-        static readonly string[] RowIndexStrings = CreateRowIndexStrings(512);
+        // Index strings for the rows' data-r and aria-rowindex, so writing one costs a frame and not an
+        // allocation.
+        //
+        // It grows to fit rather than stopping at a fixed size, and the reason is a measurement: the
+        // table used to hold 512, a thousand-row grid therefore called ToString on 488 rows of every
+        // render, and that came to 16 KB - which this branch spent a while attributing to the render
+        // frame instead. Growing it takes a row-indexing attribute from +16 KB to +0.7 KB. The frame
+        // really is nearly free; the string was not, and only because the table ran out.
+        //
+        // Doubling to a bound rather than to the index asked for, so a grid scrolled to row 900,000
+        // does not build nine hundred thousand strings for the tens of rows it can show. Past the
+        // bound it is ToString again, which is where it started - but a virtualized window is tens of
+        // rows and a page is a page, so nothing renders enough of them for that to matter.
+        const int MaxRowIndexStrings = 16384;
+
+        static string[] rowIndexStrings = CreateRowIndexStrings(512);
 
         static string[] CreateRowIndexStrings(int count)
         {
@@ -85,9 +98,35 @@ namespace Radzen.FastGrid
             return indexes;
         }
 
-        internal static string RowIndexString(int index) => index < RowIndexStrings.Length
-            ? RowIndexStrings[index]
-            : index.ToString(CultureInfo.InvariantCulture);
+        internal static string RowIndexString(int index)
+        {
+            // Read once. Another circuit may swap the table in between, and either the old one or the
+            // new one answers correctly - they hold the same strings for the same indexes.
+            var cache = rowIndexStrings;
+
+            if ((uint)index < (uint)cache.Length)
+            {
+                return cache[index];
+            }
+
+            if (index < 0 || index >= MaxRowIndexStrings)
+            {
+                return index.ToString(CultureInfo.InvariantCulture);
+            }
+
+            var size = cache.Length;
+
+            while (size <= index)
+            {
+                size *= 2;
+            }
+
+            // Last writer wins, and a race costs a duplicate table rather than a wrong answer.
+            cache = CreateRowIndexStrings(size);
+            rowIndexStrings = cache;
+
+            return cache[index];
+        }
 
         async Task AttachClicksAsync()
         {

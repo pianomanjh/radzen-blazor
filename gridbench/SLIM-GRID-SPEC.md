@@ -26,7 +26,7 @@ is up as #2698 and is the one piece not yet merged.
 | --- | ---: |
 | bare | 153 KB |
 | sorting, filtering, paging, virtualization, column picking, settings, templates, `ItemKey` | see `README.md` |
-| row click, cell click, cell context menu, row detail - **all four together** | **+16 KB** |
+| row click, cell click, cell context menu, row detail - **all four together** | **+0.9 KB** |
 | column resize | +4.1 KB |
 | column reorder | +6.7 KB |
 | two frozen columns | +0.9 KB |
@@ -54,8 +54,11 @@ Against `RadzenDataGrid` with the same feature on both sides, the narrowest row 
 
 Keyboard navigation measured 155.2 KB against a 153.85 KB bare grid over three full-length runs, inside
 the +2 KB and 1.02x gate §12 set for it. It cost eight times that until an assumption in §12 was
-measured rather than believed: `data-r` on every row is **+16 KB at a thousand rows**, because a
-pre-cached value costs nothing and the frame carrying it does. §12 records what replaced it.
+measured rather than believed: `data-r` on every row read **+16 KB at a thousand rows**. That number
+has since been taken apart and it was never the frame - the table of cached index strings held 512
+entries, so 488 rows of every render called `ToString`. Growing it to fit took row click, cell click
+and row detail from +16 KB each to under a kilobyte, and an attribute per row with it. §12 records
+both the design that came out of the wrong reading and the measurement that corrected it.
 
 Range selection measured as nothing at all, which is the answer its shape predicts: it has no
 parameter, binds nothing and emits nothing, because a Shift key is its whole surface. The row that
@@ -378,6 +381,15 @@ Each layer below caught real faults the previous one missed. Use all of them.
    a frozen column. Frames are pooled, so the work shows up in time and not in bytes - the same
    observation as the bimodal rows, from the other side.
 
+   **A control that separates a feature from an attribute does not separate an attribute from its
+   value.** `data-r` read +16 KB, and the control that established it - a row-click grid writing the
+   same attribute and binding nothing else - was sound and landed within half a kilobyte. It proved the
+   cost belonged to the attribute, which was true, and every reading of it after that said "the frame",
+   which was not: the table of cached index strings stopped at 512 and the benchmark renders a
+   thousand. **When a number is attributed to a mechanism, check that the other half of the thing was
+   actually free rather than assumed to be.** What settled it was a second attribute per row measuring
+   the same, and one per *cell* - six times the frames - measuring a twentieth of it.
+
    **Keep the harness's fakes honest.** `gridbench`'s fake `IJSObjectReference` answered `default(bool)`,
    so the grid's click listener never confirmed, the fallback rendered, and the benchmark measured the
    cost the browser no longer pays. A fake standing in for a browser has to answer like one.
@@ -480,7 +492,7 @@ Each layer below caught real faults the previous one missed. Use all of them.
   stays ordered, because reordering it would be the surprise - but the icon, the multi-sort badge and
   `aria-sort` now follow `AllowSorting`, so the grid no longer advertises a control that is not there.
 - **`ShowExpandColumn="false"` is now a placement choice, not a saving.** It used to avoid 404 KB; row
-  detail costs 16 KB, so the parameter is about where the control lives.
+  detail costs under a kilobyte, so the parameter is about where the control lives.
 - ~~Whether virtualization is in scope for v1~~ - **done.** `AllowVirtualization` puts the rows through
   `Virtualize` with `SpacerElement="tr"`, and one items provider serves every source. It is exclusive
   with paging: the two solve the same problem, so `Paging` is a single property both the pager and the
@@ -638,22 +650,32 @@ are delegated or navigation is live". Addressing by `tbody.rows[i]` would cost n
 already not model order. The index strings are pre-cached, so the attribute costs a frame and no
 allocation.
 
-> **Measured, and wrong on the last sentence.** An attribute per row is **+16 KB at 1000 rows** even
-> when its value is a pre-cached string - eight times this feature's whole budget, and enough to fail
-> the gate on its own. The value costs nothing; the frame does. `RenderTreeBuilder` rents its frame
-> array from a pool and a thousand more frames push that rental into the next bucket, which is the same
-> mechanism §9 records from the other side for frozen columns, where two frames per cell cost time and
-> no bytes. It is also, it turns out, most of what a row click costs: delegated clicks pay this same
-> 16 KB for this same attribute.
+> **Measured, and wrong on the last sentence - then measured again, and wrong about why.** An attribute
+> per row read **+16 KB at 1000 rows**, eight times this feature's whole budget, and that was put down
+> to the frame: the value being a pre-cached string, the frame was what was left, and
+> `RenderTreeBuilder` renting its frame array from a pool made a plausible mechanism for it.
 >
-> The premise was right and the conclusion was too narrow. DOM order is not model order - but the
+> The premise was the part that was false. **The table of index strings held 512 entries**, so a
+> thousand-row grid called `ToString` on 488 rows of every render - the values were pre-cached for the
+> first 512 rows and for no others, and the benchmark renders a thousand. Grown to fit, `data-r` costs
+> **+0.78 KB** and the frame is nearly free after all.
+>
+> What made it findable was positional ARIA writing two more index attributes: one per row, which
+> measured the same +15.5 KB, and one per *cell* - six times the frames - which measured +0.09 KB. Six
+> times the frames for a twentieth of the cost is not a frame-count story, and the only thing the two
+> do not share is how large their values get.
+>
+> The addressing decision below stands on its own even so, and is now a preference rather than a
+> saving. DOM order is not model order - but the
 > rendered *data rows* are, because the two things that break it are distinguishable: a detail row is a
 > sibling carrying `rz-expanded-row-content`, and `Virtualize`'s spacer carries no class at all. So the
 > nth `tr.rz-data-row` is the nth row, and the inline path needs no attribute. Under virtualization it
 > still does, because there the index is a position in the whole data set rather than in the DOM - and
 > there it is tens of rows rather than a thousand, which is the same argument delegated clicks make in
 > reverse. `RowsAreAddressed` is `ClicksAreDelegated || (navigation && virtualizing)`, and the script
-> takes `data-r` where it is offered and counts where it is not.
+> takes `data-r` where it is offered and counts where it is not. Writing it on every row would now
+> cost 0.78 KB rather than 16, so the case for counting is that it needs no attribute rather than that
+> the attribute is expensive.
 
 ### The keys
 
