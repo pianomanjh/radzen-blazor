@@ -709,9 +709,12 @@ A `Required` column keeps the width its content needs at every container size. E
 way in proportion to how much it has above its `MinWidth`, and a column that reaches its floor stops
 giving and hands its share to the ones still above theirs.
 
-A column with no `MinWidth` floors at the width of its own heading, so it never shrinks past the point
-where you can tell what it is. Set `MinWidth` where a column needs more room than its title - a date or
-a currency figure usually does.
+Width comes off a column in two stages. First down to the width that still shows its **heading**, which
+is where a column with no `MinWidth` stops under ordinary pressure. Then, only if the grid still does
+not fit, down to what its **values** need - so a column headed far wider than its content gives that
+difference up rather than making the whole grid scroll for it. Below that it scrolls.
+
+Set `MinWidth` where a column needs more room than either - a date or a currency figure usually does.
 
 Below the width where every floor cannot be met at once the grid scrolls, which is the same answer
 `Scroll` gives and is reached only when nothing else is left. A grid whose `Required` columns are on

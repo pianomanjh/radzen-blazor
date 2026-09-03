@@ -531,7 +531,7 @@ const fitted = new Map();
 // arrive with nothing above it and the same arithmetic leaves them alone. Saying it twice - a floor and
 // a flag - is what let a mutation that deleted the flag pass every test.
 function distribute(state, available) {
-    const { content, floor, out, last, cols, bare } = state;
+    const { content, soft, hard, out, last, cols, bare } = state;
     const n = content.length;
 
     let deficit = -available;
@@ -562,38 +562,49 @@ function distribute(state, available) {
         return;
     }
 
-    for (let pass = 0; pass < 8 && deficit > 0.5; pass++) {
-        let pool = 0;
+    // Two floors, taken in order. Everything comes off the soft floor first - the width at which a
+    // column still shows its own heading. Only when every column is standing on that and the table
+    // still does not fit does the second round start, which spends the difference between a heading
+    // and the values under it.
+    //
+    // That difference is the whole answer to a column headed "Manufacturing Code" over six-character
+    // codes: it is carrying width its values never needed, so it is the first thing worth spending -
+    // but only once the columns with ordinary slack have already given theirs. A column whose heading
+    // is about as wide as its content has almost nothing here and gives almost nothing.
+    for (const floor of [soft, hard]) {
+        for (let pass = 0; pass < 8 && deficit > 0.5; pass++) {
+            let pool = 0;
 
-        for (let i = 0; i < n; i++) {
-            if (out[i] > floor[i]) {
-                pool += out[i] - floor[i];
-            }
-        }
-
-        if (pool <= 0) {
-            break;
-        }
-
-        const wanted = Math.min(deficit, pool);
-        let took = 0;
-
-        for (let i = 0; i < n; i++) {
-            if (out[i] <= floor[i]) {
-                continue;
+            for (let i = 0; i < n; i++) {
+                if (out[i] > floor[i]) {
+                    pool += out[i] - floor[i];
+                }
             }
 
-            const give = Math.min(out[i] - floor[i], wanted * ((out[i] - floor[i]) / pool));
+            if (pool <= 0) {
+                break;
+            }
 
-            out[i] -= give;
-            took += give;
+            const wanted = Math.min(deficit, pool);
+            let took = 0;
+
+            for (let i = 0; i < n; i++) {
+                if (out[i] <= floor[i]) {
+                    continue;
+                }
+
+                const give = Math.min(out[i] - floor[i], wanted * ((out[i] - floor[i]) / pool));
+
+                out[i] -= give;
+                took += give;
+            }
+
+            if (took <= 0) {
+                break;
+            }
+
+            deficit -= took;
         }
-
-        if (took <= 0) {
-            break;
-        }
-
-        deficit -= took;
     }
 
     // Written only where it changed. During a drag most columns move every frame, but the required ones
@@ -691,6 +702,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   let available = 0;
   const pixels = [];
   const headers = [];
+  const bodies = [];
 
   installMeasuringStyle();
   table.classList.add(MEASURING);
@@ -718,6 +730,8 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       // and it is what a column falls back to when nobody has given it a MinWidth.
       const headerPx = widest;
 
+      let bodyPx = 0;
+
       if (rows.length > 0) {
         const first = rows[0].children[at];
         let content = 0;
@@ -732,6 +746,8 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
         }
 
         const needed = content + (first ? edges(first) : 0);
+
+        bodyPx = needed;
 
         if (needed > widest) {
           widest = needed;
@@ -751,6 +767,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       // the measurement rather than the expression the measurement turns into.
       pixels.push(px);
       headers.push(Math.ceil(headerPx));
+      bodies.push(Math.ceil(bodyPx));
 
       if (indices[k] === bare) {
         bareWidth = bound(px, minWidths[k], maxWidths[k]);
@@ -800,8 +817,9 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     const state = {
       cols: new Array(n),
       content: new Float64Array(n),
-      floor: new Float64Array(n),
       required: new Array(n),
+      soft: new Float64Array(n),
+      hard: new Float64Array(n),
       // Which column absorbs the surplus while there is one. Index into the fitted set, not the grid.
       bare: bare >= 0 ? indices.indexOf(bare) : -1,
       out: new Float64Array(n),
@@ -819,21 +837,26 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       state.cols[k] = colgroup.children[toggleOffset + indices[k]];
       state.required[k] = !!(required && required[k]);
       state.content[k] = Math.min(pixels[k], lengthOf(maxWidths[k], Infinity));
-      // Where required-ness lives: a floor at the content width, so the distribution has nothing to
-      // take. There is no second test for it anywhere.
-      //
-      // Everything else floors at its MinWidth, and a column that was never given one falls back to
-      // the width of its own heading - the point below which it stops saying what it is. Only when
-      // even that cannot be measured does it fall to VESTIGE, which is not a readable column and is
-      // not meant to be: it is the difference between a column the eye can find and one that is
-      // simply gone.
-      state.floor[k] = state.required[k]
-        ? state.content[k]
-        : Math.min(
-            state.content[k],
-            lengthOf(minWidths[k], Math.max(VESTIGE, headers[k] || 0)));
+      // Where required-ness lives: both floors at the content width, so the distribution has nothing
+      // to take in either round. There is no second test for it anywhere.
+      if (state.required[k]) {
+        state.soft[k] = state.content[k];
+        state.hard[k] = state.content[k];
+      } else {
+        // The floor an author gave, or what the values themselves need. This is as narrow as the
+        // column ever goes, and below it the grid scrolls instead.
+        state.hard[k] = Math.min(
+          state.content[k],
+          lengthOf(minWidths[k], Math.max(VESTIGE, bodies[k] || 0)));
 
-      floors += state.floor[k];
+        // And above it, the width that still shows the heading - never below the hard floor, since a
+        // heading is worth less than the values it labels.
+        state.soft[k] = Math.max(
+          state.hard[k],
+          Math.min(state.content[k], Math.max(VESTIGE, headers[k] || 0)));
+      }
+
+      floors += state.hard[k];
       needed += state.content[k];
     }
 

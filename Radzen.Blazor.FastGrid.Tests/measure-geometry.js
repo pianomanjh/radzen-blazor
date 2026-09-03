@@ -307,6 +307,9 @@ async function main() {
             // No MinWidth on anything, squeezed past what the columns can give. Each one should stop
             // at the width of its own heading rather than at zero, so a column is always still there
             // and still says what it is.
+            // No MinWidth on anything, at two pressures. Easing off first: every heading should still
+            // fit, because the soft floor holds there. Then past what the columns can give, where a
+            // heading may be spent - but the values under it may not, and nothing may vanish.
             const defaultFloor = await (async () => {
                 const restore = pane.style.width;
 
@@ -317,21 +320,41 @@ async function main() {
                     indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
                     true, indices.map(() => false));
 
-                pane.style.width = '120px';
-                await new Promise(resolve => requestAnimationFrame(resolve));
-                await new Promise(resolve => requestAnimationFrame(resolve));
-
-                const widths = at();
-
-                // Asked as "is the heading truncated" rather than by re-deriving what it needs. The
-                // theme makes .rz-column-title `flex: auto`, so its scrollWidth in a laid-out column
-                // reports the column's width and not the title's - measuring it that way answers 600px
-                // for every column on a wide pane and proves nothing.
-                const truncated = [...table.querySelectorAll(':scope > thead > tr:first-child > th')]
-                    .map(th => {
-                        const title = th.querySelector('.rz-column-title');
-                        return title ? title.scrollWidth > title.clientWidth + 1 : false;
+                // Asked as "is this ellipsised" rather than by re-deriving what it needs. Two traps in
+                // one line: .rz-column-title is `flex: auto; width: 100%`, so it never overflows and
+                // always reports the column's own width - the element that actually clips is
+                // .rz-column-title-content, which carries the overflow and the ellipsis. Measured on
+                // the wrong one it answers "nothing is clipped" at every width, including 38px.
+                const clipped = (row, inner) => [...table.querySelectorAll(row)]
+                    .map(cell => {
+                        const el = cell.querySelector(inner);
+                        return el ? el.scrollWidth > el.clientWidth + 1 : false;
                     });
+
+                const squeeze = async width => {
+                    pane.style.width = width + 'px';
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+
+                    const widths = at();
+
+                    return {
+                        pane: width,
+                        widths,
+                        total: round(widths.reduce((a, b) => a + b, 0)),
+                        // What the table refuses to shrink below: the sum of every hard floor. A grid
+                        // standing on it has nothing left to give that is not a value.
+                        floorTotal: round(parseFloat(table.style.minWidth) || 0),
+                        narrowest: round(Math.min(...widths)),
+                        headings: clipped(':scope > thead > tr:first-child > th',
+                            '.rz-column-title-content'),
+                        values: clipped(':scope > tbody > tr.rz-data-row:first-child > td',
+                            '.rz-cell-data')
+                    };
+                };
+
+                const eased = await squeeze(700);
+                const hard = await squeeze(120);
 
                 window.__fastgrid.releaseFit(table.id);
                 table.style.minWidth = '';
@@ -340,10 +363,14 @@ async function main() {
                 table.getBoundingClientRect();
 
                 return {
-                    widths,
-                    truncated,
-                    narrowest: round(Math.min(...widths)),
-                    holdsTitles: truncated.every(t => !t)
+                    eased,
+                    hard,
+                    // Within a pixel per column of the floor total, which is what says the second
+                    // round ran: stopping at the soft floors leaves the table wider than this.
+                    restsOnItsFloor: Math.abs(hard.total - hard.floorTotal) <= hard.widths.length,
+                    headingsHoldWhenEased: eased.headings.every(t => !t),
+                    valuesHoldWhenHard: hard.values.every(t => !t),
+                    narrowest: hard.narrowest
                 };
             })();
 
