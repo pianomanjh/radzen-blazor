@@ -456,15 +456,15 @@ namespace Radzen.FastGrid
         /// A rendered row's index in the whole data set, under virtualization. Identity against the
         /// window rather than a counter: Virtualize re-renders on its own as the viewport scrolls, so a
         /// cursor reset by the grid's render would drift the moment it did. The window is tens of rows,
-        /// and this is only walked while navigation is on.
+        /// and this is only walked for the two features that need the position - the keyboard cursor,
+        /// and the row number a screen reader is told.
         /// </summary>
         int VirtualRowIndex(TItem item)
         {
-            if (!AllowKeyboardNavigation || virtualWindow is null)
+            if ((!AllowKeyboardNavigation && !RowsAreCounted) || virtualWindow is null)
             {
                 return -1;
             }
-
 
             var index = virtualWindow.IndexOf(item);
 
@@ -1060,6 +1060,7 @@ namespace Radzen.FastGrid
             drawingFilters = AllowFiltering ? BuildFilters() : null;
             drawingComposed = null;
             drawingComposedOf = null;
+            drawingTotal = null;
             drawing = true;
         }
 
@@ -1069,6 +1070,7 @@ namespace Radzen.FastGrid
             drawingFilters = null;
             drawingComposed = null;
             drawingComposedOf = null;
+            drawingTotal = null;
         }
 
         /// <summary>Moves to a zero-based page and reloads.</summary>
@@ -1746,7 +1748,35 @@ namespace Radzen.FastGrid
             return ordered ?? source;
         }
 
+        /// <summary>
+        /// How many rows there are behind whatever is on screen, memoized for the render pass.
+        /// </summary>
+        /// <remarks>
+        /// The pager asks, the page clamp asks, and <c>aria-rowcount</c> asks - and over a plain
+        /// sequence each of those is a walk of the source. It is the same memo <c>Composed</c> keeps
+        /// and for the same reason: within one pass the answer cannot change, and the count is
+        /// independent of which page is being drawn.
+        /// </remarks>
         int TotalCount()
+        {
+            if (drawing && drawingTotal is { } counted)
+            {
+                return counted;
+            }
+
+            var total = CountAll();
+
+            if (drawing)
+            {
+                drawingTotal = total;
+            }
+
+            return total;
+        }
+
+        int? drawingTotal;
+
+        int CountAll()
         {
             if (LoadData.HasDelegate)
             {

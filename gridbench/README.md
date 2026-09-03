@@ -738,6 +738,40 @@ assumed, which is the rule the row above this one exists to enforce.
 **A benchmark row that differs by a parameter is measuring the parameter too.** At a hundred kilobytes
 that is invisible; at one and a half it is a fifth of the reading.
 
+### Positional ARIA, and where its two halves land
+
+`--filter "*FastGridFeatureBench.Bare*" "*FastGridFeatureBench.PositionalAria*"`, full length, quiet
+machine:
+
+| | Allocated | Time |
+| --- | ---: | ---: |
+| bare | 153.88 KB | 1.00x |
+| `+ a pager and row numbers over one page` | 155.81 KB | 1.01x |
+| `+ six columns with the middle one hidden, and column numbers` | 159.87 KB | 1.20x |
+
+Neither marginal is the attribute, and both rows need a control to say so.
+
+**Row numbers cost nothing.** The pager row reads 155.81 KB; with the emission taken out and everything
+else the same it reads 155.80. All 1.93 KB of the marginal is the pager component. The two cannot be
+told apart by a parameter - the grid emits the numbers exactly when the DOM stops being the whole table,
+which is what drawing a pager means - so the control is a build rather than a row.
+
+**Column numbers cost nothing in bytes either.** The column row's 5.99 KB is the sixth declared column,
+which registers whether or not it is drawn: with the emission out, the same row reads 159.82 KB. Forcing
+the attribute onto every cell of the ordinary five-column bare grid isolates it from the other
+direction and moves 153.88 to **153.97 KB**.
+
+**What they cost is time, and only the per-cell one.** The column row runs 1.20x; with the emission out
+it runs about 1.09x, so the attribute is roughly **1.1x** on its own - one frame on each of five
+thousand cells. The two builds were measured in separate runs, so treat that as one significant figure.
+It is the same shape frozen columns have at 1.10x for two frames on the cells of one column, and it is
+the measurement that earned `aria-colindex` its three tiers: a grid hiding its last column writes
+nothing, one hiding its first writes one index per row, and only a hole in the middle pays per cell.
+
+Row numbers under a hundred: the grid still emits them per row, and they are still free, because the
+index-string table now covers whatever is being rendered. Before it was grown, this same row read
+171.29 KB - which is how the table's size came to be looked at at all.
+
 ### `data-r` cost 16 KB, and it was the string table running out
 
 The design had the cursor address rows by the `data-r` attribute that delegated clicks already write,
