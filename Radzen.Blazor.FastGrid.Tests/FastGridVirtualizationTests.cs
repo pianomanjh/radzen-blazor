@@ -211,6 +211,41 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(1, executor.ToListCalls);
         }
 
+        /// <summary>Two of these can be equal and still be different rows, which is the whole point.</summary>
+        sealed record Twin(int Id, string Name);
+
+        [Fact]
+        public void TwoEqualRowsInOneWindowAreStillTwoRows()
+        {
+            // The window index came from IndexOf, which compares with EqualityComparer<T>.Default - so
+            // a record made two distinct rows answer to the same index. The second took the first's
+            // number and its own was never written, which leaves the keyboard cursor landing on the
+            // wrong row or on one the script cannot find at all.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var rows = new List<Twin>
+            {
+                new(1, "Alice"),
+                new(2, "Bob"),
+                new(2, "Bob"),
+                new(3, "Carol"),
+            };
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Twin>>(p =>
+            {
+                p.Add(g => g.Data, rows);
+                p.Add(g => g.AllowVirtualization, true);
+                p.Add(g => g.AllowKeyboardNavigation, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Twin, string>(x => x.Name)));
+            });
+
+            Assert.Equal(new[] { "0", "1", "2", "3" },
+                cut.FindAll("tbody tr[data-r]").Select(r => r.GetAttribute("data-r")).ToArray());
+        }
+
         [Fact]
         public void TheTotalIsCountedWithoutTheOrdering()
         {
