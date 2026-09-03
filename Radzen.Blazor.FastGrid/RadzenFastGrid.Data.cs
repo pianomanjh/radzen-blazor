@@ -425,7 +425,12 @@ namespace Radzen.FastGrid
 
                     if (virtualTotal is null)
                     {
-                        virtualTotal = await async.CountAsync(source, request.CancellationToken);
+                        // Counted without the ordering on it. A count wraps the query in
+                        // GroupBy(_ => 1).Select(g => g.Count()), and a trailing ORDER BY inside that
+                        // aggregate is what a provider is entitled to refuse to translate - SQL Server
+                        // rejects it outright. LoadPageAsync counts the filtered query for this reason
+                        // and this path was counting the sorted one.
+                        virtualTotal = await async.CountAsync(Filtered(queryable), request.CancellationToken);
                     }
 
                     // Awaiting a cancelled token throws, but a query that had already finished does
@@ -985,6 +990,13 @@ namespace Radzen.FastGrid
 
             return filters;
         }
+
+        /// <summary>
+        /// The source with the active filters on it and nothing else - what a count is taken of, since
+        /// an ordering inside a count aggregate is not translatable and changes no total anyway.
+        /// </summary>
+        IQueryable<TItem> Filtered(IQueryable<TItem> source) =>
+            AllowFiltering && ActiveFilters() is not null ? ApplyFilters(source) : source;
 
         /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
         /// <remarks>

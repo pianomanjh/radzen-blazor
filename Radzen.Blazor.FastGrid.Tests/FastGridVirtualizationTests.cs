@@ -212,6 +212,28 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void TheTotalIsCountedWithoutTheOrdering()
+        {
+            // A count wraps the query in GroupBy(_ => 1).Select(g => g.Count()), and an ORDER BY inside
+            // that aggregate is what a provider is entitled to refuse - SQL Server rejects it outright.
+            // The paged path has always counted the filtered query; this one was counting the sorted one.
+            using var ctx = new TestContext();
+            var executor = new CountingExecutor();
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            var cut = Render(ctx, data: People.Many(20).AsQueryable(), extra: p => p.Add(g => g.AllowSorting, true));
+
+            var column = cut.FindComponents<PropertyColumn<Person, string>>()[0].Instance;
+
+            cut.InvokeAsync(() => cut.Instance.SortBy(column)).Wait();
+
+            cut.WaitForAssertion(() => Assert.NotNull(executor.CountedExpression));
+
+            Assert.DoesNotContain("OrderBy", executor.CountedExpression, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void TheTotalComesFromCountingTheSourceNotTheWindow()
         {
             // The scrollbar's length is the total. Reporting the window instead makes it claim there is
@@ -396,11 +418,15 @@ namespace Radzen.FastGrid.Tests
 
             public int CountCalls { get; private set; }
 
+            /// <summary>The expression of the last query counted, so a test can see what was in it.</summary>
+            public string? CountedExpression { get; private set; }
+
             public bool IsSupported<T>(IQueryable<T> queryable) => true;
 
             public Task<int> CountAsync<T>(IQueryable<T> queryable, CancellationToken cancellationToken = default)
             {
                 CountCalls++;
+                CountedExpression = queryable.Expression.ToString();
 
                 return Task.FromResult(queryable.Count());
             }
