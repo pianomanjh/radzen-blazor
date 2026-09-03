@@ -48,7 +48,7 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, string>(x => x.Last, title: "Last")));
 
             Assert.Empty(cut.FindAll(".rz-frozen-cell"));
-            Assert.All(BodyStyles(cut), style => Assert.DoesNotContain("left:", style, StringComparison.Ordinal));
+            Assert.All(BodyStyles(cut), style => Assert.DoesNotContain("inset-inline-start:", style, StringComparison.Ordinal));
         }
 
         [Fact]
@@ -64,7 +64,7 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Contains("rz-frozen-cell", classes[0], StringComparison.Ordinal);
             Assert.Contains("rz-frozen-cell-left", classes[0], StringComparison.Ordinal);
-            Assert.Contains("left:0", BodyStyles(cut)[0], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:0", BodyStyles(cut)[0], StringComparison.Ordinal);
             Assert.Empty(classes[1]);
         }
 
@@ -82,8 +82,8 @@ namespace Radzen.FastGrid.Tests
 
             var styles = BodyStyles(cut);
 
-            Assert.Contains("left:0", styles[0], StringComparison.Ordinal);
-            Assert.Contains("left:90px", styles[1], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:0", styles[0], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:90px", styles[1], StringComparison.Ordinal);
         }
 
         [Fact]
@@ -100,9 +100,9 @@ namespace Radzen.FastGrid.Tests
 
             var styles = BodyStyles(cut);
 
-            Assert.Contains("left:0", styles[0], StringComparison.Ordinal);
-            Assert.Contains("left:90px", styles[1], StringComparison.Ordinal);
-            Assert.Contains("left:calc(90px + 10%)", styles[2], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:0", styles[0], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:90px", styles[1], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:calc(90px + 10%)", styles[2], StringComparison.Ordinal);
         }
 
         [Fact]
@@ -134,7 +134,7 @@ namespace Radzen.FastGrid.Tests
             var th = cut.FindAll("thead th")[0];
 
             Assert.Contains("rz-frozen-cell", th.GetAttribute("class"), StringComparison.Ordinal);
-            Assert.Contains("left:0", th.GetAttribute("style") ?? "", StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:0", th.GetAttribute("style") ?? "", StringComparison.Ordinal);
         }
 
         [Fact]
@@ -155,8 +155,8 @@ namespace Radzen.FastGrid.Tests
             Assert.Empty(classes[0]);
 
             // Counted from the right: the last column sits at the edge, the one before it clears it.
-            Assert.Contains("right:0", styles[2], StringComparison.Ordinal);
-            Assert.Contains("right:90px", styles[1], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-end:0", styles[2], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-end:90px", styles[1], StringComparison.Ordinal);
             Assert.Contains("rz-frozen-cell-right-end", classes[1], StringComparison.Ordinal);
         }
 
@@ -173,9 +173,9 @@ namespace Radzen.FastGrid.Tests
 
             var styles = BodyStyles(cut);
 
-            Assert.Contains("left:0", styles[0], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:0", styles[0], StringComparison.Ordinal);
             Assert.Empty(styles[1]);
-            Assert.Contains("right:0", styles[2], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-end:0", styles[2], StringComparison.Ordinal);
         }
 
         [Fact]
@@ -216,7 +216,7 @@ namespace Radzen.FastGrid.Tests
             // Pinned at the first column's width, and the end of the run because nothing after it can
             // be placed.
             Assert.Contains("rz-frozen-cell-left-end", classes[1], StringComparison.Ordinal);
-            Assert.Contains("left:90px", BodyStyles(cut)[1], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:90px", BodyStyles(cut)[1], StringComparison.Ordinal);
 
             Assert.DoesNotContain("rz-frozen-cell", classes[2], StringComparison.Ordinal);
         }
@@ -239,10 +239,10 @@ namespace Radzen.FastGrid.Tests
             // the inset without pinning the cell left it scrolling away under the columns that had
             // cleared it, with every markup assertion still passing.
             Assert.Contains("rz-frozen-cell", cells[0].GetAttribute("class") ?? "", StringComparison.Ordinal);
-            Assert.Contains("left:0", cells[0].GetAttribute("style") ?? "", StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:0", cells[0].GetAttribute("style") ?? "", StringComparison.Ordinal);
 
             // And the data column behind it clears exactly that width.
-            Assert.Contains("left:var(--rz-grid-column-icon-width)",
+            Assert.Contains("inset-inline-start:var(--rz-grid-column-icon-width)",
                 cells[1].GetAttribute("style") ?? "", StringComparison.Ordinal);
         }
 
@@ -314,7 +314,7 @@ namespace Radzen.FastGrid.Tests
             var classes = BodyClasses(cut);
 
             Assert.Contains("rz-frozen-cell", classes[0], StringComparison.Ordinal);
-            Assert.Contains("left:0", BodyStyles(cut)[0], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:0", BodyStyles(cut)[0], StringComparison.Ordinal);
         }
 
         [Fact]
@@ -330,11 +330,11 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, int>(x => x.Id, title: "Id")),
                 p => p.Add(g => g.AllowColumnResize, true));
 
-            Assert.Contains("left:90px", BodyStyles(cut)[1], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:90px", BodyStyles(cut)[1], StringComparison.Ordinal);
 
             cut.InvokeAsync(() => cut.Instance.OnColumnsResized(0, 200, new double[] { 200, 120, 0 }));
 
-            Assert.Contains("left:200px", BodyStyles(cut)[1], StringComparison.Ordinal);
+            Assert.Contains("inset-inline-start:200px", BodyStyles(cut)[1], StringComparison.Ordinal);
         }
     }
 }

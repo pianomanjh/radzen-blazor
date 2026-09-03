@@ -54,9 +54,9 @@ namespace Radzen.FastGrid
         void PinToggle(bool pinned)
         {
             ToggleFrozenClass = pinned ? "rz-frozen-cell rz-frozen-cell-left" : null;
-            ToggleFrozenCellStyle = pinned ? "left:0" : null;
-            ToggleFrozenHeaderStyle = pinned ? "left:0;z-index:2" : null;
-            ToggleFrozenFooterStyle = pinned ? "left:0;z-index:3" : null;
+            ToggleFrozenCellStyle = pinned ? "inset-inline-start:0" : null;
+            ToggleFrozenHeaderStyle = pinned ? "inset-inline-start:0;z-index:2" : null;
+            ToggleFrozenFooterStyle = pinned ? "inset-inline-start:0;z-index:3" : null;
         }
 
         /// <summary>
@@ -153,7 +153,7 @@ namespace Radzen.FastGrid
                 column.SetFrozen(
                     last ? "rz-frozen-cell rz-frozen-cell-left rz-frozen-cell-left-end"
                          : "rz-frozen-cell rz-frozen-cell-left",
-                    Inset("left", offset));
+                    Inset("inset-inline-start", offset));
 
                 if (last)
                 {
@@ -172,7 +172,7 @@ namespace Radzen.FastGrid
                     // The column that was going to be the last of the run is now the end of it, so it
                     // is the one that carries the seam.
                     column.SetFrozen("rz-frozen-cell rz-frozen-cell-left rz-frozen-cell-left-end",
-                        Inset("left", offset));
+                        Inset("inset-inline-start", offset));
 
                     // The toggle cell is inside the pinned run and is a cell of every row, so it counts.
                     return i + 1 + (ExpandColumn ? 1 : 0);
@@ -200,7 +200,7 @@ namespace Radzen.FastGrid
                 column.SetFrozen(
                     first ? "rz-frozen-cell rz-frozen-cell-right rz-frozen-cell-right-end"
                           : "rz-frozen-cell rz-frozen-cell-right",
-                    Inset("right", offset));
+                    Inset("inset-inline-end", offset));
 
                 if (first)
                 {
@@ -215,7 +215,7 @@ namespace Radzen.FastGrid
                     }
 
                     column.SetFrozen("rz-frozen-cell rz-frozen-cell-right rz-frozen-cell-right-end",
-                        Inset("right", offset));
+                        Inset("inset-inline-end", offset));
 
                     return visibleColumns.Count - i;
                 }
@@ -248,6 +248,14 @@ namespace Radzen.FastGrid
         /// The inset declaration for an offset built so far. The first column of a run is at zero, and a
         /// single term needs no calc() around it.
         /// </summary>
+        /// <remarks>
+        /// Logical rather than physical, because the run is logical. A "left" frozen column is the one
+        /// at the *start* of the column order, which in RTL is drawn at the right edge - the theme
+        /// already reads it that way, seaming with <c>border-inline-end</c> and flipping its shadow
+        /// under <c>[dir="rtl"]</c>, and so does RadzenDataGrid's own script, which writes
+        /// <c>inset-inline-start</c> for exactly these cells. Writing <c>left</c> pinned an RTL grid's
+        /// leading run to the edge it scrolls away from.
+        /// </remarks>
         static string Inset(string edge, StringBuilder offset) => offset.Length switch
         {
             0 => edge + ":0",
