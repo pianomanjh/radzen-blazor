@@ -1395,22 +1395,29 @@ namespace Radzen.FastGrid
                 // wants. One is not worth showing: the number only means anything against another.
                 if (sortable && sorted >= 0 && ShowMultiColumnSortingIndex && sorts.Count > 1)
                 {
-                    builder.OpenElement(50, "span");
-                    builder.AddAttribute(51, "class",
+                    builder.OpenElement(46, "span");
+                    builder.AddAttribute(47, "class",
                         "rz-badge rz-badge-info rz-variant-filled rz-shade-lighter rz-badge-pill");
-                    builder.AddContent(52, sorted + 1);
+                    builder.AddContent(48, sorted + 1);
                     builder.CloseElement();
                 }
 
-                if (sortable && sorted >= 0)
+                // A sortable column carries the glyph whether or not it is sorted. The theme reserves a
+                // fixed width for it, reveals a transparent one on hover, and lays the title out as a
+                // flex line beside it - so a glyph that appears only once sorted is inserted into that
+                // line by the first click, and the title re-truncates and the header jumps.
+                if (sortable)
                 {
-                    builder.OpenElement(46, "span");
-                    builder.AddAttribute(47, "class", sorts[sorted].Descending
-                        // rzi-sort as well as the direction class, which is what RadzenDataGrid emits.
-                        // The direction rule wins for both glyph and colour either way, but matching the
-                        // class list exactly is what keeps a custom theme's rules applying to both.
-                        ? "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-desc"
-                        : "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-asc");
+                    builder.OpenElement(50, "span");
+                    builder.AddAttribute(51, "class", sorted < 0
+                        ? "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort"
+                        : sorts[sorted].Descending
+                            // rzi-sort as well as the direction class, which is what RadzenDataGrid
+                            // emits. The direction rule wins for both glyph and colour either way, but
+                            // matching the class list exactly is what keeps a custom theme's rules
+                            // applying to both.
+                            ? "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-desc"
+                            : "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-asc");
                     builder.CloseElement();
                 }
 

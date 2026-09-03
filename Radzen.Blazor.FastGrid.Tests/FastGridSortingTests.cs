@@ -350,5 +350,66 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(new[] { "Adams", "Bell", "Cook", "Draper", "Zane" }, Column(cut, 0));
         }
+
+        // --- The sort glyph ---------------------------------------------------------------------
+
+        [Fact]
+        public void ASortableColumnDrawsTheGlyphBeforeItIsSorted()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(p => p.Last)));
+
+            var glyph = cut.Find("thead th .rz-sortable-column-icon");
+
+            Assert.Contains("rzi-grid-sort", glyph.ClassList);
+            Assert.DoesNotContain("rzi-sort-asc", glyph.ClassList);
+            Assert.DoesNotContain("rzi-sort-desc", glyph.ClassList);
+        }
+
+        // The header is an inline-flex whose glyph carries a reserved width, so a glyph that arrives
+        // with the first click is inserted into that line: the title re-truncates and the header
+        // visibly jumps. What has to hold is the count, not the presence.
+        [Fact]
+        public void SortingAColumnDoesNotChangeHowManyElementsItsHeaderHolds()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(p => p.Last)));
+
+            var before = cut.FindAll("thead th .rz-column-title > *").Count;
+
+            cut.Find("thead th div").Click();
+
+            Assert.Equal(before, cut.FindAll("thead th .rz-column-title > *").Count);
+        }
+
+        [Fact]
+        public void TheGlyphTakesItsDirectionFromTheSort()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(p => p.Last)));
+
+            cut.Find("thead th div").Click();
+            Assert.Contains("rzi-sort-asc", cut.Find("thead th .rz-sortable-column-icon").ClassList);
+
+            cut.Find("thead th div").Click();
+            Assert.Contains("rzi-sort-desc", cut.Find("thead th .rz-sortable-column-icon").ClassList);
+        }
+
+        [Fact]
+        public void AGridThatDoesNotSortDrawsNoGlyph()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Sample(), Columns.Of(
+                Columns.Property<Person, string>(p => p.Last)), allowSorting: false);
+
+            Assert.Empty(cut.FindAll("thead th .rz-sortable-column-icon"));
+        }
     }
 }
