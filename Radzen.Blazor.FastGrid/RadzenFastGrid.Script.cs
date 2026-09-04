@@ -37,14 +37,19 @@ namespace Radzen.FastGrid
 
             try
             {
-                if (clickAttachAttempted)
+                // Through the attachments rather than by invoking detach here, so what is bound is
+                // answered in one place. The two features disagreed about it on this very line before
+                // the attachment existed: the pointer listener was released on whether an attach had
+                // been *attempted* and the key guard on whether one had succeeded, and neither matched
+                // the condition its own detach used a few lines away.
+                if (clicks is not null)
                 {
-                    await module.InvokeVoidAsync("detach", BodyElementId);
+                    await clicks.ReleaseAsync();
                 }
 
-                if (navigationAttached)
+                if (navigation is not null)
                 {
-                    await module.InvokeVoidAsync("detachNavigation", ViewElementId);
+                    await navigation.ReleaseAsync();
                 }
 
                 // A grid fitting to its container is watching that container, and nothing else

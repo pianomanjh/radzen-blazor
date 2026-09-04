@@ -98,7 +98,7 @@ namespace Radzen.FastGrid
         /// </summary>
         List<TItem>? rangeBase;
 
-        bool navigationAttached;
+        Attachment<string[]>? navigation;
         bool rtl;
         int viewportRows;
 
@@ -111,6 +111,9 @@ namespace Radzen.FastGrid
 
         /// <summary>The element that carries the tab stop, the keydown and <c>aria-activedescendant</c>.</summary>
         internal string ViewElementId => ElementId + "-view";
+
+        /// <summary>Whether the view carries that id. Latched, for the reason on <c>bodyIsNamed</c>.</summary>
+        bool viewIsNamed;
 
         /// <summary>
         /// Whether rows have to carry their index. This is what widens <c>data-r</c> beyond delegated
@@ -173,24 +176,25 @@ namespace Radzen.FastGrid
 
         void RenderNavigation(RenderTreeBuilder builder, int sequence)
         {
-            builder.AddAttribute(sequence, "id", ViewElementId);
+            // The id is not written here. The caller emits it under a wider condition, because letting
+            // the guard go means naming the element after this has stopped being called at all.
 
             // One tab stop for the whole grid, on the element that already carries role=grid. Not a
             // roving tabindex: that is an attribute frame on every cell, which is the shape that costs
             // frozen columns 1.10x, and it buys nothing aria-activedescendant does not.
-            builder.AddAttribute(sequence + 1, "tabindex", "0");
+            builder.AddAttribute(sequence, "tabindex", "0");
 
-            builder.AddAttribute(sequence + 2, "onkeydown", keyDown ??= EventCallback.Factory
+            builder.AddAttribute(sequence + 1, "onkeydown", keyDown ??= EventCallback.Factory
                 .Create<KeyboardEventArgs>(this, NonRenderingHandler.Wrap<KeyboardEventArgs>(OnNavigationKey)));
 
             // focus and blur rather than focusin and focusout: Blazor dispatches these two to the target
             // element only, so tabbing on to a filter box inside the container does not read as the grid
             // gaining focus - which it would with the bubbling pair, and the cursor would be painted
             // while the caret was somewhere else.
-            builder.AddAttribute(sequence + 3, "onfocus", gridFocus ??= EventCallback.Factory
+            builder.AddAttribute(sequence + 2, "onfocus", gridFocus ??= EventCallback.Factory
                 .Create<FocusEventArgs>(this, NonRenderingHandler.Wrap<FocusEventArgs>(OnGridFocus)));
 
-            builder.AddAttribute(sequence + 4, "onblur", gridBlur ??= EventCallback.Factory
+            builder.AddAttribute(sequence + 3, "onblur", gridBlur ??= EventCallback.Factory
                 .Create<FocusEventArgs>(this, NonRenderingHandler.Wrap<FocusEventArgs>(OnGridBlur)));
         }
 
@@ -794,43 +798,52 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
-        /// Attaches the key guard and reads back the two things only the browser knows: the writing
-        /// direction, because the pattern specifies visual direction and the arrows flip in RTL, and how
-        /// many rows fit in the viewport, which is what PageUp and PageDown move by.
+        /// The key guard's lifetime, and the one call that reads back the two things only the browser
+        /// knows: the writing direction, because the pattern specifies visual direction and the arrows
+        /// flip in RTL, and how many rows fit in the viewport, which is what PageUp and PageDown move by.
         /// </summary>
         /// <remarks>
         /// Both are measurements. The script is told which keys the grid handles and hands back what it
         /// sees; it decides nothing either time.
+        /// <para>
+        /// A null answer is the script saying it could not find the view element, which is the one case
+        /// where nothing was bound. So that is what decides whether the grid believes it holds a guard,
+        /// and it is what stops the grid asking the script to release one it never took.
+        /// </para>
         /// </remarks>
-        async Task AttachNavigationAsync()
-        {
-            if (!AllowKeyboardNavigation || navigationAttached)
-            {
-                return;
-            }
+        Attachment<string[]> KeyGuard =>
+            navigation ??= new Attachment<string[]>(
+                async keys =>
+                {
+                    if (await ModuleAsync().ConfigureAwait(false) is not { } script)
+                    {
+                        return false;
+                    }
 
-            var script = await ModuleAsync().ConfigureAwait(false);
+                    var metrics = await script.InvokeAsync<NavigationMetrics?>("attachNavigation",
+                        ViewElementId, keys);
 
-            if (script is null)
-            {
-                return;
-            }
+                    Apply(metrics);
 
-            navigationAttached = true;
+                    return metrics is not null;
+                },
+                async () =>
+                {
+                    if (await ModuleAsync().ConfigureAwait(false) is { } script)
+                    {
+                        await script.InvokeVoidAsync("detachNavigation", ViewElementId);
+                    }
+                });
 
-            try
-            {
-                Apply(await script.InvokeAsync<NavigationMetrics?>("attachNavigation",
-                    ViewElementId, HandledKeys));
-            }
-#pragma warning disable CA1031
-            catch (Exception)
-#pragma warning restore CA1031
-            {
-                // The grid still navigates without the guard: the browser scrolls a line as well, which
-                // is a jitter rather than a failure, and RTL falls back to logical arrows.
-            }
-        }
+        /// <summary>Binds the key guard, or lets it go for a grid that has stopped navigating.</summary>
+        /// <remarks>
+        /// The second half is why this is a sync rather than an attach, and it is the fault the module
+        /// was written for. The guard calls preventDefault for every key in <see cref="HandledKeys" />
+        /// and is bound to the view element, so a grid that switched navigation off and never let go
+        /// would go on swallowing arrow keys while nothing acted on them.
+        /// </remarks>
+        Task<AttachResult> SyncNavigationAsync() =>
+            KeyGuard.SyncAsync(AllowKeyboardNavigation && JSRuntime is not null, HandledKeys);
 
         async Task MeasureNavigationAsync()
         {
@@ -865,7 +878,13 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>What the browser measured: the writing direction, and the viewport in rows.</summary>
-        sealed class NavigationMetrics
+        /// <remarks>
+        /// Internal rather than private because it is the shape of an answer crossing the interop seam,
+        /// and a test staging that answer is the only way to reach the half of this feature that depends
+        /// on it - the RTL arrow flip and the measured page step are both unreachable while the only
+        /// available answer is the stub's null.
+        /// </remarks>
+        internal sealed class NavigationMetrics
         {
             public bool Rtl { get; set; }
 

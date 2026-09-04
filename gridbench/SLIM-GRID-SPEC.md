@@ -2322,8 +2322,9 @@ sentinel because upstream already has the convention. What is left:
 
 Every pass in §10b asked whether the code is *correct*. This one asks whether it is the right *shape*:
 where a module is shallow, where a seam is missing, and where a rule that lives in a comment should
-live in an interface instead. It found no wrong answers except one, recorded below; the rest of what
-follows is shape.
+live in an interface instead. It found two wrong answers, recorded below; the rest of what follows is
+shape. Both faults were in the same place, and neither was visible until the shape was written down -
+which is the argument for this kind of pass rather than a summary of it.
 
 Read by four sub-agents against written briefs, over the two grid partials, the column model, the
 browser module with its six calling partials, and the test suite read as a consumer of the interfaces
@@ -2339,19 +2340,48 @@ ordering constraints, error modes, cost), *deep* and *shallow* (behaviour per un
 (where behaviour can be altered without editing in that place), *leverage* (what callers gain), and
 *locality* (what maintainers gain). Not "component", "service", "layer" or "boundary".
 
-### The one fault
+### The two faults - **both fixed**, with `Attachment` (candidate 4, built)
 
-**`navigationAttached` is recorded before the call that earns it, and never cleared.**
-`RadzenFastGrid.Keyboard.cs:101` is set at `:819` *before* `attachNavigation` is invoked, so a throw
-still records success — and there is no `DetachNavigationAsync` at all, though `detachNavigation` is
-exported and `Script.cs:45` calls it at dispose. Switch `AllowKeyboardNavigation` off at runtime and
-`RenderNavigation` stops emitting the view id, so `getElementById` answers null at dispose and the
-keydown guard stays bound to a live element: a grid that no longer navigates goes on swallowing arrows.
+**The key guard was recorded before the call that earned it, and never let go.** `navigationAttached`
+was set *before* `attachNavigation` was invoked, so a throw still recorded success - and there was no
+`DetachNavigationAsync` at all, though `detachNavigation` is exported and dispose called it. Switching
+`AllowKeyboardNavigation` off at runtime stops `RenderNavigation` emitting the view id, so
+`getElementById` answered null and the guard stayed bound to a live element: a grid that no longer
+navigates went on calling `preventDefault` for every key in `HandledKeys` while nothing acted on them.
 
-`RadzenFastGrid.Clicks.cs:179-182` does the opposite and says why — "recorded once it is true of the
-DOM rather than before the call". **This is the fourth instance of §10b's rule that a fix is right for
-the case that motivated it and has to be checked against its neighbour**, and the first where the
-neighbour had already been fixed and the lesson was not carried across.
+The pointer listener does the opposite and says why - "recorded once it is true of the DOM rather than
+before the call". **This is the fourth instance of §10b's rule that a fix is right for the case that
+motivated it and has to be checked against its neighbour**, and the first where the neighbour had
+already been fixed and the lesson was not carried across.
+
+**And then the neighbour turned out to have the same fault.** `DetachClicksAsync` existed, ran on the
+right condition, and could not work: the tbody's id was emitted under `ClicksAreLive &&
+!AllowVirtualization`, which is the very condition that stops the grid delegating - so switching
+virtualization on dropped the id on the render *before* the detach that needed it, `detach(bodyId)`
+found nothing, and the listener stayed bound beside the per-cell handlers that had just replaced it.
+Every click raised twice. **That is exactly what the comment above `AttachClicksAsync` has always said
+must not happen**, written by an author who had seen the hazard, fixed the half they could see, and had
+no way to notice that the markup undid it.
+
+Neither fault is reachable from a bUnit test on its own: the C# call is made in both cases and only the
+browser knows it removed nothing. What is testable is the cause, and it is one rule -
+
+> **An element a listener is bound to keeps its name past the switch that bound it.** Letting go means
+> naming the element, and the switch that stops the feature is the switch that would stop it being
+> named. So both ids are *latched*: never emitted for a grid that has never used the feature, never
+> withdrawn from one that has.
+
+Making them unconditional instead was tried and rejected: three tests assert those ids are absent when
+the features are off, which is §3's rule 3, and a fourth compares two grids' markup, which per-grid ids
+break. Keeping an id only while a listener is *currently* bound was also tried, and is worse than
+either - correct only while nothing re-renders between the switch and the release, which the component
+does not control, `Virtualize` violates on its own, and no test can pin.
+
+**A mutation check caught one of this section's own tests not discriminating.** The test for "the
+attempt is forgotten with the listener" passed with that rule deleted, because releasing also clears
+the remembered payload - so for any payload but its type's default the guard sees a change and
+re-attaches regardless. It uses a default payload now, and fails when the rule is removed. Eight
+mutations, eight caught; §9's first layer earning its place again.
 
 ### The candidates
 
@@ -2363,7 +2393,7 @@ with a load-bearing reason should be recorded here beside it.
 | 1 | Compose the view behind one interface | Strong |
 | 2 | `drawing` is a mode, not a field | Strong |
 | 3 | The browser seam has no interface | Strong |
-| 4 | Attachment is a pattern copied twice, one copy missing its half | Strong |
+| 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
 | 5 | Four methods of one shape, four meanings of `null` | Strong |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
 | 7 | A column's identity is a concept with no name | Worth exploring |
@@ -2405,10 +2435,26 @@ from the calls they govern (`Data.cs:952-992`): attach after the pagers sync, fi
 after the lookup names land, reassert focus last, detach before release before dispose. §13 already
 recorded that swapping two of them would measure blank cells "and every test would still pass".
 
-**4. Attachment is a pattern copied twice.** See the fault above. The shape is the point: two features
-with identical lifetime, one of which grew re-attach, `attachedKinds`, `DetachClicksAsync`, a fallback
-and record-after-the-call, and the other of which grew none of them. Two adapters — the tbody listener
-and the view listener — make this a real seam rather than a hypothetical one.
+**4. Attachment is a pattern copied twice.** ~~See the fault above.~~ **Built.** Two features with
+identical lifetime, one of which had grown re-attach, `attachedKinds`, `DetachClicksAsync`, a fallback
+and record-after-the-call, and the other of which had grown none of them. Both are now one
+`Attachment<TPayload>` - `SyncAsync(wanted, payload)` answering what it did, and `ReleaseAsync()` - with
+the tbody listener and the view listener as its two adapters, which is what makes the seam real rather
+than hypothetical.
+
+It calls interop through two delegates rather than reaching for the module itself, so a fake is the
+second adapter and the module's rules are testable in-process: six of the nine tests written for it
+need no browser and no `TestContext`. That is candidate 3 in miniature, scoped deliberately to attach
+and detach over one payload and nothing about geometry, focus or fitting - so that if candidate 3
+disagrees with it, what is thrown away is twenty lines.
+
+Three things moved out of the callers and into it, and each was a place the two disagreed: what
+"attached" means (the pointer listener asked what `attach` reported, the key guard asked nothing at
+all - it now asks whether the script found the element to measure); when the binding is recorded; and
+what dispose should release, where the two features had been reading *different* flags on adjacent
+lines, neither matching the condition its own detach used. What stayed with the callers is the
+fallback, because it is click-specific and ends in a re-render: `SyncAsync` reports, the caller
+decides.
 
 **5. Four methods of one shape, four meanings of `null`.** `ApplyFilter` returning null means "fall
 back for *me*" (`Data.cs:1195`); `ApplyFilterInMemory` means "abandon the route for *everyone*"

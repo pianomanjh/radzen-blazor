@@ -758,12 +758,32 @@ namespace Radzen.FastGrid
             builder.AddAttribute(22, "class", "rz-data-grid-data");
             builder.AddAttribute(23, "role", "grid");
 
-            // 24 to 28 is the band RenderNavigation writes into, which is why the table below starts at
-            // 29. The band cannot be isolated in a region: attributes may only follow the frame that
+            // 24 to 28 is the band keyboard navigation writes into, which is why the table below starts
+            // at 29. The band cannot be isolated in a region: attributes may only follow the frame that
             // opened the element, and a region opened here would sit between the two.
+            //
+            // The id outlasts the feature; the rest of the band does not. Letting the key guard go means
+            // naming the element it is bound to, and the switch that stops the grid navigating is the
+            // same switch that would stop it being named - so an id tied to that switch is dropped on
+            // the very render before the release that needs it, and the guard can never be reached
+            // again. Latched instead: a grid that has never navigated is never named and pays nothing
+            // for the feature being off, and one that has keeps its name for as long as it lives.
+            //
+            // Keeping it only while a guard is bound was tried and is worse. It is correct just as long
+            // as nothing re-renders between the switch and the release, which the component does not
+            // control - Virtualize re-renders on its own - and which no test can pin.
+            viewIsNamed |= AllowKeyboardNavigation;
+
+            if (viewIsNamed)
+            {
+                builder.AddAttribute(24, "id", ViewElementId);
+            }
+
+            // The tab stop, the key handler and the focus pair are the feature itself, and a grid that
+            // has switched it off must not keep any of them.
             if (AllowKeyboardNavigation)
             {
-                RenderNavigation(builder, 24);
+                RenderNavigation(builder, 25);
             }
 
             // Where the window sits in the whole table, on the element that is the table to a screen
@@ -1658,8 +1678,18 @@ namespace Radzen.FastGrid
             builder.OpenElement(100, "tbody");
             builder.AddAttribute(101, "role", "rowgroup");
 
-            // Only when a listener is going to resolve rows inside it.
-            if (ClicksAreLive && !AllowVirtualization)
+            // Named once a listener is going to resolve rows inside it, and named from then on. Same
+            // latch as the view's id above, and this is the case that showed why it is needed: turning
+            // virtualization on stops the grid delegating, so an id tied to that condition disappears
+            // on the very render before the detach that needs it - leaving the listener bound and
+            // answering every click a second time beside the per-cell handlers that just replaced it.
+            // That is the sequence the comment on SyncClicksAsync has always said must not happen, and
+            // until now the id was what made it happen.
+            //
+            // A grid that never delegates a click is never named, so nothing is paid for it being off.
+            bodyIsNamed |= ClicksAreLive && !AllowVirtualization;
+
+            if (bodyIsNamed)
             {
                 builder.AddAttribute(102, "id", BodyElementId);
             }
