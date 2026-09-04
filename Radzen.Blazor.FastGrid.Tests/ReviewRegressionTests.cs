@@ -21,24 +21,61 @@ namespace Radzen.FastGrid.Tests
     /// </summary>
     public class ReviewRegressionTests
     {
-        /// <summary>Counts every time the query is walked from the calling thread.</summary>
-        sealed class WalkCountingQueryable : IQueryable<Person>
+        /// <summary>
+        /// Counts every walk of a query that the executor did not make - including walks of queries
+        /// *composed over* it, which is what the grid actually runs.
+        /// </summary>
+        /// <remarks>
+        /// The version this replaces counted enumerations of the root instance only, and the grid never
+        /// enumerates the root: it composes - <c>Select</c>, <c>Distinct</c>, <c>Skip</c>, <c>Take</c> -
+        /// and a composed query enumerates through the inner provider, past any counter that lives on
+        /// the outer object. So the only walk it could ever see was the executor being handed the source
+        /// unchanged, which is a walk that is *supposed* to happen. Its red and its green were the two
+        /// sides of a race over when that landed, and the mutation that puts the fault back - running
+        /// the distinct scan inside <c>BuildRenderTree</c> - did not move it either way.
+        /// <para>
+        /// Counting in the provider is what makes a composed query visible, and excluding the executor
+        /// by <see cref="YieldingExecutor.Running" /> rather than by thread is what keeps a render-path
+        /// walk visible when the renderer posts it to the pool.
+        /// </para>
+        /// </remarks>
+        sealed class WalkCounter
         {
-            readonly IQueryable<Person> inner;
+            int walks;
 
-            public WalkCountingQueryable(IQueryable<Person> inner) => this.inner = inner;
+            public int Walks => Volatile.Read(ref walks);
 
-            public int Walks { get; private set; }
+            public void Walked()
+            {
+                if (!YieldingExecutor.Running.Value)
+                {
+                    Interlocked.Increment(ref walks);
+                }
+            }
+        }
+
+        sealed class WalkCountingQueryable<T> : IQueryable<T>
+        {
+            readonly IQueryable<T> inner;
+            readonly WalkCounter counter;
+
+            public WalkCountingQueryable(IQueryable<T> inner, WalkCounter counter)
+            {
+                this.inner = inner;
+                this.counter = counter;
+            }
+
+            public int Walks => counter.Walks;
 
             public Type ElementType => inner.ElementType;
 
             public Expression Expression => inner.Expression;
 
-            public IQueryProvider Provider => inner.Provider;
+            public IQueryProvider Provider => new WalkCountingProvider(inner.Provider, counter);
 
-            public IEnumerator<Person> GetEnumerator()
+            public IEnumerator<T> GetEnumerator()
             {
-                Walks++;
+                counter.Walked();
 
                 return inner.GetEnumerator();
             }
@@ -46,13 +83,62 @@ namespace Radzen.FastGrid.Tests
             IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
         }
 
+        sealed class WalkCountingProvider : IQueryProvider
+        {
+            readonly IQueryProvider inner;
+            readonly WalkCounter counter;
+
+            public WalkCountingProvider(IQueryProvider inner, WalkCounter counter)
+            {
+                this.inner = inner;
+                this.counter = counter;
+            }
+
+            // Every composition stays wrapped, so a query built from this one is still counted.
+            public IQueryable CreateQuery(Expression expression) =>
+                Wrap(inner.CreateQuery(expression));
+
+            public IQueryable<TElement> CreateQuery<TElement>(Expression expression) =>
+                new WalkCountingQueryable<TElement>(inner.CreateQuery<TElement>(expression), counter);
+
+            // The scalar half: Count and its siblings never enumerate, they execute.
+            public object? Execute(Expression expression)
+            {
+                counter.Walked();
+
+                return inner.Execute(expression);
+            }
+
+            public TResult Execute<TResult>(Expression expression)
+            {
+                counter.Walked();
+
+                return inner.Execute<TResult>(expression);
+            }
+
+            IQueryable Wrap(IQueryable query) =>
+                (IQueryable)Activator.CreateInstance(
+                    typeof(WalkCountingQueryable<>).MakeGenericType(query.ElementType), query, counter)!;
+        }
+
         /// <summary>Answers after a yield, the way a database does - not from an already-complete task.</summary>
         sealed class YieldingExecutor : IFastGridQueryExecutor
         {
+            /// <summary>Whether the walk about to happen is one this executor is making.</summary>
+            /// <remarks>
+            /// Set before the yield rather than after, because that is what makes it flow: an
+            /// <see cref="AsyncLocal{T}" /> assigned inside an async method is carried into that
+            /// method's continuations and into nothing else, which is exactly the scope wanted - the
+            /// executor's own work, wherever the pool happens to run it, and no part of the render.
+            /// </remarks>
+            internal static readonly AsyncLocal<bool> Running = new();
+
             public bool IsSupported<T>(IQueryable<T> queryable) => true;
 
             public async Task<int> CountAsync<T>(IQueryable<T> queryable, CancellationToken cancellationToken = default)
             {
+                Running.Value = true;
+
                 await Task.Yield();
 
                 return queryable.Count();
@@ -60,6 +146,8 @@ namespace Radzen.FastGrid.Tests
 
             public async Task<List<T>> ToListAsync<T>(IQueryable<T> queryable, CancellationToken cancellationToken = default)
             {
+                Running.Value = true;
+
                 await Task.Yield();
 
                 return queryable.ToList();
@@ -73,7 +161,7 @@ namespace Radzen.FastGrid.Tests
             // pulls the entire unpaged table synchronously - twice, once for the rows and once for the
             // pager's total - for rows the awaited load is about to replace.
             using var ctx = new TestContext();
-            var source = new WalkCountingQueryable(People.Many(40).AsQueryable());
+            var source = new WalkCountingQueryable<Person>(People.Many(40).AsQueryable(), new WalkCounter());
 
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
             ctx.Services.AddSingleton<IFastGridQueryExecutor>(new YieldingExecutor());
@@ -101,7 +189,7 @@ namespace Radzen.FastGrid.Tests
             // on the render thread, and on Entity Framework a second operation on the context that the
             // awaited page load is still using.
             using var ctx = new TestContext();
-            var source = new WalkCountingQueryable(People.Many(40).AsQueryable());
+            var source = new WalkCountingQueryable<Person>(People.Many(40).AsQueryable(), new WalkCounter());
 
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
             ctx.Services.AddSingleton<IFastGridQueryExecutor>(new YieldingExecutor());

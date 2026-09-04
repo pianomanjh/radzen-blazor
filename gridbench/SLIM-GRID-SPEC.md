@@ -3607,6 +3607,11 @@ fails about one full run in three, and fails every time it is run alone - at thi
 before it. Not this piece's, and recorded because "the suite is green" is a claim this branch makes
 often and that test makes it conditional.
 
+**It was not flaky, and §22 has what it was.** Both halves of the observation were right and the word
+was wrong: the failure is real and reproducible, and it was never about the grid. Diagnosed and fixed
+there, along with the larger thing underneath it - that neither of those two tests had ever been able to
+observe the fault it was written for.
+
 **Measured**, control at `6317cd150` sorted 175.79 KB and a filter row 158.77 KB; after, bare 154.66,
 sorted 175.79 and a filter row 158.81. Nothing here is on the grid's path and the numbers say so.
 **No time ratio is quoted**, per §9.
@@ -4256,3 +4261,104 @@ has read 154.55, 154.58, 154.66, 154.73, 154.77 and 154.81 on bit-identical code
 deltas above are inside that, and so is every "unmoved". The conclusion holds - one row moved and it is
 the one the fork is about - but §9 claimed allocation "repeats to two decimals across runs" and it does
 not, and quoting to two decimals implied a stability the harness does not have.
+
+---
+
+## 22. The test that was called flaky was not testing anything
+
+`ReviewRegressionTests.ACheckBoxListLookupIsNeverRunFromTheRenderThread` has failed about one full run
+in three since §19 noticed it, and every time it is run alone. Two sessions recorded it as flaky and not
+theirs. Both halves of that were right - it is not the grid's fault, and it is not intermittent noise
+either. It is a test that has never been able to see the thing it was written to catch, failing for a
+reason unrelated to it.
+
+There is no design section for this one. It was a diagnosis, and what it found changed what the fix had
+to be twice.
+
+### What it claimed, and what it did
+
+The rule is §9's and it is real: a source the executor owns is not touched from the render thread.
+Running a check-box list's distinct query inside `BuildRenderTree` is a blocking round trip, and on
+Entity Framework a second operation on a context the awaited page load is still using. The test stands a
+grid up over a `WalkCountingQueryable`, gives it a yielding executor, and asserts `source.Walks == 0`.
+
+`WalkCountingQueryable` counted enumerations of **itself**. The grid never enumerates the source: it
+composes - `Select`, `Distinct`, `Skip`, `Take` - and a composed query enumerates through the *inner*
+provider, past a counter that lives on the outer object. So no query the grid runs was ever visible to
+it.
+
+**The one walk it could see was the executor's own**, which is the walk that is supposed to happen. With
+no paging to compose, the check-box-list test hands the executor the source unchanged, and
+`ToListAsync` enumerates it directly. That walk arrives on a thread-pool worker after `await
+Task.Yield()`, posted through `RendererSynchronizationContext`. Whether it had landed by the time the
+assertion ran was a race, and **running the test alone lost it almost every time** - an idle pool
+schedules the continuation sooner.
+
+So its red and its green were the two sides of that race, and neither said anything about the grid.
+
+### How it was found, and the instrumentation that gave it away
+
+The stack at the walk, captured on failure. It reads
+`YieldingExecutor.ToListAsync` → `Enumerable.ToList` → `WalkCountingQueryable.GetEnumerator`, on thread
+8, with the test asserting on thread 16.
+
+**One accident was worth more than the trace.** The first attempt wrote `WALKS=1 TRACES=0` - a counter
+saying one walk and the list beside it saying none, from two adjacent statements. That is not possible
+in one thread, and it is what said the walk was concurrent with the assertion rather than before it.
+A diagnostic that contradicts itself is evidence about *when*, not a broken diagnostic.
+
+### The fix that was wrong, and why it is recorded
+
+The first fix excluded the executor's walk and stopped the flake: ten solo runs, none failing, where
+before every solo run failed. **Then the mutation refused it.** Putting the fault back - the distinct
+scan running inside the render, which is the exact line the test's comment describes - left the test
+green.
+
+That is the piece's finding, and it is §9's own rule arriving from a new direction. **A test that has
+stopped failing is not the same as a test that has started working**, and the only thing that tells
+them apart is putting the fault back. Had the flake alone been the goal, this would have shipped as a
+fix and the branch would have kept a green test over an untested rule.
+
+### What it takes to see a composed query
+
+Counting has to happen in the **provider**, not on the query. `WalkCountingProvider` wraps every
+`CreateQuery` so a query composed from a counted one is counted too, and counts `Execute` as well as
+enumeration, because `Count()` never enumerates. Then a walk of `source.Select(...).Distinct()` is
+visible where before it was not.
+
+**And the executor is excluded by what it is rather than by which thread it is on.** An `AsyncLocal`
+set before the yield flows into the executor's own continuations and into nothing else. Excluding by
+thread was the obvious alternative and is weaker: the render path is posted through
+`RendererSynchronizationContext` and also runs on pool threads, so a real fault could arrive on one and
+go uncounted - which is the mistake this whole section is about, made a second time.
+
+### What it now catches
+
+Both tests discriminate, for the first time:
+
+- Removing the `AsyncOwnsData` guard on the check-box list's lookup, so the distinct scan runs inside
+  the render, **fails `ACheckBoxListLookupIsNeverRunFromTheRenderThread`**.
+- Removing the `AsyncOwnsData` guard on `View()`, so the grid composes over an executor-owned query
+  while its load is in flight, **fails `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread`**.
+
+Neither mutation moved either test before.
+
+### Verified
+
+Ten solo runs of the previously-failing test, none failing, against every solo run failing before. Five
+full unit runs, 825 each. The browser suite, 38. No library code changed, so no benchmark applies and
+none is quoted.
+
+### Where this could still be wrong
+
+- **The provider wrapper is not a complete `IQueryProvider` implementation of anything**; it forwards
+  and counts. `CreateQuery(Expression)`, the non-generic half, closes `WalkCountingQueryable<>` over the
+  element type by reflection, which is fine in a test and would not be fine anywhere else.
+- **`AsyncLocal` flows into whatever the executor's continuation starts.** If an executor implementation
+  ever handed work back to the grid from inside its own async flow, that work would be excluded from
+  counting and would be invisible in exactly the way this section is about. The two executors here do
+  not, and nothing enforces it.
+- **The rule is still only checked at two call sites.** `AsyncOwnsData` guards four places; two of them
+  now have a test that fails when the guard is removed, and the other two - the settings reload path and
+  the count - have neither. That is a gap this section opened rather than closed: it now knows how to
+  write such a test.
