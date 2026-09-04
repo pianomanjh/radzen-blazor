@@ -308,9 +308,23 @@ namespace Radzen.FastGrid
             var data = Data;
             var dataChanged = !ReferenceEquals(lastData, data);
 
+            // A source the grid composes over is a query; anything else is rows. The distinction is what
+            // decides whether a new instance means new values.
+            var composed = !LoadData.HasDelegate && data is IQueryable<TItem>;
+
             // Before the LoadData branch, not after: a LoadData grid replaces Data on every load, and a
             // check-box list built from page one is wrong for every page after it.
-            if (dataChanged)
+            //
+            // A composed source is the case that must not clear here. Application code answers with a
+            // new queryable every time it is read - a DbSet put through AsNoTracking, a Where written in
+            // a property - so this identity is not a data change there, and treating it as one puts a
+            // SELECT DISTINCT per check-box-list column behind every render the parent does, for values
+            // that did not move. Measured at one scan per parameter set before the two were told apart.
+            //
+            // The consequence, and it is the rule §14's lookups follow deliberately: markup that swaps
+            // one query for a genuinely different one goes on offering the first one's values until
+            // Reload(). That is what Reload() is for, and its own comment has always said so.
+            if (dataChanged && !composed)
             {
                 lookups.Clear();
             }
