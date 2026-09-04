@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
@@ -168,8 +169,11 @@ namespace Radzen.FastGrid
             _ => null,
         };
 
-        /// <summary>The class of this column's cell span, carrying its wrapping mode.</summary>
-        internal string CellClass => ClassFor(WhiteSpace);
+        /// <summary>
+        /// The class of the span inside this column's body cell, carrying its wrapping mode. Not one of
+        /// the four sections above: those class the cell element, this classes what is written into it.
+        /// </summary>
+        internal string CellContentClass => ClassFor(WhiteSpace);
 
         string? cellStyle;
         bool cellStyleKnown;
@@ -301,6 +305,17 @@ namespace Radzen.FastGrid
         string? frozenClass;
         string? frozenInset;
 
+        /// <summary>Records what the grid worked out about this column's pinning, for one render.</summary>
+        /// <param name="classList">The frozen class list, or null for a column that is not pinned.</param>
+        /// <param name="inset">The inset that pins it, or null.</param>
+        /// <remarks>
+        /// <paramref name="classList" /> has to be the *same instance* for a column whose pinning has not
+        /// changed, which the grid gets right by handing back one of four literals rather than composing
+        /// one: <see cref="BodyCellClass" /> memoizes on it by reference. Composing it instead would not
+        /// break anything - this is called once per column per render, so the fold would still be reused
+        /// from the second cell onwards - but it would cost one extra string per frozen column per
+        /// render, silently, and nothing would fail.
+        /// </remarks>
         internal void SetFrozen(string? classList, string? inset)
         {
             frozenClass = classList;
@@ -309,19 +324,50 @@ namespace Radzen.FastGrid
 
         internal bool IsFrozen => frozenClass is not null;
 
-        /// <summary>The frozen class list for this column, or null when it is not pinned.</summary>
-        internal string? FrozenClass => frozenClass;
+        // A column is drawn in four sections, and each of them asks for a class and a style. The table:
+        //
+        //   section   class                        style              what the class folds over
+        //   header    HeaderCellClass(headerClass) HeaderCellStyle    the grid's sortable/resizable set
+        //   filter    FilterCellClass              FilterCellStyle    one constant
+        //   body      BodyCellClass                BodyCellStyle      CssClass
+        //   footer    FooterCellClass              FooterCellStyle    FooterCssClass
+        //
+        // The header's is a method and the other three are properties, because the header's base class
+        // is the grid's answer rather than the column's - whether the column offers sorting and
+        // resizing is not something the column decides. There is no Section type and nothing enumerates
+        // these: what moved out of the grid is the folding, not the choice of which member to call.
+        //
+        // Three of these four used to be composed by the grid, at the point of drawing, each folding
+        // frozenClass into its own base class in its own way - so "a frozen column contributes a class
+        // and an inset" was the caller's knowledge in three rows and the column's in one, and "the
+        // filter row takes the header's style" was written nowhere but at the call site that did it.
+        // §10 records that being got wrong: the filter row is a second row of the header rather than a
+        // section of its own, and it was missed when the title row was fixed.
+        //
+        // The two halves of the table memoize differently, and the asymmetry is measured rather than
+        // assumed.
+        //
+        // *No class fold is memoized except the body's.* The body's is read once per **cell**, so
+        // composing it there would be per-row string work; the other three are read once per column per
+        // render, which is what the grid was already paying when it folded them itself. Memoizing all
+        // four was written first and cost 8 reference fields per column - 64 bytes each, 320 on a
+        // five-column grid, on every grid whether or not anything is frozen - which gridbench read as
+        // exactly +0.31 KB on rows that should not have moved. It saved three concatenations per frozen
+        // column per render and was paid for by every column that is not frozen.
+        //
+        // *All three styles are memoized, and share one memo*, because they are one composition:
+        // ComposeFrozenStyles builds the body's and derives the header's and footer's from it by
+        // appending a z-index. Those five fields are not a per-section cost and predate this.
 
-        string? frozenCellClass;
-        string? frozenCellClassFor;
-        string? frozenCellClassOver;
+        string? bodyCellClass;
+        string? bodyCellClassFor;
+        string? bodyCellClassOver;
 
         /// <summary>
-        /// The class of this column's <c>td</c>, frozen classes included - distinct from
-        /// <see cref="CellClass" />, which is the inner span's. Memoized on the pair it is built from,
-        /// so a frozen column costs one string for the whole grid rather than one per cell.
+        /// The class of this column's body <c>td</c> - distinct from <see cref="CellContentClass" />,
+        /// which is the inner span's.
         /// </summary>
-        internal string? CellElementClass
+        internal string? BodyCellClass
         {
             get
             {
@@ -335,17 +381,41 @@ namespace Radzen.FastGrid
                     return frozenClass;
                 }
 
-                if (!ReferenceEquals(frozenCellClassFor, frozenClass)
-                    || !string.Equals(frozenCellClassOver, CssClass, StringComparison.Ordinal))
+                if (!ReferenceEquals(bodyCellClassFor, frozenClass)
+                    || !string.Equals(bodyCellClassOver, CssClass, StringComparison.Ordinal))
                 {
-                    frozenCellClassFor = frozenClass;
-                    frozenCellClassOver = CssClass;
-                    frozenCellClass = CssClass + " " + frozenClass;
+                    bodyCellClassFor = frozenClass;
+                    bodyCellClassOver = CssClass;
+                    bodyCellClass = CssClass + " " + frozenClass;
                 }
 
-                return frozenCellClass;
+                return bodyCellClass;
             }
         }
+
+        /// <summary>
+        /// The class of this column's header <c>th</c>, over what the grid decided the header is -
+        /// which depends on whether the column offers sorting and resizing, and so is the grid's to
+        /// pass in rather than this column's to work out.
+        /// </summary>
+        /// <param name="headerClass">The header class the grid composed for this column.</param>
+        internal string HeaderCellClass(string headerClass) =>
+            frozenClass is null ? headerClass : headerClass + " " + frozenClass;
+
+        const string FilterCellBaseClass = "rz-unselectable-text";
+
+        /// <summary>
+        /// The class of this column's filter <c>th</c>. Its base is one constant, so unlike the other
+        /// three this folds over nothing the caller supplies.
+        /// </summary>
+        internal string FilterCellClass =>
+            frozenClass is null ? FilterCellBaseClass : FilterCellBaseClass + " " + frozenClass;
+
+        /// <summary>The class of this column's footer <c>td</c>.</summary>
+        internal string? FooterCellClass =>
+            frozenClass is null ? (string.IsNullOrEmpty(FooterCssClass) ? null : FooterCssClass)
+            : string.IsNullOrEmpty(FooterCssClass) ? frozenClass
+            : FooterCssClass + " " + frozenClass;
 
         string? frozenCellStyle;
         string? frozenHeaderStyle;
@@ -353,7 +423,10 @@ namespace Radzen.FastGrid
         string? frozenStyleFor;
         string? frozenStyleOver;
 
-        // The three places a frozen column is drawn, and the stacking each of them has to win.
+        // The three stackings the four sections need, and there are three rather than four because the
+        // filter row shares the header's. The expand toggle is not a column and needs the same three:
+        // RadzenFastGrid.Frozen.cs composes them as ToggleFrozenCellStyle, ToggleFrozenHeaderStyle and
+        // ToggleFrozenFooterStyle, so a change to what a pinned cell has to clear belongs in both places.
         //
         // The body needs nothing beyond being positioned: an unfrozen cell there is static, so the
         // theme's own z-index on .rz-frozen-cell already puts the pinned one on top.
@@ -384,9 +457,9 @@ namespace Radzen.FastGrid
 
         /// <summary>
         /// The style of this column's body cells with the frozen inset folded in. Composed once per
-        /// column, so the inset is handed to every row rather than built for each of them.
+        /// column per render, so the inset is handed to every row rather than built for each of them.
         /// </summary>
-        internal string? FrozenCellStyle
+        internal string? BodyCellStyle
         {
             get
             {
@@ -402,7 +475,7 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>The same for a header cell, raised above the ordinary headers beside it.</summary>
-        internal string? FrozenHeaderStyle
+        internal string? HeaderCellStyle
         {
             get
             {
@@ -417,8 +490,20 @@ namespace Radzen.FastGrid
             }
         }
 
+        /// <summary>
+        /// The same for a filter cell, which is the header's answer and not one of its own.
+        /// </summary>
+        /// <remarks>
+        /// The filter row is a second row of the same <c>thead</c>, so its cells sit in the header's
+        /// stacking and want the header's z-index. This exists rather than the grid reading
+        /// <see cref="HeaderCellStyle" /> at the filter row because that identity is a fact about the
+        /// markup, and §10 records it being got wrong exactly once - the filter row was missed when the
+        /// title row was fixed, because nothing named it as a section.
+        /// </remarks>
+        internal string? FilterCellStyle => HeaderCellStyle;
+
         /// <summary>The same for a footer cell, whose siblings sit a level higher than a header's.</summary>
-        internal string? FrozenFooterStyle
+        internal string? FooterCellStyle
         {
             get
             {
@@ -450,10 +535,9 @@ namespace Radzen.FastGrid
         /// <summary>The width a drag settled on, or null when none has.</summary>
         internal string? ResizedWidth => resizedWidth;
 
+        // The width an auto-fit measured. No getter: EffectiveWidth and CanAutoFit are the only readers
+        // and both are here.
         string? autoFitWidth;
-
-        /// <summary>The width an auto-fit measured, or null when none has.</summary>
-        internal string? AutoFitWidth => autoFitWidth;
 
         /// <summary>
         /// Whether this column takes part in an auto-fit. Ignored unless the grid sets
@@ -710,14 +794,24 @@ namespace Radzen.FastGrid
         /// value and two different things to have typed, and an unparseable "3-" filters by null the
         /// same as an empty box.
         /// </summary>
-        internal string? AppliedFilterText { get; set; }
+        internal string? AppliedFilterText { get; private set; }
 
         /// <summary>Sets the column's live filter. Called by the grid; does not reload on its own.</summary>
-        internal void SetFilter(object? value, FilterOperator? filterOperator)
+        /// <param name="value">The value to filter by.</param>
+        /// <param name="filterOperator">How to compare it, or null for this column's default.</param>
+        /// <param name="text">
+        /// The box text the value came from, or null for a filter that came from anywhere else. A
+        /// parameter rather than a second assignment because the text belongs to the value: the two
+        /// call sites that have one used to put it back on the line after this one, each under a
+        /// comment explaining that this clears it, which is one rule written twice in the two places
+        /// most likely to be copied from. Required rather than defaulted, so that a caller who has a
+        /// text and forgets it is a build error rather than the same silent drop in a new place.
+        /// </param>
+        internal void SetFilter(object? value, FilterOperator? filterOperator, string? text)
         {
             CurrentFilterValue = value;
             CurrentFilterOperator = filterOperator ?? DefaultFilterOperator;
-            AppliedFilterText = null;
+            AppliedFilterText = text;
         }
 
         /// <summary>How this column compares when nothing said otherwise.</summary>
@@ -816,9 +910,37 @@ namespace Radzen.FastGrid
 
         bool initialized;
 
-        /// <inheritdoc />
-        protected override void OnParametersSet()
+        /// <summary>
+        /// Reads whatever this column derives from its own parameters - a compiled selector, a property
+        /// path, a member's type - before the base reads any of it.
+        /// </summary>
+        /// <remarks>
+        /// The order is the point, it has already cost this grid a bug, and it used to be five authors
+        /// remembering it. The base picks a column's default filter operator from
+        /// <see cref="EffectiveFilterType" />, which for a column declared as <c>object</c> is read off
+        /// the filter path and for a collection column is the member's type - neither known until the
+        /// column has read its own expressions. Derived afterwards, such a column defaulted to
+        /// <c>Equals</c>, nothing recomputed it, and a declared <see cref="FilterValue" /> matched
+        /// nothing for good. Every column here overrode <see cref="OnParametersSet" /> and called the
+        /// base last, two of them under a comment explaining why - and the test suite's own
+        /// <c>CompileCountingColumn</c> called it first, which happened not to matter for that column
+        /// and is exactly why nobody saw it.
+        /// <para>
+        /// So <see cref="OnParametersSet" /> is sealed and this runs before it. A column that derives
+        /// from another column calls <c>base.OnDerive()</c> where the base's own derivation has to come
+        /// first, which is a rule between two siblings rather than one against the framework.
+        /// </para>
+        /// </remarks>
+        protected virtual void OnDerive()
         {
+        }
+
+        /// <inheritdoc />
+        /// <remarks>Sealed; a column derives its own state in <see cref="OnDerive" />.</remarks>
+        protected sealed override void OnParametersSet()
+        {
+            OnDerive();
+
             if (!initialized)
             {
                 // Both parameters may legitimately be null, so the first pass cannot be told from a
@@ -838,7 +960,8 @@ namespace Radzen.FastGrid
                 // ordered by has no header control, no icon and no aria-sort, so a sort declared beside
                 // one is invisible and the user has no way to clear it - and for a collection-valued
                 // property there is no comparer to order by at all. CanSort is readable here because
-                // both derived columns resolve their paths before calling this.
+                // OnDerive has already run, which is the ordering this method now guarantees rather
+                // than depends on.
                 if (SortOrder is { } order && CanSort)
                 {
                     Grid?.ApplyDeclaredSort(this, order);
@@ -874,25 +997,65 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
+        /// The ordering this column was handed, for the columns whose key type they do not carry - a
+        /// template's, a collection's, a lookup's. Null for a column that composes its own ordering from
+        /// a typed expression, which is <see cref="PropertyColumn{TItem, TProp}" />, and null for a
+        /// column that cannot be ordered by at all.
+        /// </summary>
+        /// <remarks>
+        /// It exists so that the four <c>Apply*</c> methods and <see cref="PropertyPath" /> are answered
+        /// once rather than five times in each of three columns. Those five were verbatim in
+        /// <see cref="TemplateColumn{TItem}" />, <c>CollectionColumn</c> and <c>LookupColumnBase</c>, and
+        /// a sixth - <see cref="CanSort" /> - looks like it belongs with them and does not: a
+        /// <see cref="FastGridSort{TItem}" /> over a computed key has a null <see cref="FastGridSort{TItem}.Path" />
+        /// and can still order rows, so a column that can sort is not a column that has a path.
+        /// </remarks>
+        internal virtual FastGridSort<TItem>? SortSource => null;
+
+        /// <summary>
         /// The dotted property path this column sorts, filters and persists by, or <c>null</c> when the
         /// authored expression is computed rather than a simple member access.
         /// </summary>
-        public virtual string? PropertyPath => null;
+        public virtual string? PropertyPath => SortSource?.Path;
 
         /// <summary>Whether this column can be sorted. False for a computed column with no explicit sort.</summary>
         public virtual bool CanSort => Sortable && PropertyPath is not null;
 
         /// <summary>Writes one cell for <paramref name="item" /> into <paramref name="builder" />.</summary>
-        public abstract void RenderCell(RenderTreeBuilder builder, int sequence, TItem item);
+        /// <remarks>
+        /// A column whose cell <em>is</em> its text overrides <see cref="CellTextOf" /> and leaves this
+        /// alone. Four of them used to override both with the same expression written twice, and nothing
+        /// checked that the two spellings agreed - which they have to, because the truncation tooltip
+        /// shows <see cref="CellTextOf" /> for a cell this drew. Overriding this is for a column whose
+        /// content is not a string at all, which is <see cref="TemplateColumn{TItem}" />.
+        /// <para>
+        /// It is virtual rather than abstract for that reason, and the trade has two halves. The
+        /// compiler no longer requires a column to say how its cell is drawn, so one that overrides
+        /// neither member draws an empty cell instead of failing to build - which is the same answer
+        /// <see cref="CellTextOf" /> already gives by default. And the two columns whose overrides
+        /// called their own field directly - a property column and a collection column - now reach it
+        /// through one more virtual call per cell. It allocates nothing, so §3 does not rule it out,
+        /// and gridbench reads the bare row unmoved at 154.55 KB; it is named here because per-cell
+        /// work is the thing this file weighs everything against.
+        /// </para>
+        /// </remarks>
+        /// <param name="builder">The render tree being written.</param>
+        /// <param name="sequence">The sequence number for the content.</param>
+        /// <param name="item">The row.</param>
+        [SuppressMessage("Design", "CA1062:Validate arguments of public methods",
+            Justification = "Runs once per cell. The rule exempts overrides, so the four this replaces never checked and nothing about the shipped behaviour changes by not checking here; adding a guard would be a branch per cell bought for a null the parameter's own annotation already rules out.")]
+        public virtual void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
+            => builder.AddContent(sequence, CellTextOf(item));
 
         /// <summary>
-        /// The cell's text, for the grid's cell tooltip. Null when the column has no text to give - a
-        /// template column's content is markup, not a string.
+        /// The cell's text, for the grid's cell tooltip and - unless <see cref="RenderCell" /> is
+        /// overridden - for the cell itself. Null when the column has no text to give: a template
+        /// column's content is markup, not a string.
         /// </summary>
         /// <remarks>
-        /// Deriving the text a second time is the cost of the tooltip: <see cref="RenderCell" /> writes
-        /// into the builder rather than returning a string, and threading one back out of it would put
-        /// an out parameter on the hot path for every caller who does not want the tooltip.
+        /// The tooltip derives the text a second time, and that is its cost: <see cref="RenderCell" />
+        /// writes into the builder rather than returning a string, and threading one back out of it
+        /// would put an out parameter on the hot path for every caller who does not want the tooltip.
         /// </remarks>
         /// <param name="item">The row.</param>
         public virtual string? CellTextOf(TItem item) => null;
@@ -923,7 +1086,8 @@ namespace Radzen.FastGrid
         /// to think hardest about before writing one.
         /// </para>
         /// </remarks>
-        public virtual IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending) => null;
+        public virtual IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending) =>
+            SortSource?.Apply(source, descending);
 
         /// <summary>
         /// Adds this column's ordering after one already applied, for a grid sorting by more than one
@@ -931,7 +1095,8 @@ namespace Radzen.FastGrid
         /// </summary>
         /// <param name="source">The already-ordered query.</param>
         /// <param name="descending">Whether to order descending.</param>
-        public virtual IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending) => null;
+        public virtual IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending) =>
+            SortSource?.ApplyThen(source, descending);
 
         /// <summary>
         /// The predicate this column's current filter composes. <c>null</c> as for
@@ -968,17 +1133,23 @@ namespace Radzen.FastGrid
         /// Orders an in-memory sequence by this column. <c>null</c> as for <see cref="ApplySort" />.
         /// </summary>
         public virtual IOrderedEnumerable<TItem>? ApplySortInMemory(System.Collections.Generic.IEnumerable<TItem> source,
-            bool descending) => null;
+            bool descending) => SortSource?.Apply(source, descending);
 
         /// <summary>
         /// Adds this column to an in-memory ordering already begun. <c>null</c> as for
         /// <see cref="ApplySort" />.
         /// </summary>
         public virtual IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
-            bool descending) => null;
+            bool descending) => SortSource?.ApplyThen(source, descending);
 
         /// <inheritdoc />
-        public override Task SetParametersAsync(ParameterView parameters)
+        /// <remarks>
+        /// Sealed for the same reason <see cref="OnParametersSet" /> is, and it has to be: this is what
+        /// runs it, so a column that overrode this and derived after calling the base could still write
+        /// the ordering fault <see cref="OnDerive" /> exists to make unwritable. Registration happens
+        /// here too, and a subclass that forgot to chain would leave itself out of the grid.
+        /// </remarks>
+        public sealed override Task SetParametersAsync(ParameterView parameters)
         {
             parameters.SetParameterProperties(this);
 

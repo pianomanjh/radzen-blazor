@@ -44,6 +44,40 @@ namespace Radzen.FastGrid.Tests
                 Columns.Template<Person>(person => builder => builder.AddContent(0, person.Id),
                     title: "Id", sortProperty: path, sortBy: sort));
 
+        // A sort a column was *handed* can be the second column of a multi-column sort as well as the
+        // first, and until this was written nothing in the suite exercised that: mutating the base's
+        // ApplyThenBy and ApplyThenByInMemory to answer null left all 798 tests green, on the four
+        // then-by forwards that three columns each used to carry a copy of.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ASortByColumnCanBeTheSecondColumnOfTheSort(bool queryable)
+        {
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var people = People.Sample();
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, queryable ? people.AsQueryable() : people);
+                p.Add(g => g.AllowSorting, true);
+                p.Add(g => g.AllowMultiColumnSorting, true);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, Grade>(x => x.Grade, title: "Grade"),
+                    Columns.Template<Person>(person => builder => builder.AddContent(0, person.First),
+                        title: "First", sortBy: FastGridSort<Person>.By(x => x.First))));
+            });
+
+            ClickHeader(cut, 0);
+            ClickHeader(cut, 1);
+
+            // Junior before Senior, and within each grade by first name. Neither column on its own puts
+            // the rows in this order, so it can only come from the second sort being added to the first.
+            Assert.Equal(new[] { "Alice", "Dave", "Bob", "Carol" }, Column(cut, 1));
+        }
+
         // The bug. Before SortBy existed there was no way to make this happen at all.
         [Fact]
         public void ATemplateColumnSortsTheRows()

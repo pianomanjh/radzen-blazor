@@ -69,7 +69,7 @@ namespace Radzen.FastGrid
         Type memberType = typeof(TElement);
 
         /// <inheritdoc />
-        public override string? PropertyPath => SortBy?.Path;
+        internal override FastGridSort<TItem>? SortSource => SortBy;
 
         /// <inheritdoc />
         public override string? FilterPropertyPath => collectionPath;
@@ -87,17 +87,7 @@ namespace Radzen.FastGrid
         public override string? HeaderText => Title ?? collectionPath;
 
         /// <inheritdoc />
-        protected override void OnParametersSet()
-        {
-            Derive();
-
-            // After Derive, not before: the base picks the default filter operator from
-            // FilterElementType, which is the member's type and is only known once the member selector
-            // has been read. Called first, it would default a string member to Equals.
-            base.OnParametersSet();
-        }
-
-        void Derive()
+        protected override void OnDerive()
         {
             // Equivalent rather than ReferenceEquals, for the same reason as PropertyColumn: Razor
             // rebuilds every expression tree per render, so reference equality never holds in markup.
@@ -133,27 +123,11 @@ namespace Radzen.FastGrid
         }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Not the base's answer, which asks whether there is a path: a sort over a computed key has
+        /// none and orders rows all the same.
+        /// </remarks>
         public override bool CanSort => Sortable && SortBy is not null;
-
-        /// <inheritdoc />
-        public override IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending)
-            => SortBy?.Apply(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source,
-            bool descending) => SortBy?.ApplyThen(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedEnumerable<TItem>? ApplySortInMemory(IEnumerable<TItem> source,
-            bool descending) => SortBy?.Apply(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
-            bool descending) => SortBy?.ApplyThen(source, descending);
-
-        /// <inheritdoc />
-        public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
-            => builder.AddContent(sequence, Text(item));
 
         /// <inheritdoc />
         public override string? CellTextOf(TItem item) => Text(item);

@@ -87,18 +87,7 @@ namespace Radzen.FastGrid
         public override Type FilterElementType => ElementType ?? typeof(TProp);
 
         /// <inheritdoc />
-        protected override void OnParametersSet()
-        {
-            Derive();
-
-            // After Derive, not before: the base picks the default filter operator from
-            // EffectiveFilterType, which for a column declared as object is read off the filter path -
-            // and that path is derived below. Called first, it defaulted such a column to Equals, and
-            // nothing afterwards recomputes it, so a declared FilterValue matched nothing for good.
-            base.OnParametersSet();
-        }
-
-        void Derive()
+        protected override void OnDerive()
         {
             // Equivalent rather than ReferenceEquals: Razor hands this a freshly built expression tree on
             // every render, so reference equality never holds for a column authored in markup and the
@@ -295,10 +284,6 @@ namespace Radzen.FastGrid
                 Expression.Convert(selector.Body, sequenceType),
                 selector.Parameters);
         }
-
-        /// <inheritdoc />
-        public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
-            => builder.AddContent(sequence, cellText?.Invoke(item));
 
         /// <inheritdoc />
         public override string? CellTextOf(TItem item) => cellText?.Invoke(item);

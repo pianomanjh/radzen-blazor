@@ -253,7 +253,7 @@ namespace Radzen.Blazor.FastGrid.Tests
             {
                 if (ReferenceEquals(args.Data, row) && args.Column.Title == title)
                 {
-                    args.Attributes["class"] = args.Column.CellElementClass is { } existing
+                    args.Attributes["class"] = args.Column.BodyCellClass is { } existing
                         ? existing + " rz-state-focused"
                         : "rz-state-focused";
                 }

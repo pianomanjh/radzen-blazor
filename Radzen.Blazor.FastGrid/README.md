@@ -299,7 +299,7 @@ Two things follow from where the cost was rather than from the design:
 Two different questions, and the table below answers only the second.
 
 **What does having them cost?** Every feature here sits behind a check that is false by construction
-when it is unused - `RowClick.HasDelegate`, `column.CellStyle is { }`, `FooterTemplate is not null`,
+when it is unused - `RowClick.HasDelegate`, `column.BodyCellStyle is { }`, `FooterTemplate is not null`,
 `sorts.Count == 0`. So an unused feature costs a branch, and the branches are per render or per column,
 never per row. Measured end to end: the commit before any of this work renders 1000 x 5 in **150.44 KB**,
 and the same grid with every feature on this page present and all of them switched off renders it in

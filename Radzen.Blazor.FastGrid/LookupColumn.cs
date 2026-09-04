@@ -37,7 +37,7 @@ namespace Radzen.FastGrid
         public override string? HeaderText => Title ?? path;
 
         /// <inheritdoc />
-        protected override void OnParametersSet()
+        protected override void OnDerive()
         {
             // Equivalent rather than ReferenceEquals: Razor hands this a freshly built expression tree
             // on every render, so reference equality never holds for a column authored in markup.
@@ -49,12 +49,9 @@ namespace Radzen.FastGrid
                 key = Property?.Compile();
             }
 
-            base.OnParametersSet();
+            // Last, because the base resolves the lookup and this reads the id it is resolved against.
+            base.OnDerive();
         }
-
-        /// <inheritdoc />
-        public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
-            => builder.AddContent(sequence, CellTextOf(item));
 
         /// <inheritdoc />
         public override string? CellTextOf(TItem item) => key is null ? null : NameOf(key(item));

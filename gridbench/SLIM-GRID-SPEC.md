@@ -1094,8 +1094,15 @@ they came out, which only it does. Same division of labour as everywhere else he
 Reordering or hiding a column is a deliberate act on the columns, and having focus stay where it is on
 screen is less startling than having it chase a column across the table. A sort or a filter is an act on
 the *rows* whose entire purpose is to move the one being looked for, so focus follows the item through
-`ItemKey` - which already exists and already backs selection membership - and falls back to the position
-where no `ItemKey` is supplied.
+`ItemKey` - which already exists, as the key the render tree diffs rows by - and falls back to the
+position where no `ItemKey` is supplied.
+
+**This paragraph used to say `ItemKey` "already backs selection membership", and it does not.** Selection
+membership is `selection.Contains(item)` over the collection the caller supplied
+(`RadzenFastGrid.cs:1723`, `:2042`), which compares however that collection compares - by reference for
+the `HashSet<TItem>` the grid's own keyboard range builds. `ItemKey` has exactly two readers, `SetKey`
+and this. Found by §20's review; it makes focus the *only* place item identity is keyed rather than
+compared, which strengthens §12's argument and weakens the claim that the precedent was already set.
 
 **Nothing to focus.** Keys are inert while `IsLoading`. Focus clears when the row set empties and
 returns to the first row when data arrives; retaining an index against an empty set means holding a
@@ -2422,7 +2429,7 @@ with a load-bearing reason should be recorded here beside it.
 | 3 | The browser seam has no interface | ~~Strong~~ **built**, §18 - and three of this row's claims corrected there |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
 | 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
-| 6 | `ColumnBase`'s internal half is a field-by-field protocol | **designed, §20** - and it is four sections, not seventeen members |
+| 6 | `ColumnBase`'s internal half is a field-by-field protocol | ~~Worth exploring~~ **built**, §20 - and it is four sections, not seventeen members |
 | 7 | A column's identity is a concept with no name | Worth exploring |
 | 8 | The drop-down forwards twelve parameters, then hands out the grid | ~~Worth exploring~~ **built**, §19 - it was the scan, not the forwarding |
 
@@ -2527,7 +2534,7 @@ none of them stated where an implementer would read it — and the decision is c
 `Or`, one declining column sends every typed column through the reflective route (`:1211-1218`). §10b's
 computed-column fault was this reading the wrong one of the four.
 
-**6. `ColumnBase`'s internal half is a field-by-field protocol.** **§20 has the design, and corrects two of this entry's three counts and the diagnosis behind them.** The public half is deep — 28
+**6. `ColumnBase`'s internal half is a field-by-field protocol.** **Built**; §20 has the design it was built from, corrects two of this entry's three counts and the diagnosis behind them, and records at the end the three of its own claims that did not survive. The public half is deep — 28
 parameters, `RenderCell`, and four `Apply*` methods behind which the whole typed-expression story
 sits. The internal half is not: seventeen members each answering exactly one grid call site
 (`CellClass`, `CellStyle`, `CellElementClass`, `ColStyle`, `FrozenCellStyle`, `FrozenFooterStyle`,
@@ -3791,3 +3798,121 @@ template is content and not text.
   every column inherits and most cannot use, which is the same shallowness this section is complaining
   about, one level up. The defence is that it replaces four such members with one; the defence is not
   that it is free.
+### What the build changed
+
+All six changes landed. Three of this section's own claims did not survive, one of them measured to the
+byte, and the refactor turned up two methods that no test in the suite had ever executed.
+
+**The memo design was wrong, and gridbench said so in an exact number.** This section said the four
+sections would each be "memoized against what it folds exactly as `CellElementClass` is", and called that
+"the existing one and not a new mechanism". Built that way it cost **8 reference fields per column** -
+three for the header's fold, two for the filter's, three for the footer's - which is 64 bytes a column
+and **320 bytes on a five-column grid**, paid by every grid whether or not anything is frozen, to save
+three concatenations per frozen column per render.
+
+The bench read it as +0.31 KB on three rows that had no business moving: bare **154.86** against a
+control of **154.55**, one sort **176.10** against **175.79**, a filter row **159.34** and **159.09**
+against **158.78**. 320 B is 0.3125 KB, and the two identical readings of 154.86 are what said it was
+not noise. Only the body's pair is memoized now - it is the one read once per *cell* - and the other
+three compose on read, which is exactly what the grid was already paying when it folded them itself.
+After: bare **154.69** then **154.55**, one sort **175.87**, a filter row **158.77**, two frozen columns
+**155.74** against **156.05** with the fields. Every row back inside the noise floor, and the frozen row
+down by the same 320 bytes.
+
+**The bisect that found it is worth more than the fix.** Reverting each change on its own - the sections,
+`RenderCell`, `OnDerive` - left the number at 154.86 every time, which reads like "none of them did it"
+and is the opposite of true. The probes renamed members back and restored the grid's inline folds while
+leaving the *fields* on the class, and the cost was never in the code that ran; it was in the size of the
+object. **A bisect has to remove the thing rather than rename it**, and a per-render cost that does not
+scale with the row count is a hint that what grew is an object rather than a loop.
+
+**Two methods had never been executed by any test.** Change 4 removed twelve verbatim `Apply*` forwards
+from three columns. Mutating the base's `ApplyThenBy` and `ApplyThenByInMemory` to answer `null` left all
+798 tests green - so the second-sort half of that block, six methods as they were written, was covered by
+nothing at all. `ApplySort` and `ApplySortInMemory` were both caught. There is a test now over both
+routes, and both mutations fail it. This is §9's first layer finding a gap that only appeared because the
+duplication was collapsed: three copies of an untested method look like coverage from a distance.
+
+**"Unrepresentable" is too strong for change 5, and right for change 3.** Sealing `OnParametersSet` does
+make the derivation order not the subclass's to choose - the mutation that moves `OnDerive()` after the
+base's own work fails ten tests, and there is no way to write the old mistake. `RenderCell` defaulting to
+`CellTextOf` is weaker than that: it removes the duplication from the four columns that had it, so those
+two halves cannot drift, but a subclass can override `RenderCell` again and reintroduce exactly the
+divergence. What guards it now is a test across all four column types, not the type system. Said plainly
+here because this section claimed otherwise.
+
+**`AutoFitWidth` was dead, and so was `FrozenClass` by the end.** The first was already recorded. The
+second became unreferenced once the three folds moved into the column, which is the small proof that the
+sections really did take the recipe: the member the grid needed to hold one no longer has a caller.
+
+**The same four-section table exists a second time and this section did not notice it.** The expand
+toggle is not a `ColumnBase` and carries its own `ToggleFrozenClass`, `ToggleFrozenCellStyle`,
+`ToggleFrozenHeaderStyle` and `ToggleFrozenFooterStyle` (`RadzenFastGrid.Frozen.cs:46-59`) - the same
+three stackings for the same four sections, with the same rule that the filter row shares the header's.
+It is composed in one place rather than at four call sites, so it is not shallow the way the column's
+half was, and it is left alone. But a change to how a pinned cell stacks now has to be made in two files,
+and neither said so; both do now.
+
+### What the review found that the build had not
+
+Two read-only passes over the diff, one against §3 and `CONTRIBUTING.md` and one against this section's
+own claims. Between them they corrected a sentence in the code, closed a door the design had left open,
+found a missing control, and produced two refusals worth recording.
+
+**"Only the body's fold is memoized" was half wrong, in the comment that is this file's own summary of
+the design.** It is true of the four *classes* and false of the three *styles*: `ComposeFrozenStyles`
+memoizes the body's, the header's and the footer's behind one pair of keys, because they are one
+composition with a z-index appended. Five fields, untouched by this piece and predating it. The comment
+now says which half is which. A policy statement that is wrong about half its members is worse than none,
+and this one sat at the top of the block a future author would read before adding a field.
+
+**Sealing `OnParametersSet` closed one door and left the next one open.** `SetParametersAsync` is what
+runs it, was `public override`, and was not sealed - so a column could override *that*, call the base,
+and derive afterwards, which is the exact fault `OnDerive` exists to make unwritable, one method over.
+It is sealed now. Registration happens there too, so a subclass that overrode it and forgot to chain
+would have left itself out of the grid entirely.
+
+**The frozen row had no control, and now has one.** §20's verification asked for four rows measured
+before and after; the frozen row was only added to the filter partway through, so its "before" was a
+cross-commit inference rather than a control. Measured at `567dfb237`, whose library is `9530a37a8`'s:
+**155.74 KB**, against **155.82** after. Unmoved, and now on the same terms as the other three - which
+read **154.64** against 154.55, **175.79** against 175.79, and **158.77** against 158.78.
+
+**Two of this section's six verification items ask for evidence the design cannot produce**, and that is
+a finding about the design rather than about the build.
+
+- Item 3 wants "the memo hands back the same instance **per section**". Three sections have no memo, on
+  purpose and for a measured reason, so the strongest available test is the one that exists: the body's
+  pair, plus the three styles that share `ComposeFrozenStyles`.
+- Item 5 wants change 5's fault to be proved unrepresentable by a mutation that **fails to build**. No
+  such mutation exists: `RenderCell` is public virtual on a public class, so a column can override it
+  and disagree with `CellTextOf`, and the mutation that does so compiles. Change 3's equivalent does
+  work - `protected override void OnParametersSet` on a column is now CS0239. **One of the two claims of
+  unrepresentability is real and the other is not**, and writing both in the same sentence is how the
+  weaker one would have been believed.
+
+**`SortSource` is `internal`, which is worse than the risk this section named.** The bullet said it puts
+"a sort on the base that only three of five columns have". It is narrower than that: no out-of-assembly
+column can override it at all, so for anyone outside this library it is a member that exists and can
+never be used, and the twelve forwards it replaced were the only way in. Kept as it is, because widening
+it means publishing part of the column protocol, which is exactly what this section refused to do for the
+filter row's eight members and for the same reason.
+
+**§20 named the toggle column's duplicate table only after the build, and the sharpest instance of it is
+one line.** `RadzenFastGrid.cs:1230` reads `var spacerStyle = element == "th" ? ToggleFrozenHeaderStyle :
+ToggleFrozenFooterStyle;` - which is "the filter row is a second row of the header, so it takes the
+header's style" written as a comparison on a tag name, at a call site. That is this section's central
+diagnosis, verbatim, in code the piece did not touch. Left alone deliberately: the toggle is not a
+`ColumnBase`, has no class, style or width of its own to fold a pinning into, and its four members are
+composed in **one** place where a column's were composed at four - so it is not shallow in the way that
+made the column's half worth moving. Both files now point at each other, which is the least that should
+have been true before.
+
+**A seventh change, not in the design.** `CellClass` became `CellContentClass`. It classes the span
+inside a body cell rather than the cell element, and next to four members named for sections it read as
+a fifth. Small, and recorded because the design listed six.
+
+**And one thing outside the piece.** §12 claimed `ItemKey` "already backs selection membership". It does
+not - membership is `Contains` on the caller's own collection - and §12 is corrected above. It matters
+beyond a wrong sentence: it means focus is the *only* place in the grid where an item is identified by
+key rather than compared by reference, which is a point for §15's candidate 7 rather than against it.
