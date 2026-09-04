@@ -374,8 +374,58 @@ async function main() {
                 };
             })();
 
+            // Fitting to the container while one column is not being fitted at all - what a declared
+            // Width or AutoFit="false" column is. Its width is space the others cannot have, so a fit
+            // that ignores it sizes the rest to the whole container and the table overflows the one
+            // mode whose entire purpose is not overflowing.
+            const withReserved = await (async () => {
+                const restore = pane.style.width;
+                const kept = indices.slice(0, -1);
+
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                // Narrow enough that the fitted columns must give something up, wide enough that they
+                // can. With room to spare the bare column quietly absorbs the difference and a fit
+                // that ignored the reserved column still looks correct; narrower than every floor put
+                // together, both answers scroll and the difference is only how far. In between is the
+                // one band where the right answer fits and the wrong one does not.
+                pane.style.width = '700px';
+                table.getBoundingClientRect();
+
+                // The column left out keeps a width of its own, the way a declared one would.
+                cols.children[columns - 1].style.width = '220px';
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, kept,
+                    kept.map(() => null), kept.map(() => null), 0, kept[kept.length - 1], false, false,
+                    true, kept.map(() => false));
+
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                const widths = at();
+                const total = round(widths.reduce((a, b) => a + b, 0));
+                const room = round(pane.clientWidth);
+
+                const answer = {
+                    widths,
+                    total,
+                    room,
+                    reservedColumn: round(widths[columns - 1]),
+                    fitsTheContainer: total <= room + 1,
+                    floorTotal: round(parseFloat(table.style.minWidth) || 0)
+                };
+
+                window.__fastgrid.releaseFit(table.id);
+                table.style.minWidth = '';
+                pane.style.width = restore;
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                return answer;
+            })();
+
             return {
                 animation,
+                withReserved,
                 defaultFloor,
                 fittedToContainer,
                 squeezed,
