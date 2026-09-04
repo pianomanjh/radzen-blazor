@@ -1003,7 +1003,13 @@ namespace Radzen.FastGrid
             {
                 loadOwed = false;
 
-                await PayOwedLoadAsync();
+                // The funnel, not a second copy of its dispatch: it picks the route that owns this
+                // source, re-reading a world the deferral may have changed - virtualization switched on,
+                // or a source that has stopped being one the executor owns - and each of its branches
+                // either starts a load or lowers the scrim. Announcing is off because being handed a
+                // first page is not a setting anyone chose. Reached only with `drawn` already true, so
+                // the guard above cannot send it straight back here.
+                await RefreshAsync(announce: false);
             }
 
             if (ClampPage())
@@ -1412,10 +1418,31 @@ namespace Radzen.FastGrid
             // BeginAsyncLoad installs a fresh token immediately after when there is a load to run.
             CancelLoad();
 
+            // §23's rule, and this is the place that makes it hold rather than the two call sites that
+            // first noticed it. Every public way to reload - Reload, ClearFilters, ApplyFilters,
+            // GoToPage - funnels through here, and a parent may call any of them from its own
+            // OnAfterRenderAsync, which the renderer runs before the grid's. The load would then be
+            // composed correctly and still be the first of two, because the owed one is behind it: the
+            // application's handler invoked twice, concurrently, which is worse than the reload design
+            // §23 rejected for costing exactly that. Owed instead, so there is one load either way.
+            // Virtualizing is exempt, as it is everywhere else in §23: the provider composes when it is
+            // asked for a window, which is already after the render, so there is nothing here to wait
+            // for and owing one would only put a fetch behind the fetch.
+            if (!drawn && !AllowVirtualization && (LoadData.HasDelegate || AsyncOwnsData))
+            {
+                OweLoad();
+
+                return Task.CompletedTask;
+            }
+
             if (AllowVirtualization)
             {
                 // A new filter changes how many rows there are, so the cached total goes with it.
                 virtualTotal = null;
+
+                // Nothing below this branch lowers the scrim, and a deferral may have raised one: the
+                // provider owns fetching from here and never touches IsLoading.
+                IsLoading = false;
 
                 // Virtualize holds its own copy of the window, so a sort or filter that only re-renders
                 // redraws the same rows: the refetch is what makes the provider compose the new query.
@@ -1435,9 +1462,12 @@ namespace Radzen.FastGrid
             }
 
             // Nothing to load: the view composes over Data as it is drawn. Dropping what a previous
-            // asynchronous load produced is all that is needed.
+            // asynchronous load produced is all that is needed - and lowering the scrim, because this is
+            // the branch that knows nothing will run, and a deferral may have raised one for a source
+            // that has since stopped being loadable.
             loaded = null;
             loadedCount = null;
+            IsLoading = false;
 
             StateHasChanged();
 
@@ -1493,37 +1523,12 @@ namespace Radzen.FastGrid
         /// </remarks>
         void OweLoad()
         {
+            // Whatever is in flight was composed from a column list this grid is about to compose again
+            // from a complete one, so it is superseded rather than left to land on top of the answer.
+            CancelLoad();
+
             loadOwed = true;
             IsLoading = true;
-        }
-
-        /// <summary>Runs the load the first render was waiting for.</summary>
-        async Task PayOwedLoadAsync()
-        {
-            // Read again rather than remembered: a parameter set between the deferral and this render
-            // may have switched virtualization on, and then the provider owns fetching - invoking the
-            // handler here would ask it for a page with no window at all, which is the call the
-            // parameter-set path declines to make for exactly that reason.
-            if (!AllowVirtualization && LoadData.HasDelegate)
-            {
-                await InvokeLoadDataAsync();
-
-                return;
-            }
-
-            if (BeginAsyncLoad() is { } load)
-            {
-                await load;
-
-                return;
-            }
-
-            // The source stopped being one the executor owns between the deferral and here - a new Data
-            // arrived, or virtualization was switched on. Nothing will run, so nothing else will lift
-            // the scrim the deferral raised.
-            IsLoading = false;
-
-            StateHasChanged();
         }
 
         async Task RefreshVirtualizedAsync()
