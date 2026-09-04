@@ -121,8 +121,8 @@ export function detach(bodyId) {
 // browser is asked how wide the pinned run is and how many rows fit in the viewport, because those are
 // facts only it has. What to do with them is decided in C#.
 
-/// Attaches the guard that stops the browser scrolling for the keys the grid handles, and reports back
-/// what only the browser knows: the writing direction and the height of the viewport in rows.
+// Attaches the guard that stops the browser scrolling for the keys the grid handles, and reports back
+// what only the browser knows: the writing direction and the height of the viewport in rows.
 export function attachNavigation(viewId, keys) {
   const view = document.getElementById(viewId);
 
@@ -161,8 +161,8 @@ export function detachNavigation(viewId) {
   view._fastGridKeys = null;
 }
 
-/// Re-reads the direction and the viewport height. Called when focus enters rather than per keystroke,
-/// so a resized window is picked up without measuring on every arrow key.
+// Re-reads the direction and the viewport height. Called when focus enters rather than per keystroke,
+// so a resized window is picked up without measuring on every arrow key.
 export function measureNavigation(viewId) {
   const view = document.getElementById(viewId);
 
@@ -182,14 +182,14 @@ function measure(view) {
   };
 }
 
-/// Moves the cursor to one cell. row is -1 for the header row; cell is the browser's own cell index,
-/// which is the index the click listener already reports and so counts the row-detail toggle.
+// Moves the cursor to one cell. row is -1 for the header row; cell is the browser's own cell index,
+// which is the index the click listener already reports and so counts the row-detail toggle.
 ///
-/// pinnedStart and pinnedEnd are how many cells of the row are frozen to each edge - C# knows which
-/// columns those are, and the browser measures how wide they came out.
+// pinnedStart and pinnedEnd are how many cells of the row are frozen to each edge - C# knows which
+// columns those are, and the browser measures how wide they came out.
 ///
-/// Returns whether the cell was found straight away. A row outside a virtualized window is not, and is
-/// waited for: see the scroll-and-settle below.
+// Returns whether the cell was found straight away. A row outside a virtualized window is not, and is
+// waited for: see the scroll-and-settle below.
 export function focusCell(viewId, row, cell, pinnedStart, pinnedEnd, itemSize) {
   const view = document.getElementById(viewId);
 
@@ -260,9 +260,9 @@ function paint(view, viewId, target, pinnedStart, pinnedEnd) {
   bringIntoView(view, target, pinnedStart, pinnedEnd);
 }
 
-/// Clears the cursor and the active descendant, leaving C#'s position alone so tabbing back in
-/// restores it. RadzenDataGrid never resets its equivalent, so its grid claims an active descendant
-/// while nothing in it is focused.
+// Clears the cursor and the active descendant, leaving C#'s position alone so tabbing back in
+// restores it. RadzenDataGrid never resets its equivalent, so its grid claims an active descendant
+// while nothing in it is focused.
 export function blurCell(viewId) {
   const view = document.getElementById(viewId);
 
@@ -560,7 +560,7 @@ async function ready(tableId, wait) {
 // when the window does - only the room to put them in - so the expensive half is never repeated.
 const fitted = new Map();
 
-/// Splits `available` across the columns, taking what is missing out of the ones that can spare it.
+// Splits `available` across the columns, taking what is missing out of the ones that can spare it.
 // A column gives up in proportion to how much it has above its floor, and one that reaches its floor
 // stops giving and hands its share to the ones still above theirs - which is why this iterates rather
 // than dividing once.
@@ -569,158 +569,158 @@ const fitted = new Map();
 // arrive with nothing above it and the same arithmetic leaves them alone. Saying it twice - a floor and
 // a flag - is what let a mutation that deleted the flag pass every test.
 function distribute(state, available) {
-    const { content, soft, hard, out, last, cols, bare } = state;
-    const n = content.length;
+  const { content, soft, hard, out, last, cols, bare } = state;
+  const n = content.length;
 
-    let deficit = -available;
+  let deficit = -available;
 
+  for (let i = 0; i < n; i++) {
+    out[i] = content[i];
+    deficit += content[i];
+  }
+
+  // More room than the columns need. Handing every column its content width would leave the table
+  // narrower than its container, and under table-layout:fixed the browser then shares the surplus
+  // across every column in proportion - including the required ones, which is the one thing this
+  // mode promises not to do. So the surplus goes to a single column with no width of its own, the
+  // same way it does when the grid is not fitting at all.
+  if (deficit <= 0 && bare >= 0) {
     for (let i = 0; i < n; i++) {
-        out[i] = content[i];
-        deficit += content[i];
+      if (i === bare) {
+        if (last[i] !== -1) {
+          cols[i].style.width = '';
+          last[i] = -1;
+        }
+      } else if (out[i] !== last[i]) {
+        cols[i].style.width = out[i].toFixed(1) + 'px';
+        last[i] = out[i];
+      }
     }
 
-    // More room than the columns need. Handing every column its content width would leave the table
-    // narrower than its container, and under table-layout:fixed the browser then shares the surplus
-    // across every column in proportion - including the required ones, which is the one thing this
-    // mode promises not to do. So the surplus goes to a single column with no width of its own, the
-    // same way it does when the grid is not fitting at all.
-    if (deficit <= 0 && bare >= 0) {
-        for (let i = 0; i < n; i++) {
-            if (i === bare) {
-                if (last[i] !== -1) {
-                    cols[i].style.width = '';
-                    last[i] = -1;
-                }
-            } else if (out[i] !== last[i]) {
-                cols[i].style.width = out[i].toFixed(1) + 'px';
-                last[i] = out[i];
-            }
+    return;
+  }
+
+  // Two floors, taken in order. Everything comes off the soft floor first - the width at which a
+  // column still shows its own heading. Only when every column is standing on that and the table
+  // still does not fit does the second round start, which spends the difference between a heading
+  // and the values under it.
+  //
+  // That difference is the whole answer to a column headed "Manufacturing Code" over six-character
+  // codes: it is carrying width its values never needed, so it is the first thing worth spending -
+  // but only once the columns with ordinary slack have already given theirs. A column whose heading
+  // is about as wide as its content has almost nothing here and gives almost nothing.
+  for (const floor of [soft, hard]) {
+    for (let pass = 0; pass < 8 && deficit > 0.5; pass++) {
+      let pool = 0;
+
+      for (let i = 0; i < n; i++) {
+        if (out[i] > floor[i]) {
+          pool += out[i] - floor[i];
+        }
+      }
+
+      if (pool <= 0) {
+        break;
+      }
+
+      const wanted = Math.min(deficit, pool);
+      let took = 0;
+
+      for (let i = 0; i < n; i++) {
+        if (out[i] <= floor[i]) {
+          continue;
         }
 
-        return;
+        const give = Math.min(out[i] - floor[i], wanted * ((out[i] - floor[i]) / pool));
+
+        out[i] -= give;
+        took += give;
+      }
+
+      if (took <= 0) {
+        break;
+      }
+
+      deficit -= took;
     }
+  }
 
-    // Two floors, taken in order. Everything comes off the soft floor first - the width at which a
-    // column still shows its own heading. Only when every column is standing on that and the table
-    // still does not fit does the second round start, which spends the difference between a heading
-    // and the values under it.
-    //
-    // That difference is the whole answer to a column headed "Manufacturing Code" over six-character
-    // codes: it is carrying width its values never needed, so it is the first thing worth spending -
-    // but only once the columns with ordinary slack have already given theirs. A column whose heading
-    // is about as wide as its content has almost nothing here and gives almost nothing.
-    for (const floor of [soft, hard]) {
-        for (let pass = 0; pass < 8 && deficit > 0.5; pass++) {
-            let pool = 0;
-
-            for (let i = 0; i < n; i++) {
-                if (out[i] > floor[i]) {
-                    pool += out[i] - floor[i];
-                }
-            }
-
-            if (pool <= 0) {
-                break;
-            }
-
-            const wanted = Math.min(deficit, pool);
-            let took = 0;
-
-            for (let i = 0; i < n; i++) {
-                if (out[i] <= floor[i]) {
-                    continue;
-                }
-
-                const give = Math.min(out[i] - floor[i], wanted * ((out[i] - floor[i]) / pool));
-
-                out[i] -= give;
-                took += give;
-            }
-
-            if (took <= 0) {
-                break;
-            }
-
-            deficit -= took;
-        }
+  // Written only where it changed. During a drag most columns move every frame, but the required ones
+  // never do, and neither does anything already sitting on its floor.
+  for (let i = 0; i < n; i++) {
+    if (out[i] !== last[i]) {
+      cols[i].style.width = out[i].toFixed(1) + 'px';
+      last[i] = out[i];
     }
-
-    // Written only where it changed. During a drag most columns move every frame, but the required ones
-    // never do, and neither does anything already sitting on its floor.
-    for (let i = 0; i < n; i++) {
-        if (out[i] !== last[i]) {
-            cols[i].style.width = out[i].toFixed(1) + 'px';
-            last[i] = out[i];
-        }
-    }
+  }
 }
 
 // Follows the container. Throttled to one redistribution per frame: the arithmetic is free but each
 // write forces the table to lay out again, and at a thousand rendered rows that is the whole cost.
 function watch(table, state) {
-    const wrapper = table.parentElement;
+  const wrapper = table.parentElement;
 
-    if (!wrapper || typeof ResizeObserver === 'undefined') {
-        return;
+  if (!wrapper || typeof ResizeObserver === 'undefined') {
+    return;
+  }
+
+  state.observer = new ResizeObserver(() => {
+    if (state.queued) {
+      return;
     }
 
-    state.observer = new ResizeObserver(() => {
-        if (state.queued) {
-            return;
-        }
+    state.queued = requestAnimationFrame(() => {
+      state.queued = 0;
 
-        state.queued = requestAnimationFrame(() => {
-            state.queued = 0;
+      // The same question the fit asked before it ran, asked again because the answer changes:
+      // a window narrowed past the Responsive breakpoint stacks the rows into cards, and a
+      // colgroup width decides nothing there. Guarding only the first fit leaves the observer
+      // writing widths into a table that is no longer one.
+      if (getComputedStyle(table).display !== 'table') {
+        return;
+      }
 
-            // The same question the fit asked before it ran, asked again because the answer changes:
-            // a window narrowed past the Responsive breakpoint stacks the rows into cards, and a
-            // colgroup width decides nothing there. Guarding only the first fit leaves the observer
-            // writing widths into a table that is no longer one.
-            if (getComputedStyle(table).display !== 'table') {
-                return;
-            }
+      const available = wrapper.clientWidth - state.reserved;
 
-            const available = wrapper.clientWidth - state.reserved;
-
-            // The guard against feeding ourselves: writing column widths can change the table's width,
-            // and a wrapper that sizes to its content would then report a new size and ask again. A
-            // width we have already answered for is not a new question.
-            if (available !== state.available && available > 0) {
-                state.available = available;
-                distribute(state, available);
-            }
-        });
+      // The guard against feeding ourselves: writing column widths can change the table's width,
+      // and a wrapper that sizes to its content would then report a new size and ask again. A
+      // width we have already answered for is not a new question.
+      if (available !== state.available && available > 0) {
+        state.available = available;
+        distribute(state, available);
+      }
     });
+  });
 
-    state.observer.observe(wrapper);
+  state.observer.observe(wrapper);
 }
 
-/// Stops following a table's container. Called when the grid goes away; a grid that is merely
+// Stops following a table's container. Called when the grid goes away; a grid that is merely
 // re-rendered keeps its observer, because the table element and the content widths are both still good.
 export function releaseFit(tableId) {
-    const state = fitted.get(tableId);
+  const state = fitted.get(tableId);
 
-    // The animation's own timer, which is on the table rather than in this state. It only removes a
-    // class, but it removes it from an element this grid has finished with, and letting it go is the
-    // difference between one release path and two.
-    const table = document.getElementById(tableId);
+  // The animation's own timer, which is on the table rather than in this state. It only removes a
+  // class, but it removes it from an element this grid has finished with, and letting it go is the
+  // difference between one release path and two.
+  const table = document.getElementById(tableId);
 
-    if (table && table.rzFastGridAnimation) {
-        clearTimeout(table.rzFastGridAnimation);
-        table.rzFastGridAnimation = 0;
+  if (table && table.rzFastGridAnimation) {
+    clearTimeout(table.rzFastGridAnimation);
+    table.rzFastGridAnimation = 0;
+  }
+
+  if (state) {
+    if (state.queued) {
+      cancelAnimationFrame(state.queued);
     }
 
-    if (state) {
-        if (state.queued) {
-            cancelAnimationFrame(state.queued);
-        }
-
-        if (state.observer) {
-            state.observer.disconnect();
-        }
-
-        fitted.delete(tableId);
+    if (state.observer) {
+      state.observer.disconnect();
     }
+
+    fitted.delete(tableId);
+  }
 }
 
 export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffset, bare, wait, animate,

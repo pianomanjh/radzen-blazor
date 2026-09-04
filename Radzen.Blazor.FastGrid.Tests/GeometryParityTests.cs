@@ -536,10 +536,6 @@ namespace Radzen.Blazor.FastGrid.Tests
         [Fact]
         public void A_fit_the_user_asked_for_moves_the_columns_rather_than_jumping_them()
         {
-            // Sampled mid-flight rather than by reading the stylesheet: a transition that is declared
-            // and not running looks identical to one that is. This run starts from no width at all,
-            // which is the case that does not interpolate on its own - `auto` has nothing to leave
-            // from - so it also covers the pin.
             var fit = Fitted();
 
             // Counted rather than sampled part-way: headless Chromium runs the animation clock free of

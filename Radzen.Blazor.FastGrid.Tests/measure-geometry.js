@@ -305,9 +305,6 @@ async function main() {
                 return { wide, steps };
             })();
 
-            // No MinWidth on anything, squeezed past what the columns can give. Each one should stop
-            // at the width of its own heading rather than at zero, so a column is always still there
-            // and still says what it is.
             // No MinWidth on anything, at two pressures. Easing off first: every heading should still
             // fit, because the soft floor holds there. Then past what the columns can give, where a
             // heading may be spent - but the values under it may not, and nothing may vanish.

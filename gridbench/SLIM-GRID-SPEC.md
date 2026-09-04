@@ -1271,7 +1271,10 @@ the grid cannot.
 documented rather than worked around: the alternatives were a modifier key, which is undiscoverable and
 untestable, and an item in the column picker, which is a menu about visibility.
 
-**`AutoFitAsync()` and `AutoFitAsync(column)` are the whole rest of the surface.** No event: a fit is
+**`AutoFitOverflow`, `AutoFitPriority`, `AutoFitAsync()` and `AutoFitAsync(column)` are the whole rest
+of the surface.** The first two arrived with the fit-to-container work below and belong here rather than
+only in the section that argued for them - a surface section that lists two of four parameters is worse
+than one that lists none, because it reads as complete. No event: a fit is
 awaitable, and `Once` has no audience for a notification. Recorded as a decision so it is not later read
 as an oversight.
 
@@ -1511,7 +1514,7 @@ three width layers, which column is left bare, and the all-frozen fallback.
 every column measured identically, it was asserting the implementation rather than the behaviour, which
 is what §9 exists for.
 
-**As built: 19 bUnit tests and 7 Chromium panes.** The probe runs the shipped `fastgrid.js` itself
+**As built: 24 bUnit facts on auto-fit alone and one many-scenario Chromium pane.** The probe runs the shipped `fastgrid.js` itself
 rather than a transcription of it - the export keywords come off so a `file://` page can call it, and
 nothing else about the source is touched. Its pane holds two columns with identical values and
 different titles, which is what separates the header half of the measurement from the body half: a
