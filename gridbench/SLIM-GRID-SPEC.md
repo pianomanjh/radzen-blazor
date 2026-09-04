@@ -2415,7 +2415,7 @@ with a load-bearing reason should be recorded here beside it.
 | 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
 | 7 | A column's identity is a concept with no name | Worth exploring |
-| 8 | The drop-down forwards twelve parameters, then hands out the grid | Worth exploring |
+| 8 | The drop-down forwards twelve parameters, then hands out the grid | **designed, §19** - and it is the scan, not the forwarding |
 
 **1. Compose the view behind one interface.** **Built**, as `Composition`; §16 has the design it was
 built from and, at the end, the three of its decisions that did not survive the building.
@@ -3374,3 +3374,132 @@ otherwise.
   hazard the facade fixed on the call side, unfixed on the test side, and it is the next thing to look
   at if this seam is opened again.
 - **The ordering constraints are untouched**, as designed. §13's finding stands.
+
+---
+
+## 19. The drop-down adopts its value again on every render - the design
+
+§15's eighth candidate, argued before it is built. That entry ranks it "worth exploring" and makes three
+claims; one is a measured fault, one is wrong about which sources reach it, and one is not a fault at
+all. The measurement is first, because it is what decides the piece.
+
+### The fault, measured
+
+`Adopt` finds the row a bound value names, so a closed drop-down renders text rather than a placeholder.
+It runs on a value change **and on a data change**, deliberately - "a value is routinely bound before its
+rows arrive". The data-change test is `!ReferenceEquals(lastData, Data)`, which §10 has already recorded
+as true on every render for a source written in markup.
+
+What it does then is `Data.FirstOrDefault(item => Equals(ValueOf(item), value))`, and `ValueOf` returns
+`object?`. **So every element boxes**, which is §3's rule 5 - "a generic value must never be widened to
+reach an interface" - on a path that runs once per parent render for a drop-down nobody has opened.
+
+Measured over twenty renders of a closed drop-down whose `Data` is re-materialised each time, against
+the same drop-down holding one instance:
+
+| rows | re-materialising | stable source | the re-adopt |
+| ---: | ---: | ---: | ---: |
+| 50 | 4,843 B/render | 3,475 B/render | **+1,368 B** |
+| 1000 | 27,646 B/render | 3,475 B/render | **+24,171 B** |
+
+24,171 B over a thousand rows is 24 B an element, which is a boxed `int` exactly, and it is **seven
+times the entire rest of the render**. The scan stops at the match, so this is the worst case - a value
+whose row is last, or is not there at all, which is also what a `LoadData` page that does not contain
+the value produces.
+
+### What §15 got wrong about it
+
+**"for exactly the sources this library targets"** - no. `Adopt` returns before scanning when
+`Data is IQueryable && Data is not ICollection<TItem>`, with a comment saying why: walking a queryable
+here would run an unfiltered, unpaged query on the render thread. So the Entity Framework source §10's
+sibling findings are about is the one case that **cannot** reach this. What reaches it is an in-memory
+sequence that is a new instance each render - `Data="@people.Where(p => p.Active)"` written in markup,
+or a `ToList()` in a property. That is a real and ordinary way to write a lookup, and it is a narrower
+claim than §15's.
+
+**"twelve of its thirty-three parameters are one-line forwards, so a thirteenth is four places"** - the
+count is twelve of thirty-two, and it is not a fault. Each is a documented, typed parameter of a
+component in a shipped package; the alternative is `@attributes` splatting, which makes the drop-down's
+surface undiscoverable to anyone reading its API, and this branch's §8 argument for a narrow deliberate
+surface cuts the same way. Four places for a thirteenth is the price of saying what the component
+supports. **Refused, with that as the reason.**
+
+**`Grid => grid` exposing all 81 of the grid's parameters** is a real leak and is not this piece. Its
+one caller is a test asserting the grid instance survives the popup closing, which wants "is this the
+same grid" and not "here is the grid" - but narrowing it is an API change to a public member for the
+benefit of one assertion, and it should be argued on its own rather than as a side effect of fixing a
+scan.
+
+### What changes
+
+**Once the value is explained, a data change does not need to explain it again.**
+
+```csharp
+// today
+if (!valueChanged && !dataChanged) return;
+
+// designed
+if (!valueChanged && !dataChanged) return;
+if (!valueChanged && StillExplains(value)) { lastData = Data; return; }
+```
+
+where `StillExplains` asks whether what is already held answers the value - one `ValueOf` call for the
+single case, and for `Multiple` whether every wanted value is already in `SelectedItems`. That turns N
+boxes into one, and turns 24,171 B into about 24.
+
+**It keeps the reason `Adopt` runs on a data change at all.** A value bound before its rows arrive is
+not explained, so `StillExplains` is false and the scan runs - every render, until the row shows up,
+which is exactly the behaviour that test exists for. What stops is re-explaining an answer already
+found.
+
+**The trade, stated:** the held row is an instance from the previous source. A source swapped for a
+genuinely different one goes on showing the old row's text until the value changes or something calls
+`Reload()`. That is the same lifetime rule §10 chose for the check-box lists and §14 for its lookups,
+and it is chosen here for the same reason - the alternative is paying a scan per render to notice a
+change that almost never happens.
+
+### Deliberately not proposed
+
+- **Typing `ValueProperty` as `Expression<Func<TItem, TValue>>`.** This is the real fix for the boxing:
+  `TValue` is already a type parameter of the component, so the value's type is known, and §4's whole
+  argument - that a typed expression beats a widened one, measured at 220 KB against 119 KB - applies
+  here unchanged. It is refused *for now* because it is a breaking change to a public parameter on a
+  shipped component, and because the piece above takes the same 24 KB to nothing without one. Recorded
+  here so that it is a decision rather than an oversight: if the drop-down's surface is ever revised,
+  this is the change to make, and it would also fix the `Multiple` path's boxing, which the piece above
+  only avoids rather than removes.
+- **Caching the adoption by key.** §10's answer for its sibling was "key it by `ItemKey`", recorded and
+  not done. The drop-down has no `ItemKey`, and giving it one to avoid a scan it can already skip is a
+  larger surface for a smaller gain.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **The measurement above, repeated after.** The claim is that the re-adopt column goes to roughly the
+   cost of one `ValueOf` at both row counts. It is measured with
+   `GC.GetAllocatedBytesForCurrentThread` around twenty renders rather than in `gridbench`, because
+   what is being measured is a *re*-render of a closed drop-down and `DropDownBench` measures first
+   renders. That measurement becomes a test, since a number nothing re-checks is a number that drifts.
+2. **A test that a value bound before its rows arrive is still adopted when they do**, which is the
+   behaviour the skip must not break, and which is the one thing this change could plausibly get wrong.
+3. **A test that a genuinely changed source is not re-explained**, asserting the trade above rather than
+   leaving it as prose - a stated consequence nothing checks is how §17's wrong comment happened.
+4. **Every new test mutation-checked**, and the mutation must compile.
+5. **A `gridbench --job short` control before and after** on the grid rows, which should not move at
+   all: nothing here is on the grid's path. And `DropDownBench` itself, which measures the first render
+   the skip does not affect - quoted to show it did not.
+
+### Where this could still be wrong
+
+- **`StillExplains` may cost more than it saves for `Multiple`.** Checking that every wanted value is
+  held is a walk of `SelectedItems` and a set build, which for a large multi-selection is not obviously
+  cheaper than the scan it replaces. If it is not, the honest answer is to skip only the single case,
+  which is the common one and the one measured above.
+- **The trade may be the wrong one.** "The source changed and the text did not follow" is a real bug for
+  anyone who swaps `Data` for a different query and expects the label to follow. §10 and §14 both made
+  this choice, so the branch is at least consistent - but three consistent choices are not evidence, and
+  a user hitting it will not care which section it was recorded in.
+- **The fault may be rarer than the measurement makes it look.** It needs a re-materialising in-memory
+  source *and* a bound value *and* a parent that re-renders often. Each is ordinary; all three together
+  may not be. The number is real; how often anyone pays it is not something this section can measure.
