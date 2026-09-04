@@ -139,6 +139,7 @@ namespace Radzen.FastGrid
 
             // The list the filter offers is built from them, so it goes with them.
             entries = null;
+            entriesBlank = null;
         }
 
         /// <inheritdoc />
@@ -156,9 +157,10 @@ namespace Radzen.FastGrid
 
                 if (generation == asked)
                 {
-                    // A lookup that answers with nothing has no names, which is not the same as not
-                    // having been asked: left null it would go back on the queue for an answer it has
-                    // already given, and each redraw would ask again.
+                    // The coalesce is the seam between a case that fetches and one that does not: the
+                    // base FetchAsync answers with Resolve(), which is null for a case that needs
+                    // fetching and forgot to override it. Left null the column would go back on the
+                    // queue for an answer it has already given, and each redraw would ask again.
                     SetNames(fetched ?? Unresolved);
                 }
 
@@ -253,9 +255,28 @@ namespace Radzen.FastGrid
         /// control whose options move as the data does moves under the reader, and that is worth more
         /// than a shorter list.
         /// </remarks>
-        internal override IEnumerable? FilterValues => entries ??= BuildEntries();
+        internal override IEnumerable? FilterValues
+        {
+            get
+            {
+                // Rebuilt when the word for the blank entry changes, which a culture change does as
+                // well as the parameter: every other string this grid draws is read per render, and one
+                // baked into a list built once would otherwise stay on screen for good.
+                var blank = OffersBlank ? Grid?.BlankFilterText ?? string.Empty : null;
 
-        List<object> BuildEntries()
+                if (entries is null || !string.Equals(entriesBlank, blank, StringComparison.Ordinal))
+                {
+                    entriesBlank = blank;
+                    entries = BuildEntries(blank);
+                }
+
+                return entries;
+            }
+        }
+
+        string? entriesBlank;
+
+        List<object> BuildEntries(string? blank)
         {
             var built = new List<object>((Names?.Count ?? 0) + 1);
 
@@ -272,10 +293,10 @@ namespace Radzen.FastGrid
             built.Sort(static (left, right) =>
                 StringComparer.CurrentCulture.Compare(left.ToString(), right.ToString()));
 
-            if (OffersBlank)
+            if (blank is not null)
             {
                 // First, and not sorted among the names: it is the absence of one.
-                built.Insert(0, new FastGridLookupEntry<TKey>(default, Grid?.BlankFilterText ?? string.Empty));
+                built.Insert(0, new FastGridLookupEntry<TKey>(default, blank));
             }
 
             return built;

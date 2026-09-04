@@ -2113,8 +2113,22 @@ without a control has not been measured - is what the `data-r` claim cost when i
 compose from the columns' own expressions, and no member is reached by name, so no path here sits behind
 `DynamicCode.Supported` - so unlike the four features `Radzen.Blazor.FastGrid.TrimTest` deliberately
 leaves out, both columns belong in it. They are on its reachable path now: it publishes trimmed with
-warnings as errors and no trim warning, and the browser check that follows resolves both kinds of lookup
-cell and filters a column by a name it typed, which is what a trimmed member would be missing from.
+warnings as errors and no trim warning, and the browser check that follows resolves a cell of each
+cardinality and filters a column by a name it typed, which is what a trimmed member would be missing
+from.
+
+**All three provenances, because provenance is where the risk actually is.** A review pointed out that
+the first version of this used a `Map` for both columns, which exercises none of the only code here
+that builds an expression tree at run time - `Query`'s projection, an `Expression.New` over a captured
+constructor with a body rebound onto another lambda's parameter. That application carries a `Query`
+column now, over a `List<T>.AsQueryable()` that needs no database, and the check waits for its cells to
+fill rather than asserting about the render they are blank in.
+
+What is still argued rather than driven there: the collection column's *expression* filter route. That
+application's data is an array, so the in-memory predicate is what runs. The expression route is
+composed from `MethodInfo`s captured by ldtoken rather than found by name, and it is covered by the
+tests that render the same column over a queryable - but it is not what the trimmed application
+reaches.
 
 That is a stronger position than `CollectionColumn` manages, and it is a reason to keep the selectors
 typed even where an `object`-returning one would read more simply at the call site: §4 records that a

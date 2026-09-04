@@ -11,6 +11,11 @@
     expressions - the cell, both filter shapes, the ids the check-box list carries - so "nothing here
     declines under Native AOT" is a claim, and this is where it is checked rather than argued.
 
+    Both cardinalities and all three provenances, because provenance is where the risk actually is:
+    Query is the only one that builds an expression tree at run time - Expression.New over a captured
+    constructor, and a body rebound onto another lambda's parameter - and a map or a sequence would
+    have exercised none of it. Its source is a List.AsQueryable(), which needs no database.
+
     Deliberately absent: the four features that reach a member by name - a template column filtering by
     a string path, a collection column, the check-box-list distinct scan, and the drop-down. Those are
     known to need reflection, and including them here would assert something untrue.
@@ -30,6 +35,8 @@
                       Title="Team" />
         <LookupCollectionColumn TItem="DataItem" TKey="int" Property="@(x => x.TagIds)" Lookup="@tags"
                                 Title="Tags" />
+        <LookupColumn TItem="DataItem" TKey="int" Property="@(x => x.RoomId)" Lookup="@rooms"
+                      Title="Room" />
     </ChildContent>
 </RadzenFastGrid>
 
@@ -49,13 +56,17 @@
         [30] = "Blue",
     });
 
+    // The provenance that composes a projection at run time rather than reading a map already in hand.
+    readonly FastGridLookup<int> rooms = FastGridLookup.Query(
+        new List<Room> { new(1, "Attic"), new(2, "Cellar") }.AsQueryable(), r => r.Id, r => r.Name);
+
     readonly DataItem[] data =
     [
-        new() { Name = "Alice", Value = 42, Category = "A", Active = true, Created = new DateTime(2024, 1, 15), Bonus = 1.5m, TeamId = 1, TagIds = [10, 20] },
-        new() { Name = "Bob", Value = 87, Category = "B", Active = false, Created = new DateTime(2024, 3, 22), TeamId = 2, TagIds = [30] },
-        new() { Name = "Charlie", Value = 15, Category = "A", Active = true, Created = new DateTime(2024, 5, 10), Bonus = 3m, TeamId = 1, TagIds = [] },
-        new() { Name = "Diana", Value = 63, Category = "C", Active = true, Created = new DateTime(2024, 7, 4), TeamId = 2, TagIds = [20, 30] },
-        new() { Name = "Eve", Value = 29, Category = "B", Active = false, Created = new DateTime(2024, 8, 18), Bonus = 9m, TeamId = 1, TagIds = [10] },
+        new() { Name = "Alice", Value = 42, Category = "A", Active = true, Created = new DateTime(2024, 1, 15), Bonus = 1.5m, TeamId = 1, TagIds = [10, 20], RoomId = 1 },
+        new() { Name = "Bob", Value = 87, Category = "B", Active = false, Created = new DateTime(2024, 3, 22), TeamId = 2, TagIds = [30], RoomId = 2 },
+        new() { Name = "Charlie", Value = 15, Category = "A", Active = true, Created = new DateTime(2024, 5, 10), Bonus = 3m, TeamId = 1, TagIds = [], RoomId = 1 },
+        new() { Name = "Diana", Value = 63, Category = "C", Active = true, Created = new DateTime(2024, 7, 4), TeamId = 2, TagIds = [20, 30], RoomId = 2 },
+        new() { Name = "Eve", Value = 29, Category = "B", Active = false, Created = new DateTime(2024, 8, 18), Bonus = 9m, TeamId = 1, TagIds = [10], RoomId = 1 },
     ];
 
     class DataItem
@@ -68,5 +79,8 @@
         public decimal? Bonus { get; set; }
         public int TeamId { get; set; }
         public List<int> TagIds { get; set; } = [];
+        public int RoomId { get; set; }
     }
+
+    record Room(int Id, string Name);
 }
