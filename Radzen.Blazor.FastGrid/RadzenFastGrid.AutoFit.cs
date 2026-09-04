@@ -208,11 +208,14 @@ namespace Radzen.FastGrid
                 // moved is the point.
                 // Fitting to the container is only ever a whole-grid answer: one column cannot be
                 // redistributed against, and a single-column fit is a user pointing at that column
-                // rather than at the layout.
-                var fitting = AutoFitOverflow == AutoFitOverflow.Fit && column is null;
+                // rather than at the layout. But it is not the same as leaving the mode - "keep" is
+                // what says so, and a plain false said the other thing and took the fit down.
+                var overflow = AutoFitOverflow != AutoFitOverflow.Fit
+                    ? "scroll"
+                    : column is null ? "fit" : "keep";
 
                 widths = await script.InvokeAsync<string?[]?>("autoFit", TableElementId, targets,
-                    minimums, maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic, fitting,
+                    minimums, maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic, overflow,
                     required);
             }
 #pragma warning disable CA1031

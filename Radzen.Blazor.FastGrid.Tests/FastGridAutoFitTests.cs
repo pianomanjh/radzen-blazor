@@ -36,7 +36,7 @@ namespace Radzen.FastGrid.Tests
 
         /// <summary>The call's arguments, named the way the design names them.</summary>
         sealed record Ask(string Table, int[] Indices, string[] Min, string[] Max, int ToggleOffset,
-            int Bare, bool Wait, bool Animate, bool Fitting, bool[] Required);
+            int Bare, bool Wait, bool Animate, string Overflow, bool[] Required);
 
         static Ask Read(JSRuntimeInvocation invocation)
         {
@@ -44,7 +44,7 @@ namespace Radzen.FastGrid.Tests
 
             return new Ask((string)args[0], ((IEnumerable<int>)args[1]).ToArray(),
                 (string[])args[2], (string[])args[3], (int)args[4], (int)args[5], (bool)args[6],
-                (bool)args[7], (bool)args[8], (bool[])args[9]);
+                (bool)args[7], (string)args[8], (bool[])args[9]);
         }
 
         // --- A grid that does not fit -----------------------------------------------------------
@@ -394,17 +394,19 @@ namespace Radzen.FastGrid.Tests
             });
 
             cut.Render();
-            Assert.False(Read(module.Invocations["autoFit"].First()).Fitting);
+            Assert.Equal("scroll", Read(module.Invocations["autoFit"].First()).Overflow);
 
             // Changing the mode re-arms the Once fit, which is the only reason this second render
             // asks again at all.
             cut.SetParametersAndRender(p => p.Add(g => g.AutoFitOverflow, AutoFitOverflow.Fit));
-            Assert.True(Read(module.Invocations["autoFit"].Last()).Fitting);
+            Assert.Equal("fit", Read(module.Invocations["autoFit"].Last()).Overflow);
 
             // Fitting to the container is a whole-grid answer: one column cannot be redistributed
             // against, and a double-click is a user pointing at that column rather than at the layout.
+            // "keep", not "scroll": a single column cannot be redistributed against, but saying so
+            // with the same value that means "this grid has left Fit" tore the container fit down.
             cut.FindAll(".rz-column-resizer")[0].DoubleClick();
-            Assert.False(Read(module.Invocations["autoFit"].Last()).Fitting);
+            Assert.Equal("keep", Read(module.Invocations["autoFit"].Last()).Overflow);
         }
 
         [Fact]

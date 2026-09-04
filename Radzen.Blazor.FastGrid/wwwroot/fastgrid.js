@@ -468,7 +468,12 @@ function resolveLengths(table, values) {
   const probes = [];
   const holder = document.createElement('div');
 
-  holder.style.cssText = 'position:absolute;visibility:hidden;height:0;overflow:hidden;';
+  // Given the host's width explicitly rather than left to size itself. A percentage resolves against
+  // its containing block, and an absolutely positioned box with no width of its own is shrink-to-fit -
+  // a child asking for 20% of that gets 20% of nothing, measures zero, and is thrown away as a bound
+  // the browser could not make sense of. `rem` was unaffected, which is how this survived a test.
+  holder.style.cssText = 'position:absolute;visibility:hidden;height:0;overflow:hidden;width:'
+    + host.clientWidth + 'px;';
 
   for (let i = 0; i < values.length; i++) {
     if (typeof values[i] !== 'string' || values[i].length === 0) {
@@ -584,6 +589,25 @@ function distribute(state, available) {
   // across every column in proportion - including the required ones, which is the one thing this
   // mode promises not to do. So the surplus goes to a single column with no width of its own, the
   // same way it does when the grid is not fitting at all.
+  // With no bare column - every column frozen, so there is no trailing one to leave - the surplus has
+  // to go somewhere all the same. Written widths that sum to less than the table make the browser share
+  // the difference across every column in proportion, required ones included, which is the one thing
+  // this mode promises not to do. So the last column that is not required absorbs it instead.
+  if (deficit <= 0 && bare < 0) {
+    let absorber = -1;
+
+    for (let i = n - 1; i >= 0; i--) {
+      if (!state.required[i]) {
+        absorber = i;
+        break;
+      }
+    }
+
+    if (absorber >= 0) {
+      out[absorber] -= deficit;
+    }
+  }
+
   if (deficit <= 0 && bare >= 0) {
     for (let i = 0; i < n; i++) {
       if (i === bare) {
@@ -695,20 +719,11 @@ function watch(table, state) {
   state.observer.observe(wrapper);
 }
 
-// Stops following a table's container. Called when the grid goes away; a grid that is merely
-// re-rendered keeps its observer, because the table element and the content widths are both still good.
-export function releaseFit(tableId) {
+// Drops the observer and the state, and nothing else. A fit about to build new state calls this: it is
+// replacing what it watches with, not finishing with the table, so an animation already armed for the
+// widths it is about to write has to survive.
+function stopWatching(tableId) {
   const state = fitted.get(tableId);
-
-  // The animation's own timer, which is on the table rather than in this state. It only removes a
-  // class, but it removes it from an element this grid has finished with, and letting it go is the
-  // difference between one release path and two.
-  const table = document.getElementById(tableId);
-
-  if (table && table.rzFastGridAnimation) {
-    clearTimeout(table.rzFastGridAnimation);
-    table.rzFastGridAnimation = 0;
-  }
 
   if (state) {
     if (state.queued) {
@@ -723,8 +738,31 @@ export function releaseFit(tableId) {
   }
 }
 
+// Stops following a table's container and stops anything else this grid left running. Called when the
+// grid goes away; a grid that is merely re-rendered keeps its observer, because the table element and
+// the content widths are both still good.
+//
+// Cancelling the animation's timer is only half of it. That timer exists to take the class off, so
+// cancelling it without doing that leaves the transition armed for good: a width written later for any
+// other reason animates, and anything measuring the table straight after reads a value still in flight.
+export function releaseFit(tableId) {
+  stopWatching(tableId);
+
+  const table = document.getElementById(tableId);
+
+  if (table) {
+    if (table.rzFastGridAnimation) {
+      clearTimeout(table.rzFastGridAnimation);
+      table.rzFastGridAnimation = 0;
+    }
+
+    table.classList.remove(ANIMATING);
+  }
+}
+
+
 export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffset, bare, wait, animate,
-    fitting, required) {
+  overflow, required) {
   const table = await ready(tableId, wait);
 
   if (!table) {
@@ -872,7 +910,41 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     widths[indices.indexOf(bare)] = bareWidth;
   }
 
-  if (fitting) {
+  if (animate) {
+    // A column with no width of its own computes to `auto`, and auto does not interpolate - so a first
+    // fit would jump while every later one glides. Pinning each such column to the width it already
+    // has gives the transition a start value to leave from. The flush is what makes it real: without
+    // it the browser only ever sees the final value and compares that against auto.
+    //
+    // Cheap precisely because the pin writes what is already there - the layout it forces has nothing
+    // to move. Measured at 2.5ms over a thousand rendered rows.
+    const pinned = [];
+
+    for (let k = 0; k < indices.length; k++) {
+      const col = colgroup.children[toggleOffset + indices[k]];
+
+      // Never the bare column: it is supposed to have no width, and it follows the others anyway -
+      // being the remainder, the browser recomputes it from them on every frame of the transition.
+      if (col && !col.style.width && indices[k] !== bare) {
+        pinned.push([col, headCells(table)[toggleOffset + indices[k]]]);
+      }
+    }
+
+    for (const [col, cell] of pinned) {
+      col.style.width = (cell ? cell.getBoundingClientRect().width : 0) + 'px';
+    }
+
+    animateFor(table);
+
+    void table.offsetWidth;
+  }
+
+  // `overflow` says both what the grid is doing and what this call may do about it: 'fit' rebuilds the
+  // distribution, 'keep' is a Fit grid whose call is not a whole-grid one - a single column, which
+  // cannot be redistributed against - and 'scroll' is a grid that is not fitting at all. Only the last
+  // takes the fit down, which a bare boolean could not express: a double-click on a fitted grid sent
+  // the same false as leaving the mode, and tore down the container fit it was supposed to leave alone.
+  if (overflow === 'fit') {
     // Keeping the table inside its container instead of letting it overflow. Nothing is left bare -
     // bareness hands leftover space to one column, and here the leftover is being shared out on
     // purpose - so every column is given a width and the arithmetic decides what it is.
@@ -945,7 +1017,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     state.reserved = reserved;
     table.style.minWidth = Math.ceil(floors + reserved) + 'px';
 
-    releaseFit(tableId);
+    stopWatching(tableId);
     fitted.set(tableId, state);
 
     const room = (table.parentElement ? table.parentElement.clientWidth : needed + reserved) - reserved;
@@ -959,42 +1031,13 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     for (let k = 0; k < n; k++) {
       widths[k] = state.last[k] === -1 ? null : state.out[k].toFixed(1) + 'px';
     }
-  } else {
+  } else if (overflow !== 'keep') {
     // Leaving Fit is as much a change as entering it: the floor and the observer both have to go, or a
     // grid switched back to Scroll would keep following its container and refuse to shrink.
     if (fitted.has(tableId)) {
       table.style.minWidth = '';
       releaseFit(tableId);
     }
-  }
-
-  if (animate) {
-    // A column with no width of its own computes to `auto`, and auto does not interpolate - so a first
-    // fit would jump while every later one glides. Pinning each such column to the width it already
-    // has gives the transition a start value to leave from. The flush is what makes it real: without
-    // it the browser only ever sees the final value and compares that against auto.
-    //
-    // Cheap precisely because the pin writes what is already there - the layout it forces has nothing
-    // to move. Measured at 2.5ms over a thousand rendered rows.
-    const pinned = [];
-
-    for (let k = 0; k < indices.length; k++) {
-      const col = colgroup.children[toggleOffset + indices[k]];
-
-      // Never the bare column: it is supposed to have no width, and it follows the others anyway -
-      // being the remainder, the browser recomputes it from them on every frame of the transition.
-      if (col && !col.style.width && indices[k] !== bare) {
-        pinned.push([col, headCells(table)[toggleOffset + indices[k]]]);
-      }
-    }
-
-    for (const [col, cell] of pinned) {
-      col.style.width = (cell ? cell.getBoundingClientRect().width : 0) + 'px';
-    }
-
-    animateFor(table);
-
-    void table.offsetWidth;
   }
 
   for (let k = 0; k < indices.length; k++) {

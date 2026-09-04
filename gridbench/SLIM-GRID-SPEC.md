@@ -1666,12 +1666,13 @@ cheaper thing to spend - but only after the columns with real slack have given t
 probe pane at 120px: `[38/38/158/80/30]` with two rounds against `[42/280/158/80/51]` with one, where
 the long-headed column goes on holding 280px it does not need.
 
-**A best-effort column with no `MinWidth` floors at the width of its own heading.** That is the point
-below which it stops saying what it is, and it is a number the grid already has - the header half of the
-measurement it just took - rather than one invented for the purpose. The first version floored such a
-column at zero and a narrow enough container took it there: still in the table, no longer on the screen.
+**A best-effort column with no `MinWidth` gets both its floors from its own measurement**: the soft one
+from its heading, the hard one from its values. The heading is the point below which it stops saying
+what it is, and both are numbers the grid already has - the two halves of the measurement it just took -
+rather than any invented for the purpose. The first version floored such a column at zero and a narrow
+enough container took it there: still in the table, no longer on the screen.
 
-Under that sits a 5px backstop for a column whose heading cannot be measured at all. It is not a
+Under the hard floor sits a 5px backstop, for a column whose values measure nothing. It is not a
 readable column and is not meant to be; it is the difference between a column the eye can find and one
 that is simply gone. **It has no test of its own** - the probe page cannot produce a header with no
 title to measure - so it is a guard, not a guarantee.
@@ -1691,6 +1692,16 @@ headings first and the slack first land in the same place, and separating them w
 for that alone. The order is a claim the code makes and the spec explains; it is not one a test holds.
 
 ### Known consequences, recorded rather than designed around
+
+- **A fit of the bare column itself is discarded.** The colgroup skips that column by reference so the
+  grid's `ColumnWidth` cannot come back and size it, which also drops a width an `AutoFitAsync(column)`
+  on it had just measured. Staying bare is the right answer for the layout and the wrong one for the
+  user who double-clicked its handle and watched nothing happen. Recorded rather than fixed: the two
+  wants are genuinely opposed, and the layout's is the one the rest of the design depends on.
+- **A grid whose every column is `Required` cannot be fitted.** Nothing may give way, so a container
+  narrower than their total scrolls, and one wider leaves the browser to share the surplus across them
+  in proportion. Where at least one column is best-effort the surplus goes to it instead - the last one
+  if there is no bare column to take it - so this is only the all-required case.
 
 - **A one-column fit does not move the bare column**, and the first version cleared it - the trailing
   column silently regained the grid's `ColumnWidth` on some later unrelated render. Both review axes

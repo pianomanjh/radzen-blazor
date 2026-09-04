@@ -162,7 +162,7 @@ async function main() {
             const started = performance.now();
 
             const written = await window.__fastgrid.autoFit(table.id, indices,
-                indices.map(() => null), bounds, 0, columns - 1, false, false);
+                indices.map(() => null), bounds, 0, columns - 1, false, false, 'scroll');
 
             const elapsed = round(performance.now() - started);
 
@@ -181,7 +181,7 @@ async function main() {
             table.style.display = 'block';
 
             const declined = await window.__fastgrid.autoFit(table.id, indices,
-                indices.map(() => null), bounds, 0, columns - 1, false, false);
+                indices.map(() => null), bounds, 0, columns - 1, false, false, 'scroll');
 
             const widthsNow = [...cols.children].map(col => col.style.width);
 
@@ -203,7 +203,7 @@ async function main() {
             // so an intermediate width is not observable in this environment even though it is correct
             // in a real browser. What is observable, and is the whole contract, is whether a transition
             // ran at all and for which caller.
-            const run = async (animate) => {
+            const run = async (animate, overflow) => {
                 [...cols.children].forEach(col => { col.style.width = ''; });
                 table.getBoundingClientRect();
 
@@ -214,7 +214,8 @@ async function main() {
                 table.addEventListener('transitionstart', count, true);
 
                 await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), bounds, 0, columns - 1, false, animate);
+                    indices.map(() => null), bounds, 0, columns - 1, false, animate, overflow,
+                    indices.map(() => false));
 
                 await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -228,7 +229,19 @@ async function main() {
                 };
             };
 
-            const animation = { asked: await run(true), automatic: await run(false) };
+            // Run under both overflow modes. Fitting to the container writes the columns from its own
+            // arithmetic, and doing that before the transition was armed meant the final write had
+            // nothing left to change - an asked-for fit on a fitted grid moved without animating.
+            const animation = {
+                asked: await run(true, 'scroll'),
+                automatic: await run(false, 'scroll'),
+                askedWhileFitting: await run(true, 'fit')
+            };
+
+            window.__fastgrid.releaseFit(table.id);
+            table.style.minWidth = '';
+            [...cols.children].forEach(col => { col.style.width = ''; });
+            table.getBoundingClientRect();
 
             // A container too narrow for the fitted columns. The table is meant to overflow and the
             // wrapper to scroll - but a col with no width in an overflowed table gets nothing at all,
@@ -242,7 +255,7 @@ async function main() {
                 table.getBoundingClientRect();
 
                 await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), bounds, 0, columns - 1, false, false);
+                    indices.map(() => null), bounds, 0, columns - 1, false, false, 'scroll');
 
                 const widths = at();
                 const scrolls = table.scrollWidth > pane.clientWidth;
@@ -267,7 +280,7 @@ async function main() {
 
                 await window.__fastgrid.autoFit(table.id, indices,
                     indices.map(() => floor + 'px'), bounds, 0, columns - 1, false, false,
-                    true, required);
+                    'fit', required);
 
                 // What the required columns settled on at full width is what they must keep.
                 const wide = at();
@@ -316,7 +329,7 @@ async function main() {
 
                 await window.__fastgrid.autoFit(table.id, indices,
                     indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
-                    true, indices.map(() => false));
+                    'fit', indices.map(() => false));
 
                 // Asked as "is this ellipsised" rather than by re-deriving what it needs. Two traps in
                 // one line: .rz-column-title is `flex: auto; width: 100%`, so it never overflows and
@@ -372,6 +385,50 @@ async function main() {
                 };
             })();
 
+            // A fitted grid, then one column fitted on its own - what a double-click on a resize
+            // handle does. It cannot rebuild the distribution, but it must not take it down either.
+            const singleColumnOnAFitGrid = await (async () => {
+                const restore = pane.style.width;
+
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                pane.style.width = '700px';
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
+                    'fit', indices.map(() => false));
+
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                const floorBefore = table.style.minWidth;
+
+                await window.__fastgrid.autoFit(table.id, [1],
+                    [null], [null], 0, -1, false, true, 'keep', [false]);
+
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                // The test of whether it is still watching: move the container and see if it answers.
+                const wideAgain = at();
+                pane.style.width = '520px';
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                const narrowed = at();
+
+                const answer = {
+                    floorBefore,
+                    floorAfter: table.style.minWidth,
+                    stillFollowing: narrowed.some((w, i) => w !== wideAgain[i])
+                };
+
+                window.__fastgrid.releaseFit(table.id);
+                table.style.minWidth = '';
+                pane.style.width = restore;
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                return answer;
+            })();
+
             // A MinWidth written in something other than pixels. Under Scroll the browser is handed
             // `max(5rem, 123px)` and resolves it; fitting to a container is arithmetic and has to
             // arrive at the same number without parsing the string.
@@ -391,7 +448,7 @@ async function main() {
 
                 await window.__fastgrid.autoFit(table.id, indices,
                     indices.map(() => '5rem'), indices.map(() => null), 0, columns - 1, false, false,
-                    true, indices.map(() => false));
+                    'fit', indices.map(() => false));
 
                 pane.style.width = '150px';
                 await new Promise(resolve => requestAnimationFrame(resolve));
@@ -405,12 +462,35 @@ async function main() {
                 [...cols.children].forEach(col => { col.style.width = ''; });
                 table.getBoundingClientRect();
 
+                // And the same question for a percentage, which resolves against a containing block
+                // rather than a font - a different way for a probe to be measured in the wrong place.
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                pane.style.width = '900px';
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => '20%'), indices.map(() => null), 0, columns - 1, false, false,
+                    'fit', indices.map(() => false));
+
+                pane.style.width = '150px';
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                const percent = at();
+
+                window.__fastgrid.releaseFit(table.id);
+                table.style.minWidth = '';
+
                 return {
                     rem5,
                     widths,
                     narrowest: round(Math.min(...widths)),
                     // Every column floored at 5rem rather than at what its values happened to need.
-                    honoured: widths.every(w => w >= rem5 - 1)
+                    honoured: widths.every(w => w >= rem5 - 1),
+                    percent,
+                    // 20% of the 900px the fit was taken at. A percentage the probe could not resolve
+                    // is dropped as unusable, and the columns fall back to their content instead.
+                    percentHonoured: percent.every(w => w >= 900 * 0.2 - 2)
                 };
             })();
 
@@ -426,7 +506,7 @@ async function main() {
 
                 await window.__fastgrid.autoFit(table.id, indices,
                     indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
-                    true, indices.map(() => false));
+                    'fit', indices.map(() => false));
 
                 await new Promise(resolve => requestAnimationFrame(resolve));
 
@@ -474,7 +554,7 @@ async function main() {
 
                 await window.__fastgrid.autoFit(table.id, kept,
                     kept.map(() => null), kept.map(() => null), 0, kept[kept.length - 1], false, false,
-                    true, kept.map(() => false));
+                    'fit', kept.map(() => false));
 
                 await new Promise(resolve => requestAnimationFrame(resolve));
 
@@ -502,6 +582,7 @@ async function main() {
 
             return {
                 animation,
+                singleColumnOnAFitGrid,
                 units,
                 stackedWhileWatching,
                 withReserved,
