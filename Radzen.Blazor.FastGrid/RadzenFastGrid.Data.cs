@@ -448,7 +448,7 @@ namespace Radzen.FastGrid
 
             if (TryGetAsyncSource(out var async, out var queryable))
             {
-                var source = (IQueryable<TItem>)Composed(queryable);
+                var source = (IQueryable<TItem>)Compose(queryable);
 
                 try
                 {
@@ -489,7 +489,7 @@ namespace Radzen.FastGrid
                 }
             }
 
-            var rows = Composed(Data ?? Enumerable.Empty<TItem>());
+            var rows = Compose(Data ?? Enumerable.Empty<TItem>());
 
             // Same reason as the query above: counting a filtered in-memory sequence walks it, and
             // scrolling must not walk the whole source once per window.
@@ -1138,7 +1138,7 @@ namespace Radzen.FastGrid
         /// an ordering inside a count aggregate is not translatable and changes no total anyway.
         /// </summary>
         IQueryable<TItem> Filtered(IQueryable<TItem> source) =>
-            AllowFiltering && ActiveFilters() is not null ? ApplyFilters(source) : source;
+            ActiveFilters() is not null ? ApplyFilters(source) : source;
 
         /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
         /// <remarks>
@@ -1152,7 +1152,13 @@ namespace Radzen.FastGrid
             Justification = "ApplyFilter is virtual; the analyzer resolves it to the base implementation, which is the one that always returns null.")]
         IQueryable<TItem> ApplyFilters(IQueryable<TItem> source)
         {
-            if (!AllowFiltering && !drawing)
+            // The one place that asks. Its three callers used to ask too, and the term this replaces
+            // was `!AllowFiltering && !drawing` - which none of them could reach with a false answer,
+            // because two guarded on AllowFiltering before calling and the third only ever runs outside
+            // a render. A guard written against an ambient that cannot currently vary is the hazard the
+            // pass exists to remove rather than an example of it working: nobody can see the rule, and
+            // the next caller inherits it.
+            if (!AllowFiltering)
             {
                 return source;
             }
@@ -1245,38 +1251,23 @@ namespace Radzen.FastGrid
             Type = column.FilterPropertyType,
         };
 
-        // Drawing the table asks what is filtered more than once: the pager counts, the body enumerates,
-        // and a grid with a pager above and below counts twice. None of it can change while the table is
-        // being written, and rebuilding the descriptors means rebuilding the filter expression tree with
-        // them - so both are computed once for the render and dropped again after. A cache that outlived
-        // the render would have to be invalidated by every path that touches a filter.
-        bool drawing;
-        List<FilterDescriptor>? drawingFilters;
-        IEnumerable<TItem>? drawingComposed;
-        IEnumerable<TItem>? drawingComposedOf;
+        /// <summary>
+        /// What has already been worked out for the render in progress. See <see cref="DrawPass{TItem}" />
+        /// for why this is one value rather than the flag and four fields it replaced.
+        /// </summary>
+        DrawPass<TItem> pass;
 
+        /// <summary>
+        /// The filters in force: the pass's own while the table is being drawn, worked out on the spot
+        /// outside one. Null when nothing is filtered and null when filtering is switched off, so a
+        /// caller holding this does not ask about <see cref="AllowFiltering" /> a second time.
+        /// </summary>
         List<FilterDescriptor>? ActiveFilters() =>
-            drawing ? drawingFilters : AllowFiltering ? BuildFilters() : null;
+            pass.Drawing ? pass.Filters : AllowFiltering ? BuildFilters() : null;
 
-        int? drawingTotal;
+        void BeginDrawing() => pass = DrawPass<TItem>.Begin(AllowFiltering ? BuildFilters() : null);
 
-        void BeginDrawing()
-        {
-            drawingFilters = AllowFiltering ? BuildFilters() : null;
-            drawingComposed = null;
-            drawingComposedOf = null;
-            drawingTotal = null;
-            drawing = true;
-        }
-
-        void EndDrawing()
-        {
-            drawing = false;
-            drawingFilters = null;
-            drawingComposed = null;
-            drawingComposedOf = null;
-            drawingTotal = null;
-        }
+        void EndDrawing() => pass = default;
 
         /// <summary>Moves to a zero-based page and reloads.</summary>
         public Task GoToPage(int page)
@@ -1818,7 +1809,7 @@ namespace Radzen.FastGrid
                 return Array.Empty<TItem>();
             }
 
-            data = Composed(data);
+            data = Compose(data);
 
             return Paging ? Page(data, skip, pageSize) : data;
         }
@@ -1842,34 +1833,21 @@ namespace Radzen.FastGrid
         /// Filters and sorts, without paging. Nothing is wrapped in a queryable unless something is
         /// actually filtered or sorted, so an unfiltered, unsorted grid enumerates its source directly.
         /// </summary>
-        IEnumerable<TItem> Composed(IEnumerable<TItem> data)
-        {
-            if (drawing && ReferenceEquals(drawingComposedOf, data))
-            {
-                return drawingComposed!;
-            }
-
-            var composed = Compose(data);
-
-            if (drawing)
-            {
-                drawingComposedOf = data;
-                drawingComposed = composed;
-            }
-
-            return composed;
-        }
-
         IEnumerable<TItem> Compose(IEnumerable<TItem> data)
         {
-            var filtering = AllowFiltering && ActiveFilters() is not null;
+            if (pass.Reuses(data, out var reused))
+            {
+                return reused;
+            }
+
+            var filtering = ActiveFilters() is not null;
             var sorting = SortColumn is not null;
 
             ComposedInMemory = false;
 
             if (!filtering && !sorting)
             {
-                return data;
+                return pass.Keep(data, data);
             }
 
             // A source that is already in memory is composed with delegates rather than expressions.
@@ -1884,7 +1862,7 @@ namespace Radzen.FastGrid
                 {
                     ComposedInMemory = true;
 
-                    return composed;
+                    return pass.Keep(data, composed);
                 }
 
                 // A column that cannot compose in memory - a template column filtering by a path -
@@ -1899,7 +1877,7 @@ namespace Radzen.FastGrid
 
             // The column applies its own ordering, so it stays a typed expression the provider can
             // translate rather than a parsed string.
-            return sorting ? ApplySorts(queryable) : queryable;
+            return pass.Keep(data, sorting ? ApplySorts(queryable) : queryable);
         }
 
         /// <summary>
@@ -2015,22 +1993,7 @@ namespace Radzen.FastGrid
         /// and for the same reason: within one pass the answer cannot change, and the count is
         /// independent of which page is being drawn.
         /// </remarks>
-        int TotalCount()
-        {
-            if (drawing && drawingTotal is { } counted)
-            {
-                return counted;
-            }
-
-            var total = CountAll();
-
-            if (drawing)
-            {
-                drawingTotal = total;
-            }
-
-            return total;
-        }
+        int TotalCount() => pass.Counted(out var counted) ? counted : pass.Keep(CountAll());
 
         int CountAll()
         {
@@ -2055,7 +2018,7 @@ namespace Radzen.FastGrid
             // Only pay that when something is actually filtered.
             if (ActiveFilters() is not null)
             {
-                return Total(Composed(Data ?? Enumerable.Empty<TItem>()));
+                return Total(Compose(Data ?? Enumerable.Empty<TItem>()));
             }
 
             // Count() asks an ICollection<T> - and a non-generic ICollection - for its count rather than
