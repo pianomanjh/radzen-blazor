@@ -630,9 +630,10 @@ not - the whole suite passed before and after every one of them.
 | Attribute-run ordering, all render files | mechanically checked | 1 |
 | `ColumnBase.cs` and the column types | reviewed | 5: 4 fixed, 1 open |
 | `RadzenFastGrid.cs`, the core render path | reviewed | 5: 4 fixed, 2 open |
+| Lookup columns, §14 | **not reviewed** | - |
 
-**Every slice has now been read by someone other than its author**, which was not true until the two
-passes that closed the rows above. Between them they found ten, of which eight are fixed and three are
+**Every slice up to the lookup columns has been read by someone other than its author**, which was not
+true until the two passes that closed the rows above. Between them they found ten, of which eight are fixed and three are
 recorded as open because each is a design decision rather than a fix - one finding was two symptoms of
 a single cause, fixed once.
 
@@ -745,11 +746,9 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
   rule for one, and what a keystroke costs on a server-rendered circuit.
 - ~~**Column auto-fit**~~ - **built**, as §13 designed it, and the sort glyph it needed went up first
   on its own. Two of that section's decisions did not survive being measured; both are marked there.
-- **Lookup columns** - **designed, not built**, as §14. A column that displays a name and carries an
-  id, so a thousand rows cost a thousand integers and one lookup rather than a thousand materialized
-  entities. Scalar and collection keys, three ways of supplying the names, and no distinct scan. The one
-  thing it needs from an existing feature is §13's: an automatic fit has to wait for the lookup or it
-  fits the column to blank cells, permanently.
+- ~~**Lookup columns**~~ - **built**, shapes 1 to 3 of §14, with the auto-fit deferral it needed as a
+  prerequisite rather than a follow-up. Four of that section's decisions did not survive the build;
+  all four are marked there.
 - **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
 
 **Measurement debt:**
@@ -1799,9 +1798,11 @@ and the timer has to be able to win.
 
 ## 14. Lookup columns - the design
 
-**Not built.** Argued before the code, the way §12 and §13 were, so what follows can be re-argued rather
-than merely obeyed. Every decision carries its reason; the two that rest on facts about a dependency
-rather than on preference are marked, because a change there invalidates them and nothing else here.
+**Built**, shapes 1 to 3. Argued before the code, the way §12 and §13 were, so what follows can be
+re-argued rather than merely obeyed. Every decision carries its reason; the two that rest on facts about
+a dependency rather than on preference are marked, because a change there invalidates them and nothing
+else here. *What the build changed* at the end records the four decisions that did not survive contact
+with the code, and the numbers that replaced the predictions in *Budget*.
 
 ### What it is for
 
@@ -2079,15 +2080,17 @@ branch has already paid for more than once.
 
 ### Budget
 
-Nothing here is measured yet; these are the numbers the design predicts, and §9's protocol says to record
-the prediction so that being wrong is visible.
+The predictions are kept above what was measured, so being wrong is visible.
 
 - **A scalar lookup cell should allocate nothing.** It is `AddContent(string)` over a string already held
-  in the lookup - cheaper than a `PropertyColumn` carrying a `FormatString`, which builds one.
+  in the lookup - cheaper than a `PropertyColumn` carrying a FormatString, which builds one.
+  **Measured: nothing**, on the same harness `PropertyColumnTests` weighs a string cell with.
 - **A collection lookup cell allocates one joined string per cell per render**, through `CellText.Join`,
-  whose `[ThreadStatic]` `StringBuilder` is already reused across cells. `CollectionColumn` calls that
-  unavoidable and does not memoize; this follows it rather than inventing a cache, and a memo keyed on
-  the id sequence stays available if a measurement ever asks for one.
+  whose `[ThreadStatic]` `StringBuilder` is already reused across cells. **Measured: 112 B a cell at
+  three ids** - and the prediction missed something. `CellText.Join` was non-generic, so every id was
+  boxed on the way to a `Func<object, string>`: the same cell through that route measures **184 B**, and
+  the 72 B between them is exactly three boxed integers. A typed overload went in beside it, and the
+  control that says which is which is that same cell listed the untyped way.
 - **The lookup itself is one dictionary per distinct lookup**, not per column and not per row.
 - **The filter costs what the check-box list already costs**, minus the distinct query it does not run.
 
@@ -2096,8 +2099,12 @@ without a control has not been measured - is what the `data-r` claim cost when i
 
 ### Native AOT
 
-**Nothing declines.** Every selector is typed, both filter shapes compose from the columns' own
-expressions, and no member is reached by name, so no path here sits behind `DynamicCode.Supported`.
+**Nothing declines**, and this is checked rather than argued. Every selector is typed, both filter shapes
+compose from the columns' own expressions, and no member is reached by name, so no path here sits behind
+`DynamicCode.Supported` - so unlike the four features `Radzen.Blazor.FastGrid.TrimTest` deliberately
+leaves out, both columns belong in it. They are on its reachable path now: it publishes trimmed with
+warnings as errors and no trim warning, and the browser check that follows resolves both kinds of lookup
+cell and filters a column by a name it typed, which is what a trimmed member would be missing from.
 
 That is a stronger position than `CollectionColumn` manages, and it is a reason to keep the selectors
 typed even where an `object`-returning one would read more simply at the call site: §4 records that a
@@ -2136,6 +2143,59 @@ argument this whole section is built on, applied one level up.
 and materializes nothing client-side, so only the *cell* ever wanted the ids. That is worth keeping in
 mind if this is revisited: the feature at stake is display, not filtering.
 
+### What the build changed
+
+Four decisions above did not survive contact with the code. Each is recorded here rather than edited
+away, because what a decision was before it was checked is the part worth inheriting.
+
+**The fetch is cancelled by the grid going away, and by nothing else.** *Loading and lifetime* said it
+had the "cancelled-and-superseded return that `LoadLookupsAsync` already has", meaning the page load's
+token. That is wrong twice over. The check-box list's scan is about the data and is stale the moment a
+newer load replaces it; a lookup column's names are not, so a sort landing mid-fetch would throw away an
+answer that was still correct. And *nothing would ask again*: the render that superseded it has already
+happened, so "a newer load will ask on its own render" is a render that is already behind. The question
+actually being asked is "was this dropped while it ran", and that is a generation stamped on the column
+and moved by `Reload`. The token is now a lifetime one, cancelled in `Dispose`.
+
+**A fetch that throws resolves the column to no names.** *What a cell draws before the lookup arrives*
+never said what a *failed* fetch draws, and the auto-fit rule needs an answer: a throw that propagates
+out of `OnAfterRenderAsync` takes the circuit down, which makes "clear the outstanding state on the
+throw path" pointless. The rows are drawn and correct and only the names are missing, so it resolves to
+an empty lookup - and every cell then draws its id, which is what a missing entry already draws and for
+the same reason. Two silent blanks would have been one fault nobody can see.
+
+**A column that comes back with nothing asks again itself, and an empty answer is an answer.** The
+column cannot wait for a parameter set, because the renderer skips `SetParametersAsync` for a retained
+component whose parameters have not changed - which is exactly a column whose lookup is held in a field.
+So it re-queues itself, and that is a render feeding a fetch feeding a render. The bound is that an
+answer counts even when it is empty: a mutation that left the column outstanding after a *successful*
+fetch did not fail a test, it aborted the run with a stack overflow. The bound has its own test now.
+
+**The sharing is narrower than the table above suggests, and the table is still right.** Two `Items`
+built the same way are equal - but only from *one call site evaluated twice*, which is what markup does
+with an expression on every render. Two separate call sites are two compiler-cached delegates and are
+never equal, so two columns each writing `FastGridLookup.Items(...)` in their own markup share nothing.
+What the sharing actually pays for is the ordinary shape - one lookup held in a field and handed to both
+columns - where it is the same instance and the second column skips building the map at all.
+
+Two smaller things, recorded because they will look arbitrary otherwise:
+
+- **The blank entry is `Spreadsheet_Blank`, so it reads "(Blank)" rather than "(none)".** It is the only
+  string in Radzen's resources that already means "the rows with nothing here", and it is translated
+  into every culture Radzen ships, which a key of this component's own would not be. The grid's
+  `BlankFilterText` overrides it.
+- **A nullable key types the lookup at the nullable key**, and `FastGridLookup.Map` is the awkward one
+  there: `Dictionary<int?, string>` is a CS8714 warning in the *consumer's* own nullable-enabled code,
+  because `Dictionary` asks for a key that cannot be null. `Items` and `Query` take a selector, so a cast
+  in the lambda is the whole answer, and that is what the README documents. Inside the library the
+  suppression is stated once, beside the one factory that builds the map.
+
+The collection case turned up a fault of the kind §10b keeps finding, before it shipped rather than
+after: **the null guard has to sit inside the negation**. Written outside it, `NotIn` keeps a row
+carrying no ids at all when composed as an expression and drops it when composed as a delegate - which
+is the same shape as the `In`-over-a-null-string disagreement a review found in the shared builder. It
+has that fault's test: the same data as a `List` and as a queryable, and the two answers compared.
+
 ### Recorded open
 
 Both of the questions this section originally left for a spike have been answered before the build, and
@@ -2152,6 +2212,9 @@ sentinel because upstream already has the convention. What is left:
 
 ### Where this could still be wrong
 
+- **Nobody but its author has read this slice.** Every review pass on this branch found faults a green
+  suite did not, and this one added 34 tests without one. It belongs in §10b's table as unreviewed
+  until a pass has run against §14 as the spec axis.
 - **"The lookup is small" is an assumption about the caller's domain, not a fact.** Everything here -
   fetching it whole, holding it for the grid's life, offering all of it in the filter, reverse-mapping
   text against it - is right for hundreds of entries and wrong for hundreds of thousands. The design
