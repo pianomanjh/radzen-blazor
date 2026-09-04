@@ -631,11 +631,14 @@ not - the whole suite passed before and after every one of them.
 | `ColumnBase.cs` and the column types | reviewed | 5: 4 fixed, 1 open |
 | `RadzenFastGrid.cs`, the core render path | reviewed | 5: 4 fixed, 2 open |
 | Lookup columns, §14 | reviewed twice, two axes each | 23: 6 wrong answers, the rest tests, names and claims |
+| Architecture, whole library | reviewed for shape, not correctness | 1 fault, 8 deepening candidates - §15 |
 
-**Every slice has now been read by someone other than its author.** The lookup columns were read on two
-axes - does it follow the repo's standards, does it implement §14 - and then read again on both at
-greater depth, which is where most of it came from: the second round found more than the first, and
-the whole suite passed before and after every one.
+**Every slice has now been read by someone other than its author**, and the whole has now been read
+once for shape rather than for faults - §15 has what that found and the one fault it turned up.
+
+The lookup columns were read on two axes - does it follow the repo's standards, does it implement
+§14 - and then read again on both at greater depth, which is where most of it came from: the second
+round found more than the first, and the whole suite passed before and after every one.
 
 Four of it are worth carrying forward.
 
@@ -2312,3 +2315,160 @@ sentinel because upstream already has the convention. What is left:
   `Map` lookup never sees it, so the case that needs covering is specifically the `Query` one, and it has
   to assert about the *first* render rather than the settled one. This is the same shape as the frozen
   filter row in §10b: a check that looks for the resolved state can only see it once it works.
+
+---
+
+## 15. Architecture review — the deepening candidates
+
+Every pass in §10b asked whether the code is *correct*. This one asks whether it is the right *shape*:
+where a module is shallow, where a seam is missing, and where a rule that lives in a comment should
+live in an interface instead. It found no wrong answers except one, recorded below; the rest of what
+follows is shape.
+
+Read by four sub-agents against written briefs, over the two grid partials, the column model, the
+browser module with its six calling partials, and the test suite read as a consumer of the interfaces
+rather than as coverage.
+
+**The constraint every candidate is scored against is §3.** Rules 3 and 5 make allocation a design
+rule, so any deepening that puts a new allocation on the per-row or per-cell path fails on arrival.
+Everything below moves work that already happens once per render or once per column.
+
+**The vocabulary is deliberate** and is `codebase-design`'s: *module* (an interface and an
+implementation, at any scale), *interface* (everything a caller must know — signature, invariants,
+ordering constraints, error modes, cost), *deep* and *shallow* (behaviour per unit of interface), *seam*
+(where behaviour can be altered without editing in that place), *leverage* (what callers gain), and
+*locality* (what maintainers gain). Not "component", "service", "layer" or "boundary".
+
+### The one fault
+
+**`navigationAttached` is recorded before the call that earns it, and never cleared.**
+`RadzenFastGrid.Keyboard.cs:101` is set at `:819` *before* `attachNavigation` is invoked, so a throw
+still records success — and there is no `DetachNavigationAsync` at all, though `detachNavigation` is
+exported and `Script.cs:45` calls it at dispose. Switch `AllowKeyboardNavigation` off at runtime and
+`RenderNavigation` stops emitting the view id, so `getElementById` answers null at dispose and the
+keydown guard stays bound to a live element: a grid that no longer navigates goes on swallowing arrows.
+
+`RadzenFastGrid.Clicks.cs:179-182` does the opposite and says why — "recorded once it is true of the
+DOM rather than before the call". **This is the fourth instance of §10b's rule that a fix is right for
+the case that motivated it and has to be checked against its neighbour**, and the first where the
+neighbour had already been fixed and the lesson was not carried across.
+
+### The candidates
+
+Ranked as found. Nothing here is committed to; each is an argument to be taken or refused, and a refusal
+with a load-bearing reason should be recorded here beside it.
+
+| # | Candidate | Strength |
+| --- | --- | --- |
+| 1 | Compose the view behind one interface | Strong |
+| 2 | `drawing` is a mode, not a field | Strong |
+| 3 | The browser seam has no interface | Strong |
+| 4 | Attachment is a pattern copied twice, one copy missing its half | Strong |
+| 5 | Four methods of one shape, four meanings of `null` | Strong |
+| 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
+| 7 | A column's identity is a concept with no name | Worth exploring |
+| 8 | The drop-down forwards twelve parameters, then hands out the grid | Worth exploring |
+
+**1. Compose the view behind one interface.** `RadzenFastGrid.Data.cs:1117-1246` and `:1832-2007` are
+about 300 lines that are already a function of `(columns, sorts, source, config)` — `BuildFilters`,
+`ApplyFilters`, `Reflective`, `ComposeInMemory`, `ApplySorts`, `Compose`, `Page`, `Total`, `OrderBy`,
+`FilterString`. They are private instance methods over `columns` and `sorts`, both of which are declared
+in the *other* partial, so the partial-class split is a text split rather than a module boundary and
+the pipeline's only interface is "render a grid and read the DOM". `InMemoryCompositionTests.cs:48-64`
+stands up two `TestContext`s and diffs rendered rows to check the two routes agree.
+`FilterExpressionParityTests` is the proof this is avoidable: it calls
+`FilterExpression<Person, TProp>.For` and `.PredicateFor` directly, covers 84 operator x route
+combinations, and needs no bUnit at all.
+
+**2. `drawing` is a mode, not a field.** Set only by `BeginDrawing`/`EndDrawing` (`Data.cs:1263`,
+`:1272`), it silently changes what five methods mean, and none of them names it in a signature. The
+sharpest instance is `ApplyFilters` at `:1155` — `if (!AllowFiltering && !drawing) return source;` —
+so the same call filters differently inside a render than outside one. Six callers sit outside the
+window (`Clicks.cs:323`, `Keyboard.cs:609`, `:736`, `Data.cs:451`, `:492`, `:496`) and get an
+unmemoized recomposition and a second full count. `Composed`/`Compose` and `TotalCount`/`CountAll` are
+four methods where two would do, existing only because the memo is a field instead of a value the
+caller holds. This is §10b's "two features sharing one mechanism" with the mechanism named: `View()`
+and `TotalCount()` asking the same questions in opposite orders were both reading `drawing`.
+
+**3. The browser seam has no interface.** Sixteen named entry points carrying about forty-five
+positional arguments — and that is the narrow half. The wide half is undeclared: element ids, `data-r`,
+`data-toggle`, `rz-data-row`, `rz-cell-data`, and `:scope > table > tbody > tr`, none of which appears
+in a signature, so a rename breaks the script and no C# test notices. `autoFit` takes ten positional
+arguments; `FastGridAutoFitTests.cs:39-49` has already written the type that wants to exist, as
+`record Ask(...)` plus a hand-rolled positional decoder. Seven of the nine exports have zero coverage
+of any kind, and because the doubles answer `null` the RTL arrow flip at `Keyboard.cs:313, 318` is
+never executed by any test. `NavigationMetrics` is already a value crossing the seam with no in-process
+way to supply one.
+
+The ordering constraints are part of the interface and are written only as prose, in a different file
+from the calls they govern (`Data.cs:952-992`): attach after the pagers sync, fit before focus, fit
+after the lookup names land, reassert focus last, detach before release before dispose. §13 already
+recorded that swapping two of them would measure blank cells "and every test would still pass".
+
+**4. Attachment is a pattern copied twice.** See the fault above. The shape is the point: two features
+with identical lifetime, one of which grew re-attach, `attachedKinds`, `DetachClicksAsync`, a fallback
+and record-after-the-call, and the other of which grew none of them. Two adapters — the tbody listener
+and the view listener — make this a real seam rather than a hypothetical one.
+
+**5. Four methods of one shape, four meanings of `null`.** `ApplyFilter` returning null means "fall
+back for *me*" (`Data.cs:1195`); `ApplyFilterInMemory` means "abandon the route for *everyone*"
+(`:1940`); `ApplySort` means "skip me, keep the rest" (`:2002`); `ApplySortInMemory` means "abandon for
+everyone, but only if `i == 0` and nothing is ordered yet" (`:1977`). Four contracts, one return shape,
+none of them stated where an implementer would read it — and the decision is contagious: on a mixed
+`Or`, one declining column sends every typed column through the reflective route (`:1211-1218`). §10b's
+computed-column fault was this reading the wrong one of the four.
+
+**6. `ColumnBase`'s internal half is a field-by-field protocol.** The public half is deep — 28
+parameters, `RenderCell`, and four `Apply*` methods behind which the whole typed-expression story
+sits. The internal half is not: seventeen members each answering exactly one grid call site
+(`CellClass`, `CellStyle`, `CellElementClass`, `ColStyle`, `FrozenCellStyle`, `FrozenFooterStyle`,
+`IsFrozen`, `ElementIds`, `CanAutoFit`, `SetAutoFitWidth`, `ResizedWidth`, `FilterValues`,
+`FilterSelection`, `FilterValueFromText`, `FilterValueFromSelection`, `FilterMemberPath`,
+`FilterPropertyType`), plus `AutoFitWidth`, which has no reader anywhere in the library or the tests.
+The ordering rules between them are enforced by comment: derive before `base.OnParametersSet`, hand the
+same string instance back or the frozen memo misses, re-write `AppliedFilterText` after `SetFilter`
+clears it (two call sites, one rule).
+
+The class is public and abstract with a public abstract member, so it advertises itself as an extension
+point — but nine of its twenty-one virtuals are `internal virtual`, so an out-of-assembly column can
+render and sort and cannot participate in the filter row at all. The sibling duplication is the same
+gap from the other side: the six-member sort-forwarding block is copied verbatim into `TemplateColumn`,
+`CollectionColumn` and `LookupColumnBase`, the "Derive" ceremony four times, and
+`RenderCell => AddContent(CellTextOf(item))` four times.
+
+**Constrained by §3, and possibly refused by it.** Any consolidated answer must be a readonly struct
+over strings the column already memoizes, handed back by reference identity — `ColumnBase.cs:367-383`
+already keys its memo on `ReferenceEquals`. If it cannot be done at zero marginal allocation it should
+not be done, and `gridbench` answers that in one run.
+
+**7. A column's identity is a concept with no name.** Settings, reorder and the picker all need to name
+a column and all three borrow a *query* path to do it. `PropertyPath` is the settings key and the name
+a remote sort travels under; `FilterPropertyPath` keys the filter lookup; `FilterMemberPath` builds the
+reflective descriptor. §10b's collision and the `TemplateColumn` limitation and §14's lookup-identity
+consequence are three symptoms of one missing module. **This section does not re-open them** — §10b's
+instruction not to guess at the identity model stands. The only claim here is that they are one
+question and should be designed once rather than three times.
+
+**8. The drop-down forwards twelve parameters, then hands out the grid.** It is not a shallow
+pass-through overall: `Adopt`, `Chosen`/`ElementOf`, the popup lifetime and the form participation are
+about 380 of its 668 lines and none is reconstructible from `RadzenFastGrid`. But twelve of its
+thirty-three parameters are one-line forwards, so a thirteenth is four places; and `Grid => grid`
+(`:202`) then exposes all 81 of the grid's parameters, which its own test already reaches through
+(`FastDropDownDataGridTests.cs:414-428` asserts `Assert.Same` and then reads `Grid!.CurrentPage`). Its
+second id-to-name path is the more interesting half: `Adopt` scans `Data` linearly with no cache,
+guarded by `ReferenceEquals(lastData, Data)` — **which §10 has already recorded as false on every
+render for exactly the sources this library targets**. That makes it a fourth participant in the
+`!ReferenceEquals` trap, and the only one whose cost is a full scan per render.
+
+### Deliberately not proposed
+
+- **`FilterExpression`'s two implementations of sixteen operators.** The duplication is between an
+  expression tree and a delegate, which is the point of it, and `FilterExpressionParityTests` is a real
+  check rather than a hope. Its own comment already names the risk.
+- **Lifting `ApplyFilter` out of the columns.** `TProp`, `TKey` and `TElement` are type parameters only
+  there. Any move erases the type and puts `MakeGenericMethod` back, which is what `DynamicCode` exists
+  to fence off. The available deepening is to move *shape* into a helper already closed over the type —
+  which is what `FilterExpression<TItem, TProp>` and `FastGridSort<TItem>.By<TKey>` already are.
+- **A seam for localization, `Defer`, or `NonRenderingHandler`.** One adapter each, so each is a
+  hypothetical seam and fine as it stands.
+- Anything §1 rules out, or §10 has already settled with a reason.
