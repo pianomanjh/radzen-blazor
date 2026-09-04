@@ -186,6 +186,11 @@ lookup row is *deleted*, and a human reading stored settings sees ids rather tha
 `In`. Text matching many names emits many ids and providers have parameter limits, so the count is
 capped at `LookupColumnBase<TItem, TKey>.MatchLimit` (500).
 
+Text matching **no** name is a filter that matches no row, rather than no filter - which is the
+opposite of what an empty check-box list means on the same column, where nothing ticked is no filter.
+What tells them apart is that only the box records what was typed, and that text is stored with the
+filter so the distinction survives a reload.
+
 A column whose key can be null offers **one extra entry for the rows carrying no id at all**, named by
 the grid's `BlankFilterText` ("(Blank)" in the shipped translations). "Which products have no category"
 is a reasonable question, and `In` over a nullable key answers it.

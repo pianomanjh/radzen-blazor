@@ -975,6 +975,11 @@ namespace Radzen.FastGrid
 
             // Before the focus is put back, because a fit changes how wide every column is and
             // bringing the cursor's cell into view is measured against exactly that.
+            //
+            // And before the names below it, which is the ordering the lookup deferral rests on: the
+            // fit measures what is painted, so it has to run on a render that already has the names
+            // rather than on the one they arrive during. Swapped, it would measure the blank cells it
+            // exists to avoid and every test would still pass.
             await AutoFitOnFirstRenderAsync();
 
             // Last, and after every path above that can reload: this is the render the cursor has to be
