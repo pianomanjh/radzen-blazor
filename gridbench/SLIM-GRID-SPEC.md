@@ -768,7 +768,11 @@ never stored. Both are open; neither should be closed by guessing at the identit
   forgetting it had attached, so the grid could not take it up again; `default(TItem) is not null`,
   which answers null for a `Nullable<T>` as well as for a class; and three attribute runs left
   descending by the commits that documented the rule against it. Every one was the other half of a
-  conditional the fix had only read one way.
+  conditional the fix had only read one way. **A fifth instance came out of §16**, and as a gap rather
+  than a fault: `AllowFiltering` is asked in exactly one place and `ComposeInMemory` never re-asks, so
+  a grid with filtering switched off and a column still carrying a value would be filtered - and no
+  test said otherwise. Nothing was wrong; nothing was holding it right either, and the two halves only
+  became visible in one file once the composition moved into one.
 - **"It was reviewed once" and "little has changed since" predict nothing.** The drop-down had its own
   15-fault pass and 3 commits after it, and was ranked last for that reason; re-reading it found six,
   including a validator that never fired and a multiple selection that lost a tick when the user
@@ -2404,7 +2408,7 @@ with a load-bearing reason should be recorded here beside it.
 
 | # | Candidate | Strength |
 | --- | --- | --- |
-| 1 | Compose the view behind one interface | Strong - **designed, §16** |
+| 1 | Compose the view behind one interface | ~~Strong~~ **built**, §16 |
 | 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
 | 3 | The browser seam has no interface | Strong |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
@@ -2413,7 +2417,9 @@ with a load-bearing reason should be recorded here beside it.
 | 7 | A column's identity is a concept with no name | Worth exploring |
 | 8 | The drop-down forwards twelve parameters, then hands out the grid | Worth exploring |
 
-**1. Compose the view behind one interface.** **§16 has the design, argued before it is built.** `RadzenFastGrid.Data.cs:1117-1246` and `:1832-2007` are
+**1. Compose the view behind one interface.** **Built**, as `Composition`; §16 has the design it was
+built from and, at the end, the three of its decisions that did not survive the building.
+`RadzenFastGrid.Data.cs:1117-1246` and `:1832-2007` were
 about 300 lines that are already a function of `(columns, sorts, source, config)` — `BuildFilters`,
 `ApplyFilters`, `Reflective`, `ComposeInMemory`, `ApplySorts`, `Compose`, `Page`, `Total`, `OrderBy`,
 `FilterString`. They are private instance methods over `columns` and `sorts`, both of which are declared
@@ -2595,15 +2601,34 @@ it does not.
 
 ### The surface
 
+As designed, and **as built** - the build widened it, and §16's addendum has the argument:
+
 ```csharp
 internal static class Composition
 {
     internal static Composed<TItem> Compose<TItem>(
         IReadOnlyList<ColumnBase<TItem>> columns,
-        IReadOnlyList<SortDescriptorOfThisGrid> sorts,
+        IReadOnlyList<(ColumnBase<TItem> Column, bool Descending)> sorts,
         IEnumerable<TItem> source,
         CompositionOptions options,
         ref DrawPass<TItem> pass);
+
+    // Filtering and ordering on their own, for the callers that have to count between them.
+    internal static IQueryable<TItem> Filter<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns, IQueryable<TItem> source, CompositionOptions options);
+
+    internal static IQueryable<TItem> Sort<TItem>(
+        IReadOnlyList<(ColumnBase<TItem> Column, bool Descending)> sorts, IQueryable<TItem> source);
+
+    // What the columns are asking for: as descriptors, gated on AllowFiltering, and in force now.
+    internal static List<FilterDescriptor>? Filters<TItem>(IReadOnlyList<ColumnBase<TItem>> columns);
+
+    internal static List<FilterDescriptor>? DeclaredFilters<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options);
+
+    internal static List<FilterDescriptor>? ActiveFilters<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options,
+        in DrawPass<TItem> pass);
 }
 
 internal readonly struct Composed<TItem>
@@ -2634,6 +2659,11 @@ they are `columns` (6 references), `LogicalFilterOperator` (6), `sorts` (4), `pa
 currently smuggled out through a field becomes something a caller can read - and act on - rather than
 merely observe afterwards. The property whose reason for existing is "for the tests, and only to them"
 stops needing to exist.
+
+> **That last sentence is wrong, and the addendum below has why.** The property still exists, because
+> this section's own verification item 3 needs it: it is the only thing a test outside the grid can see
+> that says the grid asked the module and used what it was told. What is true is the first half - the
+> value stops being written from inside the composition and becomes an answer the caller is handed.
 
 ### What moves and what stays
 
@@ -2721,7 +2751,8 @@ grid has no ambient state left. `ActiveFilters` still reads the field.
    `*SingleSort`, `*Filtering`. The claim is allocation-neutral. Take no time ratio from that job
    length - the errors are wider than the differences.
 
-Expect **31 of the 32 test files that touch filtering, sorting or composition to be untouched.** If
+Expect **31 of the 32 test files that touch filtering, sorting or composition to be untouched** (it was
+30 - the addendum has why, and the boundary held). If
 they are not, the boundary is wrong.
 
 ### The order it lands in
@@ -2747,3 +2778,89 @@ once the calls live in one module is a change to one caller instead of scattered
   composition is asked for outside a render too - by the click resolver, by the keyboard cursor, by the
   virtualized items provider. Passing `default` there is correct and cheap, but if it turns out most
   calls pass `default`, the pass is a parameter three callers carry for one caller's benefit.
+
+### What the build changed
+
+Built as `Composition.cs`, 434 lines. 285 lines left `RadzenFastGrid.Data.cs` and 24 came back - the
+forward that records the route, the options value, and the call sites that now name the module. Five of
+this section's decisions did not survive the building, one of its own tests did not discriminate, and
+the mutation that caught that one went on to find a gap in the suite older than this piece.
+
+**The surface is six entry points, not one.** `Compose`, `Filter`, `Sort`, `Filters`, `DeclaredFilters`
+and `ActiveFilters`, and each has a caller: `LoadPageAsync` filters and sorts a queryable in two steps
+because it counts between them, `ProvideRowsAsync` filters without ordering because an ordering inside
+a count aggregate is not translatable, and three places ask what the columns are filtering by. That was
+visible in the code and not in the move list above, which itemised seven methods and no callers. It
+settles this section's first "where this could still be wrong" in the module's favour: `Compose` is not
+the only thing anyone calls, so `Composition` is a module and not a namespace with one function in it.
+
+**`ComposedInMemory` did not stop existing**, as marked above. The alternative was to delete it and move
+`FastGridSortByTests`' three route assertions to the seam - which would have moved a second test file,
+and this section's own boundary check is that one moves.
+
+**`ActiveFilters` moved with it, and the pass crosses at two entry points rather than one.** This
+section said "`ActiveFilters` still reads the field", and the grid's does - it reads `pass` in order to
+hand it over. But the *rule* it encodes, that the filters in force are the pass's while drawing and the
+declared ones otherwise, is a composition rule and now lives with the composition. Both crossings are
+the same seam; what this section ruled out was threading the pass through the render tree, and that is
+still ruled out. `DeclaredFilters` exists because opening a pass and asking outside one were one
+question written twice, as two spellings of `AllowFiltering ? ... : null` in two files.
+
+**The pass memo carries the route, not just the rows.** `DrawPass<TItem>` memoizes `Composed<TItem>`
+now. It has to: `Reuses` hands the second caller of a render the first caller's answer, and an answer
+that dropped the route would give the grid the right rows beside a wrong account of how it got them.
+Which caller composes first does not matter - the first composes and every one after is answered from
+the memo, so the memoized route is always the last thing written. That is reachable in a plain grid, a
+filtered and paged list where the body enumerates and the pager counts the same instance, and it is
+pinned at all three levels: the memo, the module and a rendered grid. This is the second existing test
+file to move, `DrawPassTests`, against the one this section budgeted for - so the count is **30 of 32
+untouched**, and the boundary is right even though the number was not.
+
+**`sorts` is the tuple it already was**, `IReadOnlyList<(ColumnBase<TItem> Column, bool Descending)>`.
+Naming that pair would be candidate 7 decided as a side effect of moving the pipeline, which is the
+argument this section already makes about narrowing what the module sees of a column.
+
+**`Filtered` is gone.** It appeared in neither list above, being two lines. Once both of them were calls
+to the module it was a forward with one caller whose guard could be read for the first time - and the
+guard was worse than nothing: it built and discarded a descriptor list to decide whether to call a
+function that returns its argument untouched when there is nothing to filter. Its one caller calls
+`Filter`.
+
+### A mutation caught a test of this section's own, and then a gap older than it
+
+The first pair of `CompositionSeamTests` compared the grid's route against the module's over a list and
+over a queryable, and **passed with the grid answering the route from the shape of its source** -
+`data is not IQueryable<TItem>`, which is what the flag looks like it means and agrees with the module
+in both of those cases. What separates them is a list whose column *cannot* compose in memory: the
+source is a list and the route is not the in-memory one. With that third case the mutation fails, and
+fails only there. §9's first layer earning its place for the third piece running.
+
+**And then the gap.** Removing the `AllowFiltering` gate from `DeclaredFilters` also passed the whole
+suite - and that is not a cost bug. `ComposeInMemory` builds its predicate from whatever the columns
+report and never re-asks, so a grid with filtering switched off and a column still carrying a filter
+value would have been filtered. One gate asks, nothing downstream re-asks, and **nothing said so**:
+§10b's recurring shape, found here only because moving the code put the gate and its neighbour in one
+file. `WithFilteringOffAColumnCarryingAFilterDoesNotFilter` is what says it now.
+
+**Eight mutations, six caught**, each compiling: the in-memory route reporting the wrong flag (10
+tests), the memo dropping the route (3), the grid answering the route itself (1), a declining column no
+longer handing the composition back (1), the nothing-to-do path claiming a route it did not take (1),
+and the filtering gate removed (1). The two that survive are recorded rather than counted:
+
+- `ActiveFilters` dropping its `pass.Drawing` term passes, and should. Within a pass the descriptors
+  cannot change, so that memo is a cost and not a correctness rule; `DrawPassTests` pins the mechanism
+  instead of the outcome.
+- `Reuses` dropping `reused.Rows is not null` passes, because `Keep` writes both fields together. That
+  redundancy is older than this piece and is left exactly as it was found, rather than removed on the
+  strength of an argument about callers that a future `Keep` would not be bound by.
+
+**Measured**, `--job short` at 1000 rows, one run before and two after: bare 154.55 KB -> 154.55 and
+154.66, one sort 175.83 -> 175.93 and 175.79, a filter row 158.76 -> 158.77 twice. Allocation-neutral,
+which is what was claimed; the sort row straddles its own before-value, and the bare spread of 0.11 KB
+is the same noise floor piece 2 recorded. **No time ratio is quoted**, per §9.
+
+**One cost is carried through rather than introduced, and is worth naming now it is in one place.**
+`Compose` derives `filtering` from `ActiveFilters(...) is not null`, which outside a render builds and
+discards a `List<FilterDescriptor>` per call. Inside a render it reads the pass and allocates nothing,
+which covers every per-row path; the calls that pay are the asynchronous ones. Candidate 5 is where the
+four `Apply*` return shapes get decided, and this is the same question from the other end.
