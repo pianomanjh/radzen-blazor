@@ -1583,7 +1583,7 @@ namespace Radzen.FastGrid
             builder.AddAttribute(85, nameof(RadzenDropDown<IEnumerable>.FilterCaseSensitivity),
                 FilterCaseSensitivity.CaseInsensitive);
             builder.AddAttribute(86, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
-            builder.AddAttribute(87, nameof(RadzenDropDown<IEnumerable>.Value), column.CurrentFilterValue);
+            builder.AddAttribute(87, nameof(RadzenDropDown<IEnumerable>.Value), column.FilterSelection);
             builder.AddAttribute(88, nameof(RadzenDropDown<IEnumerable>.Change),
                 EventCallback.Factory.Create<object>(this, value => OnFilterSelection(column, value)));
             builder.CloseComponent();

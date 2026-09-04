@@ -600,7 +600,7 @@ namespace Radzen.FastGrid
         /// </summary>
         Task OnFilterInput(ColumnBase<TItem> column, string? text)
         {
-            var task = Filter(column, FilterValueFrom(column, text));
+            var task = Filter(column, column.FilterValueFromText(text));
 
             // Filter routes through SetFilter, which clears this; recording the text afterwards is what
             // says the box's contents are what is applied. Anything that filters by another route -
@@ -609,40 +609,6 @@ namespace Radzen.FastGrid
             column.AppliedFilterText = text;
 
             return task;
-        }
-
-        /// <summary>The value a column filters by for the given text, or null if the text is not one.</summary>
-        static object? FilterValueFrom(ColumnBase<TItem> column, string? text)
-        {
-            if (string.IsNullOrEmpty(text))
-            {
-                return null;
-            }
-
-            // The element type, not the property type: a filter on a list of dates is compared against a
-            // date, and a conversion would have no idea what to do with the list.
-            var declared = column.EffectiveFilterType;
-            var type = Nullable.GetUnderlyingType(declared) ?? declared;
-
-            if (type == typeof(string) || type == typeof(object))
-            {
-                return text;
-            }
-
-            try
-            {
-                // ConvertType rather than Convert.ChangeType, and Enum.Parse rather than either: neither
-                // an enum nor a Guid converts from a string through IConvertible, so the framework call
-                // throws for both and what was typed silently cleared the filter instead of applying it.
-                return type.IsEnum
-                    ? Enum.Parse(type, text, ignoreCase: true)
-                    : ConvertType.ChangeType(text, declared, CultureInfo.CurrentCulture);
-            }
-            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException
-                or ArgumentException)
-            {
-                return null;
-            }
         }
 
         /// <summary>The filter presentation this column actually uses.</summary>
@@ -656,6 +622,14 @@ namespace Radzen.FastGrid
         /// </summary>
         internal IEnumerable FilterLookup(ColumnBase<TItem> column)
         {
+            // Before FilterLookupData, which a lookup column rejects outright rather than silently
+            // losing - a column that has its own values has nothing to scan for and nothing to be
+            // supplied with.
+            if (column.FilterValues is { } own)
+            {
+                return own;
+            }
+
             if (column.FilterLookupData is { } supplied)
             {
                 return supplied;
@@ -1015,27 +989,12 @@ namespace Radzen.FastGrid
                 return Filter(column, null, Radzen.FilterOperator.In);
             }
 
-            // Typed as the column's element type, not List<object>: the reflective builder puts this
-            // list straight into Contains<TElement>(selected, x), and a List<object> there is not an
-            // IEnumerable<TElement> - so a provider cannot translate it and the comparison never binds.
+            // What was ticked is not always what the column filters by: a lookup column offers names
+            // carrying ids, and the ids are what the predicate and the descriptor compare.
             //
-            // A column that composes its own predicate does not care, because it retypes the values
-            // against the type parameter it already has. So with the switch off - where closing List<>
-            // over a run-time type is exactly what is unavailable - the untyped list is enough, and the
-            // only columns that would have needed the typed one have already declined to filter.
-            var type = Nullable.GetUnderlyingType(column.EffectiveFilterType) ?? column.EffectiveFilterType;
-            var selected = DynamicCode.Supported
-                ? (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!
-                : new List<object>();
-
-            foreach (var item in sequence)
-            {
-                selected.Add(item);
-            }
-
             // An empty list is passed through rather than turned into null here: HasFilter is the single
             // rule for what counts as a filter, and it already treats an empty sequence as none.
-            return Filter(column, selected, Radzen.FilterOperator.In);
+            return Filter(column, column.FilterValueFromSelection(sequence), Radzen.FilterOperator.In);
         }
 
         /// <summary>Clears every column's filter, and reloads.</summary>

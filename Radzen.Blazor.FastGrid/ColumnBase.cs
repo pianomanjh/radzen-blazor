@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
@@ -719,9 +720,99 @@ namespace Radzen.FastGrid
             AppliedFilterText = null;
         }
 
-        FilterOperator DefaultFilterOperator => EffectiveFilterType == typeof(string)
+        /// <summary>How this column compares when nothing said otherwise.</summary>
+        internal virtual FilterOperator DefaultFilterOperator => EffectiveFilterType == typeof(string)
             ? Radzen.FilterOperator.Contains
             : Radzen.FilterOperator.Equals;
+
+        /// <summary>
+        /// The value a filter box's text means for this column, or null when it means nothing - a
+        /// half-typed date or number, which filters nothing rather than throwing.
+        /// </summary>
+        /// <remarks>
+        /// On the column because only the column knows what it filters by. The default converts to the
+        /// filtered property's own type; a column whose cells show something other than what its rows
+        /// carry has to translate instead.
+        /// </remarks>
+        internal virtual object? FilterValueFromText(string? text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return null;
+            }
+
+            // The element type, not the property type: a filter on a list of dates is compared against a
+            // date, and a conversion would have no idea what to do with the list.
+            var declared = EffectiveFilterType;
+            var type = Nullable.GetUnderlyingType(declared) ?? declared;
+
+            if (type == typeof(string) || type == typeof(object))
+            {
+                return text;
+            }
+
+            try
+            {
+                // ConvertType rather than Convert.ChangeType, and Enum.Parse rather than either: neither
+                // an enum nor a Guid converts from a string through IConvertible, so the framework call
+                // throws for both and what was typed silently cleared the filter instead of applying it.
+                return type.IsEnum
+                    ? Enum.Parse(type, text, ignoreCase: true)
+                    : ConvertType.ChangeType(text, declared, CultureInfo.CurrentCulture);
+            }
+            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException
+                or ArgumentException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The values this column's check-box list offers of its own accord, or null to leave the grid
+        /// to <see cref="FilterLookupData" /> and the distinct scan.
+        /// </summary>
+        internal virtual IEnumerable? FilterValues => null;
+
+        /// <summary>
+        /// What the check-box list is bound to, which is <see cref="CurrentFilterValue" /> unless the
+        /// list offers something other than the values the column filters by.
+        /// </summary>
+        internal virtual object? FilterSelection => CurrentFilterValue;
+
+        /// <summary>
+        /// The value a check-box-list selection means for this column. The inverse of
+        /// <see cref="FilterSelection" />, and the counterpart of <see cref="FilterValueFromText" />
+        /// for the other filter control.
+        /// </summary>
+        /// <remarks>
+        /// Typed as the column's element type, not <c>List&lt;object&gt;</c>: the reflective builder
+        /// puts this list straight into <c>Contains&lt;TElement&gt;(selected, x)</c>, and a
+        /// <c>List&lt;object&gt;</c> there is not an <c>IEnumerable&lt;TElement&gt;</c> - so a provider
+        /// cannot translate it and the comparison never binds.
+        /// <para>
+        /// A column that composes its own predicate does not need that, because it retypes the values
+        /// against the type parameter it already has. So with the switch off - where closing
+        /// <c>List&lt;&gt;</c> over a run-time type is exactly what is unavailable - the untyped list
+        /// is enough, and the only columns that would have needed the typed one have already declined
+        /// to filter.
+        /// </para>
+        /// </remarks>
+        internal virtual object FilterValueFromSelection(IEnumerable selected)
+        {
+            var declared = EffectiveFilterType;
+            var type = Nullable.GetUnderlyingType(declared) ?? declared;
+
+            var values = DynamicCode.Supported
+                ? (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!
+                : new List<object>();
+
+            foreach (var item in selected)
+            {
+                values.Add(item);
+            }
+
+            return values;
+        }
 
         bool initialized;
 

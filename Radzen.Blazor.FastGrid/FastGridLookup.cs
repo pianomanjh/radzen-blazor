@@ -141,6 +141,34 @@ namespace Radzen.FastGrid
         }
     }
 
+    /// <summary>
+    /// One choice in a lookup column's filter: the name a reader picks, and the id it filters by.
+    /// </summary>
+    /// <remarks>
+    /// The check-box list shows and searches an entry's <see cref="ToString" />, which is what lets
+    /// this carry an id without the drop-down being told which member holds it. Naming one through
+    /// <c>ValueProperty</c> would be a member reached by name, and reaching a member by name is the
+    /// one thing every other part of a lookup column avoids.
+    /// </remarks>
+    /// <typeparam name="TKey">The type of the id the row carries.</typeparam>
+    public sealed class FastGridLookupEntry<TKey>
+    {
+        internal FastGridLookupEntry(TKey? key, string text)
+        {
+            Key = key;
+            Text = text;
+        }
+
+        /// <summary>The id, or null for the entry standing for the rows that carry none.</summary>
+        public TKey? Key { get; }
+
+        /// <summary>The name.</summary>
+        public string Text { get; }
+
+        /// <inheritdoc />
+        public override string ToString() => Text;
+    }
+
     /// <summary>The dictionary a lookup's names live in.</summary>
     /// <remarks>
     /// <see cref="Dictionary{TKey, TValue}" /> asks for a key that cannot be null, and a lookup
