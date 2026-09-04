@@ -161,8 +161,11 @@ async function main() {
             // all read as zero there.
             const started = performance.now();
 
-            const written = await window.__fastgrid.autoFit(table.id, indices,
-                indices.map(() => null), bounds, 0, columns - 1, false, false, 'scroll');
+            const written = await window.__fastgrid.autoFit({
+                table: table.id, indices, min: indices.map(() => null), max: bounds,
+                toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                overflow: 'scroll', required: indices.map(() => false),
+            });
 
             const elapsed = round(performance.now() - started);
 
@@ -180,8 +183,11 @@ async function main() {
 
             table.style.display = 'block';
 
-            const declined = await window.__fastgrid.autoFit(table.id, indices,
-                indices.map(() => null), bounds, 0, columns - 1, false, false, 'scroll');
+            const declined = await window.__fastgrid.autoFit({
+                table: table.id, indices, min: indices.map(() => null), max: bounds,
+                toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                overflow: 'scroll', required: indices.map(() => false),
+            });
 
             const widthsNow = [...cols.children].map(col => col.style.width);
 
@@ -213,9 +219,11 @@ async function main() {
                 const count = () => { started++; };
                 table.addEventListener('transitionstart', count, true);
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), bounds, 0, columns - 1, false, animate, overflow,
-                    indices.map(() => false));
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => null), max: bounds,
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: animate,
+                    overflow: overflow, required: indices.map(() => false),
+                });
 
                 await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -254,8 +262,11 @@ async function main() {
                 pane.style.width = '150px';
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), bounds, 0, columns - 1, false, false, 'scroll');
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => null), max: bounds,
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                    overflow: 'scroll', required: indices.map(() => false),
+                });
 
                 const widths = at();
                 const scrolls = table.scrollWidth > pane.clientWidth;
@@ -278,9 +289,11 @@ async function main() {
                 [...cols.children].forEach(col => { col.style.width = ''; });
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => floor + 'px'), bounds, 0, columns - 1, false, false,
-                    'fit', required);
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => floor + 'px'), max: bounds,
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                    overflow: 'fit', required: required,
+                });
 
                 // What the required columns settled on at full width is what they must keep.
                 const wide = at();
@@ -327,9 +340,11 @@ async function main() {
                 [...cols.children].forEach(col => { col.style.width = ''; });
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
-                    'fit', indices.map(() => false));
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => null), max: indices.map(() => null),
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                    overflow: 'fit', required: indices.map(() => false),
+                });
 
                 // Asked as "is this ellipsised" rather than by re-deriving what it needs. Two traps in
                 // one line: .rz-column-title is `flex: auto; width: 100%`, so it never overflows and
@@ -394,16 +409,21 @@ async function main() {
                 pane.style.width = '700px';
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
-                    'fit', indices.map(() => false));
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => null), max: indices.map(() => null),
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                    overflow: 'fit', required: indices.map(() => false),
+                });
 
                 await new Promise(resolve => requestAnimationFrame(resolve));
 
                 const floorBefore = table.style.minWidth;
 
-                await window.__fastgrid.autoFit(table.id, [1],
-                    [null], [null], 0, -1, false, true, 'keep', [false]);
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: [1], min: [null], max: [null],
+                    toggleOffset: 0, bare: -1, wait: false, animate: true,
+                    overflow: 'keep', required: [false],
+                });
 
                 await new Promise(resolve => requestAnimationFrame(resolve));
 
@@ -446,9 +466,11 @@ async function main() {
                 pane.style.width = '900px';
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => '5rem'), indices.map(() => null), 0, columns - 1, false, false,
-                    'fit', indices.map(() => false));
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => '5rem'), max: indices.map(() => null),
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                    overflow: 'fit', required: indices.map(() => false),
+                });
 
                 pane.style.width = '150px';
                 await new Promise(resolve => requestAnimationFrame(resolve));
@@ -468,9 +490,11 @@ async function main() {
                 pane.style.width = '900px';
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => '20%'), indices.map(() => null), 0, columns - 1, false, false,
-                    'fit', indices.map(() => false));
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => '20%'), max: indices.map(() => null),
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                    overflow: 'fit', required: indices.map(() => false),
+                });
 
                 pane.style.width = '150px';
                 await new Promise(resolve => requestAnimationFrame(resolve));
@@ -504,9 +528,11 @@ async function main() {
                 pane.style.width = '900px';
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, indices,
-                    indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
-                    'fit', indices.map(() => false));
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: indices, min: indices.map(() => null), max: indices.map(() => null),
+                    toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
+                    overflow: 'fit', required: indices.map(() => false),
+                });
 
                 await new Promise(resolve => requestAnimationFrame(resolve));
 
@@ -552,9 +578,12 @@ async function main() {
                 cols.children[columns - 1].style.width = '220px';
                 table.getBoundingClientRect();
 
-                await window.__fastgrid.autoFit(table.id, kept,
-                    kept.map(() => null), kept.map(() => null), 0, kept[kept.length - 1], false, false,
-                    'fit', kept.map(() => false));
+                await window.__fastgrid.autoFit({
+                    table: table.id, indices: kept, min: kept.map(() => null),
+                    max: kept.map(() => null), toggleOffset: 0, bare: kept[kept.length - 1],
+                    wait: false, animate: false, overflow: 'fit',
+                    required: kept.map(() => false),
+                });
 
                 await new Promise(resolve => requestAnimationFrame(resolve));
 
