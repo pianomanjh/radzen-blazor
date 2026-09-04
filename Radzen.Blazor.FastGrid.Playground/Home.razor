@@ -50,11 +50,32 @@
         <legend>Rows</legend>
         <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
         <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
+        <label title="A lookup column's list is the lookup itself; every other column scans the data"
+               >Filter with
+            <select @bind="filterMode" disabled="@(!allowFiltering)">
+                <option value="@FilterMode.Simple">a box</option>
+                <option value="@FilterMode.CheckBoxList">check boxes</option>
+            </select>
+        </label>
         <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
         <label><input type="checkbox" @bind="virtualize" /> Virtualize</label>
         <label><input type="checkbox" @bind="alternating" /> Alternating</label>
         <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
         <label>Count <input type="number" @bind="rowCount" style="width:6rem" min="1" max="200000" /></label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Lookups</legend>
+        <label title="Where the names come from. Only a query is fetched, and only it leaves the cells blank for a render."
+               >Team names from
+            <select @bind="provenance">
+                <option value="@Provenance.Map">a map</option>
+                <option value="@Provenance.Items">a sequence</option>
+                <option value="@Provenance.Query">a query</option>
+            </select>
+        </label>
+        <label><input type="checkbox" @bind="slowLookup" /> Take a second over it</label>
+        <button @onclick="ReloadLookups">Reload (drops the names)</button>
     </fieldset>
 
     <fieldset>
@@ -92,6 +113,7 @@
                     AllowColumnReorder="@allowReorder"
                     AllowSorting="@allowSorting"
                     AllowFiltering="@allowFiltering"
+                    FilterMode="@filterMode"
                     AllowPaging="@allowPaging"
                     AllowVirtualization="@virtualize"
                     AllowColumnPicking="@allowPicking"
@@ -122,6 +144,15 @@
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" MinWidth="@Floor" Width="@Wide("90px")" />
             <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" MinWidth="@Floor" Format="d" Width="@Wide("180px")" />
             <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" MinWidth="@Floor" Format="C0" Width="@Wide("180px")" />
+            @* One id per row, nullable - so the check-box list offers an entry for the rows carrying
+               none, and the Simple box matches what is typed against the names rather than the ids. *@
+            <LookupColumn TItem="Row" TKey="int?" Property="@(x => x.TeamId)" Lookup="@TeamLookup"
+                          Title="Team" MinWidth="@Floor" Width="@Wide("160px")"
+                          SortBy="@(FastGridSort<Row>.By(r => r.TeamId))" />
+            @* Many ids per row. Over the Entity Framework source its filter composes
+               TagIds.Any(id => selected.Contains(id)) into SQL rather than running in memory. *@
+            <LookupCollectionColumn TItem="Row" TKey="int" Property="@(x => x.TagIds)" Lookup="@TagLookup"
+                                    Title="Tags" MinWidth="@Floor" Width="@Wide("200px")" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (fixed)"
                             Width="@Wide("260px")" MinWidth="@Floor" Resizable="false" Reorderable="false"
                             Frozen="@frozen" FrozenPosition="FrozenColumnPosition.Right" />
@@ -168,6 +199,71 @@
     string Floor => $"{floorPx}px";
 
     RadzenFastGrid<Row>? grid;
+
+    FilterMode filterMode = FilterMode.Simple;
+
+    /// <summary>Where a lookup's names come from. Only a query is fetched.</summary>
+    enum Provenance { Map, Items, Query }
+
+    Provenance provenance = Provenance.Map;
+    bool slowLookup;
+
+    /// <summary>
+    /// Rebuilt on every read, the way markup does. Only the map and the sequence compare equal across
+    /// two of those - a query's members include expressions, which are a fresh object graph every
+    /// time - so this is also where a column re-resolving on identity rather than once would show up
+    /// as a fetch per render in the metrics.
+    /// </summary>
+    FastGridLookup<int?> TeamLookup => provenance switch
+    {
+        Provenance.Map => FastGridLookup.Map(
+            Lookups.Teams.ToDictionary(t => (int?)t.Id, t => t.Name)),
+        Provenance.Items => FastGridLookup.Items(Lookups.Teams, t => (int?)t.Id, t => t.Name),
+        _ => FastGridLookup.Query(TeamQuery, t => (int?)t.Id, t => t.Name),
+    };
+
+    /// <summary>
+    /// The lookup's own source, which decides whether the fetch goes through the executor - not
+    /// whether the grid's data does. Over Entity Framework it is a real query; over the list it is
+    /// still fetched after the render, which is what leaves the cells blank for one of them.
+    /// </summary>
+    IQueryable<Team> TeamQuery => slowLookup
+        ? Lookups.Teams.AsQueryable().Select(Slowly)
+        : useEf ? ef.Teams : Lookups.Teams.AsQueryable();
+
+    /// <summary>
+    /// Sleep folded into the projection - a fifth of a second per team, so about a second in all -
+    /// which makes the render the cells are blank in one a person can see, and with it the auto-fit
+    /// that waits for the names rather than measuring the blanks.
+    /// </summary>
+    /// <remarks>
+    /// It blocks while it runs, and that is the honest picture: a lookup over a source the executor
+    /// cannot run asynchronously is materialized on the thread that asked for it. What the design
+    /// buys is that the thread is not the one drawing the rows - the fetch happens after the render,
+    /// so the grid is on screen throughout.
+    /// </remarks>
+    static readonly System.Linq.Expressions.Expression<Func<Team, Team>> Slowly =
+        team => new Team { Id = Pause(team.Id), Name = team.Name };
+
+    static int Pause(int id)
+    {
+        Thread.Sleep(200);
+
+        return id;
+    }
+
+    readonly FastGridLookup<int> TagLookup =
+        FastGridLookup.Map(Lookups.Tags.ToDictionary(t => t.Id, t => t.Name));
+
+    async Task ReloadLookups()
+    {
+        if (grid is not null)
+        {
+            await grid.Reload();
+
+            Log("Reload() dropped the names; nothing else does");
+        }
+    }
 
     bool selectable = true;
     bool multiSelect;

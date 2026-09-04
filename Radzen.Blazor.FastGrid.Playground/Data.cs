@@ -19,6 +19,19 @@ public class Row
 
     public string Notes { get; set; } = "";
 
+    /// <summary>
+    /// An id with no name beside it, which is what a lookup column resolves. Nullable, and null on
+    /// every seventh row, so the entry a filter offers for the rows carrying no id has rows to find.
+    /// </summary>
+    public int? TeamId { get; set; }
+
+    /// <summary>
+    /// Several ids per row, for the other cardinality. A primitive collection, which Entity Framework
+    /// maps without a conversion and can translate <c>Any</c> over - so the collection column's
+    /// expression filter runs against SQLite here rather than in memory.
+    /// </summary>
+    public List<int> TagIds { get; set; } = [];
+
     static readonly string[] Departments = ["Engineering", "Sales", "Ops", "Finance", "Support"];
 
     public static List<Row> Make(int n) => Enumerable.Range(0, n).Select(i => new Row
@@ -30,15 +43,63 @@ public class Row
         Hired = new DateTime(2010, 1, 1).AddDays(i),
         Salary = 40000m + (i % 1000) * 37m,
         Notes = "Row " + i + " has a long enough note to truncate when the column is narrowed.",
+        TeamId = i % 7 == 0 ? null : Lookups.Teams[i % (Lookups.Teams.Count - 1)].Id,
+        TagIds = Lookups.Tags.Where((_, t) => (i / (t + 1)) % 3 == 0).Select(tag => tag.Id).ToList(),
     }).ToList();
+}
+
+/// <summary>The far side of a lookup: a row holding a name and the id other rows carry.</summary>
+public class Team
+{
+    public int Id { get; set; }
+
+    public string Name { get; set; } = "";
+}
+
+/// <summary>The same for the collection column, so both have somewhere real to resolve against.</summary>
+public class Tag
+{
+    public int Id { get; set; }
+
+    public string Name { get; set; } = "";
+}
+
+/// <summary>The names the rows' ids stand for, held once.</summary>
+public static class Lookups
+{
+    /// <summary>
+    /// The last one is used by no row - which is why it is named for it. The check-box list offers it
+    /// anyway, which is the visible difference between a list drawn from the lookup and one scanned
+    /// from the data, and the generator below cycles the others deliberately to keep it that way.
+    /// </summary>
+    public static readonly List<Team> Teams =
+    [
+        new() { Id = 1, Name = "Platform" },
+        new() { Id = 2, Name = "Growth" },
+        new() { Id = 3, Name = "Billing" },
+        new() { Id = 4, Name = "Research" },
+        new() { Id = 5, Name = "Archive (nobody)" },
+    ];
+
+    public static readonly List<Tag> Tags =
+    [
+        new() { Id = 10, Name = "Remote" },
+        new() { Id = 20, Name = "Contract" },
+        new() { Id = 30, Name = "On call" },
+    ];
 }
 
 public class PlaygroundContext(DbContextOptions<PlaygroundContext> options) : DbContext(options)
 {
     public DbSet<Row> Rows => Set<Row>();
 
+    /// <summary>The lookup's own table, so a Query lookup is a real query rather than a list.</summary>
+    public DbSet<Team> Teams => Set<Team>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<Team>().Property(t => t.Id).ValueGeneratedNever();
+
         // The ids are the generator's, not the database's. Left to EF they are store-generated, and
         // then a row whose Id is 0 reads as "not set yet" - so seeding a set that starts at zero has
         // EF assign it a key of its own and collide with the row that already holds it.
@@ -75,6 +136,7 @@ public sealed class EfSource : IDisposable
                 .UseSqlite(connection).Options);
 
             context.Database.EnsureCreated();
+            context.Teams.AddRange(Lookups.Teams.Select(t => new Team { Id = t.Id, Name = t.Name }));
             context.Rows.AddRange(Row.Make(count));
             context.SaveChanges();
 
@@ -95,6 +157,13 @@ public sealed class EfSource : IDisposable
     /// this way is what would catch that again.
     /// </remarks>
     public IQueryable<Row> Rows => context!.Rows.AsNoTracking();
+
+    /// <summary>
+    /// The lookup's table, for the provenance that composes a projection into the provider's own
+    /// query. Read the same way the rows are, so a Query lookup here is fetched through the executor
+    /// exactly as one in an application would be.
+    /// </summary>
+    public IQueryable<Team> Teams => context!.Teams.AsNoTracking();
 
     public void Dispose()
     {
