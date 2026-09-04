@@ -117,6 +117,7 @@ namespace Radzen.FastGrid.Tests
             bool frozen = false,
             FrozenColumnPosition frozenPosition = FrozenColumnPosition.Left,
             bool autoFit = true,
+            bool required = false,
             string columnPickerTitle = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
@@ -165,6 +166,12 @@ namespace Radzen.FastGrid.Tests
             if (!autoFit)
             {
                 builder.AddAttribute(seq + 46, nameof(PropertyColumn<TItem, TProp>.AutoFit), false);
+            }
+
+            if (required)
+            {
+                builder.AddAttribute(seq + 47, nameof(PropertyColumn<TItem, TProp>.AutoFitPriority),
+                    AutoFitPriority.Required);
             }
 
             if (cssClass is not null)
