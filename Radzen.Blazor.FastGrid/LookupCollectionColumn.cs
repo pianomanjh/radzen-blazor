@@ -50,7 +50,7 @@ namespace Radzen.FastGrid
         private protected override bool OffersBlank => false;
 
         /// <inheritdoc />
-        protected override void OnParametersSet()
+        protected override void OnDerive()
         {
             if (!PropertyPathResolver.Equivalent(property, Property))
             {
@@ -59,12 +59,9 @@ namespace Radzen.FastGrid
                 ids = Property?.Compile();
             }
 
-            base.OnParametersSet();
+            // Last, because the base resolves the lookup and this reads the ids it is resolved against.
+            base.OnDerive();
         }
-
-        /// <inheritdoc />
-        public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
-            => builder.AddContent(sequence, CellTextOf(item));
 
         /// <inheritdoc />
         /// <remarks>

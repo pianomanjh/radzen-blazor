@@ -1166,18 +1166,12 @@ namespace Radzen.FastGrid
                 builder.AddAttribute(186, "role", "gridcell");
                 builder.AddAttribute(187, "scope", "col");
 
-                if (column.FrozenClass is { } frozenFooter)
+                if (column.FooterCellClass is { } footerCellClass)
                 {
-                    builder.AddAttribute(188, "class", string.IsNullOrEmpty(column.FooterCssClass)
-                        ? frozenFooter
-                        : column.FooterCssClass + " " + frozenFooter);
-                }
-                else if (!string.IsNullOrEmpty(column.FooterCssClass))
-                {
-                    builder.AddAttribute(188, "class", column.FooterCssClass);
+                    builder.AddAttribute(188, "class", footerCellClass);
                 }
 
-                if (column.FrozenFooterStyle is { } footerStyle)
+                if (column.FooterCellStyle is { } footerStyle)
                 {
                     builder.AddAttribute(189, "style", footerStyle);
                 }
@@ -1335,9 +1329,9 @@ namespace Radzen.FastGrid
                 };
 
                 // The header has to be pinned along with the body, or a frozen column's title scrolls
-                // away from its own cells. Per column, so the concat here is not per-row work.
-                builder.AddAttribute(53, "class",
-                    column.FrozenClass is { } frozen ? headerClass + " " + frozen : headerClass);
+                // away from its own cells. What that costs the class is the column's to fold; what the
+                // header is in the first place is this grid's, so it goes in.
+                builder.AddAttribute(53, "class", column.HeaderCellClass(headerClass));
 
                 // Only while sorting is offered. A grid with AllowSorting off still applies a sort it
                 // was given - the data is ordered and reordering it would be the surprise - but it must
@@ -1349,7 +1343,7 @@ namespace Radzen.FastGrid
                         sorts[sorted].Descending ? "descending" : "ascending");
                 }
 
-                if (column.FrozenHeaderStyle is { } headerStyle)
+                if (column.HeaderCellStyle is { } headerStyle)
                 {
                     builder.AddAttribute(55, "style", headerStyle);
                 }
@@ -1535,9 +1529,7 @@ namespace Radzen.FastGrid
 
                 // The filter row is a second row of the same header, so a frozen column has to pin here
                 // too - otherwise its title holds still and the box you type in slides out from under it.
-                builder.AddAttribute(55, "class", column.FrozenClass is { } frozenFilter
-                    ? "rz-unselectable-text " + frozenFilter
-                    : "rz-unselectable-text");
+                builder.AddAttribute(55, "class", column.FilterCellClass);
 
                 // The filter row holds real inputs that Tab already reaches, so it is not in the arrow
                 // space: putting it there would make every keystroke decide whether it is navigation or
@@ -1548,7 +1540,7 @@ namespace Radzen.FastGrid
                     builder.AddEventStopPropagationAttribute(56, "onkeydown", true);
                 }
 
-                if (column.FrozenHeaderStyle is { } filterStyle)
+                if (column.FilterCellStyle is { } filterStyle)
                 {
                     builder.AddAttribute(57, "style", filterStyle);
                 }
@@ -1859,7 +1851,7 @@ namespace Radzen.FastGrid
                 // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
                 // both places is inert under the shipped themes but would apply a custom
                 // `.rz-cell-data { padding: ... }` twice.
-                if (column.CellElementClass is { } cellClass)
+                if (column.BodyCellClass is { } cellClass)
                 {
                     builder.AddAttribute(147, "class", cellClass);
                 }
@@ -1879,7 +1871,7 @@ namespace Radzen.FastGrid
                 // Memoized on the column, so this is a reference to the same string on every row, and
                 // null - no attribute at all - for a column that aligns left, bounds nothing and is not
                 // pinned to an edge.
-                if (column.FrozenCellStyle is { } cellStyle)
+                if (column.BodyCellStyle is { } cellStyle)
                 {
                     builder.AddAttribute(150, "style", cellStyle);
                 }
@@ -1926,7 +1918,7 @@ namespace Radzen.FastGrid
                 }
 
                 builder.OpenElement(155, "span");
-                builder.AddAttribute(156, "class", column.CellClass);
+                builder.AddAttribute(156, "class", column.CellContentClass);
 
                 // The hover affordance for a truncated cell, and the most expensive thing on this list:
                 // an attribute per cell, and the cell's text derived a second time to fill it, since

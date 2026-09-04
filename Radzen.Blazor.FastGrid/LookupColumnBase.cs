@@ -50,9 +50,13 @@ namespace Radzen.FastGrid
         static readonly IReadOnlyDictionary<TKey, string> Unresolved = LookupNames.None<TKey>();
 
         /// <inheritdoc />
-        public override string? PropertyPath => SortBy?.Path;
+        internal override FastGridSort<TItem>? SortSource => SortBy;
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Not the base's answer, which asks whether there is a path: a sort over a computed key has
+        /// none and orders rows all the same.
+        /// </remarks>
         public override bool CanSort => Sortable && SortBy is not null;
 
         /// <inheritdoc />
@@ -65,23 +69,7 @@ namespace Radzen.FastGrid
         internal override FilterOperator DefaultFilterOperator => Radzen.FilterOperator.In;
 
         /// <inheritdoc />
-        public override IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending)
-            => SortBy?.Apply(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source,
-            bool descending) => SortBy?.ApplyThen(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedEnumerable<TItem>? ApplySortInMemory(IEnumerable<TItem> source,
-            bool descending) => SortBy?.Apply(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
-            bool descending) => SortBy?.ApplyThen(source, descending);
-
-        /// <inheritdoc />
-        protected override void OnParametersSet()
+        protected override void OnDerive()
         {
             if (FilterLookupData is not null)
             {
@@ -93,7 +81,10 @@ namespace Radzen.FastGrid
 
             EnsureLookup();
 
-            base.OnParametersSet();
+            // Nothing above this today, and chained anyway: the rule OnDerive states is that a link in
+            // the chain calls the next one, and a link that only happens to be last is how it stops
+            // being true.
+            base.OnDerive();
         }
 
         /// <summary>

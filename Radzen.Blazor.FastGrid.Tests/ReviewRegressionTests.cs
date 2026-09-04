@@ -704,10 +704,11 @@ namespace Radzen.FastGrid.Tests
         Expression<Func<TItem, TProp>>? last;
         Func<TItem, TProp>? compiled;
 
-        protected override void OnParametersSet()
+        // OnDerive, and it used to be OnParametersSet with base called *first* - which is the order the
+        // library's own columns carry a comment against, got backwards here without anything noticing
+        // because this column derives nothing the base reads.
+        protected override void OnDerive()
         {
-            base.OnParametersSet();
-
             if (PropertyPathResolver.Equivalent(last, Property))
             {
                 return;

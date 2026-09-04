@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 
@@ -44,6 +42,10 @@ namespace Radzen.FastGrid
         [Parameter] public string? SortProperty { get; set; }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Not the base's answer, which is the sort's path alone: this column can name a path with no
+        /// sort behind it, and a <c>LoadData</c> grid orders by exactly that.
+        /// </remarks>
         public override string? PropertyPath => SortBy?.Path ?? SortProperty;
 
         /// <inheritdoc />
@@ -53,20 +55,7 @@ namespace Radzen.FastGrid
         public override bool CanSort => Sortable && (SortBy is not null || SortProperty is not null);
 
         /// <inheritdoc />
-        public override IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending) =>
-            SortBy?.Apply(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source,
-            bool descending) => SortBy?.ApplyThen(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedEnumerable<TItem>? ApplySortInMemory(IEnumerable<TItem> source,
-            bool descending) => SortBy?.Apply(source, descending);
-
-        /// <inheritdoc />
-        public override IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
-            bool descending) => SortBy?.ApplyThen(source, descending);
+        internal override FastGridSort<TItem>? SortSource => SortBy;
 
         /// <inheritdoc />
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)

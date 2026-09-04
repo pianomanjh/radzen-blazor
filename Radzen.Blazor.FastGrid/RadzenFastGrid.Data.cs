@@ -605,9 +605,7 @@ namespace Radzen.FastGrid
                 return Task.CompletedTask;
             }
 
-            // SetFilter clears the text, so it is put back after rather than before.
-            column.SetFilter(value, filterOperator);
-            column.AppliedFilterText = text;
+            column.SetFilter(value, filterOperator, text);
 
             // A narrower set has different pages; the row that was on page 3 may not exist any more.
             skip = 0;
@@ -1046,7 +1044,7 @@ namespace Radzen.FastGrid
             {
                 if (columns[i].HasFilter)
                 {
-                    columns[i].SetFilter(null, null);
+                    columns[i].SetFilter(null, null, null);
                     cleared = true;
                 }
             }
@@ -1079,14 +1077,14 @@ namespace Radzen.FastGrid
 
             for (var i = 0; i < columns.Count; i++)
             {
-                columns[i].SetFilter(null, null);
+                columns[i].SetFilter(null, null, null);
             }
 
             foreach (var filter in filters)
             {
                 var column = ColumnByFilterPath(filter.Property);
 
-                column?.SetFilter(filter.FilterValue, filter.FilterOperator);
+                column?.SetFilter(filter.FilterValue, filter.FilterOperator, null);
             }
 
             skip = 0;
@@ -1183,7 +1181,7 @@ namespace Radzen.FastGrid
             {
                 if (columns[i].PropertyPath is { Length: > 0 })
                 {
-                    columns[i].SetFilter(null, null);
+                    columns[i].SetFilter(null, null, null);
                 }
             }
 
@@ -1209,12 +1207,10 @@ namespace Radzen.FastGrid
 
                 if (stored.FilterValue is not null)
                 {
-                    column.SetFilter(stored.FilterValue, stored.FilterOperator);
-
-                    // After SetFilter, which clears it: the text is what says the value came from the
-                    // box, and on a lookup column it is the only thing that tells a name nothing
-                    // answered to from a list with nothing ticked - both are In over no ids.
-                    column.AppliedFilterText = stored.FilterText;
+                    // The text goes with the value: it is what says the value came from the box, and on
+                    // a lookup column it is the only thing that tells a name nothing answered to from a
+                    // list with nothing ticked - both are In over no ids.
+                    column.SetFilter(stored.FilterValue, stored.FilterOperator, stored.FilterText);
                 }
 
                 // Only when something recorded a choice. A null leaves the markup's Visible standing,

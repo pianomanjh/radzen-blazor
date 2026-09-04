@@ -53,6 +53,11 @@ namespace Radzen.FastGrid
 
         void PinToggle(bool pinned)
         {
+            // The toggle is drawn in the same four sections a column is, and needs the same three
+            // stackings for the same reasons - ColumnBase has the argument, above ComposeFrozenStyles.
+            // Written here rather than shared because the toggle is not a ColumnBase and has no class,
+            // style or width of its own to fold the pinning into; it is composed once, where a column's
+            // was composed at four call sites, which is why only the column's half was worth moving.
             ToggleFrozenClass = pinned ? "rz-frozen-cell rz-frozen-cell-left" : null;
             ToggleFrozenCellStyle = pinned ? "inset-inline-start:0" : null;
             ToggleFrozenHeaderStyle = pinned ? "inset-inline-start:0;z-index:2" : null;
