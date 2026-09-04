@@ -74,7 +74,8 @@ namespace Radzen.FastGrid
                     var key = Key(entity);
 
                     // A source row with no id names nothing, and a dictionary will not hold it. The
-                    // "(none)" a filter offers belongs to the column, not to the source.
+                    // entry a filter offers for the rows carrying no id belongs to the column, which
+                    // is what names it - not to the source, which has nothing to say about it.
                     if (key is not null)
                     {
                         names[key] = Text(entity);

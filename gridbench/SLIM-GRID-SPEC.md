@@ -84,8 +84,8 @@ bytes and not in time**. §12 had them the other way round, on a frame-count arg
 be about string values instead.
 
 **Not built**: editing, grouping, composite headers. Keyboard navigation is built in full - the cursor,
-the keys, range selection and positional ARIA, and so is column auto-fit (§13). **Lookup columns are
-designed and not built** (§14). §10 has what is still open.
+the keys, range selection and positional ARIA - and so are column auto-fit (§13) and lookup columns
+(§14, shapes 1 to 3). §10 has what is still open.
 
 ## 1. Why a separate component
 
@@ -630,20 +630,36 @@ not - the whole suite passed before and after every one of them.
 | Attribute-run ordering, all render files | mechanically checked | 1 |
 | `ColumnBase.cs` and the column types | reviewed | 5: 4 fixed, 1 open |
 | `RadzenFastGrid.cs`, the core render path | reviewed | 5: 4 fixed, 2 open |
-| Lookup columns, §14 | reviewed, two axes | 7: 5 standards, 2 spec |
+| Lookup columns, §14 | reviewed twice, two axes each | 23: 6 wrong answers, the rest tests, names and claims |
 
 **Every slice has now been read by someone other than its author.** The lookup columns were read on two
-axes at once - does it follow the repo's standards, does it implement §14 - which found seven between
-them, and again the whole suite passed before and after every one.
+axes - does it follow the repo's standards, does it implement §14 - and then read again on both at
+greater depth, which is where most of it came from: the second round found more than the first, and
+the whole suite passed before and after every one.
 
-Two of that pass are worth carrying forward. **A nit is worth chasing.** The standards axis ended on
-"typing 'bl' matches the blank entry too", filed as an aside; it was a real fault - the entry is
-labelled in the reader's own language, so what a typed filter found depended on the page's culture -
-and fixing it exposed a second one underneath, where text matching no name showed every row rather than
-none. **And a test written for an exit path can fail to reach it.** The first cancellation test disposed
-the grid and asserted nothing threw; removing the catch it was written for did not fail it, because the
-wide catch below took the exception and a disposed grid renders either answer identically. It is a
-direct test of the column now, and the mutation fails it. Between them they found ten, of which eight are fixed and three are
+Four of it are worth carrying forward.
+
+**A nit is worth chasing.** The first standards pass ended on "typing 'bl' matches the blank entry
+too", filed as an aside. It was a real fault - the entry is labelled in the reader's own language, so
+what a typed filter found depended on the page's culture - and fixing it exposed a second underneath,
+where text matching no name showed every row rather than none.
+
+**Reviewing a day of fixes finds faults in them, and this is the third time.** The fix for a non-key
+value read as `default(TKey)` went into the method that finds the ticked entry and not the one beside
+it that composes the predicate, so the grid filtered to the id-zero rows while the list showed nothing
+ticked. Both axes of the second round found it independently.
+
+**A test written for an exit path can fail to reach it.** The first cancellation test disposed the grid
+and asserted nothing threw; removing the catch it was written for did not fail it, because the wide
+catch below took the exception and a disposed grid renders either answer identically. It is a direct
+test of the column now, and the mutation fails it. The parity test between the two filter routes had
+the same shape one step removed - it compared the two answers, and two empty grids agree, so a
+predicate that went always-false on both sides was invisible. It asserts the answer now.
+
+**A claim in a comment is a claim whether or not its author wrote it as one.** Two of this section's
+own sentences were overstated and a reviewer had to trace the code to find out: that the settings
+identity "could not have been" the id path, and that the empty-answer bound "has its own test now".
+Both conclusions held; the reasoning under the first and the coverage under the second did not. Between them they found ten, of which eight are fixed and three are
 recorded as open because each is a design decision rather than a fix - one finding was two symptoms of
 a single cause, fixed once.
 
@@ -757,8 +773,9 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 - ~~**Column auto-fit**~~ - **built**, as §13 designed it, and the sort glyph it needed went up first
   on its own. Two of that section's decisions did not survive being measured; both are marked there.
 - ~~**Lookup columns**~~ - **built**, shapes 1 to 3 of §14, with the auto-fit deferral it needed as a
-  prerequisite rather than a follow-up. Four of that section's decisions did not survive the build;
-  all four are marked there.
+  prerequisite rather than a follow-up. Six of that section's decisions did not survive the build and
+  two rounds of review; all six are marked there. The playground draws both cardinalities, all three
+  provenances and both filter modes, which is the fastest way to see what the section describes.
 - **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
 
 **Measurement debt:**
@@ -2130,11 +2147,12 @@ constructor with a body rebound onto another lambda's parameter. That applicatio
 column now, over a `List<T>.AsQueryable()` that needs no database, and the check waits for its cells to
 fill rather than asserting about the render they are blank in.
 
-What is still argued rather than driven there: the collection column's *expression* filter route. That
-application's data is an array, so the in-memory predicate is what runs. The expression route is
-composed from `MethodInfo`s captured by ldtoken rather than found by name, and it is covered by the
-tests that render the same column over a queryable - but it is not what the trimmed application
-reaches.
+Not covered *there*: the collection column's *expression* filter route. That application's data is an
+array, so the in-memory predicate is what runs. It is driven elsewhere - the playground's Entity
+Framework source maps `TagIds` as a primitive collection, so ticking a tag composes
+`Any(id => selected.Contains(id))` into SQLite - and it is composed from `MethodInfo`s captured by
+ldtoken rather than found by name. What is untested is that combination *under a trimmer*, which is a
+narrower gap than it was.
 
 That is a stronger position than `CollectionColumn` manages, and it is a reason to keep the selectors
 typed even where an `object`-returning one would read more simply at the call site: §4 records that a
@@ -2175,8 +2193,9 @@ mind if this is revisited: the feature at stake is display, not filtering.
 
 ### What the build changed
 
-Four decisions above did not survive contact with the code. Each is recorded here rather than edited
-away, because what a decision was before it was checked is the part worth inheriting.
+Six decisions above did not survive contact with the code - four found while building it and two more
+that two rounds of review turned up. Each is recorded here rather than edited away, because what a
+decision was before it was checked is the part worth inheriting.
 
 **The fetch is cancelled by the grid going away, and by nothing else.** *Loading and lifetime* said it
 had the "cancelled-and-superseded return that `LoadLookupsAsync` already has", meaning the page load's
