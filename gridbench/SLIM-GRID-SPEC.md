@@ -540,6 +540,19 @@ Each layer below caught real faults the previous one missed. Use all of them.
   `aria-sort` now follow `AllowSorting`, so the grid no longer advertises a control that is not there.
 - **`ShowExpandColumn="false"` is now a placement choice, not a saving.** It used to avoid 404 KB; row
   detail costs under a kilobyte, so the parameter is about where the control lives.
+- **A declared `FilterValue` is not applied to the first asynchronous load.** A column's declared
+  filter becomes its current one in the column's own `OnParametersSet`, which runs as the table is
+  drawn - and the asynchronous load that fetches the first page is started from the grid's
+  *parameter-set* path, before any column has registered. So a grid over an executor-backed queryable
+  draws its first page unfiltered, with the filter row showing a filter that is not in the query, and
+  no reload follows to put it right. The in-memory path does not have this: it composes during the
+  render, by which time every column has registered.
+
+  Found while building §15's candidate 2, which needed the asynchronous route because it is the only
+  one that composes without asking about `AllowFiltering` first. Recorded rather than fixed, because
+  the fix is a reload triggered by the first registration and that is the same "when may the grid
+  reload itself" question the settings entry above turns on - with the same `!ReferenceEquals` hazard
+  underneath it.
 - ~~Whether virtualization is in scope for v1~~ - **done.** `AllowVirtualization` puts the rows through
   `Virtualize` with `SpacerElement="tr"`, and one items provider serves every source. It is exclusive
   with paging: the two solve the same problem, so `Paging` is a single property both the pager and the
@@ -2322,9 +2335,10 @@ sentinel because upstream already has the convention. What is left:
 
 Every pass in §10b asked whether the code is *correct*. This one asks whether it is the right *shape*:
 where a module is shallow, where a seam is missing, and where a rule that lives in a comment should
-live in an interface instead. It found two wrong answers, recorded below; the rest of what follows is
-shape. Both faults were in the same place, and neither was visible until the shape was written down -
-which is the argument for this kind of pass rather than a summary of it.
+live in an interface instead. It found two wrong answers, recorded below, and building the first two
+candidates turned up a third that is recorded in §10; the rest of what follows is shape. None of the
+three was visible until the shape was written down, which is the argument for this kind of pass rather
+than a summary of it.
 
 Read by four sub-agents against written briefs, over the two grid partials, the column model, the
 browser module with its six calling partials, and the test suite read as a consumer of the interfaces
@@ -2391,7 +2405,7 @@ with a load-bearing reason should be recorded here beside it.
 | # | Candidate | Strength |
 | --- | --- | --- |
 | 1 | Compose the view behind one interface | Strong |
-| 2 | `drawing` is a mode, not a field | Strong |
+| 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
 | 3 | The browser seam has no interface | Strong |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
 | 5 | Four methods of one shape, four meanings of `null` | Strong |
@@ -2410,15 +2424,47 @@ stands up two `TestContext`s and diffs rendered rows to check the two routes agr
 `FilterExpression<Person, TProp>.For` and `.PredicateFor` directly, covers 84 operator x route
 combinations, and needs no bUnit at all.
 
-**2. `drawing` is a mode, not a field.** Set only by `BeginDrawing`/`EndDrawing` (`Data.cs:1263`,
-`:1272`), it silently changes what five methods mean, and none of them names it in a signature. The
-sharpest instance is `ApplyFilters` at `:1155` — `if (!AllowFiltering && !drawing) return source;` —
-so the same call filters differently inside a render than outside one. Six callers sit outside the
-window (`Clicks.cs:323`, `Keyboard.cs:609`, `:736`, `Data.cs:451`, `:492`, `:496`) and get an
-unmemoized recomposition and a second full count. `Composed`/`Compose` and `TotalCount`/`CountAll` are
-four methods where two would do, existing only because the memo is a field instead of a value the
-caller holds. This is §10b's "two features sharing one mechanism" with the mechanism named: `View()`
-and `TotalCount()` asking the same questions in opposite orders were both reading `drawing`.
+**2. `drawing` is a mode, not a field.** **Built**, as `DrawPass<TItem>`. The flag and the four fields
+beside it are one value: what the render in progress has already worked out. `Composed` and `Compose`
+are one method, and `TotalCount` is one line rather than a memo dance around `CountAll`, which keeps
+the source selection it was tangled with.
+
+**One claim in this section was too strong, and is corrected here.** It said `ApplyFilters` "filters
+differently inside a render than outside one". That divergence is not reachable: `Filtered` and
+`Compose` both guarded on `AllowFiltering` before calling, and `LoadPageAsync` - the one caller that
+did not - only ever runs outside a render. So the `!drawing` term in that guard was dead. It sharpens
+the candidate rather than weakening it: a guard written against an ambient that *cannot* vary is worse
+than one that does, because nobody can see the rule and the next caller inherits it. The guard is
+`!AllowFiltering` now, asked in one place, and its two callers have dropped the term they duplicated.
+
+**What the build changed.** Two of this candidate's own decisions did not survive it.
+
+- **The readers were going to test `Drawing`, and now do not.** A mutation check found the test for
+  "the total is remembered only for the pass" passing with that condition deleted - `Keep` already
+  gates on `Drawing`, so nothing can have been remembered outside a pass for a reader to find. Two
+  redundant branches, both unreachable, both looking like the rule was enforced twice. `Keep` is the
+  single gate now.
+- **Which moved the risk somewhere a test could not follow it**, and that is the more interesting half.
+  With the readers ungated, correctness depends on a pass being closed *entirely* rather than by
+  clearing its flag - otherwise a later caller holding the same source instance is handed a stale
+  composition. No test could pin that: the obvious one asserts the assignment it makes itself, not the
+  one the grid makes. So `Drawing` and `Filters` are settable only by `Begin`, and the mutation that
+  closes a pass by clearing the flag **no longer compiles**. A fault made unrepresentable is worth more
+  than a test that it has not happened.
+
+**Measured**, `--job short` at 1000 rows, one run before and two after: bare 154.53 KB -> 154.54 and
+154.65, one sort 175.89 -> 175.79 twice, a filter row 158.90 -> 158.77 twice. Allocation-neutral,
+which is what was claimed; the bare spread of 0.11 KB across the two after-runs is the noise floor
+rather than a cost, and the two composing paths are a shade cheaper in both. **No time ratio is
+quoted**: at that job length the errors on all three were wider than the differences, and §9 has the
+rule about that.
+
+The pass is a field on the grid, and is passed by `ref` only where it crosses a module edge - which is
+candidate 1, not this. What this does *not* do is remove the ambient from the grid's own helpers:
+`ActiveFilters` and `Compose` still read the field. The claim is only that it no longer crosses a seam.
+The alternative - threading `ref pass` through `RenderGrid`, `RenderPager`, `RenderHead`, `RenderBody`
+and `RenderRow` - is a large diff through the hottest code on the branch, to buy something this already
+has.
 
 **3. The browser seam has no interface.** Sixteen named entry points carrying about forty-five
 positional arguments — and that is the narrow half. The wide half is undeclared: element ids, `data-r`,
