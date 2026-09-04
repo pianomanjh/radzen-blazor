@@ -1870,11 +1870,28 @@ and it makes a column's meaning non-local. Instead the grid caches on the `FastG
 itself: `record` equality gives `Map` and `Items` deduplication for nothing, and the sharing is an
 optimization nobody has to name or think about.
 
-**Open, and to be settled by a spike rather than here:** whether record equality on `Query` is usable.
-Its members include an `IQueryable`, whose equality is reference equality on the expression tree, so two
-separately-written-but-identical queries will not dedupe. That is the right failure - it costs a second
-fetch, not a wrong answer - but if it turns out that the common call site rebuilds the queryable per
-render, `Query` needs an explicit identity instead. Measure before choosing.
+**Measured, and the answer splits the cases.** Two instances built the way Razor markup builds them -
+the whole expression re-evaluated on every render:
+
+| case | equal? | why |
+| --- | --- | --- |
+| `Map` | yes | a dictionary reference held in a field |
+| `Items` | **yes** | non-capturing lambdas are cached in static fields, so the *same delegate instances* come back every render, and the collection reference is stable |
+| `Query` | **no, ever** | its `Expression<Func<>>` members are a fresh object graph on every evaluation and `Expression` does not override `Equals` |
+
+`Query` fails **even over a stable root queryable**, so this is not about the `IQueryable` member at all -
+it is the expressions beside it, and no call site can hold it right by being careful with the query.
+
+**That is harmless, and only because the lifetime rule in *Loading and lifetime* is "once".** A failed
+dedup costs one extra fetch at startup, not a fetch per render. What it does make load-bearing is the
+other half of that rule: **once a column has resolved its lookup it does not re-resolve because the
+parameter arrived as a different instance.** A cache keyed on the lookup's identity per render would
+refetch a `Query` on every render - which is precisely the defect §10 records against the check-box
+list's distinct scan, in a feature designed to avoid it. Resolve once per column; `Reload()` is what
+drops it.
+
+So the dedup is a bonus that `Map` and `Items` get and `Query` does not, rather than a mechanism
+anything depends on. Two columns over one `Query` fetch twice, once, at startup.
 
 ### The row carries ids, so the filter compares ids
 
@@ -1911,13 +1928,15 @@ It was rejected for three reasons, in increasing order of weight:
 1. It is a query per column where this design has none.
 2. The list would then **change as the data changes**, so a filter control's options move under the
    user. A stable list is worth more than a shorter one.
-3. **It inherits the defect recorded in §10.** `lookups` is dropped on `!ReferenceEquals(lastData, Data)`,
-   which is true on every parameter set for the re-materialising sources this grid is built for, so the
-   scan re-runs per column per parent render.
+3. **Its cache is the one §10 records as having been invalidated wrongly** - dropped on
+   `!ReferenceEquals(lastData, Data)`, so the scan re-ran per column per parent render, measured at one
+   per parameter set. That is fixed, so (3) is history rather than a live cost; it is kept here because
+   it is the reason to be careful about *what a cache is keyed on*, which the dedup finding above then
+   ran into from the other side.
 
-A `FilterLookupInUseOnly` opt-in was considered and **refused**: it reintroduces exactly (3), and
-`FilterTemplate` is already the escape hatch for a grid that needs it. Build it when something asks, and
-key its cache on something better than a reference comparison when you do.
+A `FilterLookupInUseOnly` opt-in was considered and **refused**: it buys back a query per column to
+shorten a list, and `FilterTemplate` is already the escape hatch for a grid that needs it. Build it when
+something asks, and key its cache on the source kind rather than a reference when you do.
 
 ### What `Simple` mode does on a lookup column
 
@@ -1932,21 +1951,32 @@ one column type, which is the sort of hole §10b keeps finding.
 **Documented consequence:** text matching two hundred names emits two hundred ids, and providers have
 parameter limits. A cap belongs in the code with the number stated, rather than a surprise at run time.
 
-### The descriptor the collection case reports is grid-local
+### The descriptor the collection case reports is portable, and no sentinel is invented
 
-`DescriptorFor` emits `FilterProperty = FilterMemberPath` precisely so a collection column's predicate
-reads `Customers.Any(c => c.Name ...)` rather than a comparison against the collection. A
-`LookupCollectionColumn` has no member to name - the element *is* the id - so it emits `Property` as the
-id path and a sentinel `FilterProperty` meaning "the element itself".
+An earlier draft of this section had the collection descriptor as a grid-local encoding, on the
+assumption that a bare `BrandIds In [3, 7]` would read as a scalar comparison to any other consumer.
+**Reading `QueryableExtension` rather than assuming shows upstream already has exactly this convention**,
+and it is the one to emit:
 
-**It round-trips through this grid and is not promised to mean the same thing to `RadzenDataFilter`, and
-that is said out loud rather than left to be discovered.** Emitting a bare `BrandIds In [3, 7]` would
-read as a scalar comparison to any other consumer - which is the shape #2696 had to stop throwing on -
-and handing another component something that looks portable and is not is worse than admitting the
-encoding is local.
+```
+Property       = "BrandIds"     the collection property
+FilterProperty = null/empty     meaning: the element itself
+FilterOperator = In
+FilterValue    = [3, 7]
+```
 
-**Check before choosing the sentinel** what upstream's `QueryableExtension` does with an array property
-now that #2696 has landed. It may have a convention worth matching rather than inventing.
+Given a collection property with no `FilterProperty`, upstream sets the compared expression to the
+element parameter itself rather than to a member of it, rewrites `In` to `Contains`, and wraps the whole
+thing with `EnumerableAnyOrAll`. What comes out is
+`BrandIds != null && BrandIds.Any(x => new[]{3,7}.Contains(x))` - **the predicate this section
+specifies**, arrived at independently.
+
+So the descriptor round-trips through `RadzenDataFilter` and this grid alike, and nothing here needs a
+sentinel of its own. Emit the convention that exists.
+
+**Available and not used in v1:** `CollectionFilterMode` on the descriptor already chooses `Any` against
+`All` at that same call. "Rows carrying *every* selected brand" is therefore a parameter away rather than
+a redesign, and is left out only because nothing has asked for it.
 
 ### Sorting
 
@@ -2020,14 +2050,26 @@ silent; these two are the cheapest possible place to stop being.
 soft floor - the header width - and the names then arrive into a column too narrow for them.
 Permanently, because §13 settled that nothing invalidates a fit.
 
-**The fix is to defer the fit until the lookup resolves**, by extending what the script waits for. Not by
-re-arming on the lookup's arrival: that makes columns jump after the grid looked settled, which is the
-behaviour §13 rejected when it decided `Once` stays instant and only an asked-for fit animates.
+**The fix belongs on the server, not in the script**, and an earlier draft of this section said the
+opposite - "extend what the script waits for", plus an instruction to make that wait race a timer.
+Reading `fastgrid.js` rather than assuming shows `ready()` already races a `setTimeout` against
+`requestAnimationFrame` against a 1000ms deadline, carrying the fix from the second auto-fit review. Its
+`wait` argument asks one question, "are there rows yet", and rows are not what is missing.
 
-**The wait must race a timer against the frame**, not test a deadline at the top of a loop that awaits
-one. That exact defect was found in `ready()` by the second auto-fit review - a backgrounded tab is
-precisely where the awaited frame never arrives, so the deadline is never reached to be tested. Reuse the
-fix rather than re-deriving it.
+What is missing is on the C# side, where `AutoFitOnFirstRenderAsync` decides whether to fire at all. So:
+**do not attempt the fit while a `Query` lookup is still outstanding, and leave `autoFitPending`
+armed.** The resolve already calls `StateHasChanged`, and the next render fires the fit that was owed.
+Nothing in the script changes, and nothing re-arms.
+
+**Not by re-arming on the lookup's arrival**: that makes columns jump after the grid looked settled,
+which §13 rejected when it decided `Once` stays instant and only an asked-for fit animates.
+
+**The bound is the thing to get right, and it is not the script's.** §13 disarms on the *attempt* rather
+than the answer, precisely so that a grid whose script never loads does not ask again on every render.
+Deferring the attempt gives that property back temporarily, so a lookup that never resolves is a fit that
+never fires. **Every exit path out of the fetch must clear the outstanding state** - the success, the
+throw, and the cancelled-and-superseded return that `LoadLookupsAsync` already has. A test per exit path,
+not one for the happy one.
 
 **`FilterLookupData` has nothing left to do**, since the list comes from the lookup. It is inherited from
 `ColumnBase` and therefore still settable, so setting both is a **dev-time error naming both
@@ -2096,8 +2138,11 @@ mind if this is revisited: the feature at stake is display, not filtering.
 
 ### Recorded open
 
-- **Whether `Query` deduplicates usefully.** Above, with the spike it wants.
-- **The `FilterProperty` sentinel for the collection case.** Above; check #2696's landing first.
+Both of the questions this section originally left for a spike have been answered before the build, and
+both changed what is written above rather than confirming it: `Query` never deduplicates by value and it
+is the expressions rather than the queryable that prevent it, and the collection descriptor needs no
+sentinel because upstream already has the convention. What is left:
+
 - **A lookup column's settings identity is its id path**, so it joins §10b's open collision on equal
   terms and makes it no worse. It is named here so that whoever adopts `UniqueID` knows this is another
   participant.
