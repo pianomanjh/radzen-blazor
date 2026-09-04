@@ -7,6 +7,10 @@
     trimmable - which is a stronger statement than a clean analyzer run over the library alone, because
     the linker sees what is actually reachable.
 
+    Lookup columns are here on purpose. Everything they do is composed from their own typed
+    expressions - the cell, both filter shapes, the ids the check-box list carries - so "nothing here
+    declines under Native AOT" is a claim, and this is where it is checked rather than argued.
+
     Deliberately absent: the four features that reach a member by name - a template column filtering by
     a string path, a collection column, the check-box-list distinct scan, and the drop-down. Those are
     known to need reflection, and including them here would assert something untrue.
@@ -22,19 +26,36 @@
                         Format="d" />
         <PropertyColumn TItem="DataItem" TProp="decimal?" Property="@(x => x.Bonus)" Title="Bonus"
                         Format="C2" />
+        <LookupColumn TItem="DataItem" TKey="int" Property="@(x => x.TeamId)" Lookup="@teams"
+                      Title="Team" />
+        <LookupCollectionColumn TItem="DataItem" TKey="int" Property="@(x => x.TagIds)" Lookup="@tags"
+                                Title="Tags" />
     </ChildContent>
 </RadzenFastGrid>
 
 @code {
     ICollection<DataItem>? selection;
 
+    readonly FastGridLookup<int> teams = FastGridLookup.Map(new Dictionary<int, string>
+    {
+        [1] = "Ops",
+        [2] = "Design",
+    });
+
+    readonly FastGridLookup<int> tags = FastGridLookup.Map(new Dictionary<int, string>
+    {
+        [10] = "Red",
+        [20] = "Green",
+        [30] = "Blue",
+    });
+
     readonly DataItem[] data =
     [
-        new() { Name = "Alice", Value = 42, Category = "A", Active = true, Created = new DateTime(2024, 1, 15), Bonus = 1.5m },
-        new() { Name = "Bob", Value = 87, Category = "B", Active = false, Created = new DateTime(2024, 3, 22) },
-        new() { Name = "Charlie", Value = 15, Category = "A", Active = true, Created = new DateTime(2024, 5, 10), Bonus = 3m },
-        new() { Name = "Diana", Value = 63, Category = "C", Active = true, Created = new DateTime(2024, 7, 4) },
-        new() { Name = "Eve", Value = 29, Category = "B", Active = false, Created = new DateTime(2024, 8, 18), Bonus = 9m },
+        new() { Name = "Alice", Value = 42, Category = "A", Active = true, Created = new DateTime(2024, 1, 15), Bonus = 1.5m, TeamId = 1, TagIds = [10, 20] },
+        new() { Name = "Bob", Value = 87, Category = "B", Active = false, Created = new DateTime(2024, 3, 22), TeamId = 2, TagIds = [30] },
+        new() { Name = "Charlie", Value = 15, Category = "A", Active = true, Created = new DateTime(2024, 5, 10), Bonus = 3m, TeamId = 1, TagIds = [] },
+        new() { Name = "Diana", Value = 63, Category = "C", Active = true, Created = new DateTime(2024, 7, 4), TeamId = 2, TagIds = [20, 30] },
+        new() { Name = "Eve", Value = 29, Category = "B", Active = false, Created = new DateTime(2024, 8, 18), Bonus = 9m, TeamId = 1, TagIds = [10] },
     ];
 
     class DataItem
@@ -45,5 +66,7 @@
         public bool Active { get; set; }
         public DateTime Created { get; set; }
         public decimal? Bonus { get; set; }
+        public int TeamId { get; set; }
+        public List<int> TagIds { get; set; } = [];
     }
 }
