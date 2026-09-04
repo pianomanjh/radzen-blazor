@@ -537,7 +537,6 @@ Each layer below caught real faults the previous one missed. Use all of them.
   Costs +0.9 KB and 1.10x the render time at 1000 x 5 with two columns frozen - the only feature on
   this list whose time cost is larger than its allocation, because what it adds is two attribute frames
   per cell of a frozen column and frames are pooled.
-- **Delegated clicks are off under virtualization**,
 - **Delegated clicks are off under virtualization**, and that is a scope choice rather than a gap. A
   virtualized grid renders a window of some tens of rows, so the per-cell delegates cost tens of
   kilobytes there rather than 1,483, and `Virtualize` hands its `ChildContent` an item with no position,
