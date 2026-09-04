@@ -4646,6 +4646,19 @@ after-render either. The parity claim stands.
 - **Six mutations, each discriminating exactly.** The three from the build still do. Removing
   `RefreshAsync`'s owe fails the public-reload test and nothing else; dropping the settings discard, and
   dropping it together with the `else`, each fail the settings test and nothing else.
+- **The browser pass, §9's layer 6, which this change is squarely in the scope of**: the failure modes
+  that layer exists for - a render loop, a stuck scrim, a state nothing lifts - are exactly what moving a
+  load between lifecycle points risks, and none of layers 1-5 can see them. Driven over Entity Framework
+  in the playground: the grid loads and draws its 25 rows, with no scrim left behind and no empty message
+  under it. Sorting by a column reloads and the header agrees with the rows - `aria-sort="ascending"`
+  over data that is actually ascending, which is the pairing §23 exists to restore. Paging reloads. So
+  does switching the source back to the in-memory list, which is the deferral's other side: `drawn` is
+  true by then and the load runs at once.
+
+  **Renders went 2 → 3 → 4 → 5, one per action, and renders/sec sat at 0.0-0.2 throughout.** Both halves
+  matter, and §9 says why: a grid at rest reads 0, but a *stopped* counter reads the same as a quiet one,
+  and the reading that tells them apart is whether the page still responds. It did - every action moved
+  the count. The only console error is a missing favicon.
 - **Benchmarks re-run after the review fixes**, since the code changed materially. Against the control
   at `9b4711381`, **not one of the 24 FastGrid rows moved beyond the ~0.3 KB noise floor**, and the
   deltas split 13 up and 11 down - noise, not a regression. bare 154.66 → 154.58, `+ sorted by one

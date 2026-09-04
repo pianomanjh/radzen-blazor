@@ -1,0 +1,462 @@
+- generic [active] [ref=e1]:
+  - heading "RadzenFastGrid playground" [level=1] [ref=e2]
+  - generic [ref=e3]:
+    - group "Columns" [ref=e4]:
+      - generic [ref=e6]:
+        - checkbox "Resize" [checked] [ref=e7]
+        - text: Resize
+      - generic [ref=e8]:
+        - checkbox "Reorder" [checked] [ref=e9]
+        - text: Reorder
+      - generic [ref=e10]:
+        - checkbox "Freeze Id + Name" [ref=e11]
+        - text: Freeze Id + Name
+      - generic [ref=e12]:
+        - checkbox "Column picker" [ref=e13]
+        - text: Column picker
+      - generic [ref=e14]:
+        - checkbox "Declared widths" [checked] [ref=e15]
+        - text: Declared widths
+    - group "Auto-fit" [ref=e16]:
+      - generic [ref=e18]:
+        - text: When
+        - combobox "When" [ref=e19]:
+          - option "off" [selected]
+          - option "once"
+          - option "on demand"
+      - generic [ref=e20]:
+        - text: Too wide
+        - combobox "Too wide" [ref=e21]:
+          - option "scroll" [selected]
+          - option "fit container"
+      - generic [ref=e22]:
+        - checkbox "Id + Name required" [checked] [ref=e23]
+        - text: Id + Name required
+      - generic "Best-effort columns are never taken below this" [ref=e24]:
+        - text: Floor
+        - spinbutton "Floor" [ref=e25]: "80"
+      - button "Fit columns" [disabled] [ref=e26]
+      - button "Reset widths" [ref=e27]
+    - group "Stage width" [ref=e28]:
+      - generic [ref=e30]:
+        - slider "900px" [ref=e31]: "900"
+        - text: 900px
+      - generic [ref=e32]:
+        - checkbox "Full width" [checked] [ref=e33]
+        - text: Full width
+    - group "Rows" [ref=e34]:
+      - generic [ref=e36]:
+        - checkbox "Sorting" [checked] [ref=e37]
+        - text: Sorting
+      - generic [ref=e38]:
+        - checkbox "Filtering" [checked] [ref=e39]
+        - text: Filtering
+      - generic "A lookup column's list is the lookup itself; every other column scans the data" [ref=e40]:
+        - text: Filter with
+        - combobox "Filter with" [ref=e41]:
+          - option "a box" [selected]
+          - option "check boxes"
+      - generic [ref=e42]:
+        - checkbox "Paging" [checked] [ref=e43]
+        - text: Paging
+      - generic [ref=e44]:
+        - checkbox "Virtualize" [ref=e45]
+        - text: Virtualize
+      - generic [ref=e46]:
+        - checkbox "Alternating" [checked] [ref=e47]
+        - text: Alternating
+      - generic [ref=e48]:
+        - checkbox "Row detail" [ref=e49]
+        - text: Row detail
+      - generic [ref=e50]:
+        - text: Count
+        - spinbutton "Count" [ref=e51]: "500"
+    - group "Lookups" [ref=e52]:
+      - generic "Where the names come from. Only a query is fetched, and only it leaves the cells blank for a render." [ref=e54]:
+        - text: Team names from
+        - combobox "Team names from" [ref=e55]:
+          - option "a map" [selected]
+          - option "a sequence"
+          - option "a query"
+      - generic [ref=e56]:
+        - checkbox "Take a second over it" [ref=e57]
+        - text: Take a second over it
+      - button "Reload (drops the names)" [ref=e58]
+    - group "Interaction" [ref=e59]:
+      - generic [ref=e61]:
+        - checkbox "Keyboard" [checked] [ref=e62]
+        - text: Keyboard
+      - generic [ref=e63]:
+        - checkbox "Responsive" [ref=e64]
+        - text: Responsive
+      - generic [ref=e65]:
+        - checkbox "Selection" [checked] [ref=e66]
+        - text: Selection
+      - generic [ref=e67]:
+        - checkbox "Multi-select" [ref=e68]
+        - text: Multi-select
+    - group "Source" [ref=e69]:
+      - generic [ref=e71]:
+        - checkbox "Entity Framework" [ref=e72]
+        - text: Entity Framework
+      - button "Apply" [ref=e73]
+      - button "Reset metrics" [ref=e74]
+  - generic [ref=e75]:
+    - generic [ref=e76]: in-memory list
+    - generic [ref=e77]: renders 0
+    - generic [ref=e78]: per sec 0.0
+    - generic [ref=e79]: last render 0.0 ms
+    - generic [ref=e80]: alloc/render 0 KB
+    - generic [ref=e81]: heap 13,896 KB
+    - generic [ref=e82]: GC 0 / 0 / 0
+    - generic [ref=e83]: settings raised 0
+  - generic [ref=e85]:
+    - grid [ref=e86]:
+      - rowgroup [ref=e97]:
+        - row [ref=e98]:
+          - columnheader "more_vert Id sort" [ref=e99] [cursor=pointer]:
+            - generic [ref=e100]:
+              - generic [ref=e101]: more_vert
+              - generic [ref=e102]:
+                - generic [ref=e103]: Id
+                - generic [ref=e104]: sort
+          - columnheader "more_vert Name sort" [ref=e106] [cursor=pointer]:
+            - generic [ref=e107]:
+              - generic [ref=e108]: more_vert
+              - generic [ref=e109]:
+                - generic [ref=e110]: Name
+                - generic [ref=e111]: sort
+          - columnheader "more_vert Department sort" [ref=e113] [cursor=pointer]:
+            - generic [ref=e114]:
+              - generic [ref=e115]: more_vert
+              - generic [ref=e116]:
+                - generic [ref=e117]: Department
+                - generic [ref=e118]: sort
+          - columnheader "more_vert Age sort" [ref=e120] [cursor=pointer]:
+            - generic [ref=e121]:
+              - generic [ref=e122]: more_vert
+              - generic [ref=e123]:
+                - generic [ref=e124]: Age
+                - generic [ref=e125]: sort
+          - columnheader "more_vert Hired sort" [ref=e127] [cursor=pointer]:
+            - generic [ref=e128]:
+              - generic [ref=e129]: more_vert
+              - generic [ref=e130]:
+                - generic [ref=e131]: Hired
+                - generic [ref=e132]: sort
+          - columnheader "more_vert Salary sort" [ref=e134] [cursor=pointer]:
+            - generic [ref=e135]:
+              - generic [ref=e136]: more_vert
+              - generic [ref=e137]:
+                - generic [ref=e138]: Salary
+                - generic [ref=e139]: sort
+          - columnheader "more_vert Team sort" [ref=e141] [cursor=pointer]:
+            - generic [ref=e142]:
+              - generic [ref=e143]: more_vert
+              - generic [ref=e144]:
+                - generic [ref=e145]: Team
+                - generic [ref=e146]: sort
+          - columnheader "more_vert Tags" [ref=e148]:
+            - generic [ref=e149]:
+              - generic [ref=e150]: more_vert
+              - generic [ref=e151]: Tags
+          - columnheader "Notes (fixed) sort" [ref=e154] [cursor=pointer]:
+            - generic [ref=e156]:
+              - generic [ref=e157]: Notes (fixed)
+              - generic [ref=e158]: sort
+        - row [ref=e159]:
+          - columnheader [ref=e160]:
+            - textbox "Id filter value" [ref=e164]
+          - columnheader [ref=e165]:
+            - textbox "Name filter value" [ref=e169]
+          - columnheader [ref=e170]:
+            - textbox "Department filter value" [ref=e174]
+          - columnheader [ref=e175]:
+            - textbox "Age filter value" [ref=e179]
+          - columnheader [ref=e180]:
+            - textbox "Hired filter value" [ref=e184]
+          - columnheader [ref=e185]:
+            - textbox "Salary filter value" [ref=e189]
+          - columnheader [ref=e190]:
+            - textbox "Team filter value" [ref=e194]
+          - columnheader [ref=e195]:
+            - textbox "Tags filter value" [ref=e199]
+          - columnheader [ref=e200]:
+            - textbox "Notes (fixed) filter value" [ref=e204]
+      - rowgroup [ref=e205]:
+        - row [ref=e206]:
+          - gridcell "0" [ref=e207]
+          - gridcell "Person 0" [ref=e209]
+          - gridcell "Engineering" [ref=e211]
+          - gridcell "20" [ref=e213]
+          - gridcell "1/1/2010" [ref=e215]
+          - gridcell "$40,000" [ref=e217]
+          - gridcell [ref=e219]
+          - gridcell "Remote, Contract, On call" [ref=e220]
+          - gridcell "Row 0 has a long enough note to truncate when the column is narrowed." [ref=e222]
+        - row [ref=e224]:
+          - gridcell "1" [ref=e225]
+          - gridcell "Person 1" [ref=e227]
+          - gridcell "Sales" [ref=e229]
+          - gridcell "21" [ref=e231]
+          - gridcell "1/2/2010" [ref=e233]
+          - gridcell "$40,037" [ref=e235]
+          - gridcell "Growth" [ref=e237]
+          - gridcell "Contract, On call" [ref=e239]
+          - gridcell "Row 1 has a long enough note to truncate when the column is narrowed." [ref=e241]
+        - row [ref=e243]:
+          - gridcell "2" [ref=e244]
+          - gridcell "Person 2" [ref=e246]
+          - gridcell "Ops" [ref=e248]
+          - gridcell "22" [ref=e250]
+          - gridcell "1/3/2010" [ref=e252]
+          - gridcell "$40,074" [ref=e254]
+          - gridcell "Billing" [ref=e256]
+          - gridcell "On call" [ref=e258]
+          - gridcell "Row 2 has a long enough note to truncate when the column is narrowed." [ref=e260]
+        - row [ref=e262]:
+          - gridcell "3" [ref=e263]
+          - gridcell "Person 3" [ref=e265]
+          - gridcell "Finance" [ref=e267]
+          - gridcell "23" [ref=e269]
+          - gridcell "1/4/2010" [ref=e271]
+          - gridcell "$40,111" [ref=e273]
+          - gridcell "Research" [ref=e275]
+          - gridcell "Remote" [ref=e277]
+          - gridcell "Row 3 has a long enough note to truncate when the column is narrowed." [ref=e279]
+        - row [ref=e281]:
+          - gridcell "4" [ref=e282]
+          - gridcell "Person 4" [ref=e284]
+          - gridcell "Support" [ref=e286]
+          - gridcell "24" [ref=e288]
+          - gridcell "1/5/2010" [ref=e290]
+          - gridcell "$40,148" [ref=e292]
+          - gridcell "Platform" [ref=e294]
+          - gridcell [ref=e296]
+          - gridcell "Row 4 has a long enough note to truncate when the column is narrowed." [ref=e297]
+        - row [ref=e299]:
+          - gridcell "5" [ref=e300]
+          - gridcell "Person 5" [ref=e302]
+          - gridcell "Engineering" [ref=e304]
+          - gridcell "25" [ref=e306]
+          - gridcell "1/6/2010" [ref=e308]
+          - gridcell "$40,185" [ref=e310]
+          - gridcell "Growth" [ref=e312]
+          - gridcell [ref=e314]
+          - gridcell "Row 5 has a long enough note to truncate when the column is narrowed." [ref=e315]
+        - row [ref=e317]:
+          - gridcell "6" [ref=e318]
+          - gridcell "Person 6" [ref=e320]
+          - gridcell "Sales" [ref=e322]
+          - gridcell "26" [ref=e324]
+          - gridcell "1/7/2010" [ref=e326]
+          - gridcell "$40,222" [ref=e328]
+          - gridcell "Billing" [ref=e330]
+          - gridcell "Remote, Contract" [ref=e332]
+          - gridcell "Row 6 has a long enough note to truncate when the column is narrowed." [ref=e334]
+        - row [ref=e336]:
+          - gridcell "7" [ref=e337]
+          - gridcell "Person 7" [ref=e339]
+          - gridcell "Ops" [ref=e341]
+          - gridcell "27" [ref=e343]
+          - gridcell "1/8/2010" [ref=e345]
+          - gridcell "$40,259" [ref=e347]
+          - gridcell [ref=e349]
+          - gridcell "Contract" [ref=e350]
+          - gridcell "Row 7 has a long enough note to truncate when the column is narrowed." [ref=e352]
+        - row [ref=e354]:
+          - gridcell "8" [ref=e355]
+          - gridcell "Person 8" [ref=e357]
+          - gridcell "Finance" [ref=e359]
+          - gridcell "28" [ref=e361]
+          - gridcell "1/9/2010" [ref=e363]
+          - gridcell "$40,296" [ref=e365]
+          - gridcell "Platform" [ref=e367]
+          - gridcell [ref=e369]
+          - gridcell "Row 8 has a long enough note to truncate when the column is narrowed." [ref=e370]
+        - row [ref=e372]:
+          - gridcell "9" [ref=e373]
+          - gridcell "Person 9" [ref=e375]
+          - gridcell "Support" [ref=e377]
+          - gridcell "29" [ref=e379]
+          - gridcell "1/10/2010" [ref=e381]
+          - gridcell "$40,333" [ref=e383]
+          - gridcell "Growth" [ref=e385]
+          - gridcell "Remote, On call" [ref=e387]
+          - gridcell "Row 9 has a long enough note to truncate when the column is narrowed." [ref=e389]
+        - row [ref=e391]:
+          - gridcell "10" [ref=e392]
+          - gridcell "Person 10" [ref=e394]
+          - gridcell "Engineering" [ref=e396]
+          - gridcell "30" [ref=e398]
+          - gridcell "1/11/2010" [ref=e400]
+          - gridcell "$40,370" [ref=e402]
+          - gridcell "Billing" [ref=e404]
+          - gridcell "On call" [ref=e406]
+          - gridcell "Row 10 has a long enough note to truncate when the column is narrowed." [ref=e408]
+        - row [ref=e410]:
+          - gridcell "11" [ref=e411]
+          - gridcell "Person 11" [ref=e413]
+          - gridcell "Sales" [ref=e415]
+          - gridcell "31" [ref=e417]
+          - gridcell "1/12/2010" [ref=e419]
+          - gridcell "$40,407" [ref=e421]
+          - gridcell "Research" [ref=e423]
+          - gridcell "On call" [ref=e425]
+          - gridcell "Row 11 has a long enough note to truncate when the column is narrowed." [ref=e427]
+        - row [ref=e429]:
+          - gridcell "12" [ref=e430]
+          - gridcell "Person 12" [ref=e432]
+          - gridcell "Ops" [ref=e434]
+          - gridcell "32" [ref=e436]
+          - gridcell "1/13/2010" [ref=e438]
+          - gridcell "$40,444" [ref=e440]
+          - gridcell "Platform" [ref=e442]
+          - gridcell "Remote, Contract" [ref=e444]
+          - gridcell "Row 12 has a long enough note to truncate when the column is narrowed." [ref=e446]
+        - row [ref=e448]:
+          - gridcell "13" [ref=e449]
+          - gridcell "Person 13" [ref=e451]
+          - gridcell "Finance" [ref=e453]
+          - gridcell "33" [ref=e455]
+          - gridcell "1/14/2010" [ref=e457]
+          - gridcell "$40,481" [ref=e459]
+          - gridcell "Growth" [ref=e461]
+          - gridcell "Contract" [ref=e463]
+          - gridcell "Row 13 has a long enough note to truncate when the column is narrowed." [ref=e465]
+        - row [ref=e467]:
+          - gridcell "14" [ref=e468]
+          - gridcell "Person 14" [ref=e470]
+          - gridcell "Support" [ref=e472]
+          - gridcell "34" [ref=e474]
+          - gridcell "1/15/2010" [ref=e476]
+          - gridcell "$40,518" [ref=e478]
+          - gridcell [ref=e480]
+          - gridcell [ref=e481]
+          - gridcell "Row 14 has a long enough note to truncate when the column is narrowed." [ref=e482]
+        - row [ref=e484]:
+          - gridcell "15" [ref=e485]
+          - gridcell "Person 15" [ref=e487]
+          - gridcell "Engineering" [ref=e489]
+          - gridcell "35" [ref=e491]
+          - gridcell "1/16/2010" [ref=e493]
+          - gridcell "$40,555" [ref=e495]
+          - gridcell "Research" [ref=e497]
+          - gridcell "Remote" [ref=e499]
+          - gridcell "Row 15 has a long enough note to truncate when the column is narrowed." [ref=e501]
+        - row [ref=e503]:
+          - gridcell "16" [ref=e504]
+          - gridcell "Person 16" [ref=e506]
+          - gridcell "Sales" [ref=e508]
+          - gridcell "36" [ref=e510]
+          - gridcell "1/17/2010" [ref=e512]
+          - gridcell "$40,592" [ref=e514]
+          - gridcell "Platform" [ref=e516]
+          - gridcell [ref=e518]
+          - gridcell "Row 16 has a long enough note to truncate when the column is narrowed." [ref=e519]
+        - row [ref=e521]:
+          - gridcell "17" [ref=e522]
+          - gridcell "Person 17" [ref=e524]
+          - gridcell "Ops" [ref=e526]
+          - gridcell "37" [ref=e528]
+          - gridcell "1/18/2010" [ref=e530]
+          - gridcell "$40,629" [ref=e532]
+          - gridcell "Growth" [ref=e534]
+          - gridcell [ref=e536]
+          - gridcell "Row 17 has a long enough note to truncate when the column is narrowed." [ref=e537]
+        - row [ref=e539]:
+          - gridcell "18" [ref=e540]
+          - gridcell "Person 18" [ref=e542]
+          - gridcell "Finance" [ref=e544]
+          - gridcell "38" [ref=e546]
+          - gridcell "1/19/2010" [ref=e548]
+          - gridcell "$40,666" [ref=e550]
+          - gridcell "Billing" [ref=e552]
+          - gridcell "Remote, Contract, On call" [ref=e554]
+          - gridcell "Row 18 has a long enough note to truncate when the column is narrowed." [ref=e556]
+        - row [ref=e558]:
+          - gridcell "19" [ref=e559]
+          - gridcell "Person 19" [ref=e561]
+          - gridcell "Support" [ref=e563]
+          - gridcell "39" [ref=e565]
+          - gridcell "1/20/2010" [ref=e567]
+          - gridcell "$40,703" [ref=e569]
+          - gridcell "Research" [ref=e571]
+          - gridcell "Contract, On call" [ref=e573]
+          - gridcell "Row 19 has a long enough note to truncate when the column is narrowed." [ref=e575]
+        - row [ref=e577]:
+          - gridcell "20" [ref=e578]
+          - gridcell "Person 20" [ref=e580]
+          - gridcell "Engineering" [ref=e582]
+          - gridcell "40" [ref=e584]
+          - gridcell "1/21/2010" [ref=e586]
+          - gridcell "$40,740" [ref=e588]
+          - gridcell "Platform" [ref=e590]
+          - gridcell "On call" [ref=e592]
+          - gridcell "Row 20 has a long enough note to truncate when the column is narrowed." [ref=e594]
+        - row [ref=e596]:
+          - gridcell "21" [ref=e597]
+          - gridcell "Person 21" [ref=e599]
+          - gridcell "Sales" [ref=e601]
+          - gridcell "41" [ref=e603]
+          - gridcell "1/22/2010" [ref=e605]
+          - gridcell "$40,777" [ref=e607]
+          - gridcell [ref=e609]
+          - gridcell "Remote" [ref=e610]
+          - gridcell "Row 21 has a long enough note to truncate when the column is narrowed." [ref=e612]
+        - row [ref=e614]:
+          - gridcell "22" [ref=e615]
+          - gridcell "Person 22" [ref=e617]
+          - gridcell "Ops" [ref=e619]
+          - gridcell "42" [ref=e621]
+          - gridcell "1/23/2010" [ref=e623]
+          - gridcell "$40,814" [ref=e625]
+          - gridcell "Billing" [ref=e627]
+          - gridcell [ref=e629]
+          - gridcell "Row 22 has a long enough note to truncate when the column is narrowed." [ref=e630]
+        - row [ref=e632]:
+          - gridcell "23" [ref=e633]
+          - gridcell "Person 23" [ref=e635]
+          - gridcell "Finance" [ref=e637]
+          - gridcell "43" [ref=e639]
+          - gridcell "1/24/2010" [ref=e641]
+          - gridcell "$40,851" [ref=e643]
+          - gridcell "Research" [ref=e645]
+          - gridcell [ref=e647]
+          - gridcell "Row 23 has a long enough note to truncate when the column is narrowed." [ref=e648]
+        - row [ref=e650]:
+          - gridcell "24" [ref=e651]
+          - gridcell "Person 24" [ref=e653]
+          - gridcell "Support" [ref=e655]
+          - gridcell "44" [ref=e657]
+          - gridcell "1/25/2010" [ref=e659]
+          - gridcell "$40,888" [ref=e661]
+          - gridcell "Platform" [ref=e663]
+          - gridcell "Remote, Contract" [ref=e665]
+          - gridcell "Row 24 has a long enough note to truncate when the column is narrowed." [ref=e667]
+    - navigation "Pagination" [ref=e669]:
+      - generic [ref=e670]: Page 1 of 20 (500 items)
+      - list [ref=e671]:
+        - listitem [ref=e672]:
+          - button "Go to first page." [disabled] [ref=e673]:
+            - generic [ref=e674]: first_page
+        - listitem [ref=e675]:
+          - button "Go to previous page." [disabled] [ref=e676]:
+            - generic [ref=e677]: navigate_before
+        - listitem [ref=e678]:
+          - button "Go to page 1." [ref=e679] [cursor=pointer]: "1"
+        - listitem [ref=e680]:
+          - button "Go to page 2." [ref=e681] [cursor=pointer]: "2"
+        - listitem [ref=e682]:
+          - button "Go to page 3." [ref=e683] [cursor=pointer]: "3"
+        - listitem [ref=e684]:
+          - button "Go to page 4." [ref=e685] [cursor=pointer]: "4"
+        - listitem [ref=e686]:
+          - button "Go to page 5." [ref=e687] [cursor=pointer]: "5"
+        - listitem [ref=e688]:
+          - button "Go to next page." [ref=e689] [cursor=pointer]:
+            - generic [ref=e690]: navigate_next
+        - listitem [ref=e691]:
+          - button "Go to last page." [ref=e692] [cursor=pointer]:
+            - generic [ref=e693]: last_page
+  - generic [ref=e694]: "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it. Tab into the grid and the arrows move a cell: Enter opens a row, Space selects one, and arrowing off the end turns the page. With Multi-select on, holding Shift extends the selection from the last row Space chose.selected: none"
