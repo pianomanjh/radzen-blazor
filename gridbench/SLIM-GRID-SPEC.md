@@ -579,22 +579,32 @@ Each layer below caught real faults the previous one missed. Use all of them.
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
 
-- **A check-box list's distinct scan is dropped on every parameter set, not on every data change.**
-  `lookups` is cleared on `!ReferenceEquals(lastData, Data)`, which for the sources this grid is built
-  for - `context.Rows.AsNoTracking()` read per render, a `LoadData` handler assigning a fresh page - is
-  true whenever the parent renders. So the filter row draws empty, `pendingLookups` refills, and one
-  `SELECT DISTINCT` per check-box-list column runs again, followed by a second render. It does not loop:
-  `StateHasChanged` does not re-set parameters, so it is N queries and one extra render per *parent*
-  render rather than a runaway.
+- ~~**A check-box list's distinct scan is dropped on every parameter set, not on every data change.**~~ -
+  **found, measured and fixed.** `lookups` was cleared on `!ReferenceEquals(lastData, Data)`, which for
+  the sources this grid is built for - `context.Rows.AsNoTracking()` read per render, a `Where` written
+  in a property - is true whenever the parent renders. So the filter row drew empty, `pendingLookups`
+  refilled, and one `SELECT DISTINCT` per check-box-list column ran again behind a second render. Not a
+  loop, since `StateHasChanged` does not re-set parameters: N queries and one extra render per *parent*
+  render.
 
-  The same `!ReferenceEquals` trap is recorded twice already - row expansion above, and the `Once` fit in
-  §13 which is deliberately not keyed on it. This is the third participant, and the only one where the
-  cost is a database round trip.
+  **Measured at 3 scans for one render and two parameter sets** - exactly one per set - by the control
+  the file did not have. `CheckBoxListFilterTests` asserted what is offered and never how often it is
+  asked for, so a scan re-running on every render passed all sixteen of its tests.
 
-  **Derived from reading, not measured**, and `CheckBoxListFilterTests` covers neither re-fetch nor
-  caching: its three lookup tests assert what is offered and never how often it is asked for. So the
-  first thing this needs is a control that counts the queries. §14 does not inherit it - a lookup column
-  runs no distinct scan at all - which is one of the reasons that section is shaped the way it is.
+  The fix is to ask what a new source *instance* means, which differs by source kind. A materialized
+  collection is rows, so a new one is new values and the scan must run again. A queryable the grid
+  composes over is a *query*, and application code answers with a new instance every time it is read -
+  so that identity is not a data change, and `Reload()` is what drops the values, exactly as its own
+  comment always claimed. Held between two tests: the control above, and
+  `TheLookupIsRebuiltWhenTheDataChanges`, which fails if nothing clears.
+
+  **The consequence, accepted:** markup that swaps one query for a genuinely different one goes on
+  offering the first one's values until `Reload()`. That is the same lifetime rule §14 gives its
+  lookups, chosen there for the same reason.
+
+  The `!ReferenceEquals` trap now has three recorded participants - row expansion above, the `Once` fit
+  in §13 which dodges it deliberately, and this - and it is the only one whose cost was a database round
+  trip. §14 never inherits it: a lookup column runs no distinct scan at all.
 
 ## 10b. Review status
 

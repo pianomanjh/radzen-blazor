@@ -2,8 +2,11 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Radzen.Blazor;
 using Xunit;
 
@@ -275,6 +278,56 @@ namespace Radzen.FastGrid.Tests
             cut.FindAll("thead th")[0].QuerySelector("div")!.Click();
 
             Assert.Same(before, Picker(cut, 0).Data);
+        }
+
+        /// <summary>
+        /// The control the caching claims needed and did not have. Everything above asserts what is
+        /// offered; nothing asserted how often it is asked for, so a scan re-running on every parent
+        /// render would have passed the whole file.
+        /// </summary>
+        sealed class CountingExecutor : IFastGridQueryExecutor
+        {
+            public int DistinctCalls { get; private set; }
+
+            public bool IsSupported<T>(IQueryable<T> queryable) => true;
+
+            public Task<int> CountAsync<T>(IQueryable<T> queryable, CancellationToken token = default) =>
+                Task.FromResult(queryable.Count());
+
+            public Task<List<T>> ToListAsync<T>(IQueryable<T> queryable, CancellationToken token = default)
+            {
+                // The page load and the check-box list's scan both come through here; only one of them
+                // composes a Distinct.
+                if (queryable.Expression.ToString().Contains("Distinct"))
+                {
+                    DistinctCalls++;
+                }
+
+                return Task.FromResult(queryable.ToList());
+            }
+        }
+
+        [Fact]
+        public void TheScanRunsOnceForASourceReadAgainAsAnEquivalentQueryable()
+        {
+            // A source that answers with a new queryable every time it is read - AsNoTracking in a
+            // property, a Where written in markup - is what dataChanged compares by reference, so every
+            // parameter set looks like a data change to it. The values it would find are identical.
+            using var ctx = new TestContext();
+            var executor = new CountingExecutor();
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.Customer.Name)),
+                data: People.Sample().AsQueryable());
+
+            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Offered(cut, 0));
+            Assert.Equal(1, executor.DistinctCalls);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, People.Sample().AsQueryable()));
+            cut.SetParametersAndRender(p => p.Add(g => g.Data, People.Sample().AsQueryable()));
+
+            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Offered(cut, 0));
+            Assert.Equal(1, executor.DistinctCalls);
         }
     }
 }
