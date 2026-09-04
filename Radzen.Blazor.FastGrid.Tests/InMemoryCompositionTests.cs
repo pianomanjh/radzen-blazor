@@ -75,6 +75,18 @@ namespace Radzen.FastGrid.Tests
         static (ColumnBase<Person> Column, bool Descending)[] SortedBy(ColumnBase<Person> column,
             bool descending = false) => new[] { (column, descending) };
 
+        // Descending on purpose wherever a declining column is involved: People.Many builds its rows in
+        // ascending Id order, so an ascending assertion is one an unsorted source also passes, and a
+        // test for "the rest of the ordering stands" that a missing ordering satisfies is no test. The
+        // declining column's own direction is never read - it declines before anything looks at it.
+        static (ColumnBase<Person> Column, bool Descending)[] SortedByDescending(
+            ColumnBase<Person> first, ColumnBase<Person> second) =>
+            new[] { (first, true), (second, true) };
+
+        /// <summary>The rows People20 makes, in the order a working descending sort by Id leaves them.</summary>
+        static Person[] ByIdDescending(List<Person> people) =>
+            people.OrderByDescending(person => person.Id).ToArray();
+
         static CompositionOptions Options(LogicalFilterOperator logical = LogicalFilterOperator.And) =>
             new CompositionOptions(true, FilterCaseSensitivity.Default, logical);
 
@@ -213,6 +225,78 @@ namespace Radzen.FastGrid.Tests
             Assert.False(BothRoutesAgree(
                 Of(bench.Property<string>(x => x.First, filterValue: "First2"), template),
                 SortedBy(template), Options(LogicalFilterOperator.Or)));
+        }
+
+        // What a declining column costs, on each route, and neither of these was pinned by anything
+        // before §17 went looking. Both use the column that already declines - a template column told a
+        // path and no sort - so neither needs a type that does not ship.
+        //
+        // The delegate route hands the whole composition over when a column declines, but only while
+        // handing over is still possible, which is before any ordering has begun. A *later* column is
+        // past that point: it is left out, and the composition stays where it is.
+        [Fact]
+        public void OnTheDelegateRouteALaterDecliningColumnIsLeftOut()
+        {
+            using var bench = new Bench();
+
+            var id = bench.Property<int>(x => x.Id);
+            var declines = bench.Template(nameof(Person.Id));
+            var people = People20();
+            var pass = default(DrawPass<Person>);
+
+            var composed = Composition.Compose(Of(id, declines), SortedByDescending(id, declines),
+                people, Options(), ref pass);
+
+            // Still the cheap route - the whole point of the rule. Handing over here would have been
+            // the same rows about a millisecond later at a thousand of them.
+            Assert.True(composed.InMemory);
+
+            // And ordered by the column that could, rather than not ordered at all.
+            Assert.Equal(ByIdDescending(people), composed.Rows.ToArray());
+        }
+
+        // The expression route absorbs a decline instead of handing anything over, because it has
+        // somewhere to put it: the column is left out and the rest of the ordering stands. One
+        // uncomparable column must not cost the sort the caller asked for.
+        [Fact]
+        public void OnTheExpressionRouteADecliningColumnIsLeftOutAndTheRestStands()
+        {
+            using var bench = new Bench();
+
+            var id = bench.Property<int>(x => x.Id);
+            var declines = bench.Template(nameof(Person.Id));
+            var people = People20();
+            var pass = default(DrawPass<Person>);
+
+            var composed = Composition.Compose(Of(id, declines), SortedByDescending(id, declines),
+                people.AsQueryable(), Options(), ref pass);
+
+            Assert.False(composed.InMemory);
+            Assert.Equal(ByIdDescending(people), composed.Rows.ToArray());
+        }
+
+        // The expression route's loop tests whether an ordering has begun, and that is not the same
+        // question as "is this the first column" - which is exactly what it is on the delegate route.
+        // Here a *first* column that declines leaves nothing begun, so the second column has to start
+        // the ordering rather than add to one. Get that wrong and the second column is handed a null
+        // ordering to append to.
+        //
+        // Nothing reached this until it was written: both of the tests above put the declining column
+        // second, which only ever exercises the other branch.
+        [Fact]
+        public void OnTheExpressionRouteAFirstDecliningColumnLetsTheNextOneStartTheOrdering()
+        {
+            using var bench = new Bench();
+
+            var declines = bench.Template(nameof(Person.Id));
+            var id = bench.Property<int>(x => x.Id);
+            var people = People20();
+            var pass = default(DrawPass<Person>);
+
+            var composed = Composition.Compose(Of(declines, id), SortedByDescending(declines, id),
+                people.AsQueryable(), Options(), ref pass);
+
+            Assert.Equal(ByIdDescending(people), composed.Rows.ToArray());
         }
 
         // Switching filtering off is not the same as having nothing to filter by. A column can be

@@ -2412,7 +2412,7 @@ with a load-bearing reason should be recorded here beside it.
 | 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
 | 3 | The browser seam has no interface | Strong |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
-| 5 | Four methods of one shape, four meanings of `null` | Strong - **designed, §17** |
+| 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
 | 7 | A column's identity is a concept with no name | Worth exploring |
 | 8 | The drop-down forwards twelve parameters, then hands out the grid | Worth exploring |
@@ -2508,8 +2508,8 @@ lines, neither matching the condition its own detach used. What stayed with the 
 fallback, because it is click-specific and ends in a re-render: `SyncAsync` reports, the caller
 decides.
 
-**5. Four methods of one shape, four meanings of `null`.** **§17 has the design, argued before it is
-built, and three findings that only a probe would have turned up.** `ApplyFilter` returning null means "fall
+**5. Four methods of one shape, four meanings of `null`.** **Built.** §17 has the design it was built
+from, the three findings a probe turned up, and the four of its own claims that did not survive. `ApplyFilter` returning null means "fall
 back for *me*" (`Data.cs:1195`); `ApplyFilterInMemory` means "abandon the route for *everyone*"
 (`:1940`); `ApplySort` means "skip me, keep the rest" (`:2002`); `ApplySortInMemory` means "abandon for
 everyone, but only if `i == 0` and nothing is ordered yet" (`:1977`). Four contracts, one return shape,
@@ -3029,3 +3029,93 @@ the piece's one real risk and it is in "where this could still be wrong" below.
   §16's `AColumnThatCannotComposeSendsItBackToTheOtherRoute` pins and what the in-memory filter rule
   does two loops earlier, so changing it would split one route's behaviour in two. But it is the
   argument this section is least sure of.
+
+### What the build changed
+
+All three findings landed. Four of this section's own claims did not survive the building, and two of
+its new tests had to be corrected before they tested anything - one caught by a mutation and one by
+review.
+
+**The stop-and-re-decide point did not fire, and the reasoning behind it was wrong.** This section
+expected both new tests to need "a column that can sort on one route and not the other", said none
+exists, and set that as the point to stop at. It was the wrong question. The tests are about what the
+*caller* does with a decline, so a column that declines on **both** routes is all they need - and one
+ships: a `TemplateColumn` told a `SortProperty` and no `SortBy` has `CanSort` true and returns null from
+all four sort methods. Probed before building. That settles the first "where this could still be wrong"
+in the good direction: these rules were untested rather than untestable, and the deletion this section
+held open as the better outcome is not the outcome.
+
+**A mutation caught the first of the two new tests not discriminating**, which is the third piece
+running that this has happened on. The expression-route test asserted the rows came back ordered
+*ascending* by the composing column - which is the order `People.Many` builds them in, so it was an
+assertion an unsorted source also satisfies, and the mutation that abandons the whole ordering passed
+it. Both tests sort descending now, and the helper that builds their sort list carries the reason,
+because the trap belongs to the fixture rather than to either test.
+
+**And review caught a third rule this section had asserted and not pinned.** The expression route's
+loop asks whether an ordering has *begun*, which is deliberately not the same question as "is this the
+first column" - and it is the difference between the two loops that this piece exists to make legible.
+Both new tests put the declining column second, which only ever reaches the other branch. So a
+*first*-column decline on the expression route, where the second column must start the ordering rather
+than append to one, is a third test; the mutation that collapses that test to `i == 0` fails it and
+nothing else.
+
+**Four contracts, and now the branch that separates them - five tests, each failing alone.**
+
+**The dead conjunct is gone**, and what replaced it is longer than what it removed: `i == 0`, the
+invariant that makes it sufficient, and the warning that the invariant is manufactured by the `return`
+on the next line. A conjunct that cannot discriminate is worth removing; the reason it could not is
+worth keeping, because the next reader's instinct will be to restore it after reading the loop above,
+where the same test is not redundant.
+
+### Three corrections to what this section proposed for the documentation
+
+**"Stated once" was written three times.** The first attempt put the rule in `Composition`'s class
+remarks, restated it in `Sort`'s remarks and restated it again at the delegate route's guard - a
+document whose thesis is that a consequence written where it is not enforced is a consequence nothing
+keeps honest. The two loops now carry only what is local to them, and the four decline sites carry a
+one-line pointer each.
+
+**The public half and the internal half own different halves of the rule.** `ColumnBase` is shipped API,
+and the first attempt told its readers the consequence "is stated once in `Composition`" - a type they
+cannot see, in a package that does not expose it. `ColumnBase` now states what declining *means* and
+what it costs, which is what an implementer needs; `Composition` states what follows per route, which is
+what a maintainer needs. Neither restates the other. The repo history and the §-references came out of
+the shipped docs at the same time: they resolve to nothing for a consumer.
+
+**And the replacement was nearly wrong in the same way as the original.** A draft of the new remark told
+column authors that "both routes produce the same rows whichever way a decline falls out; what differs
+is cost" - which is true of today's columns and is not the contract, and which deleted the sentence at
+the guard that carries the actual reason for the rule: **the other route may not decline where this one
+did, and that is a different answer rather than a slower one.** That is why the delegate route hands the
+composition over rather than simply leaving the column out. It is restored, and the symmetry that makes
+declining currently free is stated as a property of these columns rather than of the arrangement. A
+section whose finding is a wrong doc comment came within one commit of shipping a wrong doc comment.
+
+**Measured**, and this is the one piece whose claim was that the measurement should be uninteresting.
+Control at `afb05de33`: bare 154.55 KB, one sort 175.79 KB, a filter row 158.78 KB. Two runs after:
+154.55 and 154.55, 175.79 and 175.79, 158.77 and 158.91. No column changed and nothing was added to any
+path. **No time ratio is quoted**, per §9.
+
+That filter row is worth a sentence, because it measures the instrument rather than the change. The two
+after-runs are of **the same executable code** - everything that changed between them is comment text -
+and they differ by 0.14 KB. So a 0.14 KB reading on that row is the noise floor and not a cost, which
+until now had only been inferred from piece 2's 0.11 KB spread on the bare row. A run pair that is
+identical by construction is the cheapest way to measure that, and is worth doing deliberately the next
+time a piece needs to defend a small number rather than only when one falls out.
+
+**No existing test file moved**, as designed: three tests were added to `InMemoryCompositionTests` and
+no other suite was touched.
+
+### What this piece is, honestly
+
+The second bullet under "where this could still be wrong" stands as written, and reads better as a
+summary of the piece than as a caveat to it: **the fix for a comment that was wrong is a comment that is
+right, in one place instead of four.** That is better, and it is not structural, and the structural
+alternative is still refused above on three grounds.
+
+What is structural is the rest: a conjunct that could never discriminate is gone, and three rules that
+nothing held now have a test each. Those survive a comment rotting. §15 rated this candidate Strong for
+the four-meanings observation; what it was worth was one wrong statement, one dead branch and three
+unpinned rules - a smaller thing than the ranking implied, and worth saying in case the ranking is used
+to choose what comes next.

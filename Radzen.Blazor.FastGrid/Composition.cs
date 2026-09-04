@@ -29,6 +29,31 @@ namespace Radzen.FastGrid
     /// composition and buys nothing.
     /// </para>
     /// <para>
+    /// <b>What is done when a column declines.</b> <see cref="ColumnBase{TItem}" /> states what
+    /// declining <em>means</em>, which is all a column decides; this is the only place that says what
+    /// follows from it, and it is not the same in both routes, because the two differ in whether they
+    /// have anywhere to put a decline.
+    /// </para>
+    /// <para>
+    /// <b>The expression route absorbs it.</b> A declining filter is built from the column's path by
+    /// reflection instead; a declining sort is left out of the ordering and the rest of it stands. Both
+    /// are somewhere to put it, so nothing has to be given up.
+    /// </para>
+    /// <para>
+    /// <b>The delegate route hands the whole composition over</b> - while handing over is still
+    /// possible. For a filter it always is: the predicate has been built up and not yet applied, so
+    /// dropping it costs nothing. For a sort it stops being possible the moment an ordering has begun,
+    /// because a half-applied <see cref="IOrderedEnumerable{TElement}" /> cannot be given to the other
+    /// route - so the first column can send it back and a later one is left out, which is what the
+    /// expression route would have done with it anyway.
+    /// </para>
+    /// <para>
+    /// Both loops below say only what is local to them and refer here for the rule, which is the point:
+    /// this used to be four inline policies with a restatement beside each of the six declarations, and
+    /// one of those restatements had drifted into describing a different one of the four. §17 records
+    /// which and how it was found.
+    /// </para>
+    /// <para>
     /// Internal, and reached by the tests through the assembly's <c>InternalsVisibleTo</c>. Public would
     /// commit a shipped package to this shape forever for a seam whose whole justification is internal
     /// testability - and the shape is the half least settled here, since §15's candidates 5 and 6 both
@@ -154,6 +179,7 @@ namespace Radzen.FastGrid
                 }
                 else
                 {
+                    // Declined; this route absorbs it by reflection. See this class's remarks.
                     (declined ??= new List<FilterDescriptor>()).Add(descriptor ?? DescriptorFor(column));
                 }
             }
@@ -179,10 +205,16 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
-        /// Composes every sort onto the query, in order of precedence. A column that cannot order -
-        /// which is what ApplySort returning null means - is skipped rather than allowed to break the
-        /// chain, so one uncomparable column does not cost the sort the caller asked for.
+        /// Composes every sort onto the query, in order of precedence. This is the expression route
+        /// absorbing a decline: a column that cannot order is left out and the rest of the ordering
+        /// stands, so one uncomparable column does not cost the sort the caller asked for.
         /// </summary>
+        /// <remarks>
+        /// <c>ordered is null</c> is a real test here and is not the same as <c>i == 0</c>: a first
+        /// column that declines leaves it null, the loop carries on, and the next column starts the
+        /// ordering rather than adding to one. The delegate route's loop looks identical and that is
+        /// not true of it - see this class's remarks.
+        /// </remarks>
         internal static IQueryable<TItem> Sort<TItem>(
             IReadOnlyList<(ColumnBase<TItem> Column, bool Descending)> sorts, IQueryable<TItem> source)
         {
@@ -289,6 +321,8 @@ namespace Radzen.FastGrid
 
                     if (column.ApplyFilterInMemory(options.FilterCaseSensitivity) is not { } composed)
                     {
+                        // Handing the composition over, which for a filter is always still possible:
+                        // the predicate has been built up and not applied. See this class's remarks.
                         return null;
                     }
 
@@ -320,11 +354,17 @@ namespace Radzen.FastGrid
                     ? column.ApplySortInMemory(data, descending)
                     : column.ApplyThenByInMemory(ordered, descending);
 
-                // Null here means the column declined, which the queryable route treats as "skip this
-                // column". Taking the other route instead would be a different answer, not a slower
-                // one, so only a first column that declines sends it back - and only when no ordering
-                // has begun, since a half-applied one cannot be handed over.
-                if (next is null && ordered is null && i == 0)
+                // Handing the composition over, at the one point where that is still possible - and
+                // the reason to hand over rather than simply leave the column out, which is what this
+                // route does with a later one: the other route may not decline where this one did, and
+                // that is a different answer rather than a slower one. See this class's remarks.
+                //
+                // `i == 0` is the whole of the condition, and the return below it is what makes that
+                // so: a declining first column leaves the loop here, so `ordered` can never still be
+                // null on a later pass. Removing the return would make what is left wrong rather than
+                // merely redundant - and restoring `ordered is null` beside it, which the expression
+                // route's loop does need, would only be the same test written twice.
+                if (next is null && i == 0)
                 {
                     return null;
                 }
