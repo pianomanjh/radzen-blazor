@@ -546,9 +546,9 @@ Each layer below caught real faults the previous one missed. Use all of them.
   `aria-sort` now follow `AllowSorting`, so the grid no longer advertises a control that is not there.
 - **`ShowExpandColumn="false"` is now a placement choice, not a saving.** It used to avoid 404 KB; row
   detail costs under a kilobyte, so the parameter is about where the control lives.
-- **A declared `FilterValue` is not applied to the first asynchronous load.** A column's declared
-  filter becomes its current one in the column's own `OnParametersSet`, which runs as the table is
-  drawn - and the asynchronous load that fetches the first page is started from the grid's
+- **Nothing a column declares reaches the first asynchronous load.** A column's declared filter becomes
+  its current one, and its declared sort reaches the grid, in the column's own `OnParametersSet`, which
+  runs as the table is drawn - and the load that fetches the first page is started from the grid's
   *parameter-set* path, before any column has registered. So a grid over an executor-backed queryable
   draws its first page unfiltered, with the filter row showing a filter that is not in the query, and
   no reload follows to put it right. The in-memory path does not have this: it composes during the
@@ -559,6 +559,14 @@ Each layer below caught real faults the previous one missed. Use all of them.
   the fix is a reload triggered by the first registration and that is the same "when may the grid
   reload itself" question the settings entry above turns on - with the same `!ReferenceEquals` hazard
   underneath it.
+
+  **Both halves of that were understated, and §23 measured how much.** The declared *sort* is missing
+  from the same query by the same mechanism - the header draws `aria-sort="ascending"` over rows in
+  source order - and **`LoadData` has the whole fault identically**, its handler called once with
+  `Filters` null, `OrderBy` empty and `Filter` empty. Two routes, not one; two kinds of declaration, not
+  one. §23 also argues the fix should not be the reload this bullet anticipated: a reload sends one
+  query composed from nothing before it sends the right one, which unpaged materializes the whole table
+  and for `LoadData` invokes the application's handler twice.
 - ~~Whether virtualization is in scope for v1~~ - **done.** `AllowVirtualization` puts the rows through
   `Virtualize` with `SpacerElement="tr"`, and one items provider serves every source. It is exclusive
   with paging: the two solve the same problem, so `Paging` is a single property both the pager and the
@@ -4362,3 +4370,138 @@ none is quoted.
   now have a test that fails when the guard is removed, and the other two - the settings reload path and
   the count - have neither. That is a gap this section opened rather than closed: it now knows how to
   write such a test.
+
+## 23. The first load is composed before the columns exist - the design
+
+A load is composed from `columns` and `sorts`. The first one is started from `OnParametersSetAsync`,
+and that runs *before* the render pass in which a column registers. So the query the grid sends first
+is composed from an empty column list: no `Where`, no `OrderBy`, whatever the markup declared.
+
+§10 has recorded half of this since §15's candidate 2 found it. The half it recorded is real and the
+other half is worse, so the first thing this section has to do is widen its own subject.
+
+### What is actually broken, measured
+
+Four routes reach the data. Two of them compose at load time and two after the render, and that alone
+decides which are wrong:
+
+| route | composes at | declared filter | declared sort |
+| --- | --- | --- | --- |
+| in memory | the draw | applied | applied |
+| virtualized | the provider's fetch | applied | applied |
+| **executor-backed queryable** | the load's start | **absent** | **absent** |
+| **`LoadData`** | the load's start | **absent** | **absent** |
+
+The expression the executor is handed for a grid declaring `FilterValue="Alice"` is the bare source -
+`List<Person>`, with nothing composed onto it - and exactly one load runs, so nothing follows to put it
+right. The `LoadData` handler is called once with `Filters` null, `OrderBy` empty and `Filter` empty,
+beside a column declaring both a filter and a sort.
+
+**Both halves are user-visible, and they disagree with each other on screen.** The filter box draws
+`Alice` over four unfiltered rows. The header draws `aria-sort="ascending"` over rows in source order.
+The grid is not merely unfiltered; it is telling the user it has filtered.
+
+So §10 understated the fault twice: it names only the filter, and only the executor. The declared sort
+is missing by the same mechanism, and `LoadData` has the whole of it. Its diagnosis was right and its
+extent was not - which is worth recording, because the extent is what decides whether the fix is a
+patch on one route or a change to when a load may be composed at all.
+
+### Why the two working routes work
+
+Neither is a different mechanism; both are the same mechanism asked later. In memory the view composes
+inside `View()`, called as the table draws - behind `Defer`, so every column has registered. Virtualized,
+`ProvideRows` composes when `Virtualize` asks for a window, which is after the render that created it.
+Neither route is careful; both are simply late enough.
+
+That is the whole finding. **The grid has no rule about when its own state is complete, and gets the
+right answer wherever it happens to ask late.**
+
+### What §10 anticipated, and why this does not do it
+
+§10 says the fix is "a reload triggered by the first registration", and there is a built precedent for
+exactly that: `settingsNeedReload`. Restored settings name columns, so they are applied in `RenderTable`
+after `Defer`, and the flag they set is honoured in `OnAfterRenderAsync` - guarded by
+`LoadData.HasDelegate || AsyncOwnsData`, because an in-memory grid has already drawn the state and
+reloading it once raised a settings change that spun the circuit at several thousand renders a second.
+
+Reusing it here would work and it is the wrong shape, for a reason the settings path does not have to
+face. **Settings arrive after a load that was correct when it ran.** A first load composed from no
+columns was never correct, and reloading means the grid has already sent one query it knew nothing by:
+
+- Two round trips where one would do, on every grid that declares a filter or a sort.
+- The first of them unfiltered. Under `Paging` that is bounded by `Skip`/`Take`; **unpaged it
+  materializes the whole table**, and its `CountAsync` counts the unfiltered set.
+- For `LoadData`, the application's own handler invoked twice, the first time with a request it did not
+  ask for. That is observable behaviour, not an internal detail.
+
+And the trigger is hard to write correctly. It cannot be "columns registered", because that is true of
+every grid on every first render - so every asynchronous grid would double its queries. It has to be
+"a column brought state the load did not have", which is a second thing to keep in step with what
+composition actually reads. §21's addendum has already recorded what happens when a mechanism is split
+and something old goes on claiming to cover both halves.
+
+### The rule instead
+
+**Nothing that composes from column state may run before the first render.**
+
+Settings already obey it. Loads will now: the first load moves out of `OnParametersSetAsync` and into
+`OnAfterRenderAsync`, which is the first moment the column list is complete. One query, composed from
+everything the markup declared.
+
+This is parity rather than invention. `RadzenDataGrid` does not load from its parameter set either -
+`PagedDataBoundComponent.ReloadOnFirstRender` defers the first `LoadData` to
+`OnAfterRenderAsync(firstRender)`, and upstream's `OnParametersSetAsync` reloads *only* when
+`!LoadData.HasDelegate`. This grid took a shortcut upstream does not, and the bug is the shortcut.
+
+Where a settings restore is also pending, one reload serves both: `ApplySettings` runs during the same
+render and its flag subsumes the owed load rather than adding a second query behind it.
+
+### The frame the deferral would otherwise cost
+
+A load owed is not a load running, and `IsLoading` is what draws the scrim. Left alone, the first render
+would show a grid that is empty and *not* loading - and `RenderEmpty` draws `EmptyTemplate` on any
+render with no rows, regardless of why there are none. So a grid with an empty template would flash
+"no records" before its first query had even started.
+
+Today the executor path does not have that flash, because `LoadPageAsync` sets `IsLoading` before the
+first render happens. The deferral has to keep that: **the grid marks itself loading when it defers,
+not when it starts**, and only where it knows a load will actually run - `LoadData.HasDelegate` or
+`AsyncOwnsData`, the same predicate the settings reload is guarded by. A flag set for a load that never
+starts is a scrim that never lifts.
+
+### What this costs
+
+**A prerendered `LoadData` grid with a synchronous handler loses its prerendered rows.**
+`OnAfterRenderAsync` does not run during prerendering, so a handler that today completes inside the
+parameter set - and puts its rows in the prerendered HTML - will not be called until the circuit is
+live. This is accepted, for two reasons: it is exactly what `RadzenDataGrid` does, and a handler that
+does real work is asynchronous, so it never prerendered its rows in the first place. The executor path
+is unaffected: `View()` already returns `Array.Empty<TItem>()` for a source the executor owns, so a
+prerendered asynchronous grid has always been empty.
+
+Nothing else moves. The in-memory and virtualized routes are untouched and stand as the controls. Load
+counts are unchanged - one load, later - so the counts pinned across the executor, `LoadData` and
+virtualization suites should survive without being rewritten. If any of them has to change, that is a
+result about the design and belongs in the addendum rather than in the test.
+
+### How it will be verified
+
+Four tests for the four faces, each of which must fail with the deferral removed: a declared filter and
+a declared sort reaching the query on the executor route, and reaching `LoadDataArgs` on the `LoadData`
+route. Two more as controls, asserting the in-memory and virtualized routes still apply both - those
+pass today and are there to catch a fix that moves the fault rather than removing it.
+
+Then the mutation §9 asks for, on the deferral itself rather than on any test: put the load back in
+`OnParametersSetAsync` and confirm all four fail.
+
+### Where this could still be wrong
+
+- **"The first render" is not quite the same claim as "the columns have registered".** They coincide
+  because `Defer` makes them, but a future path that renders the table without walking `ChildContent`
+  would break the coincidence silently. The rule is written against the render because that is what the
+  lifecycle offers; nothing checks that the column list is actually complete.
+- **A grid that never renders never loads.** There is no `Visible` parameter here to gate on, so this
+  is currently unreachable, and it is the kind of thing that stops being unreachable.
+- **The owed load and the settings reload are two flags that must not both fire.** One subsumes the
+  other by ordering, which is the same class of coupling §22 warned about: an ordering that is correct
+  and is not asserted anywhere.
