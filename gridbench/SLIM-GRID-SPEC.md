@@ -4700,8 +4700,8 @@ Every guard removed in turn, at §22's own commit `9b4711381`, full suite each t
 
 | guard | discriminates at §22? | caught by |
 | --- | --- | --- |
-| the check-box list's lookup | yes | `ACheckBoxListLookupIsNeverRunFromTheRenderThread` |
-| `View()` | yes | `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread` |
+| the check-box list's lookup | yes | `ACheckBoxListLookupIsNeverRunFromTheRenderThread`, and one more |
+| `View()` | yes | `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread`, and one more |
 | `TotalCount()` | **yes** | `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread` |
 | `ClampPage()`'s count | **yes** | `ASupersededLoadDoesNotOverwriteTheNewerOne` |
 | `settingsNeedReload` | **no** | nothing |
@@ -4736,8 +4736,10 @@ asked three different questions:
 3. **"Does this grid load, so must it be asked again?"** - `settingsNeedReload`, and both of §23's
    deferrals. Two of the three covered.
 
-The gap is not randomly placed. It is the one question with no test of its own, in a predicate whose
-name answers question 1.
+The gap is not randomly placed, though it is easy to state it too strongly - and the first draft of this
+paragraph did. Question 3 is not untested; it has two covered sites and six tests. What had no test was
+one *site* within it, in a predicate whose name answers question 1 and whose third question nothing in
+the name suggests.
 
 ### The gap, and why the obvious test no longer finds it
 
@@ -4764,7 +4766,7 @@ uncovered is the case the flag still owns alone: **settings arriving at a grid t
 That is a mutation moving under a test written for something else, which §21's addendum already records
 as a way for a recorded count to go stale. Here it changed which test could possibly catch the fault.
 
-### The two tests
+### The tests
 
 - **New settings handed to a drawn grid over an executor-backed source re-run the query.** Render,
   let it settle, then hand it a `Settings` carrying a sort; the executor must be asked a second time and
@@ -4774,6 +4776,9 @@ as a way for a recorded count to go stale. Here it changed which test could poss
   storage does, and what the recorded loop needed - must see the exchange settle rather than run on. The
   parent stops echoing after a bounded number of round trips and the test asserts the count, so the
   mutation fails the assertion instead of hanging: a test that hangs is not a test that fails.
+- **A `LoadData` grid is asked again.** The guard is a disjunction and the two arms fail differently;
+  this is the other one. Added after review, which measured that replacing the whole condition with
+  `AsyncOwnsData` alone broke nothing - see below.
 
 ### The harness had the same fault as the thing it was measuring
 
@@ -4784,8 +4789,9 @@ failure line as "nothing failed". The handoff's own warning is the same shape ("
 `Passed!` appear reports a failed build as caught"), and so is §22.
 
 A mutation harness has to assert that the suite **ran**, not merely that it did not report a failure.
-The sweep now requires a `Total:` line before it will believe any verdict, and treats its absence as a
-result about the harness rather than about the code.
+Every verdict quoted here was taken from a run that produced a `Total:` line, and a run without one was
+treated as a result about the harness rather than about the code. No sweep script is committed - it is a
+loop written per session, which is exactly why the same trap is available to the next one.
 
 ### Where this could still be wrong
 
@@ -4796,7 +4802,9 @@ result about the harness rather than about the code.
   covered incidentally, by a test that would stop covering it the moment it was rewritten for its own
   reasons - which is precisely what §23 did to the settings flag's first-load case.
 - **The three questions are not separated in code, only in this section.** Nothing stops a fourth
-  meaning being added to the same predicate, and the name would go on answering the first question.
+  meaning being added to the same predicate, and the name would go on answering the first question. The
+  reach is wider than the seven sites too: `AsyncOwnsData` is only a reading of `TryGetAsyncSource`,
+  which has three further callers that route rather than guard - ten places in all.
 
 ### What the build changed
 
@@ -4823,9 +4831,12 @@ the render that applied it composed from it.
 
 ### Verified
 
-- 838 unit tests (836 before, 2 added), 38 browser tests, 0 warnings.
-- **Eight mutations.** The seven-guard sweep, each guard removed in turn against the full suite, every
-  one now failing at least one test; plus the `= true` direction, which no guard removal expresses.
+- 839 unit tests (836 before, 3 added), 38 browser tests, and `dotnet build Radzen.Blazor.FastGrid` at
+  0 warnings. The library is what that count is about: the test project has never been warning-free and
+  `TreatWarningsAsErrors` is set on the library alone.
+- **Ten mutations.** The seven-guard sweep, each guard removed in turn against the full suite, every one
+  now failing at least one test; plus three directions of the settings line that no guard *removal*
+  expresses - `= true`, `= AsyncOwnsData`, and `|| Executor is not null`.
 - **No library code changed, so no benchmark applies and none is quoted** - the same reason §22 gave.
 
 ### Where this could still be wrong, after the build
@@ -4834,8 +4845,61 @@ the render that applied it composed from it.
   somehow ran without announcing would satisfy it. Announcing is what `RefreshAsync` does on every path
   that is not `announce: false`, and the settings branch takes the announcing one, so the two coincide
   here - but the test observes the announcement, not the reload.
-- **The over-reload test is in-memory only.** The guard's other arm, `LoadData.HasDelegate`, has no
-  matching test: a grid with a handler is *supposed* to reload, and nothing asserts that it does when
-  settings arrive after the first render.
+- ~~**The over-reload test is in-memory only.**~~ - **closed after review**, which measured that
+  replacing the whole condition with `AsyncOwnsData` alone broke nothing.
+  `SettingsArrivingAtADrawnLoadDataGridAskTheHandlerAgain` now fails that mutation and only that one.
 - **Seven guards is today's count.** §23 added two to §22's five without either section noticing the
   total had moved, which is how §22's four came to be written. Nothing counts them but a person.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. Every one of §24's ten factual claims was checked against the
+code and independently reproduced - including the centrepiece, which a reviewer re-ran at `9b4711381` in
+its own worktree and confirmed: removing `TotalCount`'s guard there fails
+`AnExecutorOwnedQueryIsNeverRunFromTheRenderThread`, removing `ClampPage`'s fails
+`ASupersededLoadDoesNotOverwriteTheNewerOne`, and only `settingsNeedReload` survived. It went further
+than this section had and isolated the causal half: with the `TotalCount` guard removed **and**
+`Walked()` stripped from both `Execute` overloads, §22's suite passes. So the Execute-counting §22 built
+is not merely present, it is what makes that removal visible.
+
+**The strongest thing this section could have said about its own test, it had not said.** §10 records the
+shipped fault as reading the flag as "an executor exists" rather than "the executor will run this
+source". That is not a guard *removal*, so the sweep never expressed it. Mutated to the fault as
+recorded - `LoadData.HasDelegate || Executor is not null`, which is always true because the built-in
+executor is a fallback that always resolves -
+`AGridThatDoesNotLoadAnswersASettingsRestoreWithNoReloadAtAll` fails. **The test catches the bug that
+actually shipped**, not merely a plausible neighbour of it, and that is now measured rather than hoped.
+
+**One sentence here was false and is corrected above.** "The gap is the one question with no test of its
+own" - question 3 has two covered sites and six tests. What lacked a test was a *site* within it. A
+taxonomy is a description, and this section had started using it as an argument.
+
+**The guard is a disjunction and only one arm was pinned.** `settingsNeedReload = AsyncOwnsData` - the
+handler arm deleted - broke nothing, which the pre-review text admitted as a risk bullet rather than
+fixing. It is fixed: a third test, and that mutation now fails it alone. All four mutations of that one
+line now fail exactly one test each, and a different one each time.
+
+**The counting is narrower than "the same predicate" suggests.** `AsyncOwnsData` has seven readers, but
+`TryGetAsyncSource` - which is all `AsyncOwnsData` is - has three more that do not go through it. Those
+route rather than guard, so the sweep's scope is defensible; the risk bullet about a fourth meaning being
+added should have said ten places rather than seven, and now does.
+
+**The round-trip copy is exercised only by the failing run.** The host hands back a copy of the settings,
+and `Copy` is complete - all eight `FastGridColumnSettings` properties and all three `FastGridSettings`
+ones, checked field by field. But the green run's whole assertion is that *nothing is echoed*, so `Store`
+never fires and `Copy` never runs. Its fidelity is exercised under the mutation and nowhere else. The
+restore now carries a column rather than an empty list so that the mutated run at least exercises the
+per-column arm, which an empty `CaptureSettings` answer had left dead even there.
+
+**A hazard to this whole method, found in passing and worth more than anything else here.**
+`GeometryParityTests.The_pass_costs_about_what_it_should` asserts a fitting pass completes in under
+100 ms, measured through Playwright. A reviewer saw it fail once in fifteen runs of an unrelated
+mutation, and pass in every other run of the same one. Its own comment concedes that "a CI box asserting
+one of them is a flaky test rather than a budget" - and then asserts one.
+
+**Every "and nothing else failed" verdict on this branch is read off a suite that can go red for reasons
+unrelated to the mutation.** It did not corrupt any verdict here, because each failure set was read by
+name rather than by count - but a sweep that counted failures would have been misled, and §22 is the
+record of what happens when an intermittent red is filed under the wrong cause. This is left open rather
+than fixed: it is a wall-clock assertion in the browser suite, not this section's subject, and it wants
+the treatment §22 gave its own flake.
