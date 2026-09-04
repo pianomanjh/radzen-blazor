@@ -581,6 +581,24 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void A_bound_written_in_something_other_than_pixels_is_still_a_bound()
+        {
+            // Under Scroll these go to the browser inside `clamp()` and it resolves them, so any unit
+            // works. Fitting to a container is arithmetic and needs a number - and §13 rules out
+            // getting one by parsing, which "works for pixels and is quietly wrong for everything
+            // else". The number comes from the browser instead: each bound is measured on a probe.
+            var units = Fitted().Units;
+            var seen = units?.ToString() ?? "(not measured)";
+
+            ParityAssert.True(units is { Honoured: true },
+                "a MinWidth in rem floors a column as surely as one in px",
+                "the two modes take the same parameter, and one of them silently ignoring every unit but pixels is the failure the spec names by name",
+                "every column at or above 5rem",
+                seen,
+                seen);
+        }
+
+        [Fact]
         public void A_fit_watching_its_container_stops_when_the_table_stops_being_one()
         {
             // The Responsive guard refuses a new fit below the breakpoint. That is half the answer:
