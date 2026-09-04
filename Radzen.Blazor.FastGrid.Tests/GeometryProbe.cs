@@ -182,6 +182,25 @@ namespace Radzen.Blazor.FastGrid.Tests
     }
 
     /// <summary>A fit with no MinWidth anywhere, squeezed past what the columns can give.</summary>
+    /// <summary>What a fit did when one column was left out of it.</summary>
+    public sealed class AutoFitWithReserved
+    {
+        [JsonPropertyName("widths")] public double[] Widths { get; set; }
+        [JsonPropertyName("total")] public double Total { get; set; }
+        [JsonPropertyName("room")] public double Room { get; set; }
+
+        /// <summary>The width of the column that was not fitted, which it must keep.</summary>
+        [JsonPropertyName("reservedColumn")] public double ReservedColumn { get; set; }
+
+        [JsonPropertyName("fitsTheContainer")] public bool FitsTheContainer { get; set; }
+        [JsonPropertyName("floorTotal")] public double FloorTotal { get; set; }
+
+        public override string ToString() =>
+            $"[{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
+            $" total {Total:0} in {Room:0}, reserved column {ReservedColumn:0}px, floor {FloorTotal:0}" +
+            (FitsTheContainer ? string.Empty : ", OVERFLOWS");
+    }
+
     public sealed class AutoFitSqueeze
     {
         [JsonPropertyName("pane")] public int Pane { get; set; }
@@ -327,6 +346,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>A fit that must share the container with a column it is not fitting.</summary>
+        [JsonPropertyName("withReserved")] public AutoFitWithReserved WithReserved { get; set; }
+
         /// <summary>Where columns stop when nothing has told them how narrow they may go.</summary>
         [JsonPropertyName("defaultFloor")] public AutoFitDefaultFloor DefaultFloor { get; set; }
 

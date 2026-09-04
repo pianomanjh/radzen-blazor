@@ -634,7 +634,7 @@ function watch(table, state) {
         state.queued = requestAnimationFrame(() => {
             state.queued = 0;
 
-            const available = wrapper.clientWidth;
+            const available = wrapper.clientWidth - state.reserved;
 
             // The guard against feeding ourselves: writing column widths can change the table's width,
             // and a wrapper that sizes to its content would then report a new size and ask again. A
@@ -700,6 +700,11 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   let bareWidth = null;
   let measured = 0;
   let available = 0;
+
+  // What the columns this pass is not fitting are taking. A declared Width or AutoFit="false" column
+  // is space the fitted ones cannot have, and fitting to a container means fitting to what is left of
+  // it - not to the whole thing with those columns added on afterwards.
+  let reserved = 0;
   const pixels = [];
   const headers = [];
   const bodies = [];
@@ -787,9 +792,11 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
 
     for (let i = 0; i < cells.length; i++) {
       if (!beingFitted.has(i - toggleOffset)) {
-        measured += cells[i].getBoundingClientRect().width;
+        reserved += cells[i].getBoundingClientRect().width;
       }
     }
+
+    measured += reserved;
 
     available = table.parentElement ? table.parentElement.clientWidth : table.clientWidth;
   } finally {
@@ -826,6 +833,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       // Deliberately NaN so the first pass writes every column: 0 would look like a width already set.
       last: new Float64Array(n).fill(NaN),
       available: 0,
+      reserved: 0,
       observer: null,
       queued: 0
     };
@@ -861,13 +869,15 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     }
 
     // Below this there is no arrangement that honours every floor, so the table stops shrinking and
-    // the grid scrolls - the same answer Scroll gives, arrived at only once nothing else is left.
-    table.style.minWidth = Math.ceil(floors) + 'px';
+    // the grid scrolls - the same answer Scroll gives, arrived at only once nothing else is left. The
+    // columns this pass did not fit still occupy their width, so they are part of the floor too.
+    state.reserved = reserved;
+    table.style.minWidth = Math.ceil(floors + reserved) + 'px';
 
     releaseFit(tableId);
     fitted.set(tableId, state);
 
-    const room = table.parentElement ? table.parentElement.clientWidth : needed;
+    const room = (table.parentElement ? table.parentElement.clientWidth : needed + reserved) - reserved;
 
     state.available = room;
     distribute(state, room);

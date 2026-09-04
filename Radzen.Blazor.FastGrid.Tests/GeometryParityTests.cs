@@ -581,6 +581,31 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void Fitting_the_container_leaves_room_for_the_columns_it_is_not_fitting()
+        {
+            // A column with a declared Width, or one that opted out with AutoFit="false", is not in
+            // the fit - but it is still in the table. Sizing the fitted columns to the whole container
+            // and letting that column add its width afterwards overflows the one mode whose entire
+            // purpose is not overflowing.
+            var fit = Fitted().WithReserved;
+            var seen = fit?.ToString() ?? "(not measured)";
+
+            ParityAssert.True(fit is { FitsTheContainer: true },
+                "a fit shares the container with the columns it is not fitting",
+                "space taken by a declared column is space the fitted ones cannot have - counting it twice is how a mode that exists to avoid a scrollbar produces one",
+                "a table no wider than its container",
+                seen,
+                seen);
+
+            ParityAssert.True(fit is { ReservedColumn: >= 219 and <= 221 },
+                "the column left out of the fit keeps the width it had",
+                "a fit that quietly resizes a column nobody asked it to touch has taken a decision away from whoever declared that width",
+                "220px, untouched",
+                seen,
+                seen);
+        }
+
+        [Fact]
         public void A_column_nobody_gave_a_MinWidth_stops_at_its_own_heading()
         {
             // The default floor. A column with no MinWidth used to have none at all, so a narrow
