@@ -1155,13 +1155,18 @@ own `Localizer`: a custom `ILocalizer` in the container first, then the consumin
 `RadzenStrings` resources, then the ones shipped with `Radzen.Blazor`. `UICulture` names the culture, or
 a `DefaultUICulture` cascaded from an ancestor does, exactly as every other Radzen component reads it.
 
-The keys are `RadzenDataGrid`'s own, deliberately - `DataGrid_ClearFilterText`,
+The keys are borrowed rather than invented, deliberately - `DataGrid_ClearFilterText`,
 `DataGrid_FilterValueAriaLabel`, `DataGrid_ExpandChildItemAriaLabel`, `DataGrid_ColumnsText`,
-`DataGrid_AllColumnsText`, `DataGrid_ColumnsShowingText`, `DataGrid_SelectVisibleColumnsAriaLabel`. All
-seven are already translated into the five cultures Radzen ships, so this grid speaks German, Spanish,
-French, Italian and Japanese with nothing added to any resource file, and an application that has
-already overridden one of them for `RadzenDataGrid` gets the same override here. Each is also a
-parameter - `ClearFilterText`, `ColumnsText` and so on - for a grid that wants its own wording.
+`DataGrid_AllColumnsText`, `DataGrid_ColumnsShowingText`, `DataGrid_SelectVisibleColumnsAriaLabel`, and
+`Spreadsheet_Blank` for the entry a lookup column's filter offers for the rows carrying no id. All eight
+are already translated into the five cultures Radzen ships, so this grid speaks German, Spanish, French,
+Italian and Japanese with nothing added to any resource file, and an application that has already
+overridden one of them for `RadzenDataGrid` gets the same override here. Each is also a parameter -
+`ClearFilterText`, `BlankFilterText`, `ColumnsText` and so on - for a grid that wants its own wording.
+
+The last one is a spreadsheet's key under a grid's roof because it is the only string in the resources
+that already means "the rows with nothing here", and a key of this component's own would have been
+translated into none of the five.
 
 Most of what this fixed is not translation. Two of the grid's controls are icon-only buttons, and
 neither had an accessible name:
@@ -1237,10 +1242,12 @@ carries `Expression<Func<TItem, TProp>>` composes its own sorting and filtering 
 calls, and a trimmer can follow those. The reflective alternative - reach a property by name, close a
 generic method over a type discovered at run time - is exactly what it cannot.
 
-Lookup columns are in that application on purpose. Everything they do is composed from their own typed
-expressions - the cell, both filter shapes, the ids the check-box list carries - so the browser check
-resolves lookups and filters a column by a name it typed, which is the reachable path a trimmed member
-would be missing from.
+Lookup columns are in that application on purpose, in both cardinalities and all three provenances.
+Everything they do is composed from their own typed expressions - the cell, both filter shapes, the ids
+the check-box list carries - and provenance is where the risk sits, since a `Query` lookup's projection
+is the only part built at run time. So the browser check resolves a cell of each kind, waits for the
+fetched one to arrive, and filters a column by a name it typed, which is the reachable path a trimmed
+member would be missing from.
 
 Two features still reach a member by name, and are the ones to avoid in an application published with
 Native AOT. Sorting and the drop-down's value and text members used to be there too; typed expressions
