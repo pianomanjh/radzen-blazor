@@ -35,18 +35,15 @@ namespace Radzen.FastGrid.Tests
                 extra?.Invoke(p);
             });
 
-        /// <summary>The call's arguments, named the way the design names them.</summary>
-        sealed record Ask(string Table, int[] Indices, string[] Min, string[] Max, int ToggleOffset,
-            int Bare, bool Wait, bool Animate, string Overflow, bool[] Required);
-
-        static Ask Read(JSRuntimeInvocation invocation)
-        {
-            var args = invocation.Arguments;
-
-            return new Ask((string)args[0], ((IEnumerable<int>)args[1]).ToArray(),
-                (string[])args[2], (string[])args[3], (int)args[4], (int)args[5], (bool)args[6],
-                (bool)args[7], (string)args[8], (bool[])args[9]);
-        }
+        /// <summary>
+        /// The call's one argument. This used to be a record declared here beside a decoder that read
+        /// <c>invocation.Arguments</c> by index - which is the caller's own bug copied into the thing
+        /// meant to catch it, since swapping Min and Max was silent in the caller, in the script and
+        /// here at once. The type is <see cref="AutoFitAsk" /> now and it is the one the call is made
+        /// with, so there is nothing left to decode.
+        /// </summary>
+        static AutoFitAsk Read(JSRuntimeInvocation invocation) =>
+            (AutoFitAsk)invocation.Arguments[0]!;
 
         // --- A grid that does not fit -----------------------------------------------------------
 
@@ -291,7 +288,7 @@ namespace Radzen.FastGrid.Tests
             cut.Render();
             Assert.Null(cut.FindAll("colgroup col")[2].GetAttribute("style"));
 
-            var single = module.Setup<string[]>("autoFit", i => ((IEnumerable<int>)i.Arguments[1]).Count() == 1);
+            var single = module.Setup<string[]>("autoFit", i => Read(i).Indices.Count == 1);
             single.SetResult(new[] { "44px" });
             cut.FindAll(".rz-column-resizer")[0].DoubleClick();
             cut.Render();
@@ -548,7 +545,7 @@ namespace Radzen.FastGrid.Tests
             var ask = Read(Assert.Single(module.Invocations["autoFit"]));
 
             Assert.Equal(new[] { true, false, true }, ask.Required);
-            Assert.Equal(ask.Indices.Length, ask.Required.Length);
+            Assert.Equal(ask.Indices.Count, ask.Required.Count);
         }
 
         [Fact]

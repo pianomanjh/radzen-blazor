@@ -752,17 +752,15 @@ namespace Radzen.FastGrid
 
         async Task ShowFocusAsync()
         {
-            var script = await ModuleAsync().ConfigureAwait(false);
-
-            if (script is null)
+            if (await BrowserAsync().ConfigureAwait(false) is not { } browser)
             {
                 return;
             }
 
             try
             {
-                await script.InvokeVoidAsync("focusCell", ViewElementId, focusRow, focusCell,
-                    frozenStartRun, frozenEndRun, AllowVirtualization ? ItemSize : 0);
+                await browser.FocusCellAsync(ViewElementId, focusRow, focusCell, frozenStartRun,
+                    frozenEndRun, AllowVirtualization ? ItemSize : 0);
             }
 #pragma warning disable CA1031
             catch (Exception)
@@ -778,16 +776,14 @@ namespace Radzen.FastGrid
 
         async Task HideFocusAsync()
         {
-            var script = await ModuleAsync().ConfigureAwait(false);
-
-            if (script is null)
+            if (await BrowserAsync().ConfigureAwait(false) is not { } browser)
             {
                 return;
             }
 
             try
             {
-                await script.InvokeVoidAsync("blurCell", ViewElementId);
+                await browser.BlurCellAsync(ViewElementId);
             }
 #pragma warning disable CA1031
             catch (Exception)
@@ -815,13 +811,12 @@ namespace Radzen.FastGrid
             navigation ??= new Attachment<string[]>(
                 async keys =>
                 {
-                    if (await ModuleAsync().ConfigureAwait(false) is not { } script)
+                    if (await BrowserAsync().ConfigureAwait(false) is not { } browser)
                     {
                         return false;
                     }
 
-                    var metrics = await script.InvokeAsync<NavigationMetrics?>("attachNavigation",
-                        ViewElementId, keys);
+                    var metrics = await browser.AttachNavigationAsync(ViewElementId, keys);
 
                     Apply(metrics);
 
@@ -829,9 +824,9 @@ namespace Radzen.FastGrid
                 },
                 async () =>
                 {
-                    if (await ModuleAsync().ConfigureAwait(false) is { } script)
+                    if (await BrowserAsync().ConfigureAwait(false) is { } browser)
                     {
-                        await script.InvokeVoidAsync("detachNavigation", ViewElementId);
+                        await browser.DetachNavigationAsync(ViewElementId);
                     }
                 });
 
@@ -847,16 +842,14 @@ namespace Radzen.FastGrid
 
         async Task MeasureNavigationAsync()
         {
-            var script = await ModuleAsync().ConfigureAwait(false);
-
-            if (script is null)
+            if (await BrowserAsync().ConfigureAwait(false) is not { } browser)
             {
                 return;
             }
 
             try
             {
-                Apply(await script.InvokeAsync<NavigationMetrics?>("measureNavigation", ViewElementId));
+                Apply(await browser.MeasureNavigationAsync(ViewElementId));
             }
 #pragma warning disable CA1031
             catch (Exception)

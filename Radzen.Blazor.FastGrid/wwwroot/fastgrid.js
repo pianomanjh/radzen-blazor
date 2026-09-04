@@ -780,8 +780,14 @@ export function releaseFit(tableId) {
 }
 
 
-export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffset, bare, wait, animate,
-  overflow, required) {
+// One object rather than ten positional arguments. They were written in order by the caller, read in
+// order here, and read in order a third time by the test that doubled this - so swapping two of them
+// was silent in all three places at once. `AutoFitAsk` on the C# side is the same shape, and is what
+// the test now reads instead of counting arguments.
+export async function autoFit(ask) {
+  const { table: tableId, indices, min: minWidths, max: maxWidths, toggleOffset, bare, wait, animate,
+    overflow, required } = ask;
+
   const table = await ready(tableId, wait);
 
   if (!table) {

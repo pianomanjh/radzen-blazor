@@ -169,9 +169,7 @@ namespace Radzen.FastGrid
 
         async Task RunAutoFitAsync(ColumnBase<TItem>? column, bool wait, bool automatic)
         {
-            var script = await ModuleAsync();
-
-            if (script is null || visibleColumns.Count == 0)
+            if (await BrowserAsync() is not { } browser || visibleColumns.Count == 0)
             {
                 return;
             }
@@ -228,9 +226,8 @@ namespace Radzen.FastGrid
                     ? "scroll"
                     : column is null ? "fit" : "keep";
 
-                widths = await script.InvokeAsync<string?[]?>("autoFit", TableElementId, targets,
-                    minimums, maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic, overflow,
-                    required);
+                widths = await browser.AutoFitAsync(new AutoFitAsk(TableElementId, targets, minimums,
+                    maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic, overflow, required));
             }
 #pragma warning disable CA1031
             catch (Exception)

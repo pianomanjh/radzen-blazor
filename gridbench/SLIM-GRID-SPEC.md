@@ -2410,7 +2410,7 @@ with a load-bearing reason should be recorded here beside it.
 | --- | --- | --- |
 | 1 | Compose the view behind one interface | ~~Strong~~ **built**, §16 |
 | 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
-| 3 | The browser seam has no interface | Strong - **designed, §18**, and three of this row's claims corrected there |
+| 3 | The browser seam has no interface | ~~Strong~~ **built**, §18 - and three of this row's claims corrected there |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
 | 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
@@ -3292,3 +3292,80 @@ constructed with them by its callers, and those callers can hand it `Browser`'s 
   because the double answers a misspelled name with a default rather than an error. `JSRuntimeMode.Loose`
   is what makes the suite tolerant, and it is set in almost every test file here. The piece does not
   change that, and probably something should.
+
+### What the build changed
+
+The facade landed as designed and is not a rename - the verdict this section asked for is below. Four of
+its own claims were wrong, one of its constants was the mistake it warns other people about, and typing
+the seam turned up something no reader had noticed.
+
+**The quoted surface is not the built surface.** `Browser<TItem>` is generic, not `Browser`: the answer
+crossing the seam is `RadzenFastGrid<TItem>.NavigationMetrics`, so the type parameter follows it in.
+`AutoFitAsk`'s sequences are `IReadOnlyList<>` rather than the array-and-`List` mixture the test's own
+`Ask` had, which is why that test said `Length` for three of them and `Count` for the fourth. And a
+third type is new that this section did not name, `ClickKinds` - the click attach was already passing an
+object rather than three arguments, hand-written camelCase at the call site; naming it is the same
+change as the others and it removes the hand-written casing.
+
+**Typing the seam found a `float` nobody had noticed.** `focusCell` takes six numbers and one of them is
+`Virtualize`'s row height, which is a `float` and is multiplied by a row index to get a scroll offset.
+The untyped call took it without comment and a reader counting six numbers had nothing to say one of
+them was not a count. It is `float` in the signature and the reason is written beside it. Nothing was
+broken; it was unsayable.
+
+**One constant was exactly the mistake this section is about.** `BrowserContract` shipped a
+`FocusedClass` for `rz-state-focused` - which the grid does not emit at all. The script *writes* it, so
+no rendered-grid assertion was possible and none existed, and renaming it would have been silent in a
+list whose entire purpose is that renaming is not silent. Review caught it. `ViewClass` went the same
+way for a milder reason: the script is handed the view's **id** and never selects it by class, so the
+class is how a *test* finds the view and belongs in the test. What is left is names the grid emits and
+the script selects, and every one has an assertion. `:scope > thead > tr` and `:scope > tbody` were
+added, having been in this section's own list of the undeclared half and left out of the built one.
+
+**The list is still not the whole list, and should be read that way.** `closest('td')`,
+`closest('tr[data-r]')` and `:scope > table > tbody > tr` are structure the script depends on that no
+constant names. What `BrowserContract` is for is the names a rename could quietly change; what it is not
+is a complete description of the DOM the script walks.
+
+**The two sides of the ask are checked from both directions, and the C# side is not checked at all -
+deliberately.** `autoFit` taking one object trades a positional coupling for a naming one: the record
+serializes camelCase and the script destructures by name. So one test reads the script off disk, parses
+what it destructures, and compares that to what the record serializes to - as sets, both ways, because a
+field C# sends that the script ignores travels on every fit and a name the script takes out that C# does
+not send is `undefined` inside a measurement. Renaming on the script side fails it. Renaming on the C#
+side **does not compile**, because the tests read the properties, which is the better of the two and is
+why nothing here tests it.
+
+**And the harness had a positional call left in it.** Converting the nine `autoFit` calls in
+`measure-geometry.js` missed a tenth, which then received a string where an object goes, destructured
+nothing out of it, and returned `null` - and the parity suite passed anyway. That is a finding about a
+different test, and it lands in its own commit next.
+
+**Measured**, control at `bc202edc8` bare 154.81 KB, one sort 175.79 KB, a filter row 158.78 KB; after,
+154.66, 175.90 and 158.77. Inside the floor this branch has now measured directly - the bare row has
+read 154.55, 154.66 and 154.81 on runs of identical code. **No time ratio is quoted**, per §9.
+
+### The verdict this section asked for
+
+> "if the built version does not visibly reduce what a call site has to know, it is a rename and should
+> be called one."
+
+It is not a rename. What the call sites no longer have to know: nine export-name strings, the order of
+`autoFit`'s ten arguments, the `InvokeAsync<NavigationMetrics?>` type argument written out three times,
+and the camelCase spelling of an anonymous object. Each also lost a two-step - `var script = await
+ModuleAsync(); if (script is null) return;` became `if (await BrowserAsync() is not { } browser)`.
+
+**And the count is honest about what is left.** `ModuleAsync` still exists, because something has to do
+the import and the disposer holds the module rather than reaching for it. Two ways in, one of which is
+the facade; this section's first draft claimed there was one, and the disposer forty lines below said
+otherwise.
+
+### Where it is still weak
+
+- **Reach is not coverage, and the piece did not change that.** Every export is reachable through a
+  string-keyed double that answers a misspelled name with a default, and `JSRuntimeMode.Loose` is set in
+  almost every test file here. Four exports have tests now that had none, and the RTL flip has the test
+  §15 said could not be written - but a typo in a setup string still passes silently. That is the same
+  hazard the facade fixed on the call side, unfixed on the test side, and it is the next thing to look
+  at if this seam is opened again.
+- **The ordering constraints are untouched**, as designed. §13's finding stands.

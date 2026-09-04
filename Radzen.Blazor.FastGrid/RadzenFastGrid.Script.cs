@@ -27,6 +27,23 @@ namespace Radzen.FastGrid
             return module ??= await JSRuntime.InvokeAsync<IJSObjectReference>("import", ModulePath);
         }
 
+        /// <summary>
+        /// The module behind the facade that names its nine calls, or null when there is no runtime to
+        /// import it with. Every caller that has to <em>reach</em> for the module goes through this
+        /// rather than through <see cref="ModuleAsync" />: the point of <see cref="Browser{TItem}" />
+        /// is that an export name and an argument list exist in one place, and a second way in would
+        /// be a second place.
+        /// </summary>
+        /// <remarks>
+        /// The disposer below is the one thing that does not call this, and cannot: it runs when the
+        /// module is already held and importing one to release it would be the opposite of what it is
+        /// for. It wraps the field it has instead, which is the same facade over the same reference.
+        /// </remarks>
+        async ValueTask<Browser<TItem>?> BrowserAsync() =>
+            await ModuleAsync().ConfigureAwait(false) is { } script
+                ? new Browser<TItem>(script)
+                : null;
+
         /// <summary>Releases the module, after telling it to let go of the two elements it holds.</summary>
         async ValueTask DisposeScriptAsync()
         {
@@ -61,7 +78,7 @@ namespace Radzen.FastGrid
                 // is a leak: a grid switched from Fit back to Scroll, or to AutoFitColumns="None",
                 // still has the observer it started and arrives here with the gate shut. The script
                 // already answers this for a table it is not watching.
-                await module.InvokeVoidAsync("releaseFit", TableElementId);
+                await new Browser<TItem>(module).ReleaseFitAsync(TableElementId);
 
                 await module.DisposeAsync();
             }

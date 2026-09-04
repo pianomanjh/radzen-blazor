@@ -144,26 +144,21 @@ namespace Radzen.FastGrid
             clicks ??= new Attachment<(bool Click, bool DoubleClick, bool ContextMenu)>(
                 async kinds =>
                 {
-                    if (await ModuleAsync().ConfigureAwait(false) is not { } script)
+                    if (await BrowserAsync().ConfigureAwait(false) is not { } browser)
                     {
                         return false;
                     }
 
                     clickReference ??= DotNetObjectReference.Create(this);
 
-                    return await script.InvokeAsync<bool>("attach", BodyElementId, clickReference,
-                        new
-                        {
-                            click = kinds.Click,
-                            doubleClick = kinds.DoubleClick,
-                            contextMenu = kinds.ContextMenu,
-                        });
+                    return await browser.AttachAsync(BodyElementId, clickReference,
+                        new ClickKinds(kinds.Click, kinds.DoubleClick, kinds.ContextMenu));
                 },
                 async () =>
                 {
-                    if (await ModuleAsync().ConfigureAwait(false) is { } script)
+                    if (await BrowserAsync().ConfigureAwait(false) is { } browser)
                     {
-                        await script.InvokeVoidAsync("detach", BodyElementId);
+                        await browser.DetachAsync(BodyElementId);
                     }
                 });
 

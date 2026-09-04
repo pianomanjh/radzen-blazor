@@ -30,6 +30,12 @@
 
   <ItemGroup>
     <None Include="measure-geometry.js" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- The component's own browser module, beside the tests so that one of them can read it. The
+         seam's two sides are C# and JavaScript and nothing generates either from the other, so the
+         only way a C# test can check they still agree about a name is to look at the other one. -->
+    <None Include="../Radzen.Blazor.FastGrid/wwwroot/fastgrid.js" Link="fastgrid.js"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
