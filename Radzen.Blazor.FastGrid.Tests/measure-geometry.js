@@ -103,15 +103,32 @@ async function main() {
         // What the fit costs, counted rather than timed. Chromium keeps its own tally of how many
         // layouts and style recalculations the renderer has run, and a forced synchronous layout - a
         // read taken while a write has left the tree dirty - increments it. That is the whole of what
-        // the fit's batching exists to avoid, so it is the thing to count: a batched pass forces one
-        // layout however many cells it walks, and a single write moved inside the read loop forces one
-        // per cell. The page cannot see these counters, so they are read here and handed in.
+        // the fit's batching exists to avoid, so it is the thing to count: a batched pass forces a
+        // fixed number of layouts however many cells it walks - four, on this pane - and a single
+        // write moved inside the read loop forces one per cell. The page cannot see these counters,
+        // so they are read here and handed in.
         const cdp = await page.context().newCDPSession(page);
         await cdp.send('Performance.enable');
 
         await page.exposeFunction('__parityCosts', async () => {
             const { metrics } = await cdp.send('Performance.getMetrics');
-            const value = name => metrics.find(metric => metric.name === name)?.value ?? 0;
+
+            // Never `?? 0`. These are two independent names on a CDP surface with no stability
+            // guarantee, and a fabricated zero for a name that has gone away passes a `<=` budget
+            // while measuring nothing - which is the exact shape of the fault this whole check was
+            // rewritten to escape. A missing counter is a broken probe and says so, in keeping with
+            // the rest of this script: it does not fall back to a clock.
+            const value = name => {
+                const metric = metrics.find(entry => entry.name === name);
+
+                if (!metric) {
+                    throw new Error(
+                        `Chromium reported no '${name}' metric. The fit's cost check is read off ` +
+                        'these counters and has no fallback.');
+                }
+
+                return metric.value;
+            };
 
             return {
                 layouts: value('LayoutCount'),
@@ -174,16 +191,18 @@ async function main() {
             const tableWidth = () => round(table.getBoundingClientRect().width);
             const before = { widths: widths(), truncated: truncated(), tableWidth: tableWidth() };
 
-            // Standing in for the server, which passes the same things: no toggle column on this pane,
-            // and the last column left bare so the browser hands it the remainder.
+            // Read outside the timer, so the round trip to the browser's own counters is not charged
+            // to the pass it is measuring. The await also yields, which flushes any pending layout out
+            // of the window on this side as well - see §25 on what that does to the count.
+            const costsBefore = await window.__parityCosts();
+
             // The pass itself, timed. This is the only channel that can answer what auto-fit costs:
             // gridbench is bUnit, so the reflow, the scrollWidth walk and the getComputedStyle calls
             // all read as zero there.
-            // Read outside the timer, so the round trip to the browser's own counters is not charged
-            // to the pass it is measuring.
-            const costsBefore = await window.__parityCosts();
             const started = performance.now();
 
+            // Standing in for the server, which passes the same things: no toggle column on this pane,
+            // and the last column left bare so the browser hands it the remainder.
             const written = await window.__fastgrid.autoFit({
                 table: table.id, indices, min: indices.map(() => null), max: bounds,
                 toggleOffset: 0, bare: columns - 1, wait: false, animate: false,
@@ -195,7 +214,6 @@ async function main() {
             const layouts = costsAfter.layouts - costsBefore.layouts;
             const styleRecalcs = costsAfter.styleRecalcs - costsBefore.styleRecalcs;
             const layoutMs = round((costsAfter.layoutSeconds - costsBefore.layoutSeconds) * 1000);
-
 
             // Captured here, not at return time. Everything below deliberately disturbs the columns -
             // stacking the table, squeezing the pane, re-running the fit to watch it animate - and the

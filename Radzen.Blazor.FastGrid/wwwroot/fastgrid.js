@@ -942,8 +942,8 @@ export async function autoFit(ask) {
   //
   // Decided by arithmetic rather than by writing the widths and looking, because looking would cost a
   // second whole-table layout. Both figures it needs are read inside the measuring pass above, with
-  // every other read - taking them from here instead put the pass over its own timing gate, which is
-  // what that gate is for.
+  // every other read - taking them from here instead put the pass over its own cost gate, which is
+  // what that gate is for. That gate is no longer a wall clock; §25 has what it became and why.
   if (bare >= 0 && bareWidth !== null && measured >= container) {
     widths[indices.indexOf(bare)] = bareWidth;
   }

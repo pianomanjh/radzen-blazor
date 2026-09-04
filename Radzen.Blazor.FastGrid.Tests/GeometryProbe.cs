@@ -436,27 +436,45 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         /// <summary>How long the whole measure-and-write pass took, in milliseconds.</summary>
         /// <remarks>
-        /// Recorded and reported, never asserted on. A wall-clock number measures the machine as much as
-        /// the code, and asserting one is what made this pane's own cost check flaky - see
-        /// <see cref="Layouts"/>, which is what the check asserts instead.
+        /// Recorded, printed, and asserted only as a ratio against <see cref="LayoutMs"/> - never as an
+        /// absolute. A wall-clock constant measures the machine as much as the code, and asserting one
+        /// is what made this pane's own cost check flaky: the same unmodified pass read 36.7ms early in
+        /// a session and over 100ms later in it. §25 has the measurements.
         /// </remarks>
         [JsonPropertyName("elapsed")] public double Elapsed { get; set; }
 
         /// <summary>
-        /// How many layouts Chromium ran during the pass, from its own counter rather than a clock.
+        /// How many layouts Chromium ran between the two counter reads that bracket the pass, from its
+        /// own counter rather than a clock.
         /// </summary>
         /// <remarks>
-        /// A batched pass takes every read before any write and forces one layout however many cells it
-        /// walks. A single write moved inside the read loop forces one per cell, because each read then
-        /// finds the tree dirty. So this separates the two by the number of cells rather than by a
-        /// ratio, and it does not move when the machine running it is busy.
+        /// A batched pass takes every read before any write and forces a fixed number of layouts however
+        /// many cells it walks - four, on the pane the parity check fits. A single write moved inside the
+        /// read loop forces one per cell, because each read then finds the tree dirty. So this separates
+        /// the two by the number of cells rather than by a ratio, and it does not move when the machine
+        /// running it is busy.
+        /// <para>
+        /// The window is the pass plus the two binding round trips that read the counters, which is
+        /// wider than the pass itself. A layout the fit leaves for the next frame falls inside it just
+        /// as one the fit forces does - which is why this cannot see a fault that only moves a layout
+        /// across that boundary, and why <see cref="Elapsed"/> is asserted against
+        /// <see cref="LayoutMs"/> as well. §25 has both mutations.
+        /// </para>
         /// </remarks>
         [JsonPropertyName("layouts")] public int Layouts { get; set; }
 
-        /// <summary>How many style recalculations Chromium ran during the pass, from the same counter.</summary>
+        /// <summary>
+        /// How many style recalculations Chromium ran over the same window, from the same counter.
+        /// Carried as failure context rather than asserted on: it has moved in lockstep with
+        /// <see cref="Layouts"/> in every measurement so far, so it discriminates nothing on its own,
+        /// but it is the first thing worth seeing when the count is the number that failed.
+        /// </summary>
         [JsonPropertyName("styleRecalcs")] public int StyleRecalcs { get; set; }
 
-        /// <summary>How long Chromium spent in layout during the pass, by its own attribution.</summary>
+        /// <summary>
+        /// How long Chromium spent in layout over the same window as <see cref="Layouts"/>, by its own
+        /// attribution. Wider than the pass, so it includes layout the pass itself did not pay for.
+        /// </summary>
         [JsonPropertyName("layoutMs")] public double LayoutMs { get; set; }
 
         /// <summary>How many rows it walked, so a fast number cannot come from an empty table.</summary>
