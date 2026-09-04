@@ -119,15 +119,12 @@ namespace Radzen.FastGrid
                 selector.Parameters);
         }
 
-        // Captured from typed lambdas rather than looked up by name: an ldtoken the compiler emits,
-        // closed over TKey where TKey is still a type parameter.
+        // Captured from a typed lambda rather than looked up by name: an ldtoken the compiler emits,
+        // closed over TKey where TKey is still a type parameter. The Contains it wraps is the base's,
+        // since both columns compose their In out of the same one.
         static readonly MethodInfo EnumerableAny =
             ((MethodCallExpression)((Expression<Func<IEnumerable<TKey>, bool>>)(
                 members => members.Any(id => true))).Body).Method;
-
-        static readonly MethodInfo ListContains =
-            ((MethodCallExpression)((Expression<Func<List<TKey?>, TKey?, bool>>)(
-                (keys, id) => keys.Contains(id))).Body).Method;
 
         /// <inheritdoc />
         public override Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity)

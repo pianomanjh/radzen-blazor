@@ -588,17 +588,16 @@ namespace Radzen.FastGrid
         /// what is on the page meanwhile is a blank cell - so the column would settle at its header
         /// width and the names would arrive into a column too narrow for them, permanently.
         /// </remarks>
-        internal virtual bool LookupOutstanding => false;
+        internal virtual bool NamesOutstanding => false;
 
         /// <summary>
-        /// Fetches the names this column asked for, after the render. True when they arrived and the
-        /// grid should redraw.
+        /// Fetches the names this column asked for, after the render. True when the grid should redraw.
         /// </summary>
-        internal virtual Task<bool> FetchLookupAsync(IFastGridQueryExecutor? executor,
+        internal virtual Task<bool> FetchNamesAsync(IFastGridQueryExecutor? executor,
             CancellationToken cancellationToken) => Task.FromResult(false);
 
         /// <summary>Drops resolved names, so the next render resolves them again.</summary>
-        internal virtual void DropLookup()
+        internal virtual void DropNames()
         {
         }
 
@@ -670,7 +669,7 @@ namespace Radzen.FastGrid
         /// Whether the column's current filter would actually narrow anything. An empty value filters
         /// nothing, except for the operators that are about emptiness themselves.
         /// </summary>
-        public bool HasFilter =>
+        public virtual bool HasFilter =>
             CanFilter &&
             (HasFilterValue
                 || CurrentFilterOperator is Radzen.FilterOperator.IsNull or Radzen.FilterOperator.IsNotNull

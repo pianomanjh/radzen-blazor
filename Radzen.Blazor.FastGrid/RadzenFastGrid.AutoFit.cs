@@ -153,7 +153,7 @@ namespace Radzen.FastGrid
             // This gives back, temporarily, the property that disarming on the attempt exists to
             // provide - so every way out of that fetch has to hand it over again, or a lookup that
             // never resolves is a fit that never fires.
-            if (LookupsOutstanding)
+            if (NamesOutstanding)
             {
                 return;
             }

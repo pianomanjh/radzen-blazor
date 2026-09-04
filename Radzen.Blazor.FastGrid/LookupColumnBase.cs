@@ -2,6 +2,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
@@ -110,7 +112,7 @@ namespace Radzen.FastGrid
 
             // What another column on this grid already resolved this same lookup to. Record equality
             // does the matching, so sharing is an optimization nobody has to name or think about.
-            if (Grid?.SharedLookup(Lookup) is IReadOnlyDictionary<TKey, string> shared)
+            if (Grid?.SharedNames(Lookup) is IReadOnlyDictionary<TKey, string> shared)
             {
                 SetNames(shared);
 
@@ -123,12 +125,12 @@ namespace Radzen.FastGrid
             {
                 outstanding = true;
 
-                Grid?.QueueLookup(this);
+                Grid?.QueueNames(this);
 
                 return;
             }
 
-            Grid?.ShareLookup(Lookup, Names);
+            Grid?.ShareNames(Lookup, Names);
         }
 
         void SetNames(IReadOnlyDictionary<TKey, string>? resolved)
@@ -140,10 +142,10 @@ namespace Radzen.FastGrid
         }
 
         /// <inheritdoc />
-        internal override bool LookupOutstanding => outstanding;
+        internal override bool NamesOutstanding => outstanding;
 
         /// <inheritdoc />
-        internal override async Task<bool> FetchLookupAsync(IFastGridQueryExecutor? executor,
+        internal override async Task<bool> FetchNamesAsync(IFastGridQueryExecutor? executor,
             CancellationToken cancellationToken)
         {
             var asked = generation;
@@ -187,21 +189,22 @@ namespace Radzen.FastGrid
             }
             finally
             {
-                // Cleared on every way out - the answer, the throw, and the drop that overtook it - or
-                // the auto-fit this defers would be owed forever and never run. A drop that overtook it
-                // leaves the names still missing, and the column asks again itself: waiting for a
-                // parameter set would be waiting on something a retained component may never get.
+                // Settled on every way out - the answer, the throw, and the drop that overtook it - or
+                // the auto-fit this defers would be owed forever and never run. An answer, empty
+                // included, is what clears it. A drop that overtook this one leaves the names still
+                // missing, so it stays set and the column asks again itself: waiting for a parameter
+                // set would be waiting on something a retained component may never get.
                 outstanding = Names is null;
 
                 if (outstanding)
                 {
-                    Grid?.QueueLookup(this);
+                    Grid?.QueueNames(this);
                 }
             }
         }
 
         /// <inheritdoc />
-        internal override void DropLookup()
+        internal override void DropNames()
         {
             SetNames(null);
 
@@ -301,12 +304,25 @@ namespace Radzen.FastGrid
             }
         }
 
+        /// <summary>
+        /// The entry a filter value stands for, or null when none does. A null value means the entry
+        /// for the rows carrying no id, which a column whose key cannot be null does not offer - read
+        /// as <c>default(TKey)</c> it would tick the entry whose id happens to be zero.
+        /// </summary>
         static object? EntryFor(List<object> offered, object? value)
         {
             for (var i = 0; i < offered.Count; i++)
             {
-                if (offered[i] is FastGridLookupEntry<TKey> entry
-                    && EqualityComparer<TKey>.Default.Equals(entry.Key!, value is TKey typed ? typed : default!))
+                if (offered[i] is not FastGridLookupEntry<TKey> entry)
+                {
+                    continue;
+                }
+
+                var matched = value is null
+                    ? entry.Key is null
+                    : value is TKey typed && EqualityComparer<TKey>.Default.Equals(entry.Key!, typed);
+
+                if (matched)
                 {
                     return offered[i];
                 }
@@ -358,7 +374,10 @@ namespace Radzen.FastGrid
 
             for (var i = 0; i < offered.Count && keys.Count < MatchLimit; i++)
             {
-                if (offered[i] is FastGridLookupEntry<TKey> entry
+                // Names only. The blank entry - the one with no id - is labelled by the grid rather
+                // than by the lookup, and it is a different word in every culture Radzen ships, so
+                // matching it would make what a typed filter finds depend on the language of the page.
+                if (offered[i] is FastGridLookupEntry<TKey> { Key: not null } entry
                     && entry.Text.Contains(text, StringComparison.OrdinalIgnoreCase))
                 {
                     keys.Add(entry.Key);
@@ -373,6 +392,26 @@ namespace Radzen.FastGrid
         /// other providers less; this leaves room under all of them for the rest of the query.
         /// </summary>
         public const int MatchLimit = 500;
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Text that matched no name is a filter that matches no row, not an absent filter. An empty
+        /// selection means the two opposite things on the two controls this column offers: no box
+        /// ticked is no filter, and a typed name nothing answers to is an empty answer. What tells them
+        /// apart is that only the box records what was typed.
+        /// </remarks>
+        public override bool HasFilter =>
+            CanFilter && (AppliedFilterText is { Length: > 0 } || base.HasFilter);
+
+        /// <summary>
+        /// <c>List&lt;TKey?&gt;.Contains</c>, captured from a typed lambda rather than looked up by
+        /// name: an ldtoken the compiler emits, closed over <typeparamref name="TKey" /> where it is
+        /// still a type parameter, so there is nothing for a trimmer to root and nothing closed at run
+        /// time. Both derived columns compose their <c>In</c> out of it.
+        /// </summary>
+        private protected static readonly MethodInfo ListContains =
+            ((MethodCallExpression)((Expression<Func<List<TKey?>, TKey?, bool>>)(
+                (keys, id) => keys.Contains(id))).Body).Method;
 
         /// <summary>The ids a check-box list or a typed filter settled on, as this column's own type.</summary>
         private protected List<TKey?> SelectedKeys()

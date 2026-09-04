@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Reflection;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 
@@ -88,12 +87,6 @@ namespace Radzen.FastGrid
                 CurrentFilterOperator == Radzen.FilterOperator.NotIn ? Expression.Not(contains) : contains,
                 selector.Parameters);
         }
-
-        // Captured from a typed lambda rather than looked up by name, so there is nothing for a trimmer
-        // to root and nothing closed at run time.
-        static readonly MethodInfo ListContains =
-            ((MethodCallExpression)((Expression<Func<List<TKey?>, TKey?, bool>>)(
-                (keys, id) => keys.Contains(id))).Body).Method;
 
         /// <inheritdoc />
         public override Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity)
