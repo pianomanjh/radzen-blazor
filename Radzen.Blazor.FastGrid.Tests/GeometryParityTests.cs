@@ -552,6 +552,16 @@ namespace Radzen.Blazor.FastGrid.Tests
                 fit.Animation?.Asked?.ToString() ?? "(not measured)",
                 fit.ToString());
 
+            // The same promise on a grid that is fitting its container. That path writes the columns
+            // from its own arithmetic, so arming the transition after it had already written left
+            // nothing for the final write to change and the columns moved in one frame.
+            ParityAssert.True(fit.Animation is { AskedWhileFitting.Started: > 0 },
+                "a fit somebody asked for animates while the grid is fitting its container too",
+                "the mode changes who computes the widths, not whether the user asked - and an animation that only works in one of two modes is one nobody can rely on",
+                "a transition on each column being sized",
+                fit.Animation?.AskedWhileFitting?.ToString() ?? "(not measured)",
+                fit.ToString());
+
             ParityAssert.True(fit.Animation is { Asked.StillAnimating: false },
                 "the transition comes off the table once the fit has settled",
                 "the class is on the table, so anything else that writes a column width inherits it - a resize drag most of all, which would then lag 200ms behind the pointer",
@@ -577,6 +587,31 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void Fitting_one_column_does_not_stop_a_grid_fitting_its_container()
+        {
+            // Double-clicking a resize handle fits that column alone. It cannot rebuild a distribution
+            // - one column is not a layout - but saying so with the same value that means "this grid
+            // has left Fit" took the whole container fit down with it: floor cleared, observer
+            // released, and the grid stopped following its container until a whole-grid fit ran again.
+            var single = Fitted().SingleColumnOnAFitGrid;
+            var seen = single?.ToString() ?? "(not measured)";
+
+            ParityAssert.True(single is { StillFollowing: true },
+                "a grid fitting its container goes on doing so after one column is fitted",
+                "a user who asked one column to size itself has not asked the grid to stop managing the rest, and nothing in the gesture says otherwise",
+                "the columns still answering a change of container width",
+                seen,
+                seen);
+
+            ParityAssert.True(single is not null && !string.IsNullOrEmpty(single.FloorAfter),
+                "and keeps the floor that stops it shrinking past its own content",
+                "the min-width is the sum of every hard floor - dropping it lets the table shrink past widths the fit had already decided were the minimum",
+                "the floor still set",
+                seen,
+                seen);
+        }
+
+        [Fact]
         public void A_bound_written_in_something_other_than_pixels_is_still_a_bound()
         {
             // Under Scroll these go to the browser inside `clamp()` and it resolves them, so any unit
@@ -590,6 +625,13 @@ namespace Radzen.Blazor.FastGrid.Tests
                 "a MinWidth in rem floors a column as surely as one in px",
                 "the two modes take the same parameter, and one of them silently ignoring every unit but pixels is the failure the spec names by name",
                 "every column at or above 5rem",
+                seen,
+                seen);
+
+            ParityAssert.True(units is { PercentHonoured: true },
+                "a MinWidth in per cent floors a column too",
+                "a percentage resolves against a containing block rather than a font, so a probe measured somewhere without a width of its own answers zero - and a bound that measures as nothing is dropped as unusable",
+                "every column at or above 20% of the width the fit was taken at",
                 seen,
                 seen);
         }

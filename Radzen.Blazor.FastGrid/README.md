@@ -715,7 +715,7 @@ not fit, down to what its **values** need - so a column headed far wider than it
 difference up rather than making the whole grid scroll for it. Below that it scrolls.
 
 Set `MinWidth` where a column needs more room than either - a date or a currency figure usually does.
-It means the same thing in both modes and takes any unit: `MinWidth="10rem"` and `MaxWidth="30%"` are
+It means the same thing in both modes and takes any unit - `MinWidth="10rem"` and `MaxWidth="30%"` are
 honoured under `Fit` as they are under `Scroll`, and a `MinWidth` wider than the content widens the
 column rather than merely flooring it.
 

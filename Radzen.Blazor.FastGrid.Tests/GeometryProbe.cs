@@ -324,7 +324,26 @@ namespace Radzen.Blazor.FastGrid.Tests
         [JsonPropertyName("asked")] public AutoFitMotion Asked { get; set; }
         [JsonPropertyName("automatic")] public AutoFitMotion Automatic { get; set; }
 
-        public override string ToString() => $"asked: {Asked}; automatic: {Automatic}";
+        /// <summary>The same asked-for fit on a grid that is fitting its container.</summary>
+        [JsonPropertyName("askedWhileFitting")] public AutoFitMotion AskedWhileFitting { get; set; }
+
+        public override string ToString() =>
+            $"asked: {Asked}; automatic: {Automatic}; asked while fitting: {AskedWhileFitting}";
+    }
+
+    /// <summary>What fitting a single column did to a grid that was fitting its container.</summary>
+    public sealed class AutoFitSingleColumn
+    {
+        [JsonPropertyName("floorBefore")] public string FloorBefore { get; set; }
+        [JsonPropertyName("floorAfter")] public string FloorAfter { get; set; }
+
+        /// <summary>Whether the grid still answered a change in its container afterwards.</summary>
+        [JsonPropertyName("stillFollowing")] public bool StillFollowing { get; set; }
+
+        public override string ToString() =>
+            $"floor {(string.IsNullOrEmpty(FloorBefore) ? "none" : FloorBefore)} -> " +
+            $"{(string.IsNullOrEmpty(FloorAfter) ? "NONE" : FloorAfter)}, " +
+            (StillFollowing ? "still following" : "STOPPED FOLLOWING");
     }
 
     /// <summary>A fit whose MinWidth was given in rem rather than px.</summary>
@@ -336,10 +355,14 @@ namespace Radzen.Blazor.FastGrid.Tests
         [JsonPropertyName("widths")] public double[] Widths { get; set; }
         [JsonPropertyName("narrowest")] public double Narrowest { get; set; }
         [JsonPropertyName("honoured")] public bool Honoured { get; set; }
+        [JsonPropertyName("percent")] public double[] Percent { get; set; }
+        [JsonPropertyName("percentHonoured")] public bool PercentHonoured { get; set; }
 
         public override string ToString() =>
             $"5rem is {Rem5:0}px; [{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
-            $", narrowest {Narrowest:0}px" + (Honoured ? string.Empty : ", BOUND IGNORED");
+            $", narrowest {Narrowest:0}px" + (Honoured ? string.Empty : ", REM IGNORED") +
+            $"; 20%% -> [{(Percent is null ? "-" : string.Join("/", Percent.Select(w => w.ToString("0"))))}]" +
+            (PercentHonoured ? string.Empty : ", PERCENT IGNORED");
     }
 
     /// <summary>What a fit already watching a container did once that table stopped being one.</summary>
@@ -377,6 +400,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>Whether fitting one column left the grid still fitting its container.</summary>
+        [JsonPropertyName("singleColumnOnAFitGrid")] public AutoFitSingleColumn SingleColumnOnAFitGrid { get; set; }
+
         /// <summary>Whether a bound written in something other than pixels was honoured.</summary>
         [JsonPropertyName("units")] public AutoFitUnits Units { get; set; }
 
