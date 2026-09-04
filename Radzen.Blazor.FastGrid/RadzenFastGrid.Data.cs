@@ -969,9 +969,9 @@ namespace Radzen.FastGrid
             await SyncPagersAsync();
 
             // After the pagers, so the rows the listener will resolve are the ones now on screen.
-            await AttachClicksAsync();
+            await SyncClicksAsync();
 
-            await AttachNavigationAsync();
+            await SyncNavigationAsync();
 
             // Before the focus is put back, because a fit changes how wide every column is and
             // bringing the cursor's cell into view is measured against exactly that.

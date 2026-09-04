@@ -20,16 +20,15 @@ namespace Radzen.FastGrid
     public partial class RadzenFastGrid<TItem>
     {
         DotNetObjectReference<RadzenFastGrid<TItem>>? clickReference;
-        bool clickAttachAttempted;
+
+        Attachment<(bool Click, bool DoubleClick, bool ContextMenu)>? clicks;
 
         /// <summary>
-        /// Which events the attached listener was told to answer, so the grid can tell when what it
-        /// needs has changed. A callback switched on after the first render - row detail is the ordinary
-        /// case, since a Template can arrive with the data - would otherwise leave the listener answering
-        /// the wrong set, and the feature simply would not work.
+        /// Which events the listener has to answer. It is the payload the attachment is kept in step
+        /// with: a callback switched on after the first render - row detail is the ordinary case, since
+        /// a Template can arrive with the data - would otherwise leave the listener answering the wrong
+        /// set, and the feature simply would not work.
         /// </summary>
-        (bool Click, bool DoubleClick, bool ContextMenu) attachedKinds;
-
         (bool Click, bool DoubleClick, bool ContextMenu) CurrentKinds => (
             RowClick.HasDelegate || CellClick.HasDelegate || SelectsOnRowClick || ExpandColumn,
             RowDoubleClick.HasDelegate,
@@ -68,6 +67,13 @@ namespace Radzen.FastGrid
 
         /// <summary>The id of the tbody the listener is attached to.</summary>
         internal string BodyElementId => ElementId + "-body";
+
+        /// <summary>
+        /// Whether the tbody carries that id. Latched by the render rather than read off the current
+        /// switches, because letting a listener go means naming the element it is on, and the switches
+        /// change one render before the release does.
+        /// </summary>
+        bool bodyIsNamed;
 
         // Small-integer strings, so writing one into the markup costs a frame and not an allocation.
         // Shared: the rows' data-r, aria-rowindex, aria-colindex and aria-colcount all draw on it -
@@ -130,115 +136,61 @@ namespace Radzen.FastGrid
             return cache[index];
         }
 
-        /// <summary>Whether a listener is currently bound to this grid's tbody.</summary>
-        bool clicksAttached;
-
-        async Task AttachClicksAsync()
-        {
-            if (!ClicksAreLive || AllowVirtualization || JSRuntime is null)
-            {
-                // A listener bound by an earlier render is still on the tbody while the markup has gone
-                // back to per-cell handlers - switching virtualization on does exactly that - and every
-                // click would then be raised twice. Only attach() detaches, and it is not going to run.
-                await DetachClicksAsync().ConfigureAwait(false);
-
-                return;
-            }
-
-            var kinds = CurrentKinds;
-
-            // Attach once, and again whenever what the grid listens for changes. The second case is not
-            // hypothetical: switching row detail on after the first render leaves a toggle the listener
-            // was never told about, and the button does nothing.
-            if (clickAttachAttempted && (clicksNeedHandlers || kinds == attachedKinds))
-            {
-                return;
-            }
-
-            clickAttachAttempted = true;
-
-            try
-            {
-                var script = await ModuleAsync();
-
-                if (script is null)
+        /// <summary>
+        /// The listener's lifetime. Built on first use rather than in a field initializer, so a grid
+        /// that never delegates a click - no callbacks, no selection, no row detail - never builds one.
+        /// </summary>
+        Attachment<(bool Click, bool DoubleClick, bool ContextMenu)> ClickListener =>
+            clicks ??= new Attachment<(bool Click, bool DoubleClick, bool ContextMenu)>(
+                async kinds =>
                 {
-                    return;
-                }
-
-                clickReference ??= DotNetObjectReference.Create(this);
-
-                var attached = await script.InvokeAsync<bool>("attach", BodyElementId, clickReference,
-                    new
+                    if (await ModuleAsync().ConfigureAwait(false) is not { } script)
                     {
-                        click = kinds.Click,
-                        doubleClick = kinds.DoubleClick,
-                        contextMenu = kinds.ContextMenu,
-                    });
+                        return false;
+                    }
 
-                // Recorded once it is true of the DOM rather than before the call. Recorded first, a
-                // re-attach that failed left the grid believing it listens for something it does not.
-                attachedKinds = kinds;
-                clicksAttached = attached;
+                    clickReference ??= DotNetObjectReference.Create(this);
 
-                if (attached)
+                    return await script.InvokeAsync<bool>("attach", BodyElementId, clickReference,
+                        new
+                        {
+                            click = kinds.Click,
+                            doubleClick = kinds.DoubleClick,
+                            contextMenu = kinds.ContextMenu,
+                        });
+                },
+                async () =>
                 {
-                    return;
-                }
+                    if (await ModuleAsync().ConfigureAwait(false) is { } script)
+                    {
+                        await script.InvokeVoidAsync("detach", BodyElementId);
+                    }
+                });
 
-                FallBackToHandlers();
-            }
-#pragma warning disable CA1031
-            catch (Exception)
-#pragma warning restore CA1031
-            {
-                // Deliberately every exception. This path is an optimization with a correct fallback, so
-                // there is no failure it can report that is worth more than the grid continuing to work
-                // - and the ways it fails are not enumerable from here. A browser that could not fetch
-                // the module raises JSException; a circuit torn down mid-import raises one of several
-                // cancellation or disposal types; and bUnit's strict mode, which is the default and so
-                // is what every consumer's test suite runs, raises a bUnit type this package cannot
-                // name. Narrowing this once let that last one escape OnAfterRenderAsync and fail every
-                // test that rendered a grid with a click handler.
-                //
-                // Detached first: a re-attach that threw leaves whatever the last successful one bound,
-                // and the handlers below would then be the second answer to every click.
-                await DetachClicksAsync().ConfigureAwait(false);
-
-                FallBackToHandlers();
-            }
-        }
-
-        /// <summary>Removes the listener, for a grid that has stopped delegating its clicks.</summary>
-        async Task DetachClicksAsync()
+        /// <summary>
+        /// Brings the listener into line with what the grid currently needs, and puts the per-cell
+        /// handlers back if the browser would not take it.
+        /// </summary>
+        async Task SyncClicksAsync()
         {
-            if (!clicksAttached)
+            // A listener bound by an earlier render is still on the tbody while the markup has gone
+            // back to per-cell handlers - switching virtualization on does exactly that - and every
+            // click would then be raised twice. Asking for it to be let go is how that is undone, and
+            // BodyElementId outliving the delegation is what makes the asking work.
+            var wanted = ClicksAreLive && !AllowVirtualization && JSRuntime is not null;
+
+            // Once the handlers are in the render tree, leave them there. Whatever declined the listener
+            // will decline it again, and the alternative is a re-render on every parameter change to
+            // swap between two shapes that both work.
+            if (wanted && clicksNeedHandlers)
             {
                 return;
             }
 
-            clicksAttached = false;
-
-            // The attempt is forgotten with the listener. Left set, a grid that starts delegating
-            // again - virtualization switched back off - reaches the guard above with unchanged kinds
-            // and returns, having neither a listener nor the per-cell handlers the delegating markup
-            // leaves out. Every click, double click and toggle would be dead until something else
-            // changed what the grid listens for.
-            clickAttachAttempted = false;
-            attachedKinds = default;
-
-            try
+            if (await ClickListener.SyncAsync(wanted, CurrentKinds).ConfigureAwait(false)
+                is AttachResult.Declined or AttachResult.Failed)
             {
-                if (await ModuleAsync().ConfigureAwait(false) is { } script)
-                {
-                    await script.InvokeVoidAsync("detach", BodyElementId);
-                }
-            }
-#pragma warning disable CA1031
-            catch (Exception)
-#pragma warning restore CA1031
-            {
-                // As above: a circuit that cannot be reached has no listener left to remove.
+                FallBackToHandlers();
             }
         }
 
