@@ -100,6 +100,26 @@ async function main() {
         // racing them, so the numbers are stable run to run.
         await page.evaluate(() => document.fonts.ready.then(() => true));
 
+        // What the fit costs, counted rather than timed. Chromium keeps its own tally of how many
+        // layouts and style recalculations the renderer has run, and a forced synchronous layout - a
+        // read taken while a write has left the tree dirty - increments it. That is the whole of what
+        // the fit's batching exists to avoid, so it is the thing to count: a batched pass forces one
+        // layout however many cells it walks, and a single write moved inside the read loop forces one
+        // per cell. The page cannot see these counters, so they are read here and handed in.
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send('Performance.enable');
+
+        await page.exposeFunction('__parityCosts', async () => {
+            const { metrics } = await cdp.send('Performance.getMetrics');
+            const value = name => metrics.find(metric => metric.name === name)?.value ?? 0;
+
+            return {
+                layouts: value('LayoutCount'),
+                styleRecalcs: value('RecalcStyleCount'),
+                layoutSeconds: value('LayoutDuration'),
+            };
+        });
+
         // The auto-fit pane is the one place this script runs the component's own code rather than only
         // looking at what that code produced. A fit is a measurement written in JavaScript, so the only
         // honest check of it is to run the shipped function against the real theme and read what the
@@ -159,6 +179,9 @@ async function main() {
             // The pass itself, timed. This is the only channel that can answer what auto-fit costs:
             // gridbench is bUnit, so the reflow, the scrollWidth walk and the getComputedStyle calls
             // all read as zero there.
+            // Read outside the timer, so the round trip to the browser's own counters is not charged
+            // to the pass it is measuring.
+            const costsBefore = await window.__parityCosts();
             const started = performance.now();
 
             const written = await window.__fastgrid.autoFit({
@@ -168,6 +191,11 @@ async function main() {
             });
 
             const elapsed = round(performance.now() - started);
+            const costsAfter = await window.__parityCosts();
+            const layouts = costsAfter.layouts - costsBefore.layouts;
+            const styleRecalcs = costsAfter.styleRecalcs - costsBefore.styleRecalcs;
+            const layoutMs = round((costsAfter.layoutSeconds - costsBefore.layoutSeconds) * 1000);
+
 
             // Captured here, not at return time. Everything below deliberately disturbs the columns -
             // stacking the table, squeezing the pane, re-running the fit to watch it animate - and the
@@ -630,6 +658,9 @@ async function main() {
                 after,
                 written,
                 elapsed,
+                layouts,
+                styleRecalcs,
+                layoutMs,
                 rowsMeasured: table.querySelectorAll(':scope > tbody > tr.rz-data-row').length,
                 paneWidth: round(pane.getBoundingClientRect().width)
             };
