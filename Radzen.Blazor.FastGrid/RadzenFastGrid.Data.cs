@@ -403,6 +403,14 @@ namespace Radzen.FastGrid
             // change them, so only this drops them.
             lookups.Clear();
 
+            // And the same for a lookup column's names, which nothing else invalidates: a category
+            // added while the grid was open would otherwise never appear, and a cache with no
+            // invalidation at all is what produces that report.
+            for (var i = 0; i < columns.Count; i++)
+            {
+                columns[i].DropLookup();
+            }
+
             return RefreshAsync();
         }
 
@@ -687,6 +695,75 @@ namespace Radzen.FastGrid
             return materialized;
         }
 
+        readonly List<ColumnBase<TItem>> pendingLookupColumns = new();
+
+        /// <summary>
+        /// Records that a lookup column has no names yet. Called from the render; the fetch happens
+        /// after it, for the same reason the check-box list's scan does.
+        /// </summary>
+        internal void QueueLookup(ColumnBase<TItem> column)
+        {
+            if (!pendingLookupColumns.Contains(column))
+            {
+                pendingLookupColumns.Add(column);
+            }
+        }
+
+        /// <summary>Whether any column on the page is still waiting for the names it draws.</summary>
+        internal bool LookupsOutstanding
+        {
+            get
+            {
+                for (var i = 0; i < visibleColumns.Count; i++)
+                {
+                    if (visibleColumns[i].LookupOutstanding)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Fetches the names of any lookup column that asked for them during the render.
+        /// </summary>
+        /// <remarks>
+        /// One column's failure is its own: the rows are drawn and correct, and only the names are
+        /// missing, so taking the grid down for them - or leaving the columns beside it blank - is the
+        /// worse answer. A column that fails resolves to no names at all, which draws its ids, which is
+        /// the same thing a missing entry draws and for the same reason: two silent blanks would be one
+        /// fault nobody can see.
+        /// </remarks>
+        async Task LoadColumnLookupsAsync()
+        {
+            if (pendingLookupColumns.Count == 0)
+            {
+                return;
+            }
+
+            var wanted = pendingLookupColumns.ToList();
+
+            pendingLookupColumns.Clear();
+
+            var token = loadCts?.Token ?? CancellationToken.None;
+            var loaded = false;
+
+            foreach (var column in wanted)
+            {
+                if (await column.FetchLookupAsync(Executor, token))
+                {
+                    loaded = true;
+                }
+            }
+
+            if (loaded && !disposed)
+            {
+                StateHasChanged();
+            }
+        }
+
         readonly HashSet<ColumnBase<TItem>> pendingLookups = new();
 
         /// <summary>
@@ -888,6 +965,8 @@ namespace Radzen.FastGrid
             // Last, and after every path above that can reload: this is the render the cursor has to be
             // put back on, and a reload started here would move the rows out from under it.
             await ReassertFocusAsync();
+
+            await LoadColumnLookupsAsync();
 
             await LoadLookupsAsync();
         }

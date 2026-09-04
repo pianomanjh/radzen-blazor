@@ -45,12 +45,29 @@ namespace Radzen.FastGrid.Tests
         /// cope with: the first value being comparable says nothing about the rest.
         /// </summary>
         public object Mixed { get; set; }
+
+        /// <summary>An id with no name beside it, which is what a lookup column resolves.</summary>
+        public int CategoryId { get; set; }
+
+        /// <summary>The same, nullable, so a row with no region has one to render and to filter by.</summary>
+        public int? RegionId { get; set; }
+
+        /// <summary>A collection of ids, which is the cardinality LookupCollectionColumn exists for.</summary>
+        public List<int> BrandIds { get; set; }
     }
 
     public enum Grade
     {
         Junior,
         Senior,
+    }
+
+    /// <summary>The far side of a lookup: rows holding a key and the name it stands for.</summary>
+    public class Category
+    {
+        public int Id { get; set; }
+
+        public string Name { get; set; }
     }
 
     public class Company
@@ -361,6 +378,112 @@ namespace Radzen.FastGrid.Tests
             builder.CloseComponent();
         };
 
+        public static Action<RenderTreeBuilder, int> Lookup<TItem, TKey>(
+            Expression<Func<TItem, TKey>> property,
+            FastGridLookup<TKey> lookup,
+            string title = null,
+            FastGridSort<TItem> sortBy = null,
+            FilterMode? filterMode = null,
+            bool filterable = true,
+            object filterValue = null,
+            System.Collections.IEnumerable filterLookupData = null,
+            string width = null,
+            bool autoFit = true) => (builder, seq) =>
+        {
+            builder.OpenComponent<LookupColumn<TItem, TKey>>(seq);
+            builder.AddAttribute(seq + 1, nameof(LookupColumn<TItem, TKey>.Property), property);
+            builder.AddAttribute(seq + 2, nameof(LookupColumn<TItem, TKey>.Lookup), lookup);
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 3, nameof(LookupColumn<TItem, TKey>.Title), title);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 4, nameof(LookupColumn<TItem, TKey>.SortBy), sortBy);
+            }
+
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(LookupColumn<TItem, TKey>.FilterMode), filterMode);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 6, nameof(LookupColumn<TItem, TKey>.Filterable), false);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 7, nameof(LookupColumn<TItem, TKey>.FilterValue), filterValue);
+            }
+
+            if (filterLookupData is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(LookupColumn<TItem, TKey>.FilterLookupData), filterLookupData);
+            }
+
+            if (width is not null)
+            {
+                builder.AddAttribute(seq + 9, nameof(LookupColumn<TItem, TKey>.Width), width);
+            }
+
+            if (!autoFit)
+            {
+                builder.AddAttribute(seq + 10, nameof(LookupColumn<TItem, TKey>.AutoFit), false);
+            }
+
+            builder.CloseComponent();
+        };
+
+        public static Action<RenderTreeBuilder, int> LookupCollection<TItem, TKey>(
+            Expression<Func<TItem, IEnumerable<TKey>>> property,
+            FastGridLookup<TKey> lookup,
+            string title = null,
+            string separator = null,
+            FastGridSort<TItem> sortBy = null,
+            FilterMode? filterMode = null,
+            bool filterable = true,
+            object filterValue = null) => (builder, seq) =>
+        {
+            builder.OpenComponent<LookupCollectionColumn<TItem, TKey>>(seq);
+            builder.AddAttribute(seq + 1, nameof(LookupCollectionColumn<TItem, TKey>.Property), property);
+            builder.AddAttribute(seq + 2, nameof(LookupCollectionColumn<TItem, TKey>.Lookup), lookup);
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 3, nameof(LookupCollectionColumn<TItem, TKey>.Title), title);
+            }
+
+            if (separator is not null)
+            {
+                builder.AddAttribute(seq + 4, nameof(LookupCollectionColumn<TItem, TKey>.Separator), separator);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(LookupCollectionColumn<TItem, TKey>.SortBy), sortBy);
+            }
+
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 6, nameof(LookupCollectionColumn<TItem, TKey>.FilterMode), filterMode);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 7, nameof(LookupCollectionColumn<TItem, TKey>.Filterable), false);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(LookupCollectionColumn<TItem, TKey>.FilterValue), filterValue);
+            }
+
+            builder.CloseComponent();
+        };
+
         public static Action<RenderTreeBuilder, int> Template<TItem>(
             RenderFragment<TItem> template,
             string title = null,
@@ -399,6 +522,36 @@ namespace Radzen.FastGrid.Tests
         };
     }
 
+    /// <summary>The far sides of the lookups the sample rows' ids point at.</summary>
+    public static class Lookups
+    {
+        /// <summary>Categories, one of which no row uses, so a stable filter list is visible as one.</summary>
+        public static Dictionary<int, string> Categories() => new()
+        {
+            [10] = "Toys",
+            [20] = "Games",
+            [30] = "Puzzles",
+            [40] = "Books",
+        };
+
+        public static Dictionary<int, string> Brands() => new()
+        {
+            [100] = "Acme",
+            [200] = "Globex",
+            [300] = "Umbrella",
+        };
+
+        public static Dictionary<int?, string> Regions() => new()
+        {
+            [1] = "North",
+            [2] = "South",
+        };
+
+        public static List<Category> CategoryRows() => Categories()
+            .Select(entry => new Category { Id = entry.Key, Name = entry.Value })
+            .ToList();
+    }
+
     public static class People
     {
         /// <summary>
@@ -412,6 +565,7 @@ namespace Radzen.FastGrid.Tests
                 Grade = Grade.Senior, Reference = Reference(3), Id = 3, First = "Carol", Mixed = 3, Last = "Adams", Salary = 4000m, Bonus = 250.5m,
                 Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" },
                 Regions = new() { "North", "West" }, Codes = new[] { 10, 20 },
+                CategoryId = 10, RegionId = 1, BrandIds = new() { 100, 200 },
                 Accounts = new() { new() { Name = "Acme", Region = "North", Size = 10 }, new() { Name = "Globex", Region = "West", Size = 20 } }
             },
             new Person
@@ -419,6 +573,7 @@ namespace Radzen.FastGrid.Tests
                 Grade = Grade.Junior, Reference = Reference(1), Id = 1, First = "Alice", Mixed = "n/a", Last = "Draper", Salary = 2000m, Bonus = null,
                 Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" },
                 Regions = new() { "South" }, Codes = new[] { 20 },
+                CategoryId = 20, RegionId = null, BrandIds = new() { 200 },
                 Accounts = new() { new() { Name = "Initech", Region = "South", Size = 30 } }
             },
             new Person
@@ -426,6 +581,7 @@ namespace Radzen.FastGrid.Tests
                 Grade = Grade.Junior, Reference = Reference(4), Id = 4, First = "Dave", Mixed = 4, Last = "Bell", Salary = 1000m, Bonus = 10m,
                 Hired = new DateTime(2018, 11, 30), Customer = new Company { Name = "Xray" },
                 Regions = new(), Codes = System.Array.Empty<int>(),
+                CategoryId = 10, RegionId = 2, BrandIds = new(),
                 Accounts = new()
             },
             new Person
@@ -433,6 +589,7 @@ namespace Radzen.FastGrid.Tests
                 Grade = Grade.Senior, Reference = Reference(2), Id = 2, First = "Bob", Mixed = 2, Last = "Cook", Salary = 3000m, Bonus = 99.25m,
                 Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" },
                 Regions = new() { "North", "East", "South" }, Codes = new[] { 30 },
+                CategoryId = 30, RegionId = 1, BrandIds = new() { 300, 100 },
                 Accounts = new() { new() { Name = "Acme", Region = "East", Size = 10 }, new() { Name = "Umbrella", Region = "North", Size = 40 } }
             },
         };
