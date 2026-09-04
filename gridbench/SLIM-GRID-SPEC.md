@@ -2203,6 +2203,14 @@ Two smaller things, recorded because they will look arbitrary otherwise:
   in the lambda is the whole answer, and that is what the README documents. Inside the library the
   suppression is stated once, beside the one factory that builds the map.
 
+**Two seams on `ColumnBase` replaced a branch the grid could not have written.** A review read the
+filter plumbing moving onto the column as a refactor riding along, and it is worth saying why it is
+not optional: the grid had to ask a column what typed text means and what a ticked list means, and it
+cannot ask a lookup column anything specific because it is not generic over `TKey`. A virtual needs a
+default, and a default lives on the base - so the two methods moved rather than being added beside the
+ones they replace. What came with it is that the selection seam absorbed the `MakeGenericType` the grid
+was doing to type that list, so a lookup column reaches nothing by name on that path either.
+
 The collection case turned up a fault of the kind §10b keeps finding, before it shipped rather than
 after: **the null guard has to sit inside the negation**. Written outside it, `NotIn` keeps a row
 carrying no ids at all when composed as an expression and drops it when composed as a delegate - which
