@@ -74,31 +74,61 @@ namespace Radzen.FastGrid
         internal override async Task<bool> FetchLookupAsync(IFastGridQueryExecutor? executor,
             CancellationToken cancellationToken)
         {
-            // Cleared on every way out - the answer, the throw, and the return that was superseded -
-            // or the auto-fit this defers would be owed forever and never run.
+            // What the names were asked for. Reload moves it on, and an answer that arrives against an
+            // older one is about a lookup nobody is showing any more.
+            var asked = generation;
+
+            // Cleared on every way out - the answer, the throw, and the drop that overtook it - or the
+            // auto-fit this defers would be owed forever and never run.
             try
             {
                 var fetched = await Lookup.FetchAsync(executor, cancellationToken);
 
-                // The names may have been dropped while the query ran, and writing them now would put
-                // a previous source's back with nothing to clear them until the next Reload.
-                if (cancellationToken.IsCancellationRequested)
+                if (generation == asked)
                 {
-                    return false;
+                    // A lookup that answers with nothing has no names, which is not the same as not
+                    // having been asked: left null it would go back on the queue for an answer it has
+                    // already given, and each redraw would ask again.
+                    names = fetched ?? Unresolved;
                 }
 
-                names = fetched;
-
+                // Redraw either way: when the answer stands, to show it, and when it does not, because
+                // the render is what puts this column back on the queue.
                 return true;
             }
             catch (OperationCanceledException)
             {
-                // Superseded by a newer load, which will ask again on its own render.
+                // The grid is going away. Nothing will render, and nothing needs to.
                 return false;
+            }
+#pragma warning disable CA1031
+            catch (Exception)
+#pragma warning restore CA1031
+            {
+                // Every provider throws its own, and a narrow catch here would be a catch for one of
+                // them. The rows are drawn and correct and only the names are missing, so the grid
+                // stays up - and resolves to no names, which draws every id. That is what a missing
+                // entry already draws, and for the same reason: a column of blanks would be a fault
+                // nobody can see. Reload is what tries again.
+                if (generation == asked)
+                {
+                    names = Unresolved;
+                }
+
+                return true;
             }
             finally
             {
-                outstanding = false;
+                // Cleared on every way out - the answer, the throw, and the drop that overtook it - or
+                // the auto-fit this defers would be owed forever and never run. A drop that overtook
+                // it leaves the names still missing, and the column asks again itself: waiting for a
+                // parameter set would be waiting on something a retained component may never get.
+                outstanding = names is null;
+
+                if (outstanding)
+                {
+                    Grid?.QueueLookup(this);
+                }
             }
         }
 
@@ -106,7 +136,18 @@ namespace Radzen.FastGrid
         internal override void DropLookup()
         {
             names = null;
+            generation++;
+
+            // Straight away rather than on the next parameter set, for the same reason: a Map is
+            // resolved again here and now, and a Query goes back on the queue. A fetch still in
+            // flight is left alone - its answer is against the old generation and is discarded, and
+            // it re-queues itself on the way out.
+            EnsureLookup();
         }
+
+        int generation;
+
+        static readonly IReadOnlyDictionary<TKey, string> Unresolved = LookupNames.None<TKey>();
 
         /// <inheritdoc />
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)

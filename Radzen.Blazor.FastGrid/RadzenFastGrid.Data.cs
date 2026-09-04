@@ -726,16 +726,23 @@ namespace Radzen.FastGrid
             }
         }
 
+        CancellationTokenSource? lifetime;
+
+        /// <summary>
+        /// Cancelled when the grid goes away, and by nothing else.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not the page load's token, which the check-box list's scan uses. That scan is
+        /// about the data and is stale the moment a newer load replaces it; a lookup column's names
+        /// are not - only <see cref="Reload" /> drops them - so a sort landing mid-fetch would throw
+        /// away an answer that was still correct, and the render that superseded it has already
+        /// happened, so nothing would ask again.
+        /// </remarks>
+        CancellationToken Lifetime => (lifetime ??= new CancellationTokenSource()).Token;
+
         /// <summary>
         /// Fetches the names of any lookup column that asked for them during the render.
         /// </summary>
-        /// <remarks>
-        /// One column's failure is its own: the rows are drawn and correct, and only the names are
-        /// missing, so taking the grid down for them - or leaving the columns beside it blank - is the
-        /// worse answer. A column that fails resolves to no names at all, which draws its ids, which is
-        /// the same thing a missing entry draws and for the same reason: two silent blanks would be one
-        /// fault nobody can see.
-        /// </remarks>
         async Task LoadColumnLookupsAsync()
         {
             if (pendingLookupColumns.Count == 0)
@@ -747,18 +754,20 @@ namespace Radzen.FastGrid
 
             pendingLookupColumns.Clear();
 
-            var token = loadCts?.Token ?? CancellationToken.None;
-            var loaded = false;
+            var redraw = false;
 
             foreach (var column in wanted)
             {
-                if (await column.FetchLookupAsync(Executor, token))
+                if (await column.FetchLookupAsync(Executor, Lifetime))
                 {
-                    loaded = true;
+                    redraw = true;
                 }
             }
 
-            if (loaded && !disposed)
+            // A column whose answer was dropped while it ran comes back with no names and asks to be
+            // redrawn anyway: the render is what puts it back on the queue, and without one it would
+            // wait for a fetch nobody is going to start.
+            if (redraw && !disposed)
             {
                 StateHasChanged();
             }
@@ -2097,6 +2106,10 @@ namespace Radzen.FastGrid
             loadCts?.Cancel();
             loadCts?.Dispose();
             loadCts = null;
+
+            lifetime?.Cancel();
+            lifetime?.Dispose();
+            lifetime = null;
 
             // The references handed to the browser. The listener itself is released in DisposeAsync,
             // which is the path Blazor takes for a component that offers one.

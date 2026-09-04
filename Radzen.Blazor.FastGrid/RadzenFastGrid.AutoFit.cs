@@ -144,6 +144,20 @@ namespace Radzen.FastGrid
                 return;
             }
 
+            // A lookup column whose names have not arrived is drawing blank cells, and the script waits
+            // for rows rather than for anything in them - so a fit taken now settles that column at its
+            // header width and the names arrive into a column too narrow for them, permanently, because
+            // nothing invalidates a fit. Deferred rather than re-armed when they land: a column that
+            // jumps after the grid looked settled is what deciding Once stays instant already refused.
+            //
+            // This gives back, temporarily, the property that disarming on the attempt exists to
+            // provide - so every way out of that fetch has to hand it over again, or a lookup that
+            // never resolves is a fit that never fires.
+            if (LookupsOutstanding)
+            {
+                return;
+            }
+
             // Disarmed by the attempt rather than by the answer. A fit that comes back with nothing -
             // no script, no table, or a view that moved while it was in flight - has still had its one
             // go, and re-arming on the answer means a grid whose script never loads asks again on every

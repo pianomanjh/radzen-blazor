@@ -89,7 +89,7 @@ namespace Radzen.FastGrid.Tests
         public void AQueryLookupLeavesTheCellsBlankUntilItArrives()
         {
             using var ctx = new TestContext();
-            var executor = new GatedExecutor();
+            var executor = new GatedLookupExecutor();
 
             ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
@@ -112,7 +112,7 @@ namespace Radzen.FastGrid.Tests
             // The reason Query takes expressions and Items takes delegates: only this one composes into
             // the provider's own query, and a lookup that materialized entities would not need them.
             using var ctx = new TestContext();
-            var executor = new GatedExecutor();
+            var executor = new GatedLookupExecutor();
 
             ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
@@ -125,36 +125,95 @@ namespace Radzen.FastGrid.Tests
             Assert.NotEqual(typeof(Category), executor.LastElementType);
         }
 
-        /// <summary>Holds each materialization open until the test releases it.</summary>
-        sealed class GatedExecutor : IFastGridQueryExecutor
+        [Fact]
+        public void ALookupThatFailsToFetchDrawsItsIdsRatherThanTakingTheGridDown()
         {
-            public Gate Pending { get; private set; }
+            // The rows are drawn and correct and only the names are missing, so the grid stays up - and
+            // resolves to no names at all, which draws every id. That is the same thing a missing entry
+            // draws, for the same reason: a blank column would be a fault nobody can see.
+            using var ctx = new TestContext();
+            var executor = new GatedLookupExecutor { Fails = new InvalidOperationException("no") };
 
-            public Type LastElementType { get; private set; }
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
-            public bool IsSupported<T>(IQueryable<T> queryable) => true;
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(x => x.CategoryId,
+                FastGridLookup.Query(Lookups.CategoryRows().AsQueryable(), c => c.Id, c => c.Name))));
 
-            public Task<int> CountAsync<T>(IQueryable<T> queryable, CancellationToken token = default)
-                => Task.FromResult(queryable.Count());
+            executor.Pending.Release();
 
-            public Task<List<T>> ToListAsync<T>(IQueryable<T> queryable, CancellationToken token = default)
-            {
-                var gate = new Gate();
+            cut.WaitForAssertion(() => Assert.Equal(new[] { "10", "20", "10", "30" }, Cells(cut, 0)));
+        }
 
-                Pending = gate;
-                LastElementType = queryable.ElementType;
+        [Fact]
+        public void FetchingNamesCostsOneExtraRenderAndNoMore()
+        {
+            // A column that comes back with no names asks to be redrawn so that it can queue itself
+            // again, which is a render feeding a fetch feeding a render. The bound is that an answer -
+            // including an empty one - is an answer: this grid's own history has a render loop that
+            // ran 880,000 times in two and a half seconds and logged nothing.
+            using var ctx = new TestContext();
 
-                return gate.Source.Task.ContinueWith(_ => queryable.ToList(), CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            }
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(new GatedLookupExecutor { Holds = 0 });
 
-            public sealed class Gate
-            {
-                public TaskCompletionSource<bool> Source { get; } =
-                    new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(x => x.CategoryId,
+                FastGridLookup.Query(Lookups.CategoryRows().AsQueryable(), c => c.Id, c => c.Name))));
 
-                public void Release() => Source.TrySetResult(true);
-            }
+            Assert.Equal(new[] { "Toys", "Games", "Toys", "Puzzles" }, Cells(cut, 0));
+            Assert.InRange(cut.RenderCount, 1, 2);
+        }
+
+        [Fact]
+        public void ASortLandingWhileTheNamesAreInFlightDoesNotThrowThemAway()
+        {
+            // The fetch is cancelled by the grid going away and by nothing else. A page load being
+            // superseded says nothing about a lookup - only Reload drops those - and the render that
+            // superseded it has already happened, so an answer thrown away here is one nobody asks for
+            // again.
+            using var ctx = new TestContext();
+            var executor = new GatedLookupExecutor { PassThrough = typeof(Person) };
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Lookup<Person, int>(x => x.CategoryId,
+                    FastGridLookup.Query(Lookups.CategoryRows().AsQueryable(), c => c.Id, c => c.Name))),
+                extra: p => p.Add(g => g.AllowSorting, true),
+                data: People.Sample().AsQueryable());
+
+            cut.FindAll("thead th")[0].QuerySelector("div").Click();
+
+            executor.Pending.Release();
+
+            cut.WaitForAssertion(() => Assert.DoesNotContain("", Cells(cut, 1)));
+
+            Assert.Equal(1, executor.Materializations);
+        }
+
+        [Fact]
+        public void NamesDroppedWhileTheyWereInFlightAreFetchedAgain()
+        {
+            // Reload is the one thing that drops them, and an answer that arrives afterwards is about
+            // a lookup nobody is showing. Written back, it would also stop the column ever asking
+            // again - so the count is what this turns on, not the cells.
+            using var ctx = new TestContext();
+            var executor = new GatedLookupExecutor { Holds = 1 };
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(x => x.CategoryId,
+                FastGridLookup.Query(Lookups.CategoryRows().AsQueryable(), c => c.Id, c => c.Name))));
+
+            var stale = executor.Pending;
+
+            cut.InvokeAsync(() => cut.Instance.Reload()).Wait();
+
+            stale.Release();
+
+            cut.WaitForAssertion(() =>
+                Assert.Equal(new[] { "Toys", "Games", "Toys", "Puzzles" }, Cells(cut, 0)));
+
+            Assert.Equal(2, executor.Materializations);
         }
     }
 }

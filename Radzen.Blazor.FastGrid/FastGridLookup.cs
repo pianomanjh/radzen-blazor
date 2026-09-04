@@ -67,13 +67,7 @@ namespace Radzen.FastGrid
         {
             internal override IReadOnlyDictionary<TKey, string> Resolve()
             {
-                // Dictionary asks for a key that cannot be null and a lookup column's key can be an
-                // int?, which is what makes "no category" a value a row can hold. No null key is ever
-                // stored - the loop below drops them and the column never asks about one - so the
-                // constraint is stricter here than the use.
-#pragma warning disable CS8714
-                var names = new Dictionary<TKey, string>();
-#pragma warning restore CS8714
+                var names = LookupNames.Of<TKey>(0);
 
                 foreach (var entity in Source)
                 {
@@ -117,9 +111,7 @@ namespace Radzen.FastGrid
                     ? await executor.ToListAsync(projected, token).ConfigureAwait(false)
                     : projected.ToList();
 
-#pragma warning disable CS8714
-                var names = new Dictionary<TKey, string>(rows.Count);
-#pragma warning restore CS8714
+                var names = LookupNames.Of<TKey>(rows.Count);
 
                 foreach (var row in rows)
                 {
@@ -147,6 +139,30 @@ namespace Radzen.FastGrid
                     parameter);
             }
         }
+    }
+
+    /// <summary>The dictionary a lookup's names live in.</summary>
+    /// <remarks>
+    /// <see cref="Dictionary{TKey, TValue}" /> asks for a key that cannot be null, and a lookup
+    /// column's key can be an <c>int?</c> - which is what makes "no category" a value a row can hold.
+    /// No null key is ever stored: every writer drops them and no reader asks about one. So the
+    /// constraint is stricter than the use, and saying that once here keeps the suppression off the
+    /// three places that would otherwise each carry it.
+    /// </remarks>
+    internal static class LookupNames
+    {
+#pragma warning disable CS8714
+        internal static Dictionary<TKey, string> Of<TKey>(int capacity) => new(capacity);
+
+        /// <summary>No names at all - what a lookup that could not be fetched resolves to.</summary>
+        internal static IReadOnlyDictionary<TKey, string> None<TKey>() => Empty<TKey>.Instance;
+
+        static class Empty<TKey>
+        {
+            internal static readonly IReadOnlyDictionary<TKey, string> Instance =
+                new Dictionary<TKey, string>();
+        }
+#pragma warning restore CS8714
     }
 
     /// <summary>One row of a lookup query: an id and the name it stands for.</summary>
