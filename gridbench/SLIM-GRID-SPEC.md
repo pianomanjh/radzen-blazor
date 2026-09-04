@@ -2412,7 +2412,7 @@ with a load-bearing reason should be recorded here beside it.
 | 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
 | 3 | The browser seam has no interface | Strong |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
-| 5 | Four methods of one shape, four meanings of `null` | Strong |
+| 5 | Four methods of one shape, four meanings of `null` | Strong - **designed, §17** |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
 | 7 | A column's identity is a concept with no name | Worth exploring |
 | 8 | The drop-down forwards twelve parameters, then hands out the grid | Worth exploring |
@@ -2508,7 +2508,8 @@ lines, neither matching the condition its own detach used. What stayed with the 
 fallback, because it is click-specific and ends in a re-render: `SyncAsync` reports, the caller
 decides.
 
-**5. Four methods of one shape, four meanings of `null`.** `ApplyFilter` returning null means "fall
+**5. Four methods of one shape, four meanings of `null`.** **§17 has the design, argued before it is
+built, and three findings that only a probe would have turned up.** `ApplyFilter` returning null means "fall
 back for *me*" (`Data.cs:1195`); `ApplyFilterInMemory` means "abandon the route for *everyone*"
 (`:1940`); `ApplySort` means "skip me, keep the rest" (`:2002`); `ApplySortInMemory` means "abandon for
 everyone, but only if `i == 0` and nothing is ordered yet" (`:1977`). Four contracts, one return shape,
@@ -2864,3 +2865,167 @@ is the same noise floor piece 2 recorded. **No time ratio is quoted**, per §9.
 discards a `List<FilterDescriptor>` per call. Inside a render it reads the pass and allocates nothing,
 which covers every per-row path; the calls that pay are the asynchronous ones. Candidate 5 is where the
 four `Apply*` return shapes get decided, and this is the same question from the other end.
+
+---
+
+## 17. Four methods of one shape, four meanings of `null` - the design
+
+§15's fifth candidate, argued before it is built, and in the order §16 set: the four `Apply*` methods
+are precisely what `Composition` consumes, so changing what they mean is now a change to one caller
+rather than to scattered ones.
+
+Everything below about the present code was checked by running it, not by reading it. Three of the
+findings are recorded here because a probe answered them, and two of those three are the reason this
+section is worth building at all.
+
+### What it is for
+
+Six methods on `ColumnBase<TItem>` return something-or-`null`: `ApplySort` and `ApplyThenBy`,
+`ApplyFilter`, `ApplyFilterInMemory`, `ApplySortInMemory` and `ApplyThenByInMemory`. `null` means "I
+cannot" in all six, which is one contract. What is *done* about it is four different things, and all
+four live in the caller:
+
+| The column declines | What `Composition` does | Where |
+| --- | --- | --- |
+| `ApplyFilter` | this column alone falls back to the reflective builder | `Composition.cs:149` |
+| `ApplyFilterInMemory` | the whole composition goes back to the expression route | `:290` |
+| `ApplySort` | the column is left out of the ordering, the rest of it stands | `:196` |
+| `ApplySortInMemory` | back to the expression route, but only for the first column | `:320` |
+
+**Those are not four contracts. They are two rules, one per route, and the routes are what differ.**
+The expression route can absorb a decline, because it has somewhere to put it - reflection for a
+filter, omission for a sort. The delegate route has nowhere, so it hands the whole composition over -
+while handing over is still possible. For filtering it always is: the predicate has been built and not
+yet applied. For ordering it stops being possible the moment an ordering has begun, because a
+half-applied `IOrderedEnumerable` cannot be given to the other route - so the first column can send it
+back and a later one is left out, which is what the expression route would have done anyway.
+
+Said once each, that is two sentences. Said four times inline and nowhere at the declarations, it is
+what the next three findings are.
+
+### Three findings, each from a probe rather than a reading
+
+**1. One of the four doc comments states the wrong one of the four contracts.** `ColumnBase.cs:948-951`
+says of `ApplySortInMemory`:
+
+> Orders an in-memory sequence by this column, or returns null when it cannot order - **the same
+> contract as `ApplySort`, which the grid already skips over.**
+
+It is not the same contract. A first column that declines does not get skipped over; it sends the whole
+composition to the other route. And the first column is not an edge case - it is the only column a
+single-column sort has, which is most grids. An author of a new column type reading that sentence would
+be wrong about the common case. §10b already has the rule this breaks: *a rule stated in a comment is
+only as good as the comment*, and this is the second instance of it on this branch.
+
+Behaviourally this is currently harmless, and the reason is worth recording because it is what hid it:
+**no column can decline in memory and succeed on the queryable route.** Every column guards both of its
+sort methods on the same thing - `PropertyColumn` on `!CanSort || (SortBy ?? Property) is not { }`,
+and `TemplateColumn`, `CollectionColumn` and `LookupColumnBase` on `SortBy?.` - so abandoning the route
+produces the same rows more slowly rather than different rows. The four contracts differ; the columns
+that would make the difference visible do not exist. That is the definition of a fault waiting for its
+first caller.
+
+**2. The guard has a conjunct that can never discriminate.** `Composition.cs:326` reads:
+
+```csharp
+if (next is null && ordered is null && i == 0)
+```
+
+`ordered` is assigned only at the foot of the loop and starts null, and this very `return` is what stops
+the loop reaching `i == 1` with `ordered` still null. So `ordered is null` and `i == 0` are the same
+condition, and the guard reads as three tests where there are two. **Both halves were removed
+separately and the suite passed both times.** It is the shape piece 2 found twice - a rule that looks
+like it is enforced twice and is enforced once - and it is a shape a reader cannot tell apart from the
+queryable loop twenty lines above, where `ordered is null` is *not* redundant, because there a declining
+first column leaves `ordered` null and the loop carries on.
+
+**3. Two of the four contracts have no test at all.** Removing the decline rule entirely - so that any
+declining column, not only the first, abandons the delegate route - **passes the whole suite**. So does
+making a declining column abandon the *expression* route's sort rather than being skipped. Two of the
+four rows in the table above are unpinned. The other two are well covered: the in-memory filter decline
+fails five tests when it is broken, and §16's own work pinned the route flag.
+
+### What changes
+
+**The rule moves to where it is enforced, once per route, and the declarations point at it.** Four
+restatements of a policy the declarations do not control is how one of them came to be wrong; the fix is
+not to correct the wrong one and leave four, it is to have one. `ColumnBase`'s six methods say what
+`null` means *for the column* - "I cannot" - which is the part a column author owns and the part that is
+identical in all six. What is done about it is `Composition`'s, is stated there per route, and is
+referred to rather than reproduced.
+
+**The dead conjunct goes**, with the invariant that made it dead stated in its place - including that
+the invariant is created by the `return` beside it, so that removing the return does not silently make
+the remaining test wrong.
+
+**The two unpinned contracts get a test each**, mutation-checked, and the mutation must compile:
+
+- a delegate-route sort where a *later* column declines, which must be left out while the composition
+  stays on the delegate route;
+- an expression-route sort where a column declines, which must be left out while the other columns'
+  ordering stands.
+
+Both need a column that can sort on one route and not the other, and no such column exists today - see
+finding 1. So both tests need a column type that does not ship, which is the same shape as
+`Attachment`'s fake adapter in candidate 4: a test double that exists to make a rule reachable. That is
+the piece's one real risk and it is in "where this could still be wrong" below.
+
+**No column changes.** Not one of the six overrides gains or loses a line.
+
+### Deliberately not proposed
+
+- **A stated capability - `ComposesFilter`, `ComposesSort` - replacing the nullable returns.** It reads
+  well and does not survive contact. The guards are null tests the compiler needs for flow analysis
+  (`(FilterBy ?? Property) is not { } selector`), so a capability property makes the method re-assert
+  what it just asked with a `!`, trading a check for a suppression. It also turns one call into a
+  two-call protocol, which is §15 candidate 6's complaint about `ColumnBase`'s internal half arriving in
+  its public half. And it does not fix the fault: the four caller policies would remain, keyed on a bool
+  instead of on a null.
+- **One sort loop over both routes.** The two loops are the same loop apart from their types and their
+  decline rule, but `IOrderedQueryable<T>` and `IOrderedEnumerable<T>` share no interface, so unifying
+  them means a route abstraction - a constrained generic struct, to stay inside §3 - threaded through
+  the hottest composition path to save about twelve lines. It would make the code harder to read to
+  remove a duplication that is two loops long. Refused, with that as the reason.
+- **Changing what any of the four rules *is*.** Each was argued where it stands and §15 and §16 record
+  the arguments; this section moves where they are said and pins two of them, and changes none of them.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **The two new tests must fail without the rule they name**, checked by a mutation that compiles.
+   Both rules are currently unpinned, so the mutation is simply the code as it stands today with the
+   rule deleted - which is the strongest form of this check available, because the "before" is known to
+   pass.
+2. **The doc fault gets no test**, and that should be said plainly rather than worked around: a comment
+   cannot be pinned by a test. What can be pinned is the behaviour it misdescribes, which is what the
+   two new tests do. The comment is fixed by having one of it rather than four.
+3. **A `gridbench --job short` control before and after**, on `*Bare`, `*SingleSort`, `*Filtering`. The
+   claim is allocation-neutral, and it should be trivially so: no column changes and no allocation is
+   added or removed. Control at `afb05de33` is bare 154.55 KB, one sort 175.79 KB, a filter row
+   158.78 KB. No time ratio from that job length, per §9.
+4. **Expect the existing test files to be untouched.** This piece adds tests and moves no boundary, so
+   unlike §16 there is no file that has to move. If one does, something bigger happened than was
+   designed.
+
+### Where this could still be wrong
+
+- **The test double may be the whole piece.** Both new tests need a column that sorts on one route and
+  not the other, and none exists. If writing that double turns out to be most of the work, the honest
+  reading is that these two rules are unpinnable *because nothing can reach them* - and the better
+  answer is the one piece 2 reached: a rule no caller can reach with a different answer should stop
+  being a branch. That is a stop-and-re-decide point. It would turn this piece into a deletion, and a
+  deletion with a measurement behind it is a better outcome than two tests over a double.
+- **"State it once" is still a comment.** The fix for a comment that was wrong is a comment that is
+  right, in one place instead of four. That is better and it is not structural, and §10b's rule says
+  comments rot. The structural version is the capability property, which the section above refuses on
+  three grounds - so this piece is deliberately choosing the weaker mechanism, and should say so rather
+  than claim more.
+- **Finding 1 may deserve to be resolved the other way.** If `ApplySortInMemory`'s doc is what the
+  design *should* say - a declining column is skipped, on both routes - then the code is what is wrong,
+  and the delegate route should skip a declining first column rather than hand the composition over.
+  That is a smaller diff than this section proposes and a real behaviour change: it would keep a grid on
+  the fast route where it currently leaves it. It is not proposed here because handing over is what
+  §16's `AColumnThatCannotComposeSendsItBackToTheOtherRoute` pins and what the in-memory filter rule
+  does two loops earlier, so changing it would split one route's behaviour in two. But it is the
+  argument this section is least sure of.
