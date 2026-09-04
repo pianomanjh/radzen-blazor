@@ -276,7 +276,70 @@ namespace Radzen.FastGrid
             boundValue = Value;
             lastData = Data;
 
+            // A data change on its own does not need re-answering once the value has an answer. The
+            // scan below is linear and its comparison goes through ValueOf, which is typed to object -
+            // so every element it walks boxes, and a source written in markup is a new instance on
+            // every parent render. Measured on a closed drop-down nobody has opened: 1,368 B a render
+            // over fifty rows and 24,171 B over a thousand, which is 24 bytes an element and seven
+            // times the whole of the rest of the render.
+            //
+            // The reason Adopt runs on a data change at all is untouched: a value bound before its
+            // rows arrive is not explained, so this is false and the scan runs on every render until
+            // the row turns up. What stops is explaining an answer already held.
+            //
+            // What that costs is a source swapped for a genuinely different one going on showing the
+            // row it found in the old one - until the value changes, which is the only thing that
+            // dislodges it. This component has no Reload of its own, so there is no second way out and
+            // saying there is would be worse than saying nothing. That is the lifetime rule §10 chose
+            // for the check-box lists and §14 for its lookups, and it is chosen here for the same
+            // reason: the alternative is a scan per render to notice a change that almost never
+            // happens.
+            //
+            // Not gated on the value having stayed the same, which is what this first said: a value
+            // that changed cannot be explained by the row that explained the old one, so the term
+            // could not be reached with a different answer. The question that decides it is the same
+            // one either way - is what is held the answer to this value.
+            if (StillExplains(Value))
+            {
+                return;
+            }
+
             Adopt(Value);
+        }
+
+        /// <summary>
+        /// Whether what is already held answers <paramref name="value" /> - so that a source arriving
+        /// as a new instance over the same rows does not have to be walked to find out.
+        /// </summary>
+        /// <remarks>
+        /// One <c>ValueOf</c> call, against a scan that makes one per element.
+        /// <para>
+        /// <b>Only for a single value.</b> A multiple selection is re-found every time, which is the
+        /// slower answer and the only safe one: the grid draws its ticks by asking a
+        /// <c>HashSet&lt;TItem&gt;</c> whether it holds the row it is drawing, and that set compares by
+        /// reference - so rows kept from a source that has since re-materialised are ticks that do not
+        /// appear. That is true today whether or not anything is skipped, and §19 records it as its own
+        /// fault to fix; what skipping would add is that the state never recovers, because a selection
+        /// that has gone wrong still explains the value and so is never re-found.
+        /// </para>
+        /// <para>
+        /// <c>Data</c> going away is not "already explained" either. <c>Adopt</c> clears what is held
+        /// before returning for a null source, and this must not skip that.
+        /// </para>
+        /// </remarks>
+        bool StillExplains(TValue? value)
+        {
+            // `Multiple` is redundant today and is kept deliberately: `selected` is only ever set by
+            // the scalar branch, so the test below already answers false for a multiple selection. But
+            // that is an accident of which field happens to be written, and the exclusion is a
+            // correctness decision - see the remark above. Leaving it to be inferred is how it would
+            // quietly stop being true.
+            if (Multiple || value is null || Data is null)
+            {
+                return false;
+            }
+
+            return selected is not null && Equals(ValueOf(selected), value);
         }
 
         /// <summary>

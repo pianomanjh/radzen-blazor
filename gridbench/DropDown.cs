@@ -103,8 +103,12 @@ public class DropDownBench
     {
         ["Data"] = people,
         ["ChildContent"] = FastColumns,
-        ["TextProperty"] = "Name",
-        ["ValueProperty"] = "Id",
+        // Expressions, not strings. These said "Name" and "Id", which is what RadzenDropDownDataGrid
+        // takes and is not what this one does - so every Fast_ row in this table has reported NA since
+        // TextProperty became an expression, and the face-off has been measuring one component against
+        // a cast exception. A benchmark that throws still prints a row.
+        ["TextProperty"] = (Expression<Func<Person, object?>>)(p => p.Name),
+        ["ValueProperty"] = (Expression<Func<Person, object?>>)(p => p.Id),
         ["AllowSorting"] = true,
         ["AllowFiltering"] = false,
         ["AllowPaging"] = true,
