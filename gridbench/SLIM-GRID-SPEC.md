@@ -2410,7 +2410,7 @@ with a load-bearing reason should be recorded here beside it.
 | --- | --- | --- |
 | 1 | Compose the view behind one interface | ~~Strong~~ **built**, §16 |
 | 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
-| 3 | The browser seam has no interface | Strong |
+| 3 | The browser seam has no interface | Strong - **designed, §18**, and three of this row's claims corrected there |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
 | 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
@@ -2472,8 +2472,9 @@ The alternative - threading `ref pass` through `RenderGrid`, `RenderPager`, `Ren
 and `RenderRow` - is a large diff through the hottest code on the branch, to buy something this already
 has.
 
-**3. The browser seam has no interface.** Sixteen named entry points carrying about forty-five
-positional arguments — and that is the narrow half. The wide half is undeclared: element ids, `data-r`,
+**3. The browser seam has no interface.** **§18 has the design, and disagrees with this entry: the
+coverage count below is wrong and the reason given for it is wrong.** Sixteen named entry points
+carrying about forty-five positional arguments — and that is the narrow half. The wide half is undeclared: element ids, `data-r`,
 `data-toggle`, `rz-data-row`, `rz-cell-data`, and `:scope > table > tbody > tr`, none of which appears
 in a signature, so a rename breaks the script and no C# test notices. `autoFit` takes ten positional
 arguments; `FastGridAutoFitTests.cs:39-49` has already written the type that wants to exist, as
@@ -3119,3 +3120,175 @@ nothing held now have a test each. Those survive a comment rotting. §15 rated t
 the four-meanings observation; what it was worth was one wrong statement, one dead branch and three
 unpinned rules - a smaller thing than the ranking implied, and worth saying in case the ranking is used
 to choose what comes next.
+
+---
+
+## 18. The browser seam has no interface - the design
+
+§15's third candidate, argued before it is built. Four things in this section were checked by running
+them, and three of those four contradict what §15 said about this candidate. That is the most useful
+part of the section and it is first.
+
+### What §15 got wrong about it, and how that changes the piece
+
+**§15: "Seven of the nine exports have zero coverage of any kind."** Four do, not seven. Counting test
+references per export: `autoFit` 41, `attach` 5, `detach` 2, `attachNavigation` 2, `detachNavigation` 2,
+and then `measureNavigation`, `focusCell`, `blurCell` and `releaseFit` at zero. Two of the covered five
+are covered thoroughly.
+
+**§15: "because the doubles answer `null` the RTL arrow flip at `Keyboard.cs:313, 318` is never executed
+by any test."** The first half is a fact about the tests that exist and the second half is a diagnosis,
+and the diagnosis is wrong. The flip is reachable now, with machinery already in the suite:
+`FastGridAttachmentTests.cs:38` already stages a `NavigationMetrics` through bUnit's module double.
+Staging one with `Rtl = true` and pressing an arrow was run while writing this section, and the flip
+executes - ArrowRight moves the cursor from cell 0 to cell 1 under LTR and leaves it at 0 under RTL,
+ArrowLeft does the reverse. `NavigationMetrics` is `internal` precisely so a test can do that, and its
+own doc comment says so. **Nobody wrote the test.**
+
+**Which means the strongest plank under this candidate does not hold.** "There is no way to reach this
+in process" was the argument for an abstraction with a fake behind it, the way `Attachment` has one.
+There is a way, it is the one bUnit already provides, and it reaches every export. What is missing is
+tests, and tests do not need a new seam to be written.
+
+**What §15 got right, and it is the half no test can reach:** sixteen named entry points carrying
+forty-two positional arguments - nine module exports with twenty-six, two stock-`Radzen` calls with
+seven, five `[JSInvokable]` callbacks with nine - and an undeclared half that appears in no signature at
+all.
+
+### What is actually wrong, then
+
+**1. Ten positional arguments, decoded by position in three places.** `autoFit(tableId, indices,
+minWidths, maxWidths, toggleOffset, bare, wait, animate, overflow, required)`. C# writes them in order,
+the script reads them in order, and `FastGridAutoFitTests.cs:39-49` reads them in order a third time -
+it has already written the type that wants to exist, as `record Ask(string Table, int[] Indices,
+string[] Min, string[] Max, int ToggleOffset, int Bare, bool Wait, bool Animate, string Overflow,
+bool[] Required)` plus a hand-rolled decoder over `invocation.Arguments`. **A test that decodes by
+position has the caller's bug in it**, so this is the one hazard here that writing more tests cannot
+touch: swapping `minWidths` and `maxWidths` would be silent in all three.
+
+**2. The export names are strings on three sides.** The C# call site, the JS export, and the test's
+`module.Setup("autoFit")`. Renaming two of the three leaves the third passing, because a module double
+in loose mode answers a name it was not set up for with a default.
+
+**3. The undeclared half.** `tr[data-r]`, `[data-toggle]`, `tr.rz-data-row`, `.rz-cell-data`,
+`.rz-state-focused`, `.rz-column-title`, `:scope > table > tbody > tr`, `:scope > colgroup`,
+`:scope > thead > tr`. The script selects on them; `RadzenFastGrid.cs` emits them as string literals
+several hundred lines away; nothing in either file mentions the other. This is the real content of "the
+seam has no interface", and it is what a rename breaks silently.
+
+**4. The ordering constraints are prose, in a different file from the calls they govern.**
+`Data.cs:952-992`: pagers before clicks, fit before focus, fit after the names, focus last, and in
+teardown detach before release before dispose. §13 already recorded that swapping two of them would
+measure blank cells and every test would still pass.
+
+### The surface
+
+A concrete façade, not an abstraction - the distinction matters and the probes above are why.
+
+```csharp
+internal readonly struct Browser
+{
+    internal Browser(IJSObjectReference module);
+
+    internal ValueTask<bool> AttachAsync(string bodyId, DotNetObjectReference<...> handler, string[] kinds);
+    internal ValueTask DetachAsync(string bodyId);
+    internal ValueTask<NavigationMetrics?> AttachNavigationAsync(string viewId, string[] keys);
+    internal ValueTask DetachNavigationAsync(string viewId);
+    internal ValueTask<NavigationMetrics?> MeasureNavigationAsync(string viewId);
+    internal ValueTask FocusCellAsync(string viewId, int row, int cell, int pinnedStart, int pinnedEnd, int itemSize);
+    internal ValueTask BlurCellAsync(string viewId);
+    internal ValueTask ReleaseFitAsync(string tableId);
+    internal ValueTask<string?[]?> AutoFitAsync(AutoFitAsk ask);
+}
+```
+
+A `readonly struct` over the one module reference, so §3 is satisfied by construction: it is a wrapper
+around a field, not an object per call, and every one of these is called once per attach, per fit or per
+focus rather than per row.
+
+**No interface and no fake.** An `IBrowser` with a test double would buy reach the suite already has,
+and would put a second implementation of nine methods in the test project to be kept in step with the
+script by hand - which is the thing that goes wrong here, done twice. `Attachment` earns its two
+delegates because it has rules of its own to test; this has none. It forwards.
+
+**`autoFit`'s ten arguments become one value**, on both sides:
+
+```csharp
+internal readonly record struct AutoFitAsk(string Table, int[] Indices, string[] Min, string[] Max,
+    int ToggleOffset, int Bare, bool Wait, bool Animate, string Overflow, bool[] Required);
+```
+
+which is `FastGridAutoFitTests`' own `Ask`, promoted out of the test and into the thing it describes.
+The script destructures one object instead of counting ten places, and the test reads
+`invocation.Arguments[0]` as the record instead of casting ten elements - so its decoder is deleted
+rather than rewritten. That is the whole of hazard 1, and the only change to the JS file's own logic.
+
+**The DOM contract gets named once and pinned.** A `BrowserContract` of the eight selectors and
+attribute names the script depends on, and a test asserting that a rendered grid carries each of them -
+so a rename in `RadzenFastGrid.cs` fails a C# test instead of a browser. The script cannot import the
+constants, so the two sides still agree by hand; what changes is that there is one list to check against
+rather than a search through a thousand lines of JS.
+
+### What changes and what does not
+
+**Changes:** `Browser` and `AutoFitAsk` are new. Six call sites stop naming exports and counting
+arguments. `fastgrid.js` changes in one function, `autoFit`, and only its parameter list.
+`FastGridAutoFitTests`' `Ask` and `Read` are deleted in favour of the real type. Four tests are added
+for the four uncovered exports, and one for the RTL flip that §15 said was unreachable.
+
+**Does not change:** the two stock-`Radzen` calls, which are upstream's interface and not this
+package's to name. Every `[JSInvokable]` callback. `Attachment`, which keeps its two delegates - it is
+constructed with them by its callers, and those callers can hand it `Browser`'s methods without
+`Attachment` knowing what a module is. No behaviour anywhere.
+
+### Deliberately not proposed
+
+- **An `IBrowser` and a fake.** Refused on the evidence above: the reach it would buy exists, and the
+  cost is a second nine-method implementation that has to track a script it cannot see. If a rule ever
+  lands *in* this seam rather than passing through it, that is when it earns an abstraction, and
+  `Attachment` is the precedent for how.
+- **Structuring the ordering constraints.** They are real and §13's finding stands, but every way of
+  making them structural - a named sequence, a phase enum, a builder - moves five awaits in
+  `OnAfterRenderAsync` behind something that has to be read to know what it does, which is worse than
+  five awaits with a comment. What would actually pin them is a test that observes the order, and that
+  needs the browser rather than a double. Left for candidate 3's second half or for §13 to answer.
+- **Generating the DOM contract from one source.** The two sides are C# and JavaScript, and there is no
+  build step here to generate either from the other. Adding one to a package whose whole claim is that
+  it is a plain library is a bigger price than the hazard.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **The four uncovered exports get a test each**, and the RTL flip gets the one §15 said could not be
+   written. Each mutation-checked, and the mutation must compile.
+2. **The DOM contract test must fail when the markup drifts**, which is checked by renaming each emitted
+   literal in turn - eight mutations, and any that passes means the contract lists something the test
+   does not really assert.
+3. **`autoFit` must still be asked for exactly what it was asked for before.** Its 41 existing test
+   references are the regression suite for the argument change, and they should need only the decoder
+   swapped, not their expectations.
+4. **`GeometryParityTests` is the one layer that runs the real script** - 38 tests against Chromium - so
+   the `autoFit` parameter change is not a C#-only claim.
+5. **A `gridbench --job short` control before and after.** Allocation-neutral: one struct over a
+   reference, one record per fit, nothing per row. Control at `7e05bc199` is bare 154.81 KB, one sort
+   175.79 KB, a filter row 158.78 KB - and note that bare has read 154.55 and 154.81 on runs of
+   identical code, so the floor on that row is at least 0.26 KB and a difference smaller than that is
+   not a difference.
+
+### Where this could still be wrong
+
+- **This may be two pieces.** The façade and `AutoFitAsk` are one argument; the DOM contract is another,
+  and it is the one with an unknown size - eight names is the count today, and finding the ninth is what
+  the work consists of. If the contract list grows past what one test can honestly assert, it should
+  land on its own and the façade should go first.
+- **The façade may read as ceremony.** Nine methods that forward to nine `InvokeAsync` calls is a thin
+  thing, and thin wrappers are how a codebase acquires a layer nobody wants. The defence is that it
+  makes each export name and each argument list exist exactly once, which is the hazard - but if the
+  built version does not visibly reduce what a call site has to know, it is a rename and should be
+  called one.
+- **The correction to §15 may be too kind to the tests.** Reach and coverage are not the same thing:
+  every export being reachable through a string-keyed double is a weaker property than a typed seam,
+  because the double answers a misspelled name with a default rather than an error. `JSRuntimeMode.Loose`
+  is what makes the suite tolerant, and it is set in almost every test file here. The piece does not
+  change that, and probably something should.
