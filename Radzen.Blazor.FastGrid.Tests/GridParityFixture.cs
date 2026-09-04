@@ -51,7 +51,17 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// <summary>Rows and columns the recorded geometry baseline was taken at.</summary>
         public const int RowCount = 8;
 
-        /// <summary>Rows in the auto-fit pane, which is the size §13's gate for the pass is written at.</summary>
+        /// <summary>
+        /// Rows in the auto-fit pane, which is the size the gates for the pass are calibrated at.
+        /// </summary>
+        /// <remarks>
+        /// Do not lower this without re-deriving §25's ratio. The pass has a roughly fixed non-layout
+        /// cost and a layout cost that scales with cells, so shrinking the pane raises
+        /// <c>Elapsed / LayoutMs</c> on correct code: measured at 1.84-2.20 over 200 rows and 3.19-7.24
+        /// over 50, against a gate of 2.4. <c>The_pass_costs_about_what_its_own_layouts_cost</c> asserts
+        /// this count for that reason, so a smaller pane fails saying the calibration moved rather than
+        /// failing as a cost.
+        /// </remarks>
         public const int AutoFitRowCount = 1000;
 
         /// <summary>Column titles, in order. Both grids get exactly these.</summary>

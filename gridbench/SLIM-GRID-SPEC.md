@@ -4926,15 +4926,18 @@ Unmodified code, one machine, one session. Nothing in `fastgrid.js` changed betw
 | ten busy loops on ten cores, N=8 | 42.9-53.5ms, median 48.6 |
 | later the same session, after those load runs, N=11 | 86.0-98.9ms |
 
-**The last row is the flake, reproduced: 98.9ms against a 100ms gate, with no fault present.** The gate
-was set from the first row, where it left a budget of 2.7x - which reads as generous until the same
-machine, warm from its own test suite, spends all of it on being warm. The reviewer did not need a CI
-box or a slow one. This machine got there on its own, inside one session, running these very tests.
+**The last row came within 1.1ms of the gate with no fault present**, and review then went past it:
+**8 of 25 healthy runs at or over 100ms, up to 107.5**. So the crossing is reproduced, and not on a CI
+box - on this machine, inside one session, running these very tests. In that state the old assertion is
+not flaky, it is failing. The gate was set from the first row, where it left a budget of 2.7x, which
+reads as generous until the same machine, warm from its own suite, spends all of it on being warm.
 
-Load alone is not the whole story and the honest split matters: saturating every core cost 1.3x, and the
-rest is thermal. The first attempt to reproduce this drove ten busy loops against ten cores and did not
-cross the gate, and reported so; the crossing turned up later, unforced, in a control run measuring
-something else.
+Load alone is not the whole story and the honest split matters: saturating every core cost +11.9ms here
+and +6.6ms at review's warmer baseline, and the rest is thermal. Stated in milliseconds rather than as
+the 1.3x this section first claimed - a multiplier taken at one baseline is not a property of the load,
+and review measured that same absolute cost as 1.07x simply by starting from 96ms instead of 36.7ms. The
+first attempt to reproduce the crossing drove ten busy loops against ten cores, did not cross, and said
+so; the crossing turned up later, unforced, in a control run measuring something else.
 
 ### The obvious replacement, and the mutation that refused it
 
@@ -4944,9 +4947,10 @@ through a binding. A batched pass forces a fixed number of layouts however many 
 left inside the read loop forces one per cell, because every read after it finds the tree dirty. On a
 synthetic 1000 x 5 table the two shapes read 0-1 layouts in 3ms against 5001 in 22.3s.
 
-Against the real pane the pass reads **4 layouts over 5000 cells, in every one of twenty-two runs, quiet
-and with every core saturated**. An integer that does not move when the machine does, which is the whole
-of the complaint against the number it would replace.
+Against the real pane the pass reads **4 layouts over 5000 cells, in every one of twenty-seven runs,
+quiet and with every core saturated** - and 4 again in every one of review's thirty-one. An integer that
+does not move when the machine does, which is the whole of the complaint against the number it would
+replace.
 
 **Then the mutation refused it.** `fastgrid.js` reads the two figures the no-slack case needs inside the
 measuring pass rather than after it, and says why: taking them from below "put the pass over its own
@@ -4985,18 +4989,32 @@ write - it moves the *wrong way*, down towards 1, because under that fault almos
 layout. So a single assertion cannot be chosen between them; both are asserted.
 
 **The fault the old comment named is not a fault any assertion sees.** At full strength the interleaved
-write does not fail the cost check: the pane never comes back, and all 38 tests fail with
+write does not fail the cost check: the pane never comes back, and every test sharing it fails with
 `The geometry measurement did not finish within 180s.` The gate's stated purpose was catching something
 that takes the probe down long before any threshold is consulted. What it could really discriminate was
 the smaller fault - and only while the machine stayed where the threshold was calibrated.
 
 ### What is asserted now
 
-Three assertions, and `RowsMeasured > 0` kept as the control that a fast pass is not an empty one.
+Two gates, in **two tests rather than one**, each with the control that keeps it from passing without
+measuring. Two tests because §24's rule is to read a mutation's failure set by name, and as a single
+test both faults reported the same name - see the review section below, which is where that was found.
 
-- **`Layouts <= 8`.** Four measured, and one stray write interleaved once per column would add five.
-- **`LayoutMs > 0`**, because the ratio below is taken against it and a zero would make it vacuously
-  true rather than false - which is exactly how a cost check stops being one.
+`The_pass_forces_a_fixed_number_of_layouts`:
+
+- **`RowsMeasured > 0`**, so a fast pass is not an empty one.
+- **`Layouts > 0`**, because an absent counter reads as zero and zero passes a `<=` budget while
+  asserting nothing.
+- **`Layouts <= 8`.** Four measured, and one stray write interleaved once per column adds five - review
+  built that mutation and measured exactly 9, so the gate catches it with no margin to spare, which is
+  the tightest the band allows.
+
+`The_pass_costs_about_what_its_own_layouts_cost`:
+
+- **`RowsMeasured >= AutoFitRowCount`.** The ratio is only a cost check while layout dominates the pass,
+  and the pane's size is that calibration - see the review section.
+- **`LayoutMs > 0`**, because the ratio is taken against it and a zero would make it vacuously true
+  rather than false - which is exactly how a cost check stops being one.
 - **`Elapsed <= 2.4 * LayoutMs`.** The pass measured against its own layout time rather than against a
   constant. Both numbers come off the same machine in the same run, so a slow, busy or warm box moves
   them together.
@@ -5005,11 +5023,21 @@ Three assertions, and `RowsMeasured > 0` kept as the control that a fast pass is
 absolute, and `GeometryProbe.cs` says so where the property is declared, so the next person to reach for
 it has the reason in front of them.
 
+**This is a stability fix, not a detection one, and the section should say so plainly.** Review measured
+`Elapsed` under every fault here - 195.2ms, 1497ms, 111.5ms - and the old `Elapsed < 100` would have
+caught all of them. The pair does not catch more than the clock did; it catches the same things without
+going red when nothing is wrong. Its headroom against a false positive is in fact *narrower* than the
+clock's used to be, 30% against 172%, and it is safer only because the denominator drifts with the
+numerator instead of standing still while the numerator moves.
+
 ### What it costs
 
-The counters need Chromium's Performance domain enabled for the life of the page. Interleaved A/B, five
-pairs alternating so drift falls on both arms: **+1.9ms mean**, against a pass of ~90ms. Effectively
-free.
+The counters need Chromium's Performance domain enabled for the life of the page. Interleaved A/B,
+alternating so drift falls on both arms: **+1.9ms mean over five pairs here, +0.65ms over review's
+eight**, against a pass of ~90ms and a within-arm spread of 3-4ms. So the honest statement is **under
+about 2ms, which is all this method can say**: both deltas sit well inside the spread, and §9's own rule
+is that a difference under the noise floor has not been measured. Effectively free, by a wider margin
+than either single figure claims.
 
 That number is here because the first reading of it was wrong. Measured as two consecutive blocks rather
 than alternating pairs, the instrumented arm looked 25ms *cheaper* and then 25ms dearer, depending on
@@ -5021,26 +5049,110 @@ which block ran second - all of it thermal drift, none of it instrumentation. On
 - `dotnet build Radzen.Blazor.FastGrid` - 0 warnings, 0 errors. No library code changed, so no benchmark
   applies and none is quoted.
 - The unit suite, and the browser suite three times.
-- **Both new assertions mutated, and each fails alone.** A read taken after the writes fails only *the
-  pass costs about what its own layouts cost*; a write inside the read loop fails only *the pass forces a
-  fixed number of layouts rather than one per cell*. One test of 38 each time, and a different one.
-- The healthy run passes on a machine measured at 98.9ms - where the assertion it replaces had 1.1ms
-  left.
+- **Both gates mutated, and each fails alone.** A read taken after the writes fails only
+  `The_pass_costs_about_what_its_own_layouts_cost`; a write inside the read loop fails only
+  `The_pass_forces_a_fixed_number_of_layouts`. One test of 39 each time, and a **different** one - which
+  became true only after review, and the review section records what it was before.
+- **The vacuity path mutated too**, which the first version of this section had not done. With the metric
+  lookup pointed at a name Chromium does not report, all 39 tests fail with
+  `Chromium reported no 'LayoutCount' metric` - the probe's own refusal, not an assertion, which is the
+  same contract the rest of this script keeps: it never falls back and never skips. Before the fix the
+  same mutation left a fabricated zero that `Layouts <= 8` passed, caught only incidentally by
+  `LayoutMs > 0`. `Layouts > 0` remains in the layout test as the second line, and is now unreachable by
+  design rather than load-bearing by accident.
+- The healthy run passes on a machine where the assertion it replaces was failing outright.
 
 ### Where this could still be wrong
 
-- **The ratio's margin is 28%, and it is the narrowest number in this section.** Healthy topped out at
-  1.87 across 22 runs and the gate is 2.4; the fault starts at 2.89. Unlike a wall-clock constant it does
-  not move with load or heat, but it does move with a machine's balance of JavaScript against layout, and
-  nothing here has measured a second machine. A box whose JS is relatively slower than its layout raises
-  the healthy ratio, and 1.87 to 2.4 is not much room.
+- **The ratio is calibrated to the pane's row count, and correct code fails it on a smaller pane.**
+  Review measured unmodified code at **1.84-2.20 over 200 rows and 3.19-7.24 over 50**, against a gate of
+  2.4. The pass has a roughly fixed non-layout cost and a layout cost that scales with cells, so shrinking
+  the pane raises the ratio with nothing wrong. This is the same shape as the fault this section set out
+  to fix - a threshold calibrated to a condition that can silently move - relocated from the machine's
+  temperature to a constant in the fixture, where it is *more* likely to move. It is guarded rather than
+  only documented: the ratio test asserts `RowsMeasured >= AutoFitRowCount`, so shrinking the pane fails
+  saying the calibration moved, and `AutoFitRowCount` carries the numbers above at its declaration.
+- **The ratio's margin is asymmetric, and the fault side is the thin one.** Healthy topped out at 1.87
+  across 53 runs against a gate of 2.4 - 30% - but the fault's floor is not fixed either: review measured
+  it at 2.89-3.17 on a cool machine and **2.742 on a warm one**, because heat inflates layout time faster
+  than the JavaScript around it and compresses the fault towards the gate. That leaves 14% on the side
+  that matters for a false negative, half the margin on the other side. The gate stays at 2.4 rather than
+  dropping to balance them, because this whole section exists to stop a check going red when nothing is
+  wrong, and a missed regression is the cheaper of the two failures here - but it is a real narrowing and
+  the same enemy in new clothes.
+- **It also moves with a machine's balance of JavaScript against layout**, and nothing here has measured
+  a second machine. A box whose JS is relatively slower than its layout raises the healthy ratio.
 - **`LayoutCount` is a whole-renderer counter, not the pass's.** It is read either side of the fit, so
   anything else the page does in that window is counted too. Nothing else does, on this page, today.
 - **The window ends at a binding round trip, and that is what made the count blind to the second fault.**
   A layout that the fit leaves for the next frame is inside the window; one the fit forces itself is also
   inside it. Any future fault that only moves work across that boundary will be invisible to the count
   for the same reason, and is the ratio's job alone.
+- **The window has a near side too.** The `await` that reads the counters before the pass yields, which
+  flushes any pending layout out of the measured window on that side as well. Benign here - it is the
+  same mechanism named above on the far side - but the instrumentation moves the pass's boundaries as
+  well as costing time, and only one of the two boundaries was named when this was written.
 - **Nothing asserts the absolute cost any more.** A change that made the pass uniformly 10x slower in
   both its layout and its JavaScript would keep the ratio at 1.7 and the count at 4, and pass. §13's
   recorded ~1.7ms + ~0.03ms a row is the only statement of absolute cost on this branch, and it is prose,
   not a check.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. The Spec reviewer reproduced both mutations independently,
+built two the section had not, and measured 31 healthy runs of its own; every centrepiece claim survived
+- the two blindness results, the 104, the 9-from-one-stray-write, the 180s timeout verbatim, and the §24
+edit clause by clause. What follows is what did not.
+
+**The two gates were one test, so a mutation's failure set could not tell them apart by name.** Both
+faults failed `The_pass_costs_about_what_it_should`; only the rule string inside the message differed.
+§24 is the section that established *read the failure set by name, not by count*, and this had shipped a
+check where the name was identical in both directions. Worse, `ParityAssert.True` throws on the first
+failure, so the assertions short-circuited in source order: under the interleaved write the ratio
+assertion never ran at all, and "fails only the count" was not observable from the test - it was true,
+but established by instrumentation rather than by the mutation. They are two tests now, and the claim is
+the run's rather than the author's.
+
+**A missing counter would have passed the layout gate silently.** The probe read metrics with
+`?? 0`, so a name Chromium stopped reporting would hand back a fabricated zero - and `Layouts <= 8`
+passes at zero while asserting nothing. `LayoutMs > 0` happened to catch the all-zeros case, which is why
+review's metrics-absent mutation still went red, but that is one guard covering a hole it was not written
+for, and splitting the tests would have removed even that. **This is the section's own subject, made a
+second time**: a check that stops measuring while staying green. The probe now throws on a metric it did
+not find, and the layout gate carries its own `Layouts > 0`.
+
+**The row count, and the deterrent that pointed at a gate this commit deleted.** The whole of the first
+risk bullet above is review's. `AutoFitRowCount`'s comment said the pane was sized *"the size §13's gate
+for the pass is written at"* - a justification written for `Elapsed < 100`, left pointing at an assertion
+that no longer exists, while the replacement was *more* sensitive to that constant than the thing it
+replaced.
+
+**Four numbers in this section were wrong or overstated, and one shipped comment was stale.**
+
+- *"the flake, reproduced: 98.9ms"* claimed a crossing that had not happened - 98.9 is a near miss.
+  Review then produced the crossing properly, 8 of 25 healthy runs at or over 100ms, so the claim is now
+  true on evidence rather than on enthusiasm. The measurement was right and the sentence was ahead of it.
+- *"1.3x"* for the cost of saturating every core is a ratio taken at one baseline quoted as a property of
+  the load; review read the same absolute cost as 1.07x from a warmer start.
+- *"+1.9ms"* for the instrumentation is quoted past what the method can resolve - both that and review's
+  +0.65ms sit inside the run-to-run spread, which by §9's own noise-floor rule means the difference has
+  not been measured.
+- The layout count's *"twenty-two runs"* was the **ratio's** sample size borrowed by mistake; the count's
+  own n was twenty-seven.
+- The shipped comment beside the ratio still read *"1.61 to 1.87 over seventeen runs"* - numbers from
+  before the last measurements landed, disagreeing with the section two files away. Review's 31 runs put
+  the true healthy floor lower again, at 1.48.
+
+**And the section had not said what it is.** Review measured `Elapsed` under every fault and found the
+old gate would have caught all of them, so this is a stability fix and not a detection one. That is now
+said in *What is asserted now*, along with the uncomfortable half: the new gate's headroom against a
+false positive is narrower than the clock's was, and it is safer only because its denominator moves with
+its numerator.
+
+Standards fixes in the same commit: named constants for the two budgets with the derivation of each at
+its declaration, the budget computed once instead of twice inside one statement, `85.92000000000002`
+rounded out of the failure message, `Elapsed`'s doc corrected from "never asserted on" to "never asserted
+on *as an absolute*", "one layout" corrected to "a fixed number" in the two places that still said the
+pass forces one, the counter docs corrected from "during the pass" to the wider window they actually
+measure, `StyleRecalcs` given the reason it is carried at all, and `fastgrid.js` no longer calling the
+thing it points at a timing gate.

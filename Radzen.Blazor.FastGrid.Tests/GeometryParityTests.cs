@@ -826,8 +826,32 @@ namespace Radzen.Blazor.FastGrid.Tests
                 fit.ToString());
         }
 
+        /// <summary>
+        /// How many layouts the fit may force. Four is what it takes, over 5000 cells; one stray write
+        /// interleaved once per column adds five, and nine is the first number that must fail.
+        /// </summary>
+        const int LayoutBudget = 8;
+
+        /// <summary>
+        /// How many times its own layout time the pass may cost. Calibrated at
+        /// <see cref="GridParityFixture.AutoFitRowCount"/> rows, and only meaningful there - the pass has
+        /// a roughly fixed non-layout cost, so a smaller pane raises this ratio on correct code.
+        /// </summary>
+        const double LayoutTimeBudget = 2.4;
+
+        // §25. What stood here was one test asserting `Elapsed < 100`, over a comment conceding that a
+        // CI box asserting a wall-clock number is a flaky test rather than a budget - and then
+        // asserting one. It read 36.7ms quiet at the start of a session and over 100ms on the same
+        // unmodified code later in it, once the machine had warmed on its own suite.
+        //
+        // What replaces it is two gates in units the machine cannot move, and they are two *tests*
+        // rather than two assertions in one, because §24's rule is to read a mutation's failure set by
+        // name: as one test they both reported the same name and only the rule string inside the
+        // message told them apart. Each is blind to the fault the other catches, so neither is
+        // redundant - §25 has the mutations that establish both halves of that.
+
         [Fact]
-        public void The_pass_costs_about_what_it_should()
+        public void The_pass_forces_a_fixed_number_of_layouts()
         {
             var fit = Fitted();
 
@@ -838,24 +862,46 @@ namespace Radzen.Blazor.FastGrid.Tests
                 fit.RowsMeasured.ToString(CultureInfo.InvariantCulture),
                 fit.ToString());
 
-            // §25. What stood here was `Elapsed < 100`, and its own comment conceded that a CI box
-            // asserting a wall-clock number is a flaky test rather than a budget - and then asserted
-            // one. It measured 36.7ms on a quiet machine, so the whole budget was 2.7x, and a reviewer
-            // watched it fail once in fifteen runs of a mutation that had nothing to do with it.
-            //
-            // The two assertions below are what that budget was reaching for, in units the machine
-            // cannot move. Neither is redundant: each is blind to the fault the other catches, which
-            // §25 has the mutations for.
+            // Zero is what an absent counter reads as, and zero passes a `<=` budget while asserting
+            // nothing. The probe throws rather than reporting a metric it did not find, so this should
+            // be unreachable - it is here because the reachable version of it is the whole of §25.
+            ParityAssert.True(fit.Layouts > 0,
+                "the browser counted the pass's layouts at all",
+                "an absent counter reads as zero, and a zero under a budget is a check that passes without measuring - which is how a cost check stops being one",
+                "more than 0 layouts",
+                fit.Layouts.ToString(CultureInfo.InvariantCulture),
+                fit.ToString());
 
             // A batched pass forces a fixed number of layouts however many cells it walks; a write left
             // inside the read loop forces one per cell, because every read after it finds the tree
-            // dirty. Four, here, over 5000 cells - in 22 runs, quiet and with every core busy. At a
-            // fiftieth of full strength that fault reads 104; at full strength the probe never returns.
-            ParityAssert.True(fit.Layouts <= 8,
+            // dirty. Four, here, over 5000 cells - in every one of 27 runs, quiet and with every core
+            // busy. At a fiftieth of full strength that fault reads 104; at full strength the probe
+            // never returns at all and the whole pane fails on its own timeout.
+            ParityAssert.True(fit.Layouts <= LayoutBudget,
                 "the pass forces a fixed number of layouts rather than one per cell",
                 "every read is batched behind one class toggle, and moving a single write between two of them turns one layout into thousands",
-                "at most 8 layouts, against the 4 this pass takes",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"at most {LayoutBudget} layouts, against the 4 this pass takes"),
                 fit.Layouts.ToString(CultureInfo.InvariantCulture),
+                fit.ToString());
+        }
+
+        [Fact]
+        public void The_pass_costs_about_what_its_own_layouts_cost()
+        {
+            var fit = Fitted();
+
+            // Not `> 0` like its neighbour: this gate is a ratio against layout time, and the pass's
+            // non-layout half is roughly fixed while its layout half scales with cells. Correct code
+            // measured 1.84-2.20 at 200 rows and 3.19-7.24 at 50, so a shrunken pane fails this for a
+            // reason that has nothing to do with the fit. The pane's size is the calibration, and it is
+            // asserted here so that changing it fails saying so rather than failing as a cost.
+            ParityAssert.True(fit.RowsMeasured >= GridParityFixture.AutoFitRowCount,
+                "the fit pane is still the size this gate was calibrated at",
+                "the ratio below is only a cost check while layout dominates the pass; at a fraction of these rows correct code exceeds it, so a smaller pane turns this into a false alarm rather than a looser check",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"at least {GridParityFixture.AutoFitRowCount} rows"),
+                fit.RowsMeasured.ToString(CultureInfo.InvariantCulture),
                 fit.ToString());
 
             ParityAssert.True(fit.LayoutMs > 0,
@@ -865,19 +911,22 @@ namespace Radzen.Blazor.FastGrid.Tests
                 string.Create(CultureInfo.InvariantCulture, $"{fit.LayoutMs}ms"),
                 fit.ToString());
 
-            // The count above cannot see a read taken *after* the writes: that fault adds no layout at
+            // The layout count cannot see a read taken *after* the writes: that fault adds no layout at
             // all, it moves one the browser was going to run anyway to inside the pass. What it does
             // change is how much of the pass is not layout - so the pass is measured against its own
             // layout time rather than against a constant. Both numbers come off the same machine in the
-            // same run, so a slow or busy box moves them together and the ratio does not move: 1.61 to
-            // 1.87 over seventeen runs, six of them with every core saturated. The fault reads 2.89 to
-            // 3.17, and it is the regression this gate has already caught once - see fastgrid.js, where
-            // the two figures are read with the others rather than after them, and why.
-            ParityAssert.True(fit.Elapsed <= 2.4 * fit.LayoutMs,
+            // same run, so a slow, busy or warm box moves them together: 1.48 to 1.87 over 53 runs
+            // spanning a quiet machine, ten saturated cores, and one warm enough that the assertion
+            // this replaced was failing outright. The fault reads 2.74 to 3.17 - and it is the
+            // regression the *old* wall-clock gate is on record as having caught, which is why the
+            // check survives in a different unit rather than being dropped.
+            var budget = LayoutTimeBudget * fit.LayoutMs;
+
+            ParityAssert.True(fit.Elapsed <= budget,
                 "the pass costs about what its own layouts cost",
                 "a read taken after the widths are written forces a whole-table layout inside the pass that would otherwise have run on the next frame; the pass is then twice its own cost while every count stays where it was",
                 string.Create(CultureInfo.InvariantCulture,
-                    $"at most {2.4 * fit.LayoutMs}ms, being 2.4x the {fit.LayoutMs}ms the browser spent in layout"),
+                    $"at most {budget:0.##}ms, being {LayoutTimeBudget}x the {fit.LayoutMs}ms the browser spent in layout"),
                 string.Create(CultureInfo.InvariantCulture, $"{fit.Elapsed}ms"),
                 fit.ToString());
         }
