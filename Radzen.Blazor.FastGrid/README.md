@@ -219,6 +219,10 @@ and the columns nobody renders dropped, which is this column's own argument appl
 **`AutoFitMode.Once` waits** for a `Query` lookup rather than measuring the blank cells it would
 otherwise fit to. Neither lookup column is available in `RadzenFastDropDownDataGrid`.
 
+**Settings are keyed on a column's sort path**, so a lookup column is stored across a reload only when
+it has a `SortBy` - the same limitation `CollectionColumn` has. One that does store its filter as ids,
+which is what makes the filter survive a rename.
+
 ## Rows, selection and events
 
 The grid's own chrome is `ShowHeader`, `AllowAlternatingRows` (on by default), `GridLines`, `Density`

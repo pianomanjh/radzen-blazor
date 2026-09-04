@@ -516,6 +516,91 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void AStoredFilterIsIdsAndSurvivesTheLookupBeingRenamed()
+        {
+            // The reason ids are what the filter carries everywhere. Stored as a name it would break the
+            // day someone edited the lookup row; stored as an id it does not. Note the column needs a
+            // SortBy to be stored at all - settings are keyed on PropertyPath, which is the sort path,
+            // so a lookup column without one shares CollectionColumn's gap. §10b has that open.
+            using var ctx = new TestContext();
+
+            var rows = Lookups.CategoryRows();
+
+            RenderFragment Columns(FastGridSort<Person> sortBy) => Tests.Columns.Of(
+                Tests.Columns.Lookup<Person, int>(x => x.CategoryId,
+                    FastGridLookup.Items(rows, c => c.Id, c => c.Name), sortBy: sortBy));
+
+            FastGridSettings captured = null;
+
+            var cut = Render(ctx, Columns(FastGridSort<Person>.By(p => p.CategoryId)), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
+                p.Add(g => g.SettingsChanged,
+                    EventCallback.Factory.Create<FastGridSettings>(this, s => captured = s));
+            });
+
+            Pick(cut, 0, Named(cut, 0, "Toys"));
+
+            Assert.Equal(new[] { 10 },
+                ((System.Collections.IEnumerable)captured.Columns.Single().FilterValue).Cast<int>());
+
+            rows.Single(category => category.Id == 10).Name = "Playthings";
+
+            using var second = new TestContext();
+
+            var restored = Render(second, Columns(FastGridSort<Person>.By(p => p.CategoryId)), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
+                p.Add(g => g.Settings, captured);
+            });
+
+            Assert.Equal(new[] { "Playthings", "Playthings" }, Cells(restored, 0));
+        }
+
+        [Fact]
+        public async Task AFetchTheGridWentAwayDuringLeavesTheNamesUnresolved()
+        {
+            // The one exit from the fetch that is not an answer, and the reason it needs a catch of its
+            // own: the wide one below it would read cancellation as a failure and resolve the column to
+            // no names, which draws every id for good. Driven against the column rather than through a
+            // grid, because a disposed grid renders nothing and would make either answer look alike.
+            var column = new LookupColumn<Person, int>
+            {
+                Lookup = FastGridLookup.Query(Lookups.CategoryRows().AsQueryable(),
+                    c => c.Id, c => c.Name),
+            };
+
+            using var gone = new CancellationTokenSource();
+
+            await gone.CancelAsync();
+
+            var redraw = await column.FetchNamesAsync(new GatedLookupExecutor { Holds = 0 }, gone.Token);
+
+            Assert.False(redraw);
+            Assert.True(column.NamesOutstanding);
+        }
+
+        [Fact]
+        public void AnEmptyAnswerIsAnAnswer()
+        {
+            // A lookup that resolves to no names at all leaves every cell drawing its id, and must not
+            // put the column back on the queue for an answer it has already given. The bound this pins
+            // is a render loop: leaving the column outstanding after a successful fetch does not fail a
+            // test, it aborts the run with a stack overflow.
+            using var ctx = new TestContext();
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(new GatedLookupExecutor { Holds = 0 });
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(x => x.CategoryId,
+                FastGridLookup.Query(new List<Category>().AsQueryable(), c => c.Id, c => c.Name))));
+
+            Assert.Equal(new[] { "10", "20", "10", "30" }, Cells(cut, 0));
+            Assert.InRange(cut.RenderCount, 1, 2);
+        }
+
+        [Fact]
         public void TwoLookupsBuiltTheSameWayAreOneLookupAndTwoQueriesNeverAre()
         {
             // What the sharing rests on, and the reason it is a bonus rather than a mechanism: a query
