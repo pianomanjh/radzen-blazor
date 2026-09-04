@@ -4373,10 +4373,14 @@ none is quoted.
   ever handed work back to the grid from inside its own async flow, that work would be excluded from
   counting and would be invisible in exactly the way this section is about. The two executors here do
   not, and nothing enforces it.
-- **The rule is still only checked at two call sites.** `AsyncOwnsData` guards four places; two of them
-  now have a test that fails when the guard is removed, and the other two - the settings reload path and
-  the count - have neither. That is a gap this section opened rather than closed: it now knows how to
-  write such a test.
+- ~~**The rule is still only checked at two call sites.**~~ - **measured in §24, and this bullet was
+  wrong twice.** It said `AsyncOwnsData` guards four places; there were five. It said two lacked a test
+  that fails when the guard is removed; only one did. The count it named as uncovered was covered at
+  both of its sites - and `TotalCount` by the very test this section had just taught to count `Execute`
+  as well as enumeration, which is what makes that removal visible at all. This section built the
+  capability that covered the site, in the commit that recorded the site as uncovered, in a section
+  about the difference between a test that passes and a test that works. The one real gap -
+  `settingsNeedReload` - is closed in §24.
 
 ## 23. The first load is composed before the columns exist - the design
 
@@ -4680,3 +4684,116 @@ after-render either. The parity claim stands.
   before the first render, which the renderer does not appear to produce - the child's render and its
   after-render both fall inside the batch that set its parameters. "Does not appear to" is the honest
   strength of that claim.
+
+## 24. §22's parting gap, measured rather than asserted - the design
+
+§22 ended by naming a gap: "`AsyncOwnsData` guards four places; two of them now have a test that fails
+when the guard is removed, and the other two - the settings reload path and the count - have neither."
+
+**That sentence was never measured, and it is wrong twice.** Which is worth stating plainly, because
+§22's entire subject is that a test which passes is not a test that works, and the only thing that tells
+them apart is putting the fault back. It closed by asserting which of its own tests worked.
+
+### What the measurement says
+
+Every guard removed in turn, at §22's own commit `9b4711381`, full suite each time:
+
+| guard | discriminates at §22? | caught by |
+| --- | --- | --- |
+| the check-box list's lookup | yes | `ACheckBoxListLookupIsNeverRunFromTheRenderThread` |
+| `View()` | yes | `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread` |
+| `TotalCount()` | **yes** | `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread` |
+| `ClampPage()`'s count | **yes** | `ASupersededLoadDoesNotOverwriteTheNewerOne` |
+| `settingsNeedReload` | **no** | nothing |
+
+So: **five guarded places, not four**, and **one uncovered, not two**. The count §22 named as uncovered
+was covered at both of its sites - and `TotalCount` was covered by the very test §22 had just repaired.
+`Count()` never enumerates, which is why §22 taught `WalkCountingProvider` to count `Execute` as well;
+that change is what makes removing the `TotalCount` guard visible. **§22 built the capability that
+covered the site, in the same commit that recorded the site as uncovered.**
+
+Today there are **seven** guarded places - §23 added two - and six of them discriminate:
+
+| guard | discriminates now? |
+| --- | --- |
+| the deferral in `OnParametersSetAsync` (§23) | yes, six tests |
+| the check-box list's lookup | yes |
+| `ClampPage()`'s count | yes |
+| **`settingsNeedReload`** | **no** |
+| `RefreshAsync`'s owe (§23) | yes |
+| `View()` | yes |
+| `TotalCount()` | yes |
+
+### One predicate, three questions
+
+Worth naming while the sites are all in view, because it is §17's shape - one thing answering for
+several - and it is why a single gap is easy to lose among six covered siblings. `AsyncOwnsData` is
+asked three different questions:
+
+1. **"May the render thread touch this source?"** - the lookup, `View`, `TotalCount`. This is the rule
+   §22 named, and all three sites are covered.
+2. **"Is the row count on screen a placeholder rather than a total?"** - `ClampPage`. Covered.
+3. **"Does this grid load, so must it be asked again?"** - `settingsNeedReload`, and both of §23's
+   deferrals. Two of the three covered.
+
+The gap is not randomly placed. It is the one question with no test of its own, in a predicate whose
+name answers question 1.
+
+### The gap, and why the obvious test no longer finds it
+
+```csharp
+settingsNeedReload = LoadData.HasDelegate || AsyncOwnsData;
+```
+
+One line with two failure modes, and **neither is asserted**:
+
+- **Under-reloading.** Mutated to `LoadData.HasDelegate`, a grid over an executor-backed queryable
+  applies restored settings and never asks for the data again: the header draws the restored sort over
+  rows that are still in the old order. 836 tests pass.
+- **Over-reloading.** Mutated to `true`, an in-memory grid reloads on every settings apply - which
+  raises `SettingsChanged`, which hands the grid new settings, which applies them and schedules
+  another. §10 records that this shipped once and "spun the circuit at several thousand renders a
+  second and never stopped". 836 tests pass.
+
+**The obvious test does not discriminate, and §23 is why.** A settings restore that reaches the *first*
+load is now covered by the deferral rather than by this flag - the owed load runs after `ApplySettings`,
+so it composes from the restored state whether or not anything asked for a reload. §23's own
+`ARestoredSettingsSortCostsOneQuery` passes under the mutation for exactly that reason. What is left
+uncovered is the case the flag still owns alone: **settings arriving at a grid that has already drawn.**
+
+That is a mutation moving under a test written for something else, which §21's addendum already records
+as a way for a recorded count to go stale. Here it changed which test could possibly catch the fault.
+
+### The two tests
+
+- **New settings handed to a drawn grid over an executor-backed source re-run the query.** Render,
+  let it settle, then hand it a `Settings` carrying a sort; the executor must be asked a second time and
+  the rows must come back in the new order. Fails when the guard becomes `LoadData.HasDelegate`.
+- **A grid that is not loaded does not answer a settings restore with a reload.** A parent that stores
+  what `SettingsChanged` gives it and hands back a *fresh* object - which is what round-tripping through
+  storage does, and what the recorded loop needed - must see the exchange settle rather than run on. The
+  parent stops echoing after a bounded number of round trips and the test asserts the count, so the
+  mutation fails the assertion instead of hanging: a test that hangs is not a test that fails.
+
+### The harness had the same fault as the thing it was measuring
+
+The first sweep reported **all seven guards as gaps**, which contradicted two results already in hand.
+The runner wrapped each test invocation in `timeout`, which is GNU coreutils and **is not on macOS** -
+so every run died as "command not found", produced no test output, and the harness read the absence of a
+failure line as "nothing failed". The handoff's own warning is the same shape ("a shell check of did
+`Passed!` appear reports a failed build as caught"), and so is §22.
+
+A mutation harness has to assert that the suite **ran**, not merely that it did not report a failure.
+The sweep now requires a `Total:` line before it will believe any verdict, and treats its absence as a
+result about the harness rather than about the code.
+
+### Where this could still be wrong
+
+- **The sweep removes a guard; it does not try to make it wrong in subtler ways.** A guard that is
+  load-bearing when deleted may still be wrong in a way no deletion expresses - `AsyncOwnsData` where
+  `LoadData.HasDelegate || AsyncOwnsData` was meant, for instance.
+- **"Six of seven discriminate" is a statement about this suite**, not about the guards. A site can be
+  covered incidentally, by a test that would stop covering it the moment it was rewritten for its own
+  reasons - which is precisely what §23 did to the settings flag's first-load case.
+- **The three questions are not separated in code, only in this section.** Nothing stops a fourth
+  meaning being added to the same predicate, and the name would go on answering the first question.
