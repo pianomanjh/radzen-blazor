@@ -2226,13 +2226,21 @@ sentinel because upstream already has the convention. What is left:
 
 - **A lookup column's settings identity is its *sort* path, not its id path**, which is not what this
   section said before it was built. `PropertyPath` is two things at once - the settings key *and* the
-  name a `LoadData` or OData sort is sent under - so giving it the id path would order a remote grid by
-  `CategoryId` under a column sorting by `Category.Name`. The consequence is `CollectionColumn`'s
-  exactly: **a lookup column with no `SortBy` has no settings identity at all**, so its width, order,
-  visibility and filter are never captured. One *with* a `SortBy` stores its filter as ids and survives
-  the rename this section argued for, and there is a test for that round trip. Separating the two
-  meanings of `PropertyPath` is §10b's open collision, and §10b's own instruction is not to close it by
-  guessing at the identity model - so this joins it as another participant rather than settling it.
+  name a `LoadData` or OData sort travels under - so it cannot simply carry the id: a remote grid would
+  order by `CategoryId` under a column sorting by `Category.Name`.
+
+  Separating them was available and was **not taken**, and the reason is not that it could not be done -
+  a `SettingsKey` defaulting to `PropertyPath` is four call sites. It is that the separation makes
+  things worse rather than better here: an id-path settings key gives a `LookupColumn` over
+  `p.CategoryId` **the same identity as a `PropertyColumn` over `p.CategoryId`**, which is §10b's
+  collision newly created rather than avoided. §10b's own instruction is not to close that by guessing
+  at the identity model, and this would have been a guess.
+
+  So the consequence stands and is `CollectionColumn`'s exactly: **a lookup column with no `SortBy` has
+  no settings identity at all**, and its width, order, visibility and filter are never captured. One
+  *with* a `SortBy` stores its filter as ids and survives the rename this section argued for, and that
+  round trip has a test. This joins §10b's open collision as another participant rather than settling
+  it.
 - **Not in `RadzenFastDropDownDataGrid`**, for the same reason §13's auto-fit is not: that slice has the
   worst review history on the branch, and its open layout question should be answered before anything
   else is added to it.

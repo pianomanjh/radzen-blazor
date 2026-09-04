@@ -398,9 +398,12 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
 
             var categories = new Dictionary<int, string> { [0] = "Unfiled", [10] = "Toys" };
+            var data = People.Sample();
+
+            data[0].CategoryId = 0;
 
             var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, int>(
-                x => x.CategoryId, FastGridLookup.Map(categories))));
+                x => x.CategoryId, FastGridLookup.Map(categories))), data);
 
             cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
             {
@@ -412,7 +415,28 @@ namespace Radzen.FastGrid.Tests
                 },
             })).Wait();
 
+            // Both surfaces, because they read the values through different code and only one of them
+            // was asked the first time this was written. A picker showing nothing ticked over a grid
+            // filtered to the id-zero rows is the two disagreeing, silently.
             Assert.Empty(((System.Collections.IEnumerable)Picker(cut, 0).Value).Cast<object>());
+            Assert.Empty(Cells(cut, 0));
+        }
+
+        [Fact]
+        public void AStringFilterValueIsNotReadAsASequenceOfCharacters()
+        {
+            // A string is an IEnumerable, and the two methods that read CurrentFilterValue have to
+            // agree about that or a string-keyed column ticks its list from the letters. Asked at the
+            // seam because the two answers - no ticks, and ticks found for four chars that match
+            // nothing - draw the same picker.
+            using var ctx = new TestContext();
+
+            var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, string>(
+                x => x.Customer.Name,
+                FastGridLookup.Map(new Dictionary<string, string> { ["Zeta"] = "Zeta Ltd" }),
+                filterValue: "Zeta")));
+
+            Assert.Null(cut.FindComponent<LookupColumn<Person, string>>().Instance.FilterSelection);
         }
 
         [Fact]

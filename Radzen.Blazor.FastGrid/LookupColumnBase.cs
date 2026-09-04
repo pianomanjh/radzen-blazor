@@ -233,12 +233,18 @@ namespace Radzen.FastGrid
                 : id.ToString();
 
         /// <summary>
+        /// Whether an id can be missing at all, which is what makes "no category" a value a row can
+        /// hold and a null among the filter's values something to keep rather than to drop.
+        /// </summary>
+        private protected static readonly bool KeyCanBeNull =
+            !typeof(TKey).IsValueType || Nullable.GetUnderlyingType(typeof(TKey)) is not null;
+
+        /// <summary>
         /// Whether the filter offers an entry for the rows carrying no id at all. Only where a key can
         /// be one: "which products have no category" is a question, and <c>In</c> over a nullable key
         /// answers it.
         /// </summary>
-        private protected virtual bool OffersBlank =>
-            !typeof(TKey).IsValueType || Nullable.GetUnderlyingType(typeof(TKey)) is not null;
+        private protected virtual bool OffersBlank => KeyCanBeNull;
 
         /// <inheritdoc />
         /// <remarks>
@@ -285,7 +291,8 @@ namespace Radzen.FastGrid
         {
             get
             {
-                if (CurrentFilterValue is not IEnumerable selected || FilterValues is not List<object> offered)
+                if (CurrentFilterValue is not IEnumerable selected || CurrentFilterValue is string
+                    || FilterValues is not List<object> offered)
                 {
                     return null;
                 }
@@ -425,13 +432,19 @@ namespace Radzen.FastGrid
 
             foreach (var value in selected)
             {
-                if (value is null)
-                {
-                    keys.Add(default);
-                }
-                else if (value is TKey typed)
+                if (value is TKey typed)
                 {
                     keys.Add(typed);
+                }
+                else if (value is null && KeyCanBeNull)
+                {
+                    // The entry for the rows carrying no id, which a column whose key cannot be one
+                    // does not offer. These values are not always ones this column produced -
+                    // ApplyFilters takes descriptors from a RadzenDataFilter and from stored settings -
+                    // and read as default(TKey) a stray null filters to the rows whose id happens to be
+                    // zero while the check-box list beside it shows nothing ticked. That is the rule the
+                    // picker already applies; this is the method that composes the predicate.
+                    keys.Add(default);
                 }
             }
 
