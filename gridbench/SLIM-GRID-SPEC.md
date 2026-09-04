@@ -3338,8 +3338,13 @@ why nothing here tests it.
 
 **And the harness had a positional call left in it.** Converting the nine `autoFit` calls in
 `measure-geometry.js` missed a tenth, which then received a string where an object goes, destructured
-nothing out of it, and returned `null` - and the parity suite passed anyway. That is a finding about a
-different test, and it lands in its own commit next.
+nothing out of it, and returned `null` - **and the parity suite passed anyway.** Which was worth
+following: `Fitting_the_container_leaves_room_for_the_columns_it_is_not_fitting` passes with no fit
+performed at all. Its container was 700px and the table measured 698 unfitted, so it was already
+fitting; the reserved column is 220px because the harness sets it there; and both of its assertions are
+satisfied by a table the browser laid out on its own. The scenario's own comment names the band it
+needed to sit in and 700 was outside it. That is a fault in a §13 test rather than in this seam, and it
+lands in the commit after this one.
 
 **Measured**, control at `bc202edc8` bare 154.81 KB, one sort 175.79 KB, a filter row 158.78 KB; after,
 154.66, 175.90 and 158.77. Inside the floor this branch has now measured directly - the bare row has

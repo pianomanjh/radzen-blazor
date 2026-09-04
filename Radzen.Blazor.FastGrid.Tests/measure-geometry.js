@@ -571,7 +571,14 @@ async function main() {
                 // that ignored the reserved column still looks correct; narrower than every floor put
                 // together, both answers scroll and the difference is only how far. In between is the
                 // one band where the right answer fits and the wrong one does not.
-                pane.style.width = '700px';
+                //
+                // This said 700px and was outside that band on the wrong side: the table measured 698
+                // unfitted, so the fit changed nothing at all, and removing the fit altogether passed
+                // every assertion here. At 600 the unfitted table distributes evenly and the fit does
+                // not, so the two are telling apart - and the floor the fit writes is what the test
+                // asserts to know the fit ran, since a table the browser is laying out fits its
+                // container whether or not anything asked it to.
+                pane.style.width = '600px';
                 table.getBoundingClientRect();
 
                 // The column left out keeps a width of its own, the way a declared one would.

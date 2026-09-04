@@ -671,6 +671,20 @@ namespace Radzen.Blazor.FastGrid.Tests
                 seen,
                 seen);
 
+            // Without this the other two assertions here are satisfied by a table that was never
+            // fitted at all: the reserved column is 220px because the harness set it there, and a
+            // table whose layout the browser is doing fits its container whether anything ran or not.
+            // Removing the fit from the scenario passed both of them, which is how this was found.
+            //
+            // The floor is what says the fit ran: the script writes the table's min-width out of the
+            // floors it resolved, and nothing else on this page sets one.
+            ParityAssert.True(fit is { FloorTotal: > 0 },
+                "the fit this measures actually ran",
+                "the other two assertions here describe a fitted table, and both are also true of a table nobody fitted - so without this they pass while measuring nothing",
+                "a table carrying the min-width a fit resolves",
+                seen,
+                seen);
+
             ParityAssert.True(fit is { ReservedColumn: >= 219 and <= 221 },
                 "the column left out of the fit keeps the width it had",
                 "a fit that quietly resizes a column nobody asked it to touch has taken a decision away from whoever declared that width",
