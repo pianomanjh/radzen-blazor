@@ -1662,6 +1662,14 @@ leaves a floor above the width it is a floor for, the table's `min-width` then o
 columns can sum to, and the browser scales them back up to reach it - so columns promised they would
 not move, moved.
 
+**Fitting one column is not leaving the mode, and the grid has to be able to say which.** A
+double-click on a resize handle fits that column alone; it cannot rebuild a distribution, because one
+column is not a layout. But the first version said so with the same `false` that means "this grid is no
+longer fitting", and the script took the teardown branch: floor cleared, observer released, the grid
+stopped following its container until some later whole-grid fit. What travels is now `'fit'`, `'keep'`
+or `'scroll'` - rebuild, leave alone, take down - because the two facts a boolean was carrying were
+never one fact.
+
 **There are two floors, and they are spent in order.** A column headed "Manufacturing Code" over
 six-character codes carries width its values never needed, and holding that width while the grid
 scrolls is the wrong trade. So the distribution runs twice:
@@ -1701,6 +1709,16 @@ is the sum of them - and that catches a second round that never runs. It does **
 rounds being run in the wrong order: at every pressure this probe pane can produce, spending the
 headings first and the slack first land in the same place, and separating them would need a pane built
 for that alone. The order is a claim the code makes and the spec explains; it is not one a test holds.
+
+**Waiting for rows is bounded by a clock that can actually be read.** Under virtualization the rows
+arrive after the render, so the script waits for them rather than measuring an empty table. Waiting on
+frames alone waits as long as a backgrounded tab stays hidden, since `requestAnimationFrame` does not
+fire there - and the server has disarmed by then, so nothing would ask again.
+
+The first attempt at a bound tested the deadline at the top of the loop, *after* awaiting a frame. That
+reads as a timeout and is not one: the tab that needs it is exactly the tab where the await never
+returns, so the deadline was only ever consulted when it was not needed. The frame and a timer race,
+and the timer has to be able to win.
 
 ### Known consequences, recorded rather than designed around
 

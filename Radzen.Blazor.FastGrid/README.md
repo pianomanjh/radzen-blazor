@@ -683,10 +683,14 @@ stays right through a window resize with nothing watching for one. It is the las
 widest deliberately: which column is widest is a property of the data, so filtering would change which
 one stretches and the table would rearrange itself for no reason a reader can see.
 
+**Fitting one column leaves the rest alone.** Double-clicking a resize handle sizes that column to its
+content; on a grid that is fitting its container, the grid goes on doing so afterwards.
+
 **A fit you ask for animates; the one `Once` runs does not.** The columns ease into their new widths
 over 200ms rather than snapping to them, so a re-fit shows what moved. The automatic fit is the grid
 settling into its first layout, which reads as a page still loading rather than as an answer to
-anything, so it lands in one frame. `prefers-reduced-motion: reduce` turns the animation off.
+anything, so it lands in one frame. This holds under either `AutoFitOverflow`.
+`prefers-reduced-motion: reduce` turns the animation off.
 
 ### Fitting the container instead of scrolling
 
