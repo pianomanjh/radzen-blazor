@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Radzen.Blazor;
 using Xunit;
 
 namespace Radzen.FastGrid.Tests
@@ -30,8 +31,33 @@ namespace Radzen.FastGrid.Tests
             });
         }
 
+        static IRenderedComponent<RadzenFastGrid<Person>> Filtered(TestContext ctx, RenderFragment columns,
+            IEnumerable<Person> data = null) =>
+            Render(ctx, columns, p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
+            }, data);
+
         static string[] Cells(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
             cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[index].TextContent).ToArray();
+
+        static RadzenDropDown<System.Collections.IEnumerable> Picker(
+            IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
+            cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[index].Instance;
+
+        static object[] Offered(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
+            Picker(cut, index).Data.Cast<object>().ToArray();
+
+        static string[] OfferedNames(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
+            Offered(cut, index).Select(entry => entry.ToString()).ToArray();
+
+        static object Named(IRenderedComponent<RadzenFastGrid<Person>> cut, int index, string name) =>
+            Offered(cut, index).Single(entry => entry.ToString() == name);
+
+        static void Pick(IRenderedComponent<RadzenFastGrid<Person>> cut, int index, params object[] entries) =>
+            cut.InvokeAsync(() => cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[index]
+                .Instance.Change.InvokeAsync(entries.ToList())).Wait();
 
         [Fact]
         public void ACellShowsTheNameTheRowsIdStandsFor()
@@ -214,6 +240,170 @@ namespace Radzen.FastGrid.Tests
                 Assert.Equal(new[] { "Toys", "Games", "Toys", "Puzzles" }, Cells(cut, 0)));
 
             Assert.Equal(2, executor.Materializations);
+        }
+        // --- The filter -------------------------------------------------------------------------
+
+        [Fact]
+        public void TheCheckBoxListIsTheLookupItselfRatherThanAScanOfTheData()
+        {
+            // No SELECT DISTINCT runs: the names are already held and the ids come with them. "Books"
+            // is in the list and in no row, which is the point - a stable list is worth more than a
+            // shorter one, and one that moves as the data does moves a filter control under the reader.
+            using var ctx = new TestContext();
+
+            var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))));
+
+            Assert.Equal(new[] { "Books", "Games", "Puzzles", "Toys" }, OfferedNames(cut, 0));
+        }
+
+        [Fact]
+        public void PickingANameFiltersByItsId()
+        {
+            // Ids everywhere - the predicate, the descriptor and the persisted settings - so no join is
+            // needed and a filter survives someone renaming the lookup row.
+            using var ctx = new TestContext();
+
+            var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))));
+
+            Pick(cut, 0, Named(cut, 0, "Toys"));
+
+            Assert.Equal(new[] { "Toys", "Toys" }, Cells(cut, 0));
+
+            var filter = Assert.Single(cut.Instance.Filters);
+
+            Assert.Equal("CategoryId", filter.Property);
+            Assert.Equal(FilterOperator.In, filter.FilterOperator);
+            Assert.Equal(new[] { 10 }, ((System.Collections.IEnumerable)filter.FilterValue).Cast<int>());
+        }
+
+        [Fact]
+        public void ANullableKeyOffersTheRowsWithNoIdAsAChoiceOfTheirOwn()
+        {
+            // "Which products have no category" is a reasonable question, and In over a nullable key
+            // answers it. Note this is the check-box list's own rule reversed: that one drops nulls.
+            using var ctx = new TestContext();
+
+            var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, int?>(
+                x => x.RegionId, FastGridLookup.Map(Lookups.Regions()))));
+
+            Assert.Equal(new[] { "(Blank)", "North", "South" }, OfferedNames(cut, 0));
+
+            Pick(cut, 0, Named(cut, 0, "(Blank)"));
+
+            Assert.Equal(new[] { "" }, Cells(cut, 0));
+        }
+
+        [Fact]
+        public void TheOfferedListIsTheSameOneOnEveryRender()
+        {
+            // Rebuilding it per render would replace the drop-down's Data on every parent render, which
+            // is a new list for values that did not move.
+            using var ctx = new TestContext();
+
+            var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))));
+
+            var before = Picker(cut, 0).Data;
+
+            cut.Render();
+
+            Assert.Same(before, Picker(cut, 0).Data);
+        }
+
+        [Fact]
+        public void NoDistinctQueryRunsForALookupColumn()
+        {
+            // The names are already held and the ids come with them, so the one query behind an
+            // ordinary check-box list is a query this column does not have.
+            using var ctx = new TestContext();
+            var executor = new GatedLookupExecutor { Holds = 0, PassThrough = typeof(Person) };
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            Filtered(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))),
+                data: People.Sample().AsQueryable());
+
+            Assert.Equal(0, executor.Materializations);
+        }
+
+        [Fact]
+        public void SimpleModeMatchesTheTypedTextAgainstTheNames()
+        {
+            // Matching the ids as text would be useless - nobody types 30 looking for Puzzles - and
+            // refusing simple mode outright would leave FilterMode with a value that does nothing on
+            // one kind of column.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))),
+                extra: p => p.Add(g => g.AllowFiltering, true));
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("puz");
+
+            Assert.Equal(new[] { "Puzzles" }, Cells(cut, 0));
+
+            var filter = Assert.Single(cut.Instance.Filters);
+
+            Assert.Equal(FilterOperator.In, filter.FilterOperator);
+            Assert.Equal(new[] { 30 }, ((System.Collections.IEnumerable)filter.FilterValue).Cast<int>());
+        }
+
+        [Fact]
+        public void SettingFilterLookupDataBesideALookupNamesBothParameters()
+        {
+            // Silently ignoring a parameter somebody deliberately set is a failure mode this grid has
+            // paid for more than once. FilterLookupData is inherited and therefore still settable, and
+            // a column drawing its list from Lookup has nothing for it to supply.
+            using var ctx = new TestContext();
+
+            var thrown = Assert.ThrowsAny<Exception>(() => Filtered(ctx, Columns.Of(
+                Columns.Lookup<Person, int>(x => x.CategoryId,
+                    FastGridLookup.Map(Lookups.Categories()),
+                    filterLookupData: new[] { "Toys" }))));
+
+            Assert.Contains("FilterLookupData", Deepest(thrown).Message, StringComparison.Ordinal);
+            Assert.Contains("Lookup", Deepest(thrown).Message, StringComparison.Ordinal);
+        }
+
+        static Exception Deepest(Exception exception) =>
+            exception.InnerException is null ? exception : Deepest(exception.InnerException);
+
+        [Fact]
+        public void ALookupColumnIsNotSortableWithoutASortBy()
+        {
+            // Sorting by the id puts the categories in insertion order under a column showing names
+            // alphabetically - a wrong answer that looks like a working feature.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))),
+                extra: p => p.Add(g => g.AllowSorting, true));
+
+            // Against a sortable neighbour, so an assertion that could only ever see an empty list is
+            // not what is passing here.
+            var headers = cut.FindAll("thead th");
+
+            Assert.Contains("rz-sortable-column", headers[0].ClassName, StringComparison.Ordinal);
+            Assert.DoesNotContain("rz-sortable-column", headers[1].ClassName, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void ASortByIsWhatMakesItSortable()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
+                sortBy: FastGridSort<Person>.By(p => p.First))),
+                extra: p => p.Add(g => g.AllowSorting, true));
+
+            cut.Find("thead th div").Click();
+
+            Assert.Equal(new[] { "Games", "Puzzles", "Toys", "Toys" }, Cells(cut, 0));
         }
     }
 }

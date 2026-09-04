@@ -121,6 +121,24 @@ namespace Radzen.FastGrid
             set => columnsShowingText = value;
         }
 
+        string? blankFilterText;
+
+        /// <summary>
+        /// What a lookup column's filter calls the entry standing for the rows carrying no id at all.
+        /// Only a column whose key can be null offers one.
+        /// </summary>
+        /// <remarks>
+        /// A spreadsheet's key rather than a grid's, because it is the only string in the resources
+        /// that already means "the rows with nothing here" - and it is translated into every culture
+        /// Radzen ships, which a key of this component's own would not be.
+        /// </remarks>
+        [Parameter]
+        public string BlankFilterText
+        {
+            get => blankFilterText ?? Localize(nameof(Blazor.RadzenStrings.Spreadsheet_Blank));
+            set => blankFilterText = value;
+        }
+
         string? selectVisibleColumnsAriaLabel;
 
         /// <summary>The column picker's accessible name.</summary>
