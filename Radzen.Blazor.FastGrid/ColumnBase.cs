@@ -902,19 +902,40 @@ namespace Radzen.FastGrid
         /// their property type, so the ordering is a typed expression the provider can translate rather
         /// than a parsed string.
         /// </summary>
+        /// <remarks>
+        /// <b>This is the first of six methods that answer with something or with <c>null</c>, and
+        /// <c>null</c> means the same thing in all six: this column cannot compose that.</b> Say that
+        /// and nothing more - it is the whole of what a column decides, and the rest is the grid's.
+        /// <para>
+        /// What the grid does about it, so that declining is not a leap in the dark: a filter it cannot
+        /// get from the column is built from the column's path by reflection instead, which costs that
+        /// grid its ahead-of-time-compilation cleanliness; a sort it cannot get is left out, and the
+        /// rest of the ordering stands. Where it still can, the grid first takes the composition to the
+        /// other route rather than leaving the column out - because <b>a column may decline one route
+        /// and not the other, and that is a different answer rather than a slower one.</b>
+        /// </para>
+        /// <para>
+        /// No column in this library is like that, and it is worth knowing that the symmetry is a
+        /// property of these columns rather than of the arrangement: each guards both of its sort
+        /// methods on one condition and both of its filter methods on one condition, so it declines
+        /// both routes or neither, and a decline currently costs a grid time and not a different
+        /// answer. A column that broke the symmetry is the case those rules exist for, and is the thing
+        /// to think hardest about before writing one.
+        /// </para>
+        /// </remarks>
         public virtual IOrderedQueryable<TItem>? ApplySort(IQueryable<TItem> source, bool descending) => null;
 
         /// <summary>
         /// Adds this column's ordering after one already applied, for a grid sorting by more than one
-        /// column. Null when the column cannot be ordered by, exactly as <see cref="ApplySort" />.
+        /// column. <c>null</c> as for <see cref="ApplySort" />.
         /// </summary>
         /// <param name="source">The already-ordered query.</param>
         /// <param name="descending">Whether to order descending.</param>
         public virtual IOrderedQueryable<TItem>? ApplyThenBy(IOrderedQueryable<TItem> source, bool descending) => null;
 
         /// <summary>
-        /// The predicate this column's current filter composes, or null when the column cannot compose
-        /// one and the grid should fall back to building it from the column's path by reflection.
+        /// The predicate this column's current filter composes. <c>null</c> as for
+        /// <see cref="ApplySort" />.
         /// </summary>
         /// <remarks>
         /// The same reasoning as <see cref="ApplySort" />, and it matters more here: only the column
@@ -932,8 +953,8 @@ namespace Radzen.FastGrid
             bool inMemory) => null;
 
         /// <summary>
-        /// The same filter as <see cref="ApplyFilter" />, as a delegate, or null when the column cannot
-        /// compose one.
+        /// The same filter as <see cref="ApplyFilter" />, as a delegate. <c>null</c> as for
+        /// <see cref="ApplySort" />.
         /// </summary>
         /// <remarks>
         /// Only for a source that is already in memory, and worth having for exactly that: handing an
@@ -944,13 +965,15 @@ namespace Radzen.FastGrid
         public virtual Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity) => null;
 
         /// <summary>
-        /// Orders an in-memory sequence by this column, or returns null when it cannot order - the same
-        /// contract as <see cref="ApplySort" />, which the grid already skips over.
+        /// Orders an in-memory sequence by this column. <c>null</c> as for <see cref="ApplySort" />.
         /// </summary>
         public virtual IOrderedEnumerable<TItem>? ApplySortInMemory(System.Collections.Generic.IEnumerable<TItem> source,
             bool descending) => null;
 
-        /// <summary>Adds this column to an in-memory ordering already begun.</summary>
+        /// <summary>
+        /// Adds this column to an in-memory ordering already begun. <c>null</c> as for
+        /// <see cref="ApplySort" />.
+        /// </summary>
         public virtual IOrderedEnumerable<TItem>? ApplyThenByInMemory(IOrderedEnumerable<TItem> source,
             bool descending) => null;
 
