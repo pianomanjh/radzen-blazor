@@ -546,7 +546,13 @@ Each layer below caught real faults the previous one missed. Use all of them.
   `aria-sort` now follow `AllowSorting`, so the grid no longer advertises a control that is not there.
 - **`ShowExpandColumn="false"` is now a placement choice, not a saving.** It used to avoid 404 KB; row
   detail costs under a kilobyte, so the parameter is about where the control lives.
-- **Nothing a column declares reaches the first asynchronous load.** A column's declared filter becomes
+- ~~**Nothing a column declares reaches the first asynchronous load.**~~ - **done in §23**, and not by
+  the reload this bullet anticipated. The first load moved out of the parameter set and into
+  `OnAfterRenderAsync`, which is the first moment the column list is complete: one query, composed from
+  everything the markup declared, rather than one composed from nothing followed by a correction. The
+  rule it settled is that **nothing composing from column state may run before the first render** -
+  which the settings restore two bullets down had already been obeying alone. The record of what was
+  wrong, kept because the diagnosis is worth more than the fix: A column's declared filter becomes
   its current one, and its declared sort reaches the grid, in the column's own `OnParametersSet`, which
   runs as the table is drawn - and the load that fetches the first page is started from the grid's
   *parameter-set* path, before any column has registered. So a grid over an executor-backed queryable
@@ -4469,6 +4475,9 @@ not when it starts**, and only where it knows a load will actually run - `LoadDa
 `AsyncOwnsData`, the same predicate the settings reload is guarded by. A flag set for a load that never
 starts is a scrim that never lifts.
 
+*(The build corrected this paragraph's mechanics: `RenderEmpty` draws on that render either way, and
+what the scrim does is cover it rather than prevent it. The addendum below has it.)*
+
 ### What this costs
 
 **A prerendered `LoadData` grid with a synchronous handler loses its prerendered rows.**
@@ -4505,3 +4514,65 @@ Then the mutation §9 asks for, on the deferral itself rather than on any test: 
 - **The owed load and the settings reload are two flags that must not both fire.** One subsumes the
   other by ordering, which is the same class of coupling §22 warned about: an ordering that is correct
   and is not asserted anywhere.
+
+### What the build changed
+
+**The design's central claim held exactly: no existing test had to be rewritten.** §23 said load counts
+would stay one - one load, later - and that the counts pinned across the executor, `LoadData` and
+virtualization suites should therefore survive. They did, all of them, including
+`FastGridLoadDataTests.IsInvokedOnceOnTheFirstRender`, whose name the deferral makes literally true for
+the first time. The suite went 825 → 834 by addition alone.
+
+**The paragraph about the empty template was wrong about its own mechanism.** §23 said a deferred load
+would make a grid "flash *no records* before its first query had even started". `RenderEmpty` draws
+`EmptyTemplate` on any render with no rows and does not consult `IsLoading` - so the empty message is in
+the DOM on that render *whether or not* the grid marks itself loading. What `IsLoading` does is draw the
+scrim **over** it. The mitigation is right and the reason given for it was not.
+
+That mattered for the test, not only for the prose. Presence does not discriminate: both orderings end
+with the scrim drawn, because `LoadPageAsync` marks the grid loading as it begins. **Order does.**
+`StateHasChanged` queues a render rather than running one, so a grid that marks itself loading only when
+the load starts sends the query out first and paints the scrim afterwards. The test asserts that the
+loading template is invoked before the executor is asked for anything, and it is the only assertion here
+that could tell the two apart.
+
+**Two faults were found by reading the diff rather than by any test.** The executor deferral was written
+`!drawn && !AllowVirtualization && AsyncOwnsData`, and the virtualization branch above it has already
+returned - so that middle test was dead. And `PayOwedLoadAsync` invoked the `LoadData` handler without
+re-reading `AllowVirtualization`: a parameter set between the deferral and the first render can switch
+virtualization on, and then the handler would be asked for a page with no window at all, which is the
+call the parameter-set path declines to make for exactly that reason. Neither had a test and neither has
+one now; both are reachable only through a parameter change inside a window one render wide.
+
+**A third case the design did not mention:** the source can stop being one the executor owns between the
+deferral and the render that pays it. Nothing then runs, and nothing else would lift the scrim the
+deferral raised - so `PayOwedLoadAsync` lowers it itself. This is the "flag raised for a load that never
+runs" the design warned about, arriving from the one direction it did not name.
+
+### Verified
+
+- `dotnet build Radzen.Blazor.FastGrid` - 0 warnings, 0 errors.
+- 834 unit tests (825 before, 9 added), and the 38-test browser suite.
+- **Three mutations, each discriminating exactly.** Removing the executor deferral fails the declared
+  filter, the declared sort, the `aria-sort` test and the scrim ordering. Removing the `LoadData`
+  deferral fails both `LoadDataArgs` tests and nothing else. Not marking the grid loading when it defers
+  fails the scrim ordering and nothing else. The two controls - in memory, virtualized - and
+  `TheDeclaredStateCostsNoSecondQuery` passed under all three, which is what a control is for.
+- **Benchmarks: no measurable change**, and there is no mechanism for one. Control at `9b4711381` and
+  the run after the change agree within the ~0.3 KB noise floor on every row, with the deltas split 24
+  down and 22 up - the signature of noise rather than of a regression. The change adds two `bool` fields
+  set once per component and a branch in a lifecycle method; the bench renders in-memory grids, which
+  never reach either. bare 154.66 → 154.73, `+ sorted by one column` 175.82 → 175.74, `+ a filter row`
+  158.80 → 159.13, `+ ItemKey` 178.17 → 178.04, `+ selection and ItemKey` 190.14 → 190.13. No time ratio
+  is quoted; `--job short` does not support one.
+
+### Where this could still be wrong
+
+The three bullets the design section ends with all still stand. Two more the build added:
+
+- **The two flags are ordered, and the ordering is still not asserted.** `settingsNeedReload` subsumes
+  `loadOwed` by an `else`, and a test that fails when the `else` becomes an `if` was not written. §22's
+  parting gap is the same shape and this widens it rather than closing it.
+- **`drawn` says the grid has rendered, which is only a proxy for "the columns have registered".** They
+  coincide because `Defer` makes them coincide. Nothing checks the coincidence, and the failure mode if
+  it ever broke is silent - a query composed from a partial column list looks exactly like a correct one.
