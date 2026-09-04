@@ -2205,6 +2205,19 @@ never equal, so two columns each writing `FastGridLookup.Items(...)` in their ow
 What the sharing actually pays for is the ordinary shape - one lookup held in a field and handed to both
 columns - where it is the same instance and the second column skips building the map at all.
 
+**`HasFilter` is virtual, and an empty selection means two opposite things.** Not a departure this
+section foresaw at all - it came out of *What `Simple` mode does on a lookup column* meeting the rule
+that a check-box list with nothing ticked is no filter. On the box, a name nothing answers to *is* an
+answer and the grid should show no rows; on the list, nothing ticked is the absence of a filter. Both
+are `In` over an empty list of ids, so the value cannot tell them apart. What can is that only the box
+records what was typed, so that is what the override asks.
+
+The consequence reaches further than the column: **the typed text is part of the stored settings now**,
+because a filter captured and restored through the value alone comes back as the other one - a grid
+showing nothing restored as a grid showing everything. And recording that text had to move: it was
+being written by the caller after `Filter` returned, and `Filter` reloads, and the reload is what
+announces the settings, so it was recorded after the thing that stores it.
+
 Two smaller things, recorded because they will look arbitrary otherwise:
 
 - **The blank entry is `Spreadsheet_Blank`, so it reads "(Blank)" rather than "(none)".** It is the only
