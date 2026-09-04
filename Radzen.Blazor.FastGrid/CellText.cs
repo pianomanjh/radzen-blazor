@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
@@ -21,9 +22,8 @@ namespace Radzen.FastGrid
         static StringBuilder? shared;
 
         /// <summary>
-        /// Lists the members of a sequence. The string a cell of a collection column produces is
-        /// unavoidable - and still cheaper than the render fragment a template would have cost - but the
-        /// builder it is assembled in is not: one per thread is reused across every such cell.
+        /// Lists the members of a sequence whose element type is only known at run time - a column
+        /// declared as <c>object</c>, or one whose collection was recognised from its interfaces.
         /// </summary>
         /// <param name="sequence">The members to list.</param>
         /// <param name="separator">What goes between them.</param>
@@ -47,10 +47,7 @@ namespace Radzen.FastGrid
                     return first ?? string.Empty;
                 }
 
-                // Taken rather than borrowed: text is application code, and a ToString that rendered a
-                // grid of its own would otherwise write into the builder this call is still using.
-                var builder = shared ?? new StringBuilder();
-                shared = null;
+                var builder = Rent();
 
                 builder.Append(first).Append(separator).Append(text(enumerator.Current));
 
@@ -59,22 +56,81 @@ namespace Radzen.FastGrid
                     builder.Append(separator).Append(text(enumerator.Current));
                 }
 
-                var joined = builder.ToString();
-
-                // One cell that listed something enormous must not keep that buffer alive for the
-                // lifetime of the thread, so an overgrown builder is dropped rather than kept.
-                if (builder.Capacity <= 1024)
-                {
-                    builder.Clear();
-                    shared = builder;
-                }
-
-                return joined;
+                return Return(builder);
             }
             finally
             {
                 (enumerator as IDisposable)?.Dispose();
             }
+        }
+
+        /// <summary>
+        /// The same for a sequence whose element type is a type parameter, which is the difference
+        /// between a value member costing a string and costing a string and a box.
+        /// </summary>
+        /// <remarks>
+        /// Written out rather than shared with the loop above: the two differ in the enumerator they
+        /// walk, and the only way to abstract over that is the interface that does the boxing. What is
+        /// shared is the part that is a policy rather than a loop - which builder, and when it is kept.
+        /// </remarks>
+        internal static string Join<T>(IEnumerable<T> sequence, string separator, Func<T, string?> text)
+        {
+            using var enumerator = sequence.GetEnumerator();
+
+            if (!enumerator.MoveNext())
+            {
+                return string.Empty;
+            }
+
+            var first = text(enumerator.Current);
+
+            if (!enumerator.MoveNext())
+            {
+                return first ?? string.Empty;
+            }
+
+            var builder = Rent();
+
+            builder.Append(first).Append(separator).Append(text(enumerator.Current));
+
+            while (enumerator.MoveNext())
+            {
+                builder.Append(separator).Append(text(enumerator.Current));
+            }
+
+            return Return(builder);
+        }
+
+        /// <summary>
+        /// The shared builder, taken rather than borrowed: the text delegate is application code, and a
+        /// <c>ToString</c> that rendered a grid of its own would otherwise write into the builder the
+        /// call that lent it is still using.
+        /// </summary>
+        static StringBuilder Rent()
+        {
+            var builder = shared ?? new StringBuilder();
+
+            shared = null;
+
+            return builder;
+        }
+
+        /// <summary>
+        /// The joined string, and the builder back on the shelf - unless one cell listed something
+        /// enormous, which must not keep that buffer alive for the lifetime of the thread.
+        /// </summary>
+        static string Return(StringBuilder builder)
+        {
+            var joined = builder.ToString();
+
+            if (builder.Capacity <= 1024)
+            {
+                builder.Clear();
+
+                shared = builder;
+            }
+
+            return joined;
         }
     }
 }

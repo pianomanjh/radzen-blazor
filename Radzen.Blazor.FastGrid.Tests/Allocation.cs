@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq.Expressions;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -75,5 +77,29 @@ namespace Radzen.FastGrid.Tests
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
             => builder.AddContent(sequence,
                 ((IFormattable)(object)compiled(item))?.ToString(format, CultureInfo.CurrentCulture));
+    }
+
+    /// <summary>
+    /// A lookup collection cell listed through the untyped join, which boxes every id on the way to a
+    /// <c>Func&lt;object, string&gt;</c>. Identical characters out, so the difference from the real
+    /// column is the boxes and nothing else.
+    /// </summary>
+    sealed class BoxingJoinColumn<TItem, TKey> : ColumnBase<TItem>
+    {
+        readonly Func<TItem, IEnumerable<TKey>> ids;
+        readonly string separator;
+        readonly Func<object, string> show;
+
+        public BoxingJoinColumn(Expression<Func<TItem, IEnumerable<TKey>>> property,
+            IReadOnlyDictionary<TKey, string> names, string separator)
+        {
+            ids = property.Compile();
+            this.separator = separator;
+            show = value => value is TKey key && names.TryGetValue(key, out var text) ? text : value?.ToString();
+        }
+
+        public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
+            => builder.AddContent(sequence,
+                ids(item) is { } members ? CellText.Join((IEnumerable)members, separator, show) : null);
     }
 }
