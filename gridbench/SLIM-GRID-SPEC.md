@@ -401,7 +401,14 @@ Each layer below caught real faults the previous one missed. Use all of them.
    reported a 507 KB regression that was an artefact of that.
 
    **`--job short` measures allocation, not time.** Allocation repeats to two decimals across runs;
-   the time column does not. Reorder came out at 1.76x, 1.86x and 0.97x on three passes of it, frozen
+   the time column does not.
+
+   **That first half is too strong, and §18 already knew it.** The bare row has read 154.55, 154.58,
+   154.66, 154.73, 154.77 and 154.81 on runs of bit-identical code - a spread of **0.26 KB**, which is
+   the noise floor §18 measured and larger than most of the differences this file quotes to two
+   decimals. Allocation repeats far better than time and is worth reading to two decimals *within* a
+   run; across runs, a difference under about 0.3 KB on a 154 KB row has not been measured. Every
+   "unmoved" in this file means that, and §21 is where it caught up with the wording. Reorder came out at 1.76x, 1.86x and 0.97x on three passes of it, frozen
    at 1.01x and then 2.68x, every one with an error bar wider than the difference being claimed. Both
    settled under a full-length run - reorder 0.93x, frozen 1.10x, errors under 3%. Quote a time ratio
    from a full-length run or do not quote one. And run it on a quiet machine: one of those passes had
@@ -567,7 +574,7 @@ Each layer below caught real faults the previous one missed. Use all of them.
   position in a dragged order never survives. `RadzenDataGrid` answers both with `UniqueID`, matched
   ahead of `Property`. Adopting that here is a new public parameter and a settings-format addition,
   which is why it is recorded rather than done. §10b has the failure in full.
-- **Row expansion is keyed on the item instance, which both leaks and loses state.** `expandedRows`
+- ~~**Row expansion is keyed on the item instance, which both leaks and loses state.**~~ - **done in §21**, and the leak is bounded rather than closed: `RowCollapse` has to name a row that may no longer be on screen, so one instance per currently-expanded row is kept. What ended is the accumulation. `expandedRows`
   is a `HashSet<TItem>` added to by `ToggleRow` and emptied only by an explicit collapse or
   `ExpandMode.Single`. Over a source that re-materialises - `AsNoTracking()` read per render, or a
   `LoadData` handler assigning a fresh page - every entity ever expanded is pinned for the life of
@@ -580,6 +587,11 @@ Each layer below caught real faults the previous one missed. Use all of them.
   for precisely the grids the leak affects. `lookups` tolerates that because rebuilding a check-box
   list costs nothing; user state does not. The grid already has `ItemKey`, and keying expansion by it
   would answer the leak and the lost state together. Recorded rather than done, for that reason.
+
+  **That last sentence is what §21 had to correct.** Keying it answers the lost state; the leak it only
+  bounds, because `RowCollapse` takes the row and naming a row that may no longer be on screen means
+  having kept one. What ended is the accumulation, and it ended by construction: a dictionary keyed on
+  identity cannot hold two entries for one row.
 - ~~**A sortable header that is not currently sorted draws no sort icon.**~~ - **done.** The glyph is
   now reserved the way upstream reserves it, so hovering signals something and the first click no
   longer inserts an element into the flex line and re-truncates the title. It became urgent rather
@@ -619,8 +631,10 @@ Each layer below caught real faults the previous one missed. Use all of them.
   fit in §13 which dodges it deliberately, this, and the drop-down's `Adopt` found in §19 - and this is
   the only one whose cost was a database round trip. §14 never inherits it: a lookup column runs no
   distinct scan at all.
-- **A multiple-select drop-down over a re-materialising source loses its ticks and doubles its value.**
-  Found in §19 and left there, because fixing it is the identity question rather than a patch. The grid
+- ~~**A multiple-select drop-down over a re-materialising source loses its ticks and doubles its value.**~~
+  - **done in §21**, and it needed no new parameter: the drop-down already knew a row's id, as `ValueOf`,
+  and its chosen rows are now a set that compares by it. The grid is handed that same collection as its
+  `Selection`, so one comparer answered both halves. Found in §19 and left there, because fixing it is the identity question rather than a patch. The grid
   draws a tick by asking a `HashSet<TItem>` whether it holds the row being drawn, and that set compares
   by reference - so a source read again per render ticks nothing, and a click on an apparently unticked
   row `Remove`s the new instance, misses, and `Add`s it beside the old one: two objects, one id, and a
@@ -1097,12 +1111,17 @@ the *rows* whose entire purpose is to move the one being looked for, so focus fo
 `ItemKey` - which already exists, as the key the render tree diffs rows by - and falls back to the
 position where no `ItemKey` is supplied.
 
-**This paragraph used to say `ItemKey` "already backs selection membership", and it does not.** Selection
-membership is `selection.Contains(item)` over the collection the caller supplied
-(`RadzenFastGrid.cs:1723`, `:2042`), which compares however that collection compares - by reference for
-the `HashSet<TItem>` the grid's own keyboard range builds. `ItemKey` has exactly two readers, `SetKey`
-and this. Found by §20's review; it makes focus the *only* place item identity is keyed rather than
-compared, which strengthens §12's argument and weakens the claim that the precedent was already set.
+**This paragraph used to say `ItemKey` "already backs selection membership", and when §20's review found
+that false it was true that focus was the only place a row was named rather than compared.** Selection
+membership was `selection.Contains(item)` over the collection the caller supplied, which compares however
+that collection compares - by reference for the `HashSet<TItem>` the grid's own keyboard range built.
+
+**§21 then made the original sentence true, by a different route than it claimed.** Selection membership
+*is* keyed now, on the render path, against a set of keys rather than through `ItemKey` being consulted
+by the collection; row expansion is keyed too; and `ItemKey` has five reading sites rather than two. So
+the correction above is a record of what was so between §20 and §21, and focus is no longer the only
+place. What survives unchanged is why §12 chose it: a sort or a filter moves the row being looked for,
+so focus has to follow the item rather than the position.
 
 **Nothing to focus.** Keys are inert while `IsLoading`. Focus clears when the row set empties and
 returns to the first row when data arrives; retaining an index against an empty set means holding a
@@ -4079,3 +4098,162 @@ be documented on the parameter.
   identity comparer would fix the lost state alone, in one line and with no second storage, and would
   leave the accumulation. If the dictionary's own cost is visible on the row-detail row, that is the
   cheaper piece and this section should say so.
+
+### What the build changed
+
+All four faults are fixed and asserted. Two of this section's claims did not survive, one of them was
+hiding a cost of 46.9 KB per render, and the fork it left open is settled below with the number it asked
+for.
+
+**"A membership test that uses the key adds no allocation at all" was the sentence that hid it.** True
+only of a test that *probes with the key*. The first build did it the obvious way instead - an
+`IEqualityComparer<TItem>` over `ItemKey`, handed to every set - and that reads the key a second time
+per row, because `GetHashCode` is given the *row* and has to derive the key from it, and deriving a
+value-typed key is a box. Measured on the row added for this piece: **225.37 KB against a control of
+178.49**, or **+46.9 KB** on a thousand rows, on top of the 23.5 KB `ItemKey` already costs. §3's rule 5
+in the one shape this section exists to serve.
+
+**So there are two mechanisms, and the rule that picks between them is where the question is asked.**
+*On the render path, ask by key* - `RenderRow` computes the row's key once, and the tick, the expansion
+lookup and `SetKey` all read that one call, so the lookups are free. *Off it, ask by comparer* -
+`SelectRow` and the keyboard range run once per click, not once per row, and there the comparer is
+simply the clearest way to say what a set means. Written down because it is the kind of split that looks
+like indecision until the number is beside it.
+
+**Change 1 said the identity would be a struct and it is a class.** "§3 rules out its being a class,
+since a reference per grid buys nothing a field gives" - except that what the off-the-render-path half
+needs is an `IEqualityComparer<TItem>`, which is an interface, so a struct would be boxed at every
+hand-off. It is one object per grid, made the first time a key is used and never rebuilt: it reads
+`ItemKey` through the component rather than capturing it, which is what keeps a key written in markup -
+a new delegate on every render if it captures anything - from making this the fifth participant in §10's
+`!ReferenceEquals` trap.
+
+**Change 4 was built and then taken out again.** Publishing the new selection as a set that compares by
+identity, rather than as the list it has always been, was argued as making the per-row tick right for
+free. Once the tick is answered by key that is no longer true of it - it buys nothing - and what is left
+is a change to what a caller receives, including the order rows were selected in. Changing that for no
+gain is not a trade. `SelectionChanged` publishes a `List<TItem>` exactly as before; the identity set is
+what composes it.
+
+**The fork, settled.** Keying the tick for a selection the grid did not build costs **190.14 KB against
+178.49**, or **+11.65 KB**, and it is kept. Three things decided it. It is confined to the only shape
+that can ask the question - a grid with both a key and a selection - so §3's rule 3 holds and every
+other row is unmoved: bare **154.73**, selection **154.69**, one sort **175.83**, a filter row
+**158.81**, row detail **155.68**, `+ ItemKey` **178.07**, a reference-typed key **154.77**, against
+controls of 154.55, 154.65, 175.87, 158.77, 155.64, 178.03 and 154.59. What it buys is a wrong answer on
+screen rather than a slow one. And the arithmetic accounts for it: 250 selected rows of 1000 are 250
+boxed keys at 24 bytes, which is 6 KB, and a `HashSet<object>` holding them is about 5.3 KB - together
+11.3 against 11.65 measured. **The set is allocated once per grid and refilled**, so in a component that
+lives across renders only the 6 KB recurs; `gridbench` renders a fresh grid per operation and cannot see
+that, which is the same limit §19 recorded about `DropDownBench`.
+
+**§10's fix for the expansion leak is available and this is not quite it.** "Keying expansion by
+`ItemKey` would answer the leak and the lost state together." The lost state, yes. The leak is bounded
+rather than closed: `RowCollapse` takes the row, and naming a row that may no longer be on screen means
+having kept one - so the store is a `Dictionary<object, TItem>` and holds the first row seen for each
+key. What that ends is the *accumulation* - ten re-reads of one expanded row are one entry, not ten -
+which is what made §10 call it a leak. One live instance per currently-expanded row is the price of the
+event, and the test that pins it is that a single collapse empties the store.
+
+**The null key, which this section flagged and did not settle.** A row whose key is null is compared as
+itself, at both levels: `RowIdentity` falls back to default equality when either side has no key, and
+the expansion store consults the keyed dictionary and the unkeyed set in turn, because a key that
+answers for some rows and not others leaves rows in each. That makes identity a property of a row rather
+than of a grid, which is the wider claim this section warned it would be - and it is the right one,
+because a lookup column's id legitimately is null.
+
+**The fault this section found by reading is now the one with the sharpest test.** `SelectRow` asking
+the caller's collection, missing, and adding the row beside the equal one already there had never been
+asserted; over a re-read source the selection held it twice. It is one line in the test and the
+unfixed code answers 2 where it answers 0.
+
+**Five mutations, five caught, two rewritten.** The two that failed to build did so for incidental
+reasons - a pattern variable that can never be null, and an always-false comparison - which under
+`TreatWarningsAsErrors` is a compile error rather than a result, exactly as this branch's process rule
+says. Rewritten to compile, both were caught. The mutation worth keeping is the first: making the key
+name a row without hashing it - so `Equals` still reads the key and no set can ever find the row - fails
+five of the eight tests and leaves the sixth green, and that sixth is the one asserting a grid *without*
+a key behaves as it always has.
+
+### What the review found that the build had not
+
+Two read-only passes, one against §3 and `CONTRIBUTING.md` and one against this section's own claims.
+Between them they found a regression this piece introduced, three claims in the addendum above that are
+not true of the code, a test that proved something other than what it said, and one number that had been
+measured against a build that no longer existed.
+
+**A regression, and it is the exact case the null-key rule exists for.** `ReadSelection` drops rows whose
+key is null from the key set, and the tick then committed to that set with no way back - so in a keyed
+grid a *selected* row whose key is null drew **not selected**, unconditionally, even with the caller's
+`Selection` holding that very instance. Before this piece `Selection.Contains(item)` answered true. So
+the piece reintroduced "ticks nothing" for one row shape while removing it for every other, in the shape
+the addendum above names as the reason for the rule ("a lookup column's id legitimately is null"). The
+tick now falls back to the collection for an unnamed row, as `Holds` and `RowIdentity` already did, and
+a test pins it.
+
+**"A row whose key is null is compared as itself, at both levels" was wrong about how many levels there
+are.** There are three - the comparer, the expansion store and the tick - and the third had no fallback.
+Two out of three, written as if it were all of them, is how the regression above went in.
+
+**Two more claims above do not survive.** *"One type says how a row is named"* - there is no such type:
+`RowIdentity` only compares, the key itself is answered by `RowKeyOf` on the grid, and the render path
+uses neither, probing a set of raw keys. That is the two-mechanism split, argued honestly a paragraph
+later and left contradicted a paragraph earlier. And *"every comparison the grid makes itself goes
+through identity… no cost: a comparer on a set it was already allocating"* is true of the keyboard range,
+which already built two sets, and false of `SelectRow`, which built one over the whole selection where it
+had built none - including in `Single` mode, where it was used for one membership test, and including for
+a grid with no key, where the comparer is the default one and the set buys nothing. It is asked of the
+collection again when there is no key.
+
+**And one half of change 5 was never built.** §21 said the drop-down would set the inner grid's `ItemKey`
+from `ValueProperty` *and* give `SelectedItems` the matching comparer. Only the second was done, and it
+is sufficient - the popup grid has no key, so its tick asks the collection, and the collection is the set
+that compares by id. Recorded because the section still describes a mechanism the code does not use.
+
+**The mutation record was measured against a build that no longer existed.** "Fails five of the eight
+tests and leaves the sixth green" was true when the tick still went through the comparer. Once the tick
+was keyed, a comparer mutation cannot reach the render path at all - which is the design's own split
+working, and it makes the recorded number wrong rather than merely stale. Measured again on the eleven
+tests as they now stand: the comparer mutation fails **three**, all of them the off-the-render-path
+sites, and the render path needed a mutation of its own - the expansion store looking a row up by the
+row rather than by its key - which fails **two**. The lesson is narrower than "re-run your mutations":
+*a mutation is scoped to a mechanism, and splitting one mechanism into two silently halves what an old
+mutation can prove.*
+
+**A test proved something better than what it was written to prove.** It asserted that the published
+selection keeps two rows sharing a key, and it could not run: `SetKey` is given the same key the identity
+uses, and Blazor's diff refuses duplicate sibling keys outright. **A non-unique `ItemKey` is not a state
+a keyed grid can reach** - the renderer rejects it on the first diff - so the whole worry about
+de-duplicating a selection was about an unreachable state. The test now asserts the refusal, and the
+justification for publishing a list rather than a set is corrected: it is that a set is an allocation
+over the whole selection bought for one membership test, not that it would lose rows.
+
+**The accumulation claim is not tested and does not need to be.** §21's verification item 5 asked for a
+test that the store does not accumulate, calling it the claim most likely to be wrong. It is
+unreachable instead: a dictionary keyed on identity cannot hold two entries for one row, so the
+accumulation ended by construction rather than by care. The test written for it does discriminate, but
+against the *lost state* - which another test already proves. **A fault made unrepresentable does not
+get a test; it gets a sentence saying why it cannot happen.**
+
+**§21's third risk bullet is answered.** "The drop-down's comparer calls `ValueOf` on both sides of every
+comparison… the same call in a comparer has not been measured at all." `DropDownBench` could not measure
+it, because every row in it leaves the chosen set empty and an empty set answers without hashing
+anything. A row that chooses three: **50.64 KB against 49.15**, and the number is *the same at fifty rows
+and at a thousand*. That flatness is the whole answer - the comparison is per drawn row and a popup draws
+a page, so it is bounded by `PageSize` and not by the data. The closed and open rows are unmoved at 15.73
+and 49.15 against §19's 15.63 and 49.06.
+
+**Four smaller things, each a fault of its own.** A row filed under a key could only be removed by the
+key it has *now*, so taking `ItemKey` away stranded the entry for good and `ExpandMode.Single` would then
+collapse a row nobody had expanded. `TryAdd` was defended by a comment describing a branch the control
+flow already excludes, and it kept the *first* instance where §21 and the field's own comment both said
+the last - the indexer now does, so `RowCollapse` names the freshest row rather than the most detached
+one. The `Single` sweep lost its "anything open?" guard and allocated a list per expand. And the
+drop-down's chosen set is hashed by `ValueProperty`, which nothing re-filed when that expression changed
+- §19's fault by another road, and the one new invalidation obligation this piece created.
+
+**The precision this file quotes numbers to is wrong, and §9 is corrected rather than §21.** The bare row
+has read 154.55, 154.58, 154.66, 154.73, 154.77 and 154.81 on bit-identical code. Most of the "+0.04"
+deltas above are inside that, and so is every "unmoved". The conclusion holds - one row moved and it is
+the one the fork is about - but §9 claimed allocation "repeats to two decimals across runs" and it does
+not, and quoting to two decimals implied a stability the harness does not have.

@@ -211,9 +211,46 @@ namespace Radzen.FastGrid
         /// <summary>Raised with the row that was collapsed.</summary>
         [Parameter] public EventCallback<TItem> RowCollapse { get; set; }
 
-        // Allocated on the first expand: a grid whose rows are never expanded never holds the set, and
-        // one with no Template never reaches the lookup at all.
+        IEqualityComparer<TItem>? rowIdentity;
+
+        /// <summary>
+        /// How this grid tells one row from another - <see cref="ItemKey" /> where there is one, the row
+        /// itself where there is not. Every set the grid builds over its own rows is built with it.
+        /// </summary>
+        /// <remarks>
+        /// The comparer reads <see cref="ItemKey" /> through this component rather than capturing it, so
+        /// it is allocated once and never has to be rebuilt: a key written in markup that captures
+        /// anything is a new delegate on every render, and rebuilding on that identity is the trap §10
+        /// has four recorded participants in. With no key this is the default comparer, which is what
+        /// every one of these lookups used to be - so a grid without one behaves exactly as it did.
+        /// </remarks>
+        internal IEqualityComparer<TItem> RowComparer => ItemKey is null
+            ? EqualityComparer<TItem>.Default
+            : rowIdentity ??= new RowIdentity<TItem>(item => ItemKey!(item));
+
+        // The rows held open, in two shapes, because this is looked up once per row and §3 rules out
+        // paying for that twice.
+        //
+        // Keyed, the entry is the row's key and the value is the row last seen carrying it. The key is
+        // the one RenderRow has already computed for SetKey, so the lookup costs nothing at all - which
+        // a comparer cannot manage, because IEqualityComparer.GetHashCode is handed the row and has to
+        // read the key again, and reading it is a box. Measured: the same lookup through a comparer
+        // costs 46.9 KB per render at 1000 rows. The row is kept beside its key because RowCollapse has
+        // to name a row that may no longer be on screen, and TryAdd keeps the first one seen rather than
+        // putting an equal one beside it - which is the accumulation §10 recorded as a leak.
+        //
+        // Unkeyed there is nothing to key by, so it is the set it always was, compared the way it always
+        // was. Both are consulted, because a key that answers null for some rows and not others leaves
+        // rows in each.
+        Dictionary<object, TItem>? expandedByKey;
         HashSet<TItem>? expandedRows;
+
+        /// <summary>This row's key, or null when there is none. One call per row, and its only one.</summary>
+        object? RowKeyOf(TItem item) => ItemKey is { } key ? key(item) : null;
+
+        bool Holds(TItem item, object? rowKey) =>
+            (rowKey is not null && expandedByKey is not null && expandedByKey.ContainsKey(rowKey))
+            || (expandedRows is not null && expandedRows.Contains(item));
 
         // One arguments object for every cell of every render, pointed at each cell in turn. Measured:
         // allocating one per cell costs 195 KB at 1000 x 5 before the handler does anything, and the
@@ -236,7 +273,49 @@ namespace Radzen.FastGrid
 
         /// <summary>Whether the given row is expanded.</summary>
         /// <param name="item">The row.</param>
-        public bool IsRowExpanded(TItem item) => expandedRows is not null && expandedRows.Contains(item);
+        public bool IsRowExpanded(TItem item) => Holds(item, RowKeyOf(item));
+
+        // Whether anything is held open at all, so the Single-mode sweep below allocates nothing for the
+        // ordinary case of expanding the first row.
+        bool AnyOpen => expandedByKey is { Count: > 0 } || expandedRows is { Count: > 0 };
+
+        // Drops any entry holding this row under a key it no longer answers to.
+        void Unfile(TItem item)
+        {
+            if (expandedByKey is null)
+            {
+                return;
+            }
+
+            foreach (var entry in expandedByKey)
+            {
+                if (EqualityComparer<TItem>.Default.Equals(entry.Value, item))
+                {
+                    expandedByKey.Remove(entry.Key);
+
+                    return;
+                }
+            }
+        }
+
+        // The rows currently held open, for the one caller that has to name them all - Single mode, which
+        // collapses what was there before raising an event per row. Allocated only on that path.
+        List<TItem> OpenRows()
+        {
+            var open = new List<TItem>();
+
+            if (expandedByKey is not null)
+            {
+                open.AddRange(expandedByKey.Values);
+            }
+
+            if (expandedRows is not null)
+            {
+                open.AddRange(expandedRows);
+            }
+
+            return open;
+        }
 
         /// <summary>Expands or collapses a row, raising the matching event.</summary>
         /// <param name="item">The row.</param>
@@ -247,9 +326,25 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            if (IsRowExpanded(item))
+            var rowKey = RowKeyOf(item);
+
+            if (Holds(item, rowKey))
             {
-                expandedRows!.Remove(item);
+                if (rowKey is not null)
+                {
+                    expandedByKey?.Remove(rowKey);
+                }
+                else
+                {
+                    // A row with no key now may have been filed under one before - ItemKey is a
+                    // parameter and a caller may stop supplying it. Removing only by the current key
+                    // would leave that entry unreachable for good, and OpenRows would then collapse a
+                    // row nobody has expanded. Walking is safe here: this is the rows held open, which
+                    // is what a person has clicked.
+                    Unfile(item);
+                }
+
+                expandedRows?.Remove(item);
 
                 await RowCollapse.InvokeAsync(item).ConfigureAwait(false);
             }
@@ -257,11 +352,12 @@ namespace Radzen.FastGrid
             {
                 // Single mode collapses what was open, and says so: a row that leaves the screen without
                 // an event is a row the caller still thinks is expanded.
-                if (ExpandMode == DataGridExpandMode.Single && expandedRows is { Count: > 0 })
+                if (ExpandMode == DataGridExpandMode.Single && AnyOpen)
                 {
-                    var open = new List<TItem>(expandedRows);
+                    var open = OpenRows();
 
-                    expandedRows.Clear();
+                    expandedByKey?.Clear();
+                    expandedRows?.Clear();
 
                     foreach (var previous in open)
                     {
@@ -269,7 +365,19 @@ namespace Radzen.FastGrid
                     }
                 }
 
-                (expandedRows ??= new HashSet<TItem>()).Add(item);
+                if (rowKey is not null)
+                {
+                    // The indexer, so the row held for a key is the one last seen carrying it. Neither
+                    // this nor TryAdd can grow the store - replacing a value leaves Count alone, and
+                    // this line is only reached when Holds said no - so what the choice decides is
+                    // which instance RowCollapse hands back, and the freshest is the right one: over a
+                    // re-materialising source the first is the most detached thing the grid ever saw.
+                    (expandedByKey ??= new Dictionary<object, TItem>())[rowKey] = item;
+                }
+                else
+                {
+                    (expandedRows ??= new HashSet<TItem>()).Add(item);
+                }
 
                 await RowExpand.InvokeAsync(item).ConfigureAwait(false);
             }
@@ -1663,9 +1771,68 @@ namespace Radzen.FastGrid
         // this render resolved, which is the same one they would have looked up.
         string? togglerLabel;
 
+        // The selection as keys, worked out once for the render, and null when there is no key to work
+        // them out from - which is when selectionLookup below is what answers instead. The store is the
+        // same set every render; the field above is what says whether it holds this render's answer.
+        HashSet<object>? selectionKeys;
+        HashSet<object>? selectionStore;
+
+        /// <summary>
+        /// Reads the selection once per render so the per-row tick can be answered by key.
+        /// </summary>
+        /// <remarks>
+        /// The alternative was a comparer over the caller's collection, and it was built and measured
+        /// before this: <c>IEqualityComparer.GetHashCode</c> is handed the row and has to read its key,
+        /// and reading a value-typed key is a box - so the tick cost **46.9 KB** per render at 1000
+        /// rows, on top of the 23.5 KB <see cref="ItemKey" /> already costs. Probing a set of keys with
+        /// the key <c>RenderRow</c> has already computed for <c>SetKey</c> costs nothing per row; what
+        /// it costs is this pass over the selection, once.
+        /// <para>
+        /// Not cached against the <see cref="Selection" /> instance, deliberately. That identity is the
+        /// one §10 has four recorded participants in getting wrong, and here it would be worse than
+        /// usual: a caller who mutates the collection it handed in would keep a tick the grid can no
+        /// longer see is gone.
+        /// </para>
+        /// <para>
+        /// It is still a snapshot of one render, and <c>Virtualize</c> redraws its own rows on a scroll
+        /// without this running again - the same caveat the toggler label above carries. So between two
+        /// renders of the grid, a keyed tick answers from the keys read at the last one. A caller who
+        /// mutates the collection in place rather than publishing a new one sees that on scrolled rows;
+        /// the parameter's own documentation is that the grid renders from what it is given and never
+        /// writes to it, which is the contract that makes this a non-question.
+        /// </para>
+        /// </remarks>
+        void ReadSelection()
+        {
+            selectionKeys = null;
+
+            if (ItemKey is not { } key || Selection is not { Count: > 0 } chosen)
+            {
+                return;
+            }
+
+            // Refilled rather than rebuilt: the set is a grid's, not a render's, and Clear keeps the
+            // buckets - so a keyed grid with a selection allocates one of these ever, and what it pays
+            // per render is only the keys themselves.
+            var keys = selectionStore ??= new HashSet<object>(chosen.Count);
+
+            keys.Clear();
+
+            foreach (var row in chosen)
+            {
+                if (key(row) is { } rowKey)
+                {
+                    keys.Add(rowKey);
+                }
+            }
+
+            selectionKeys = keys;
+        }
+
         void RenderBody(RenderTreeBuilder builder)
         {
             togglerLabel = ExpandColumn ? ExpandChildItemAriaLabel : null;
+            ReadSelection();
 
             builder.OpenElement(100, "tbody");
             builder.AddAttribute(101, "role", "rowgroup");
@@ -1719,20 +1886,31 @@ namespace Radzen.FastGrid
         // the keyboard cursor needs. That, rather than the cost, is why delegated clicks stay off there.
         void RenderRow(RenderTreeBuilder builder, TItem item, int rowIndex)
         {
-            var selection = Selection;
-            var selected = selection is not null && selection.Contains(item);
+            // One key for the row, and its only one: the tick reads it, the detail lookup reads it, and
+            // SetKey below is written from it rather than calling ItemKey a second time.
+            var rowKey = RowKeyOf(item);
+
+            // By key where the row has one, and as itself where it does not - the same fallback Holds
+            // makes below and RowIdentity makes for the sets. Without the second arm a keyed grid
+            // answered a flat "not selected" for every row whose key is null, which is the shape the
+            // fallback exists for: a lookup row's id legitimately is null, and it can be selected.
+            var selected = rowKey is not null && selectionKeys is not null
+                ? selectionKeys.Contains(rowKey)
+                : Selection is { } chosen && chosen.Contains(item);
 
             // One lookup for the row, read by the toggle and by the detail row below it. Costs nothing
-            // when no Template is set, since the set is never allocated.
-            var expanded = Template is not null && IsRowExpanded(item);
+            // when no Template is set, since neither store is allocated.
+            var expanded = Template is not null && Holds(item, rowKey);
 
             builder.OpenElement(120, "tr");
             builder.AddAttribute(121, "role", "row");
 
             // Set on the tr, before its children: SetKey applies to the element most recently opened.
-            if (ItemKey is { } key)
+            // From the key read above rather than by calling ItemKey again, which would be a second box
+            // per row for a value-typed key.
+            if (ItemKey is not null)
             {
-                builder.SetKey(key(item));
+                builder.SetKey(rowKey);
             }
 
             // No alternating class: rz-grid-table-striped stripes with :nth-child in CSS.
@@ -2039,7 +2217,18 @@ namespace Radzen.FastGrid
         async Task SelectRow(TItem item)
         {
             var current = Selection;
-            var selected = current is not null && current.Contains(item);
+
+            // Asked of a set this grid builds, not of the collection it was handed: that collection's
+            // comparer is its owner's, and over a re-materialising source the reference one it usually
+            // is answers "not selected" for a row that is - so the branch below added the row a second
+            // time, beside the instance already there, and published one id twice. Same fault §19
+            // measured in the drop-down, which reaches this method through its own selection.
+            //
+            // Only where there is a key to ask by. With none the identity *is* the instance, so the
+            // collection already answers this and a copy would be a set per click bought for nothing.
+            var selected = ItemKey is null
+                ? current is not null && current.Contains(item)
+                : Held(current).Contains(item);
 
             List<TItem> next;
 
@@ -2066,13 +2255,18 @@ namespace Radzen.FastGrid
             }
             else
             {
+                // Copied from the caller's collection rather than composed out of a set: what a caller
+                // receives is not this piece's to change, and a set here would be an allocation over
+                // the whole selection bought for one membership test. Not, as this comment first said,
+                // to protect two rows that share a key - SetKey is given the same key, and the
+                // renderer refuses duplicate sibling keys, so a keyed grid cannot reach that state.
                 next = current is null ? new List<TItem>() : new List<TItem>(current);
 
                 // Exactly one row changes, and it is the one that was clicked - so which event to raise
                 // is known, rather than something to be worked out by comparing the two collections.
                 if (selected)
                 {
-                    next.Remove(item);
+                    Deselect(next, item);
 
                     await RowDeselect.InvokeAsync(item).ConfigureAwait(false);
                 }
@@ -2085,6 +2279,31 @@ namespace Radzen.FastGrid
             }
 
             await SelectionChanged.InvokeAsync(next).ConfigureAwait(false);
+        }
+
+        /// <summary>The selection as a set this grid can ask its own questions of.</summary>
+        HashSet<TItem> Held(ICollection<TItem>? rows) => rows is null
+            ? new HashSet<TItem>(RowComparer)
+            : new HashSet<TItem>(rows, RowComparer);
+
+        /// <summary>
+        /// Takes a row out of a selection by identity, in place, so the rows around it keep their order.
+        /// </summary>
+        /// <remarks>
+        /// Every match rather than the first: a selection already holding one row twice - which is what
+        /// the fault this replaces produced - is one a deselect should leave empty of it.
+        /// </remarks>
+        void Deselect(List<TItem> rows, TItem item)
+        {
+            var comparer = RowComparer;
+
+            for (var i = rows.Count - 1; i >= 0; i--)
+            {
+                if (comparer.Equals(rows[i], item))
+                {
+                    rows.RemoveAt(i);
+                }
+            }
         }
 
         void RenderEmpty(RenderTreeBuilder builder)

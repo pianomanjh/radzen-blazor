@@ -150,6 +150,38 @@ public class DropDownBench
 
         await renderer.Drive(() => ((RadzenFastDropDownDataGrid<Person, int>)component).OpenPopup());
     }
+
+    // An open popup with rows actually chosen, which no row above has. It is the only shape where the
+    // set of chosen rows is asked whether it holds the row being drawn - the comparison §21 keys by
+    // ValueOf - so it is the only shape that can measure what that comparison costs. Every other row
+    // here leaves SelectedItems empty, and an empty set answers without hashing anything.
+    [Benchmark]
+    public async Task Fast_OpenWithChosenRows()
+    {
+        using var renderer = new BenchmarkRenderer(services);
+
+        var chosen = new List<object> { people[0].Id, people[1].Id, people[2].Id };
+
+        var parameters = new Dictionary<string, object?>
+        {
+            ["Data"] = people,
+            ["ChildContent"] = FastColumns,
+            ["TextProperty"] = (Expression<Func<Person, object?>>)(p => p.Name),
+            ["ValueProperty"] = (Expression<Func<Person, object?>>)(p => p.Id),
+            ["AllowSorting"] = true,
+            ["AllowFiltering"] = false,
+            ["AllowPaging"] = true,
+            ["PageSize"] = 10,
+            ["Multiple"] = true,
+            ["Value"] = chosen,
+        };
+
+        var component = await renderer.Render(typeof(RadzenFastDropDownDataGrid<Person, IEnumerable<object>>),
+            ParameterView.FromDictionary(parameters));
+
+        await renderer.Drive(() =>
+            ((RadzenFastDropDownDataGrid<Person, IEnumerable<object>>)component).OpenPopup());
+    }
 }
 
 // Why the numbers come out the way they do. A benchmark says how much; this says what of.

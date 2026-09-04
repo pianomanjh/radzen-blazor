@@ -607,7 +607,7 @@ namespace Radzen.FastGrid
             var high = Math.Max(rangeAnchor, focusRow);
 
             var next = new List<TItem>(rangeBase);
-            var chosen = new HashSet<TItem>(next);
+            var chosen = new HashSet<TItem>(next, RowComparer);
             var index = 0;
 
             foreach (var item in View())
@@ -645,7 +645,11 @@ namespace Radzen.FastGrid
 
             if (RowSelect.HasDelegate || RowDeselect.HasDelegate)
             {
-                var was = current is null ? new HashSet<TItem>() : new HashSet<TItem>(current);
+                // Through the grid's own identity, like chosen: the difference between these two sets
+                // is which rows are reported selected and deselected, so comparing them by instance
+                // over a re-materialising source announces a deselect and a select for a row that
+                // never moved.
+                var was = Held(current);
 
                 if (RowSelect.HasDelegate)
                 {
