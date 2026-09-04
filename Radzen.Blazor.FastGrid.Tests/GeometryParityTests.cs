@@ -581,6 +581,24 @@ namespace Radzen.Blazor.FastGrid.Tests
         }
 
         [Fact]
+        public void A_fit_watching_its_container_stops_when_the_table_stops_being_one()
+        {
+            // The Responsive guard refuses a new fit below the breakpoint. That is half the answer:
+            // a grid already fitting has a ResizeObserver on its container, and a window narrowed past
+            // the breakpoint is exactly the resize that observer was waiting for. Guarding only the
+            // first fit leaves it writing colgroup widths into a table laid out as cards.
+            var stacked = Fitted().StackedWhileWatching;
+            var seen = stacked?.ToString() ?? "(not measured)";
+
+            ParityAssert.True(stacked is { WroteNothing: true },
+                "a fit already watching a container stops writing once that table stops being one",
+                "the colgroup decides nothing in card mode, so every width written there is work nobody reads and a min-width nobody wants",
+                "every col at the width it had",
+                seen,
+                seen);
+        }
+
+        [Fact]
         public void Fitting_the_container_leaves_room_for_the_columns_it_is_not_fitting()
         {
             // A column with a declared Width, or one that opted out with AutoFit="false", is not in

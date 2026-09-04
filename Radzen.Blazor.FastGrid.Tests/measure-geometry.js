@@ -374,6 +374,43 @@ async function main() {
                 };
             })();
 
+            // A live fit, then the table stacked the way the Responsive breakpoint stacks it. The
+            // observer must stop writing: the guard that refuses the first fit means nothing if the
+            // one watching the container goes on answering after the colgroup has stopped deciding.
+            const stackedWhileWatching = await (async () => {
+                const restore = pane.style.width;
+
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                pane.style.width = '900px';
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => null), indices.map(() => null), 0, columns - 1, false, false,
+                    true, indices.map(() => false));
+
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                const before = [...cols.children].map(col => col.style.width);
+
+                // What the media query does, and then a resize the observer would answer.
+                table.style.display = 'block';
+                pane.style.width = '400px';
+
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                const after = [...cols.children].map(col => col.style.width);
+
+                table.style.display = '';
+                window.__fastgrid.releaseFit(table.id);
+                table.style.minWidth = '';
+                pane.style.width = restore;
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                return { before, after, wroteNothing: after.every((w, i) => w === before[i]) };
+            })();
+
             // Fitting to the container while one column is not being fitted at all - what a declared
             // Width or AutoFit="false" column is. Its width is space the others cannot have, so a fit
             // that ignores it sizes the rest to the whole container and the table overflows the one
@@ -425,6 +462,7 @@ async function main() {
 
             return {
                 animation,
+                stackedWhileWatching,
                 withReserved,
                 defaultFloor,
                 fittedToContainer,

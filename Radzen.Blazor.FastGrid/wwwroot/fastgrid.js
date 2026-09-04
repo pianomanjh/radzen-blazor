@@ -634,6 +634,14 @@ function watch(table, state) {
         state.queued = requestAnimationFrame(() => {
             state.queued = 0;
 
+            // The same question the fit asked before it ran, asked again because the answer changes:
+            // a window narrowed past the Responsive breakpoint stacks the rows into cards, and a
+            // colgroup width decides nothing there. Guarding only the first fit leaves the observer
+            // writing widths into a table that is no longer one.
+            if (getComputedStyle(table).display !== 'table') {
+                return;
+            }
+
             const available = wrapper.clientWidth - state.reserved;
 
             // The guard against feeding ourselves: writing column widths can change the table's width,
@@ -653,6 +661,16 @@ function watch(table, state) {
 // re-rendered keeps its observer, because the table element and the content widths are both still good.
 export function releaseFit(tableId) {
     const state = fitted.get(tableId);
+
+    // The animation's own timer, which is on the table rather than in this state. It only removes a
+    // class, but it removes it from an element this grid has finished with, and letting it go is the
+    // difference between one release path and two.
+    const table = document.getElementById(tableId);
+
+    if (table && table.rzFastGridAnimation) {
+        clearTimeout(table.rzFastGridAnimation);
+        table.rzFastGridAnimation = 0;
+    }
 
     if (state) {
         if (state.queued) {

@@ -201,7 +201,7 @@ namespace Radzen.Blazor.FastGrid.Tests
             (FitsTheContainer ? string.Empty : ", OVERFLOWS");
     }
 
-    public sealed class AutoFitSqueeze
+    public sealed class AutoFitPressure
     {
         [JsonPropertyName("pane")] public int Pane { get; set; }
         [JsonPropertyName("widths")] public double[] Widths { get; set; }
@@ -231,10 +231,10 @@ namespace Radzen.Blazor.FastGrid.Tests
     public sealed class AutoFitDefaultFloor
     {
         /// <summary>Under mild pressure, where the soft floor should still hold every heading.</summary>
-        [JsonPropertyName("eased")] public AutoFitSqueeze Eased { get; set; }
+        [JsonPropertyName("eased")] public AutoFitPressure Eased { get; set; }
 
         /// <summary>Past what the columns can give, where a heading may be spent but a value may not.</summary>
-        [JsonPropertyName("hard")] public AutoFitSqueeze Hard { get; set; }
+        [JsonPropertyName("hard")] public AutoFitPressure Hard { get; set; }
 
         /// <summary>Whether the hardest squeeze actually reached every hard floor.</summary>
         [JsonPropertyName("restsOnItsFloor")] public bool RestsOnItsFloor { get; set; }
@@ -326,6 +326,21 @@ namespace Radzen.Blazor.FastGrid.Tests
         public override string ToString() => $"asked: {Asked}; automatic: {Automatic}";
     }
 
+    /// <summary>What a fit already watching a container did once that table stopped being one.</summary>
+    public sealed class AutoFitAfterStacking
+    {
+        [JsonPropertyName("before")] public string[] Before { get; set; }
+        [JsonPropertyName("after")] public string[] After { get; set; }
+
+        /// <summary>Whether every col came through the resize with the width it went in with.</summary>
+        [JsonPropertyName("wroteNothing")] public bool WroteNothing { get; set; }
+
+        public override string ToString() =>
+            $"[{(Before is null ? "-" : string.Join("/", Before))}] -> " +
+            $"[{(After is null ? "-" : string.Join("/", After))}]" +
+            (WroteNothing ? ", untouched" : ", WROTE WIDTHS");
+    }
+
     /// <summary>What a fit did when asked to size a table the theme had stacked into cards.</summary>
     public sealed class AutoFitStacked
     {
@@ -346,6 +361,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>What a live fit's observer did once the table stopped being one.</summary>
+        [JsonPropertyName("stackedWhileWatching")] public AutoFitAfterStacking StackedWhileWatching { get; set; }
+
         /// <summary>A fit that must share the container with a column it is not fitting.</summary>
         [JsonPropertyName("withReserved")] public AutoFitWithReserved WithReserved { get; set; }
 

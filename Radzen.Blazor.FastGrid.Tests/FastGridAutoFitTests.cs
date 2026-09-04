@@ -36,7 +36,7 @@ namespace Radzen.FastGrid.Tests
 
         /// <summary>The call's arguments, named the way the design names them.</summary>
         sealed record Ask(string Table, int[] Indices, string[] Min, string[] Max, int ToggleOffset,
-            int Bare, bool Wait, bool Animate);
+            int Bare, bool Wait, bool Animate, bool Fitting, bool[] Required);
 
         static Ask Read(JSRuntimeInvocation invocation)
         {
@@ -44,7 +44,7 @@ namespace Radzen.FastGrid.Tests
 
             return new Ask((string)args[0], ((IEnumerable<int>)args[1]).ToArray(),
                 (string[])args[2], (string[])args[3], (int)args[4], (int)args[5], (bool)args[6],
-                (bool)args[7]);
+                (bool)args[7], (bool)args[8], (bool[])args[9]);
         }
 
         // --- A grid that does not fit -----------------------------------------------------------
@@ -371,6 +371,70 @@ namespace Radzen.FastGrid.Tests
             cut.Render();
 
             Assert.Null(cut.FindAll("colgroup col")[2].GetAttribute("style"));
+        }
+
+        [Fact]
+        public void TheGridTellsTheBrowserWhetherItIsFittingToTheContainer()
+        {
+            // The browser honours this flag and a Chromium test covers that end, but only the grid
+            // knows which mode it is in, so what it sends is the whole of its side. Nothing pinned it
+            // before: hard-coding the flag to false, which turns the entire feature off, passed every
+            // test in the suite.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "40px", "50px", null });
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.AutoFitColumns, AutoFitMode.Once);
+                p.Add(g => g.AllowColumnResize, true);
+                p.Add(g => g.AutoFitOverflow, AutoFitOverflow.Scroll);
+            });
+
+            cut.Render();
+            Assert.False(Read(module.Invocations["autoFit"].First()).Fitting);
+
+            // Changing the mode re-arms the Once fit, which is the only reason this second render
+            // asks again at all.
+            cut.SetParametersAndRender(p => p.Add(g => g.AutoFitOverflow, AutoFitOverflow.Fit));
+            Assert.True(Read(module.Invocations["autoFit"].Last()).Fitting);
+
+            // Fitting to the container is a whole-grid answer: one column cannot be redistributed
+            // against, and a double-click is a user pointing at that column rather than at the layout.
+            cut.FindAll(".rz-column-resizer")[0].DoubleClick();
+            Assert.False(Read(module.Invocations["autoFit"].Last()).Fitting);
+        }
+
+        [Fact]
+        public void TheGridTellsTheBrowserWhichColumnsMustKeepTheirWidth()
+        {
+            // AutoFitPriority is the other half of the same wiring, and was equally unpinned. The
+            // flags travel positionally against the same target list, so this checks the alignment
+            // rather than only the count.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            module.Setup<string[]>("autoFit", _ => true).SetResult(new[] { "40px", "50px", null });
+
+            var cut = Render(ctx, p =>
+                {
+                    p.Add(g => g.AutoFitColumns, AutoFitMode.Once);
+                    p.Add(g => g.AutoFitOverflow, AutoFitOverflow.Fit);
+                },
+                Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, required: true),
+                    Columns.Property<Person, string>(x => x.Last),
+                    Columns.Property<Person, decimal>(x => x.Salary, required: true)));
+
+            cut.Render();
+
+            var ask = Read(Assert.Single(module.Invocations["autoFit"]));
+
+            Assert.Equal(new[] { true, false, true }, ask.Required);
+            Assert.Equal(ask.Indices.Length, ask.Required.Length);
         }
 
         [Fact]

@@ -47,14 +47,16 @@ namespace Radzen.FastGrid
                     await module.InvokeVoidAsync("detachNavigation", ViewElementId);
                 }
 
-                // A grid fitting to its container is watching that container. Nothing else releases
-                // it: the observer is held by the script rather than by anything the circuit owns, so
-                // a grid that went away without this would keep redistributing a table nobody is
-                // looking at for as long as the page lives.
-                if (AutoFitOverflow == AutoFitOverflow.Fit && AutoFitEnabled)
-                {
-                    await module.InvokeVoidAsync("releaseFit", TableElementId);
-                }
+                // A grid fitting to its container is watching that container, and nothing else
+                // releases it: the observer is held by the script rather than by anything the circuit
+                // owns, so a grid that went away without this would keep redistributing a table nobody
+                // is looking at for as long as the page lives.
+                //
+                // Asked unconditionally. Gating it on the current AutoFitOverflow reads as thrift and
+                // is a leak: a grid switched from Fit back to Scroll, or to AutoFitColumns="None",
+                // still has the observer it started and arrives here with the gate shut. The script
+                // already answers this for a table it is not watching.
+                await module.InvokeVoidAsync("releaseFit", TableElementId);
 
                 await module.DisposeAsync();
             }
