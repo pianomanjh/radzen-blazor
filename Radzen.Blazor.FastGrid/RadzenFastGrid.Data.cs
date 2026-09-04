@@ -92,6 +92,13 @@ namespace Radzen.FastGrid
         bool settingsPending;
         bool settingsNeedReload;
 
+        // Whether the grid has drawn at least once, and whether a load is waiting for that. §23: a load
+        // composes from the column list, and a column registers during the render - so the parameter set
+        // that precedes the first render is the one moment the grid cannot compose a query from its own
+        // state. What it composed there carried no declared filter and no declared sort.
+        bool drawn;
+        bool loadOwed;
+
         /// <summary>How string comparisons treat case. The provider decides by default.</summary>
         [Parameter] public FilterCaseSensitivity FilterCaseSensitivity { get; set; }
 
@@ -346,7 +353,22 @@ namespace Radzen.FastGrid
 
                 // While virtualizing the provider owns fetching, and it asks for a window. Loading here
                 // as well would call the handler once with no window at all and throw the answer away.
-                return AllowVirtualization ? Task.CompletedTask : InvokeLoadDataAsync();
+                if (AllowVirtualization)
+                {
+                    return Task.CompletedTask;
+                }
+
+                // The handler is told the sorts and filters, which are read off the columns - so before
+                // the first render it would be told there are none, and a grid whose markup declares a
+                // filter would have its handler asked for an unfiltered page and never asked again.
+                if (!drawn)
+                {
+                    OweLoad();
+
+                    return Task.CompletedTask;
+                }
+
+                return InvokeLoadDataAsync();
             }
 
             if (!dataChanged && !pagingChanged)
@@ -378,6 +400,16 @@ namespace Radzen.FastGrid
                 CancelLoad();
 
                 return RefreshAsync(announce: false);
+            }
+
+            // The same before the first render, and for the same reason: LoadPageAsync composes the
+            // filter and the sort onto the query before it hands it to the executor, so composing here
+            // would send one query that carried neither and nothing would follow to correct it.
+            if (!drawn && AsyncOwnsData)
+            {
+                OweLoad();
+
+                return Task.CompletedTask;
             }
 
             if (BeginAsyncLoad() is { } load)
@@ -950,6 +982,10 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override async Task OnAfterRenderAsync(bool firstRender)
         {
+            // Before anything below reads the rows, and before the flag is cleared: every path here is
+            // allowed to compose from the column list because this one has run.
+            drawn = true;
+
             // A grid composing over a queryable in memory has already drawn the restored state - the
             // render that applied it composed from it. One that loads its data has not: the load that
             // produced what is on screen ran before the settings existed.
@@ -957,7 +993,17 @@ namespace Radzen.FastGrid
             {
                 settingsNeedReload = false;
 
+                // A restore composes the same query the owed load would have, off the same columns. One
+                // reload serves both, and running them in turn would send the second for nothing.
+                loadOwed = false;
+
                 await RefreshAsync();
+            }
+            else if (loadOwed)
+            {
+                loadOwed = false;
+
+                await PayOwedLoadAsync();
             }
 
             if (ClampPage())
@@ -1433,6 +1479,52 @@ namespace Radzen.FastGrid
             !AllowVirtualization && TryGetAsyncSource(out var async, out var queryable)
                 ? LoadPageAsync(async, queryable)
                 : null;
+
+        /// <summary>
+        /// Notes that a load must wait for the first render, and marks the grid loading now rather than
+        /// when the load starts.
+        /// </summary>
+        /// <remarks>
+        /// The scrim is drawn from <see cref="IsLoading" />, which a load sets as it begins - so a
+        /// deferred load would leave the render it defers past showing a grid that is empty and not
+        /// loading. That is the render on which <c>RenderEmpty</c> draws <c>EmptyTemplate</c>, which
+        /// makes the flash read as "no records" rather than as "not yet". Marked only where a load is
+        /// known to follow: a flag raised for a load that never runs is a scrim that never lifts.
+        /// </remarks>
+        void OweLoad()
+        {
+            loadOwed = true;
+            IsLoading = true;
+        }
+
+        /// <summary>Runs the load the first render was waiting for.</summary>
+        async Task PayOwedLoadAsync()
+        {
+            // Read again rather than remembered: a parameter set between the deferral and this render
+            // may have switched virtualization on, and then the provider owns fetching - invoking the
+            // handler here would ask it for a page with no window at all, which is the call the
+            // parameter-set path declines to make for exactly that reason.
+            if (!AllowVirtualization && LoadData.HasDelegate)
+            {
+                await InvokeLoadDataAsync();
+
+                return;
+            }
+
+            if (BeginAsyncLoad() is { } load)
+            {
+                await load;
+
+                return;
+            }
+
+            // The source stopped being one the executor owns between the deferral and here - a new Data
+            // arrived, or virtualization was switched on. Nothing will run, so nothing else will lift
+            // the scrim the deferral raised.
+            IsLoading = false;
+
+            StateHasChanged();
+        }
 
         async Task RefreshVirtualizedAsync()
         {
