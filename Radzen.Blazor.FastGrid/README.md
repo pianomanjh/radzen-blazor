@@ -76,6 +76,8 @@ Radzen needs one: `LoadDataArgs.OrderBy`, OData `$orderby`, and `FilterDescripto
 | --- | --- |
 | `PropertyColumn<TItem, TProp>` | One value per cell. `Property`, `Format`, `SortBy`, `FilterBy`, `Title`, `CssClass`, `Sortable`, `Filterable` |
 | `CollectionColumn<TItem, TElement>` | A collection per cell, listed. `Property`, `DisplayProperty`, `FilterProperty`, `Separator`, `SortBy` |
+| `LookupColumn<TItem, TKey>` | A name per cell, from an id the row carries. `Property`, `Lookup`, `SortBy` |
+| `LookupCollectionColumn<TItem, TKey>` | Names per cell, from ids the row carries. `Property`, `Lookup`, `Separator`, `SortBy` |
 | `TemplateColumn<TItem>` | A template per cell. `Template`, `SortBy`, `SortProperty`, `Title` |
 | `TemplateColumn<TItem>` | Arbitrary content. `Template`, `SortProperty`. Costs ~94 B/cell more than a property column - use it where a cell is not just a value |
 
@@ -117,6 +119,105 @@ takes a `SortBy` naming something that can be ordered:
 
 A collection-valued `PropertyColumn` has no such escape: its `SortBy` is typed at the property, which
 is the collection, so its header stays unsortable.
+
+## A column that shows a name and carries an id
+
+The row holds `CategoryId` and the cell shows "Toys". Without this the routes are a join the source may
+not have, a navigation property that drags whole entities across the wire per row, or a `TemplateColumn`
+that resolves each cell by hand and can neither filter nor sort.
+
+```razor
+<LookupColumn Property="@(p => p.CategoryId)" Lookup="@categories" Title="Category" />
+<LookupCollectionColumn Property="@(p => p.BrandIds)" Lookup="@brands" Title="Brands" />
+```
+
+The efficiency is the point rather than a side effect: **the row carries integers and the names are
+held once for the grid.** A thousand rows with a category each are a thousand ints and one lookup of
+however many categories exist, against a thousand materialized `Category` instances - and what a cell
+renders is a string the lookup already holds, so a scalar cell allocates nothing at all.
+
+The two column types split on **how many ids a row carries**, which is knowable from the property's
+type. Where the names come from is a separate question with one answer for both:
+
+```csharp
+FastGridLookup.Map(categoriesById)                              // an IReadOnlyDictionary<TKey, string>
+FastGridLookup.Items(categories, c => c.Id, c => c.Name)        // a sequence already in memory
+FastGridLookup.Query(db.Categories, c => c.Id, c => c.Name)     // a query the grid runs for itself
+```
+
+`Items` takes delegates and `Query` takes expressions, and the difference is load-bearing: `Query`
+composes both into one projection, so the provider sends back an id and a name per row rather than the
+rows themselves. It is fetched through `IFastGridQueryExecutor` **even when `Data` is in memory** -
+what decides is the lookup's own queryable - so its cells are blank for one render and the rows are
+never gated on it.
+
+**A missing entry draws the id**, and a null id draws an empty cell. They are different failures and
+should not look the same: an id with no entry is a deleted row, a lookup narrowed by a `Where`, or a
+fetch that failed, and the id is the only thing that lets anyone diagnose it.
+
+**A nullable key types the lookup at the nullable key.** `Property="@(p => p.RegionId)"` over an `int?`
+makes `TKey` `int?`, so the lookup is a `FastGridLookup<int?>` - which `Items` and `Query` give you with
+a cast in the selector, `FastGridLookup.Items(regions, r => (int?)r.Id, r => r.Name)`.
+
+### Sorting one
+
+**Not sortable unless `SortBy` names something the provider can order by.** Sorting by the id puts the
+categories in insertion order under a column showing names alphabetically, which is a wrong answer that
+looks like a working feature. Where a navigation property exists, that is the honest answer:
+
+```razor
+<LookupColumn Property="@(p => p.CategoryId)" Lookup="@categories"
+              SortBy="@(FastGridSort<Product>.By(p => p.Category.Name))" />
+```
+
+### Filtering one
+
+**The check-box list is the lookup**, so no `SELECT DISTINCT` runs for a lookup column. The list is
+therefore complete rather than only what the current rows hold, and stable rather than moving under the
+reader as the data changes. `FilterLookupData` beside a `Lookup` is an error naming both parameters
+rather than a parameter quietly ignored.
+
+**What it filters by is ids** - the predicate, the descriptor `Filters` reports, and the persisted
+settings. No join is needed, it translates on any provider, and a filter stored as an id survives
+someone renaming the lookup row. The costs of that are worth knowing: a saved filter goes stale when a
+lookup row is *deleted*, and a human reading stored settings sees ids rather than names.
+
+`Simple` mode matches the typed text against the **names**, in memory, and emits the ids it hits as an
+`In`. Text matching many names emits many ids and providers have parameter limits, so the count is
+capped at `LookupColumnBase<TItem, TKey>.MatchLimit` (500).
+
+A column whose key can be null offers **one extra entry for the rows carrying no id at all**, named by
+the grid's `BlankFilterText` ("(Blank)" in the shipped translations). "Which products have no category"
+is a reasonable question, and `In` over a nullable key answers it.
+
+### What it holds, and when it lets go
+
+**The whole lookup, once, for the life of the grid.** For the shapes this is aimed at - categories,
+brands, statuses, owners - that is tens or hundreds of rows fetched once, after which every cell
+resolves and the filter list is complete. Two columns declaring the same lookup resolve it once between
+them; two declaring the same `Query` fetch it twice, once, at startup, because two query lookups never
+compare equal.
+
+**Nothing invalidates it. `Reload()` drops it**, and it is the only thing that does - there is
+deliberately no second refresh verb with a subtly different scope beside it.
+
+A lookup over a genuinely large table is the case this is wrong for: everything here - fetching it
+whole, holding it, offering all of it in the filter, matching text against it - is right for hundreds
+of entries and wrong for hundreds of thousands. Hand over a narrowed `IQueryable`
+(`db.Users.Where(u => u.Active)`), which is more honest than the grid guessing at a limit.
+
+**Where the ids live behind a navigation collection**, project them into one rather than reaching for
+them per row:
+
+```csharp
+db.Products.Select(p => new ProductRow { ..., BrandIds = p.Brands.Select(b => b.Id).ToList() })
+```
+
+That makes `ProductRow` the row type and the column an ordinary `LookupCollectionColumn` - one query,
+and the columns nobody renders dropped, which is this column's own argument applied one level up.
+
+**`AutoFitMode.Once` waits** for a `Query` lookup rather than measuring the blank cells it would
+otherwise fit to. Neither lookup column is available in `RadzenFastDropDownDataGrid`.
 
 ## Rows, selection and events
 
@@ -568,7 +669,8 @@ LINQ or OData form depending on the source) and `Filters` (as descriptors), and 
 - `Simple` (default) - a text box per column.
 - `CheckBoxList` - a multi-select of the column's distinct values, filtering with `In`. The values come
   from a composed `SELECT DISTINCT`, not from enumerating the data, and are cached until the data
-  changes. `FilterLookupData` supplies them instead for a source too large or remote to ask.
+  changes. `FilterLookupData` supplies them instead for a source too large or remote to ask, and a
+  lookup column supplies its own.
 
 `FilterAsYouType` (default `true`) filters while the box still has focus, after `FilterDelay`
 milliseconds of no typing (default 500). Turning it off leaves the filter applying when the box is left
@@ -1125,6 +1227,11 @@ That is not an accident of this component being small. It is what the typed desi
 carries `Expression<Func<TItem, TProp>>` composes its own sorting and filtering out of ordinary generic
 calls, and a trimmer can follow those. The reflective alternative - reach a property by name, close a
 generic method over a type discovered at run time - is exactly what it cannot.
+
+Lookup columns are in that application on purpose. Everything they do is composed from their own typed
+expressions - the cell, both filter shapes, the ids the check-box list carries - so the browser check
+resolves lookups and filters a column by a name it typed, which is the reachable path a trimmed member
+would be missing from.
 
 Two features still reach a member by name, and are the ones to avoid in an application published with
 Native AOT. Sorting and the drop-down's value and text members used to be there too; typed expressions
