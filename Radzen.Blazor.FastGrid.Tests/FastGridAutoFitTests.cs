@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Radzen.FastGrid.Tests
@@ -76,6 +77,83 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Single(cut.FindAll("table[id]"));
             Assert.Equal(3, cut.FindAll("colgroup col").Count);
+        }
+
+        // --- Waiting for names it cannot measure without ------------------------------------------
+
+        static RenderFragment LookupColumns(FastGridLookup<int> lookup) => Columns.Of(
+            Columns.Property<Person, string>(x => x.First, title: "First"),
+            Columns.Lookup<Person, int>(x => x.CategoryId, lookup, title: "Category"));
+
+        static FastGridLookup<int> Fetched() =>
+            FastGridLookup.Query(Lookups.CategoryRows().AsQueryable(), c => c.Id, c => c.Name);
+
+        [Fact]
+        public void AFitWaitsForNamesThatHaveNotArrived()
+        {
+            // autoFitPending is disarmed by the attempt, and the script waits for rows rather than for
+            // cell content - so a fit taken now would measure blank cells, settle the column at its
+            // header width, and the names would arrive into a column too narrow for them. Nothing
+            // invalidates a fit, so that is permanent.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            var executor = new GatedLookupExecutor();
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), LookupColumns(Fetched()));
+
+            Assert.Empty(module.Invocations["autoFit"]);
+        }
+
+        [Fact]
+        public void TheFitItWasOwedRunsOnceTheNamesArrive()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(new GatedLookupExecutor { Holds = 0 });
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), LookupColumns(Fetched()));
+
+            Assert.Single(module.Invocations["autoFit"]);
+        }
+
+        [Fact]
+        public void AFitWaitingOnNamesThatFailToArriveStillRuns()
+        {
+            // Deferring gives back the property that disarming on the attempt was there to provide, so
+            // every way out of the fetch has to hand it over again. A lookup that never resolves would
+            // otherwise be a fit that never fires.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(
+                new GatedLookupExecutor { Holds = 0, Fails = new InvalidOperationException("no") });
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once), LookupColumns(Fetched()));
+
+            Assert.Single(module.Invocations["autoFit"]);
+        }
+
+        [Fact]
+        public void AFitIsNotHeldUpByNamesThatAreAlreadyInHand()
+        {
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+
+            Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once),
+                LookupColumns(FastGridLookup.Map(Lookups.Categories())));
+
+            Assert.Single(module.Invocations["autoFit"]);
         }
 
         // --- When it fires ----------------------------------------------------------------------
