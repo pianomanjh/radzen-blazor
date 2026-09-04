@@ -2422,7 +2422,7 @@ with a load-bearing reason should be recorded here beside it.
 | 3 | The browser seam has no interface | ~~Strong~~ **built**, §18 - and three of this row's claims corrected there |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
 | 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
-| 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
+| 6 | `ColumnBase`'s internal half is a field-by-field protocol | **designed, §20** - and it is four sections, not seventeen members |
 | 7 | A column's identity is a concept with no name | Worth exploring |
 | 8 | The drop-down forwards twelve parameters, then hands out the grid | ~~Worth exploring~~ **built**, §19 - it was the scan, not the forwarding |
 
@@ -2527,7 +2527,7 @@ none of them stated where an implementer would read it — and the decision is c
 `Or`, one declining column sends every typed column through the reflective route (`:1211-1218`). §10b's
 computed-column fault was this reading the wrong one of the four.
 
-**6. `ColumnBase`'s internal half is a field-by-field protocol.** The public half is deep — 28
+**6. `ColumnBase`'s internal half is a field-by-field protocol.** **§20 has the design, and corrects two of this entry's three counts and the diagnosis behind them.** The public half is deep — 28
 parameters, `RenderCell`, and four `Apply*` methods behind which the whole typed-expression story
 sits. The internal half is not: seventeen members each answering exactly one grid call site
 (`CellClass`, `CellStyle`, `CellElementClass`, `ColStyle`, `FrozenCellStyle`, `FrozenFooterStyle`,
@@ -2549,6 +2549,14 @@ gap from the other side: the six-member sort-forwarding block is copied verbatim
 over strings the column already memoizes, handed back by reference identity — `ColumnBase.cs:367-383`
 already keys its memo on `ReferenceEquals`. If it cannot be done at zero marginal allocation it should
 not be done, and `gridbench` answers that in one run.
+
+**One of its complaints is refused, and this is the reason.** Opening the eight `internal virtual`
+members - which are not scattered, but are exactly the filter row's protocol - would publish that
+protocol at its current shape while two things that would change it are open: §10's question of whether
+an operator menu, a date popup, a numeric range or an enum picker is built in, and candidate 7 below,
+which would give a column an identity the filter lookup is currently keyed by. Publishing eight members
+now and revising them after either lands is worse than publishing them once. §20 records it the same
+way.
 
 **7. A column's identity is a concept with no name.** Settings, reorder and the picker all need to name
 a column and all three borrow a *query* path to do it. `PropertyPath` is the settings key and the name
@@ -3585,3 +3593,201 @@ carried the cost, one is refused with its reason above, and one - handing out th
 What this piece adds to the list is that the multiple path is *wrong* over a re-materialising source,
 which none of the three noticed, and that the benchmark meant to catch component-level regressions here
 has not run for some time.
+
+---
+
+## 20. `ColumnBase` asks the grid to know its recipes - the design
+
+§15's sixth candidate, argued before it is built. That entry calls it "worth exploring", constrains it
+by §3, and describes it as "seventeen members each answering exactly one grid call site". Two of its
+three counts are wrong, and the diagnosis behind them is wrong in a way that changes what the piece is.
+The corrections are first, because they decide it.
+
+### What §15 got wrong about it
+
+**`CellStyle` has no grid call site.** It is read three times inside `ColumnBase` - by
+`FrozenCellStyle`, `FrozenHeaderStyle` and `FrozenFooterStyle`, each as the basis they fold an inset
+into - and once by a test. Naming it in a list of members that answer the grid is what a count taken by
+reading declarations rather than callers produces.
+
+**"Nine of its twenty-one virtuals are `internal virtual`" is 8 of 28.** Nineteen are public virtual or
+abstract, eight are internal virtual, one is protected virtual. The *substance* survives the correction
+and is sharper for it: the eight are not scattered, they are exactly one feature - `NamesOutstanding`,
+`FetchNamesAsync`, `DropNames`, `DefaultFilterOperator`, `FilterValueFromText`, `FilterValues`,
+`FilterSelection`, `FilterValueFromSelection`. An out-of-assembly column can render, sort and compose a
+filter *predicate*; what it cannot do is take part in the filter **row**. That is one closed door rather
+than nine.
+
+**`AutoFitWidth` having no reader is right**, and is the one claim in the entry that checks out exactly:
+`internal string? AutoFitWidth => autoFitWidth;` is matched by nothing in the library, the tests or the
+bench. It is the getter half of a field whose only readers are `EffectiveWidth` and `CanAutoFit`, both
+of which read the field.
+
+**And the diagnosis is wrong.** Seventeen members are not shallow because there are seventeen of them.
+Counting members is how a shallow module and a wide one are confused. What is actually shallow here is
+narrower and worse: at four call sites the grid holds a *recipe* rather than asking a question.
+
+### The fault, stated as one sentence
+
+**A column is drawn in four sections, and three of the four make the grid fold the frozen decoration in
+itself.**
+
+| section | the class the grid writes | the style |
+| --- | --- | --- |
+| header (`:1340`) | `column.FrozenClass is { } f ? headerClass + " " + f : headerClass` | `FrozenHeaderStyle` |
+| filter (`:1538`) | `column.FrozenClass is { } f ? "rz-unselectable-text " + f : "rz-unselectable-text"` | `FrozenHeaderStyle` |
+| body (`:1862`) | `column.CellElementClass` - the column folds it, memoized | `FrozenCellStyle` |
+| footer (`:1169`) | `column.FrozenClass is { } f ? ... FooterCssClass + " " + f ...` | `FrozenFooterStyle` |
+
+Four rows, and every column of the table is a rule written nowhere. That a frozen column contributes a
+class *and* an inset is the grid's knowledge in three rows and the column's in one. That the filter row
+uses the **header's** style rather than one of its own is the grid's knowledge in all four, and it is
+the only place that fact is recorded - §10 has already paid for that: "there are **four** such sections
+- the title row, the filter row, the body and the footer - and the filter row is a second row of the
+header rather than a thing of its own, **which is how it was missed** after the title row was fixed."
+The rule that was got wrong is the one this table's third column holds, and it is held at a call site
+rather than in a type.
+
+`CellElementClass` is the shape the other three want. It already exists, already memoizes on the pair it
+folds, and already means "the class of this column's cell in this section". It is one row of a table
+whose other three rows were written by hand at the point of use.
+
+### What changes
+
+Six changes, ranked by what each removes. None is on the per-row path and none adds an allocation to it;
+the fourth and fifth remove members from four subclasses and add none.
+
+**1. The four sections are four pairs, asked the same way.** `HeaderCellClass(string headerClass)`,
+`FilterCellClass`, `FooterCellClass` join `CellElementClass`, each memoized against what it folds
+exactly as `CellElementClass` is, and `FilterCellStyle => FrozenHeaderStyle` is where "the filter row is
+a second row of the header" is finally written as code rather than as a comment two files away. The grid
+asks each section for a class and a style and stops knowing that a frozen column is a class plus an
+inset.
+
+The memo is the existing one and not a new mechanism: the base classes it folds are interned literals in
+three of four rows and `FooterCssClass` - a parameter - in the fourth, so a hit returns the same string
+instance and a frozen column costs one string per section per grid rather than one per render. Today's
+three inline folds allocate a string per frozen column per render; that is once per column and not per
+row, so the change is not sold as a saving and the bench is expected to say so.
+
+**2. `SetFilter` carries the text that produced the value.** Today it clears `AppliedFilterText`, and
+two of its six call sites put the text back on the next line under a comment explaining that they must
+(`Data.cs:608-610`, `:1214-1217`). One rule, written twice, in the places most likely to be copied from.
+`SetFilter(value, filterOperator, text = null)` puts it in the signature; the four sites that want the
+clear say nothing and get it.
+
+**3. `OnParametersSet` is sealed, and derivation is a hook that runs before it.** Five classes override
+it and every one of them is "do my own derivation, then call base" - with a comment in two of them
+explaining that the order matters, because the base picks the default filter operator from
+`FilterElementType` and a column that has not read its member selector yet answers `object`. That rule
+is currently enforced by five authors remembering it, and **the test suite already contains a column
+that gets it backwards**: `ReviewRegressionTests.CompileCountingColumn` calls `base.OnParametersSet()`
+first and derives afterwards. It happens not to matter for that column, which is exactly why nobody
+noticed. A sealed `OnParametersSet` calling `protected virtual void OnDerive()` first makes the order
+not the subclass's to choose, and the mutation that gets it wrong stops compiling.
+
+`ColumnBase` is public and this narrows it: a third-party column overrides `OnDerive` where it used to
+override `OnParametersSet`. §8's packaging question is open and nothing has shipped, so this is the
+cheapest it will ever be.
+
+**4. The four `Apply*` methods default to a sort the column supplies.** `TemplateColumn`,
+`CollectionColumn` and `LookupColumnBase` each carry the same four one-line forwards to `SortBy` -
+twelve methods, verbatim across three classes, and two of the three also carry the same
+`PropertyPath => SortBy?.Path`. An `internal virtual FastGridSort<TItem>? SortSource => null` on the
+base, with the four `Apply*` and `PropertyPath` defaulting through it, turns twelve methods and two
+properties into three overrides of one member.
+
+Nothing public changes behaviour: the default `SortSource` is null, so every `Apply*` still answers null
+for a column that supplies no sort - which is what an out-of-assembly column inherits today.
+`PropertyColumn` overrides all four with typed expressions and does not participate. `CanSort` stays
+overridden where it differs, because it genuinely does: `TemplateColumn` can sort on a bare
+`SortProperty` with no `FastGridSort` at all.
+
+**5. `RenderCell` defaults to the cell's own text.** Four of the five columns implement `RenderCell` and
+`CellTextOf` as the same expression written twice -
+
+```
+LookupColumn            AddContent(sequence, CellTextOf(item))     CellTextOf => key is null ? null : NameOf(key(item))
+LookupCollectionColumn  AddContent(sequence, CellTextOf(item))     CellTextOf => ...Join(...)
+CollectionColumn        AddContent(sequence, Text(item))           CellTextOf => Text(item)
+PropertyColumn          AddContent(sequence, cellText?.Invoke(item))  CellTextOf => cellText?.Invoke(item)
+```
+
+- and nothing checks that the two agree. They must: `CellTextOf` is what the truncation tooltip shows
+(`RadzenFastGrid.cs:1935`) and what a column's text is read through elsewhere, so a column whose two
+halves drift shows one thing in the cell and another on hover. Making `RenderCell` virtual with
+`AddContent(sequence, CellTextOf(item))` as its body removes four overrides and makes the divergence
+unrepresentable for a text column.
+
+The cost is that `RenderCell` stops being `abstract`, so a column that overrides neither draws an empty
+cell instead of failing to compile. That is a real loss and it is small: `CellTextOf` returning null is
+already the base's answer, and the compiler was enforcing "say how a cell is drawn" over a class whose
+other twenty-seven members all have defaults. `TemplateColumn` keeps its own `RenderCell`, because a
+template is content and not text.
+
+**6. `AutoFitWidth` is deleted.** No reader anywhere.
+
+### Deliberately not proposed
+
+- **Opening the eight `internal virtual` filter members.** It is the candidate's most interesting
+  complaint and it is not a shape question, it is a decision about what a third-party column may do -
+  and taking it would freeze the filter-row protocol at its current shape while two things that would
+  change it are open: §10's question of whether an operator menu, a date popup, a numeric range or an
+  enum picker is built in, and §15's candidate 7, which would give a column an identity the filter
+  lookup is currently keyed by. Publishing eight members now and revising them after either lands is
+  worse than publishing them once. **Refused, with that as the reason**, and recorded beside the
+  candidate in §15.
+- **Composing the four sections eagerly at the two points that can change them.** It is available -
+  `OnParametersSet` and `SetFrozen` are the only writers of every input - and it would turn the body's
+  two per-cell getters into two field reads, removing the four-term comparison `CellStyle`'s memo runs
+  per cell today. It is refused because it trades a mechanism that **cannot** go stale for one that can:
+  a lazy memo guarded on its inputs is self-correcting, and compose-on-write is correct only while both
+  writers remember to recompose. That is this branch's most-recorded fault class, and the speed it would
+  buy is not measurable at `--job short`, so it would be bought on an argument rather than a number.
+- **Anything that makes the grid hoist a per-column value out of the row loop.** §15's candidate 2
+  refused that shape - "a large diff through the hottest code on the branch" - and nothing here is worth
+  reopening it for.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **A `gridbench --job short` control before and after**, on all three rows. The control at
+   `9530a37a8` is bare **154.55 KB**, one sort **175.79 KB**, a filter row **158.78 KB**, and the noise
+   floor on the bare row is ~0.3 KB. Nothing here is on the per-row path, so all three should hold. A
+   fourth run with two columns frozen, because change 1 is the only one that touches a frozen column's
+   strings and §10 measured frozen at +0.9 KB.
+2. **A test that the four sections agree**, asserting that a frozen column's filter cell carries the
+   header's style and not the body's - the fact §10 records being got wrong once, and which currently
+   nothing checks directly.
+3. **A test that the memo hands back the same instance per section**, as
+   `FastGridColumnLayoutTests:122` already does for `CellStyle` - `Assert.Same`, which is the only
+   assertion that distinguishes a memo that engages from one that does not.
+4. **A test that a column's cell and its tooltip agree**, which is what change 5 makes
+   unrepresentable and what nothing asserts today.
+5. **Every new test mutation-checked, and the mutation must compile.** Changes 3 and 5 claim to make a
+   fault unrepresentable; for those the evidence is a mutation that *fails to build*, which is worth
+   more than one that fails a test.
+6. **`GeometryParityTests` in a real browser**, because change 1 rewrites what every frozen cell in
+   three of four sections is classed and styled with, and the geometry layer is the only thing that
+   reads a pinned column's actual position.
+
+### Where this could still be wrong
+
+- **Change 1 may be a rename rather than a deepening.** It adds three members and removes three
+  concatenations, which is close to flat, and if the four pairs do not end up looking like one table
+  when they are written down, the honest answer is that `CellElementClass` was already the whole of the
+  idea and the other three sections were fine as they were. The test in verification step 2 is what
+  decides it: if the rule it asserts cannot be stated without naming a section, the sections are real.
+- **Change 3's seal may cost more than the rule is worth.** Sealing a `ComponentBase` override on a
+  public class is the most aggressive thing here, and the argument for it rests on one test column
+  getting the order backwards *without consequence*. A rule whose violation has never cost anything may
+  not need enforcing at all.
+- **Change 5 removes a compiler error.** "Say how your cell is drawn" is currently checked at build
+  time for every column anyone writes, and after this it is not. The trade is one class of mistake for
+  another, and the claim that the drift it prevents is the likelier one is a judgement rather than a
+  measurement.
+- **Change 4 puts a sort on the base that only three of five columns have.** `SortSource` is a member
+  every column inherits and most cannot use, which is the same shallowness this section is complaining
+  about, one level up. The defence is that it replaces four such members with one; the defence is not
+  that it is free.
