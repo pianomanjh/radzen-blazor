@@ -52,6 +52,17 @@ function expect(what, actual, expected) {
     expect('the grid renders its rows', await names(),
         ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve']);
 
+    // The lookup columns, which is what a trimmed member would be missing from: their cells resolve an
+    // id the row carries against names the grid holds once, and a trimmer that took either apart would
+    // leave them blank rather than throw.
+    const column = n => page.$$eval(`tbody tr td:nth-child(${n})`, tds => tds.map(t => t.textContent.trim()));
+
+    expect('a lookup cell shows the name its id stands for', await column(7),
+        ['Ops', 'Design', 'Ops', 'Design', 'Ops']);
+
+    expect('a lookup collection cell lists them', await column(8),
+        ['Red, Green', 'Blue', '', 'Green, Blue', 'Red']);
+
     // Twice: the sample is already ascending by name, so only the descending click proves a sort ran.
     await page.click('thead th:first-child');
     await page.waitForTimeout(300);
@@ -69,11 +80,28 @@ function expect(what, actual, expected) {
         ['Charlie', 'Eve', 'Alice', 'Diana', 'Bob']);
 
     // Contains, case-sensitive by default - which is why Alice, with no lowercase a, is not a match.
-    await page.fill('thead input.rz-textbox', 'a');
-    await page.dispatchEvent('thead input.rz-textbox', 'change');
+    // Scoped to the column now that more than one box is on the page.
+    const box = n => `thead th:nth-child(${n}) input.rz-textbox`;
+
+    await page.fill(box(1), 'a');
+    await page.dispatchEvent(box(1), 'change');
     await page.waitForTimeout(500);
 
     expect('filtering by a string', await names(), ['Charlie', 'Diana']);
+
+    await page.fill(box(1), '');
+    await page.dispatchEvent(box(1), 'change');
+    await page.waitForTimeout(500);
+
+    // A lookup column matches what is typed against the names and filters by the ids they carry, which
+    // is the path that would have needed a member reached by name if it had been built the other way.
+    await page.fill(box(7), 'Ops');
+    await page.dispatchEvent(box(7), 'change');
+    await page.waitForTimeout(500);
+
+    // Still in the ascending-by-Value order the sort above left, which is the point of asserting the
+    // order rather than the set: the filter narrows and does not re-order.
+    expect('filtering a lookup column by a name', await names(), ['Charlie', 'Eve', 'Alice']);
 
     await browser.close();
 
@@ -86,7 +114,7 @@ function expect(what, actual, expected) {
         process.exit(1);
     }
 
-    console.log('The trimmed app renders, sorts by string and by number, and filters.');
+    console.log('The trimmed app renders, resolves its lookups, sorts by string and by number, and filters.');
 })().catch(e => {
     console.error(`Could not drive the trimmed app: ${e.message}`);
     process.exit(1);
