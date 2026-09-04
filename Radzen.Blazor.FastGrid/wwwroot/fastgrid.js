@@ -184,10 +184,10 @@ function measure(view) {
 
 // Moves the cursor to one cell. row is -1 for the header row; cell is the browser's own cell index,
 // which is the index the click listener already reports and so counts the row-detail toggle.
-///
+//
 // pinnedStart and pinnedEnd are how many cells of the row are frozen to each edge - C# knows which
 // columns those are, and the browser measures how wide they came out.
-///
+//
 // Returns whether the cell was found straight away. A row outside a virtualized window is not, and is
 // waited for: see the scroll-and-settle below.
 export function focusCell(viewId, row, cell, pinnedStart, pinnedEnd, itemSize) {
@@ -430,9 +430,9 @@ function installMeasuringStyle() {
 function animateFor(table) {
   table.classList.add(ANIMATING);
 
-  clearTimeout(table.rzFastGridAnimation);
+  clearTimeout(table._fastGridAnimation);
 
-  table.rzFastGridAnimation = setTimeout(() => {
+  table._fastGridAnimation = setTimeout(() => {
     table.classList.remove(ANIMATING);
   }, ANIMATION_MS + 50);
 }
@@ -493,16 +493,18 @@ function resolveLengths(table, values) {
 
   host.appendChild(holder);
 
-  for (const [i, probe] of probes) {
-    const width = probe.getBoundingClientRect().width;
+  try {
+    for (const [i, probe] of probes) {
+      const width = probe.getBoundingClientRect().width;
 
-    // A length the browser could not make sense of measures as nothing, which is not a bound.
-    if (width > 0) {
-      resolved[i] = width;
+      // A length the browser could not make sense of measures as nothing, which is not a bound.
+      if (width > 0) {
+        resolved[i] = width;
+      }
     }
+  } finally {
+    host.removeChild(holder);
   }
-
-  host.removeChild(holder);
 
   return resolved;
 }
@@ -545,18 +547,35 @@ function bound(px, min, max) {
 // would otherwise re-arm on every render and wait again.
 async function ready(tableId, wait) {
   // Bounded by the clock as well as by frames. requestAnimationFrame does not fire in a backgrounded
-  // tab, so a frame count alone can wait for as long as the tab stays hidden - and the server has
-  // already disarmed by then, so nothing would ever ask again.
+  // tab, so waiting on frames alone waits as long as the tab stays hidden - and the server has already
+  // disarmed by then, so nothing would ever ask again.
+  //
+  // The clock has to be able to win the race rather than merely be consulted between frames: testing
+  // the deadline at the top of the loop reads as a timeout and is not one, because the await above it
+  // never returns for the tab that needs it.
   const deadline = performance.now() + 1000;
 
   for (;;) {
     const table = document.getElementById(tableId);
 
-    if (!table || !wait || dataRows(table).length > 0 || performance.now() >= deadline) {
+    if (!table || !wait || dataRows(table).length > 0) {
       return table;
     }
 
-    await new Promise(resolve => requestAnimationFrame(resolve));
+    const remaining = deadline - performance.now();
+
+    if (remaining <= 0) {
+      return table;
+    }
+
+    await new Promise(resolve => {
+      const timer = setTimeout(resolve, remaining);
+
+      requestAnimationFrame(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 }
 
@@ -672,7 +691,7 @@ function distribute(state, available) {
   // Written only where it changed. During a drag most columns move every frame, but the required ones
   // never do, and neither does anything already sitting on its floor.
   for (let i = 0; i < n; i++) {
-    if (out[i] !== last[i]) {
+    if (cols[i] && out[i] !== last[i]) {
       cols[i].style.width = out[i].toFixed(1) + 'px';
       last[i] = out[i];
     }
@@ -751,9 +770,9 @@ export function releaseFit(tableId) {
   const table = document.getElementById(tableId);
 
   if (table) {
-    if (table.rzFastGridAnimation) {
-      clearTimeout(table.rzFastGridAnimation);
-      table.rzFastGridAnimation = 0;
+    if (table._fastGridAnimation) {
+      clearTimeout(table._fastGridAnimation);
+      table._fastGridAnimation = 0;
     }
 
     table.classList.remove(ANIMATING);
@@ -793,7 +812,9 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   // needed for the no-slack case below.
   let bareWidth = null;
   let measured = 0;
-  let available = 0;
+  // The whole container. `state.available` is this minus what the columns nobody is fitting take, and
+  // one word for the two was a way to reach for the wrong one.
+  let container = 0;
 
   // What the columns this pass is not fitting are taking. A declared Width or AutoFit="false" column
   // is space the fitted ones cannot have, and fitting to a container means fitting to what is left of
@@ -805,6 +826,11 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
 
   installMeasuringStyle();
   table.classList.add(MEASURING);
+
+  // Nothing to resolve on a grid that declares no bounds, which is most of them, so this costs nothing
+  // there and one layout where it does.
+  const minimums = resolveLengths(table, minWidths);
+  const maximums = resolveLengths(table, maxWidths);
 
   try {
     for (let k = 0; k < indices.length; k++) {
@@ -857,7 +883,13 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       // the single outcome that makes this look like it did not work. No over-fit beyond that: the
       // 3% RadzenSpreadsheet adds is for surviving a renderer other than the one that measured, and
       // here they are the same renderer.
-      const px = Math.ceil(widest) + 1;
+      // Bounded here rather than only in the string handed to the browser. `measured` decides whether
+      // there is slack left, and summing what a column would need if nothing capped it overstates a
+      // MaxWidth-capped column by however much the cap removes - enough to conclude there is no slack
+      // when there is. The fitting path had its own clamp and got this right; now there is one.
+      const px = Math.max(
+        minimums[k] === null ? 0 : minimums[k],
+        Math.min(Math.ceil(widest) + 1, maximums[k] === null ? Infinity : maximums[k]));
 
       // The bare column takes whatever the fitted ones left, which under table-layout:fixed is what
       // a col with no width at all means. Its own measurement is kept rather than discarded: it is
@@ -892,7 +924,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
 
     measured += reserved;
 
-    available = table.parentElement ? table.parentElement.clientWidth : table.clientWidth;
+    container = table.parentElement ? table.parentElement.clientWidth : table.clientWidth;
   } finally {
     table.classList.remove(MEASURING);
   }
@@ -906,7 +938,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
   // second whole-table layout. Both figures it needs are read inside the measuring pass above, with
   // every other read - taking them from here instead put the pass over its own timing gate, which is
   // what that gate is for.
-  if (bare >= 0 && bareWidth !== null && measured >= available) {
+  if (bare >= 0 && bareWidth !== null && measured >= container) {
     widths[indices.indexOf(bare)] = bareWidth;
   }
 
@@ -926,7 +958,7 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       // Never the bare column: it is supposed to have no width, and it follows the others anyway -
       // being the remainder, the browser recomputes it from them on every frame of the transition.
       if (col && !col.style.width && indices[k] !== bare) {
-        pinned.push([col, headCells(table)[toggleOffset + indices[k]]]);
+        pinned.push([col, headRow ? headRow.children[toggleOffset + indices[k]] : null]);
       }
     }
 
@@ -969,25 +1001,16 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     let floors = 0;
     let needed = 0;
 
-    const minimums = resolveLengths(table, minWidths);
-    const maximums = resolveLengths(table, maxWidths);
-
     for (let k = 0; k < n; k++) {
       state.cols[k] = colgroup.children[toggleOffset + indices[k]];
       state.required[k] = !!(required && required[k]);
 
-      // The same bounds `bound()` hands the browser under Scroll, applied here as numbers: a MinWidth
-      // wider than the content widens the column, exactly as its `max()` does. Doing only the `min()`
-      // half made the one parameter mean two different things depending on the mode.
-      //
-      // Ordered the way `clamp()` orders it - the minimum applied last, so it wins over a maximum
-      // beneath it, as CSS has min-width beat max-width. The other order leaves a floor above the
-      // width it is a floor for, and the table's min-width then overstates what the columns can
-      // actually sum to: the browser scales them back up to reach it, and columns that were promised
-      // they would not move, move.
-      state.content[k] = Math.max(
-        minimums[k] === null ? 0 : minimums[k],
-        Math.min(pixels[k], maximums[k] === null ? Infinity : maximums[k]));
+      // Already bounded when it was measured, in `clamp()`'s order - the minimum last, so it wins over
+      // a maximum beneath it as CSS has min-width beat max-width. Getting that order wrong leaves a
+      // floor above the width it is a floor for, the table's min-width then overstates what the columns
+      // can sum to, and the browser scales them back up to reach it: columns promised they would not
+      // move, move.
+      state.content[k] = pixels[k];
       // Where required-ness lives: both floors at the content width, so the distribution has nothing
       // to take in either round. There is no second test for it anywhere.
       if (state.required[k]) {
