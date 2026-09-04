@@ -445,7 +445,8 @@ namespace Radzen.FastGrid.Tests
             FastGridSort<TItem> sortBy = null,
             FilterMode? filterMode = null,
             bool filterable = true,
-            object filterValue = null) => (builder, seq) =>
+            object filterValue = null,
+            FilterOperator? filterOperator = null) => (builder, seq) =>
         {
             builder.OpenComponent<LookupCollectionColumn<TItem, TKey>>(seq);
             builder.AddAttribute(seq + 1, nameof(LookupCollectionColumn<TItem, TKey>.Property), property);
@@ -479,6 +480,11 @@ namespace Radzen.FastGrid.Tests
             if (filterValue is not null)
             {
                 builder.AddAttribute(seq + 8, nameof(LookupCollectionColumn<TItem, TKey>.FilterValue), filterValue);
+            }
+
+            if (filterOperator is not null)
+            {
+                builder.AddAttribute(seq + 9, nameof(LookupCollectionColumn<TItem, TKey>.FilterOperator), filterOperator);
             }
 
             builder.CloseComponent();

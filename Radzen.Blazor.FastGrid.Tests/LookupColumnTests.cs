@@ -405,5 +405,27 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(new[] { "Games", "Puzzles", "Toys", "Toys" }, Cells(cut, 0));
         }
+
+        [Fact]
+        public void AScalarCellAllocatesNothing()
+        {
+            // §14 predicted this and a prediction is not a measurement. What a cell renders is a string
+            // the lookup already holds, so there is nothing left to build - cheaper than a PropertyColumn
+            // carrying a FormatString, which builds one.
+            const int iterations = 20000;
+
+            using var ctx = new TestContext();
+            var item = new Person { CategoryId = 10 };
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))), data: new[] { item });
+
+            Assert.Equal("Toys", cut.Find("tbody td span").TextContent);
+
+            var column = cut.FindComponent<LookupColumn<Person, int>>().Instance;
+
+            Assert.True(Allocation.PerCell(column, item, iterations) < 1,
+                "rendering a resolved lookup cell should allocate nothing");
+        }
     }
 }
