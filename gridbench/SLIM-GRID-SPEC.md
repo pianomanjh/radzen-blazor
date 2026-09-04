@@ -2404,7 +2404,7 @@ with a load-bearing reason should be recorded here beside it.
 
 | # | Candidate | Strength |
 | --- | --- | --- |
-| 1 | Compose the view behind one interface | Strong |
+| 1 | Compose the view behind one interface | Strong - **designed, §16** |
 | 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
 | 3 | The browser seam has no interface | Strong |
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
@@ -2413,7 +2413,7 @@ with a load-bearing reason should be recorded here beside it.
 | 7 | A column's identity is a concept with no name | Worth exploring |
 | 8 | The drop-down forwards twelve parameters, then hands out the grid | Worth exploring |
 
-**1. Compose the view behind one interface.** `RadzenFastGrid.Data.cs:1117-1246` and `:1832-2007` are
+**1. Compose the view behind one interface.** **§16 has the design, argued before it is built.** `RadzenFastGrid.Data.cs:1117-1246` and `:1832-2007` are
 about 300 lines that are already a function of `(columns, sorts, source, config)` — `BuildFilters`,
 `ApplyFilters`, `Reflective`, `ComposeInMemory`, `ApplySorts`, `Compose`, `Page`, `Total`, `OrderBy`,
 `FilterString`. They are private instance methods over `columns` and `sorts`, both of which are declared
@@ -2564,3 +2564,186 @@ render for exactly the sources this library targets**. That makes it a fourth pa
 - **A seam for localization, `Defer`, or `NonRenderingHandler`.** One adapter each, so each is a
   hypothetical seam and fine as it stands.
 - Anything §1 rules out, or §10 has already settled with a reason.
+
+---
+
+## 16. Composing the view behind one interface - the design
+
+§15's first candidate, argued before it is built. Nothing here has been written yet; the numbers are
+measurements of the code as it stands, and the decisions are the ones that came out of grilling the
+candidate rather than assumptions to be rediscovered.
+
+### What it is for
+
+`RadzenFastGrid.Data.cs` holds about 250 lines that are already a function of their arguments -
+`BuildFilters`, `DescriptorFor`, `ApplyFilters`, `Reflective`, `Compose`, `ComposeInMemory`,
+`ApplySorts`. They are private instance methods over `columns` and `sorts`, both of which are declared
+in the *other* partial, so the partial-class split is a text split rather than a module boundary and
+the pipeline's only interface is "render a grid and read the DOM".
+
+What that costs is visible in the suite. `InMemoryCompositionTests` stands up **two** `TestContext`s
+and two grids and diffs the rendered rows, because there is no function to call twice with the same
+arguments. `FilterCompositionTests` types into the DOM to reach the mixed `And`/`Or` branch - the one
+place in the composition carrying a written correctness argument. And `ComposedInMemory` exists as a
+property whose own doc comment says it is "exposed for the tests, and only to them", because which
+route ran is invisible in the rows.
+
+**The proof that this is avoidable is already in the repo.** `FilterExpressionParityTests` calls
+`FilterExpression<Person, TProp>.For` and `.PredicateFor` directly, covers 84 operator x route
+combinations, and needs no bUnit at all. That interface sits at the right seam. The composition above
+it does not.
+
+### The surface
+
+```csharp
+internal static class Composition
+{
+    internal static Composed<TItem> Compose<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns,
+        IReadOnlyList<SortDescriptorOfThisGrid> sorts,
+        IEnumerable<TItem> source,
+        CompositionOptions options,
+        ref DrawPass<TItem> pass);
+}
+
+internal readonly struct Composed<TItem>
+{
+    internal IEnumerable<TItem> Rows { get; }
+
+    /// Whether the delegate route ran rather than the expression one.
+    internal bool InMemory { get; }
+}
+
+internal readonly struct CompositionOptions
+{
+    internal bool AllowFiltering { get; }
+    internal FilterCaseSensitivity FilterCaseSensitivity { get; }
+    internal LogicalFilterOperator LogicalFilterOperator { get; }
+}
+```
+
+Three parameters that are really parameters, one options value, and the pass. That is the whole
+argument list, and it is not a guess: the moving code reaches for exactly nine things on `this`, and
+they are `columns` (6 references), `LogicalFilterOperator` (6), `sorts` (4), `pass` (4),
+`FilterCaseSensitivity` (3), `ComposedInMemory` (3), `AllowFiltering` (1), `SortColumn` (1) and
+`DynamicCode.Supported` (1). Six collapse into `CompositionOptions`, three are the real parameters,
+`SortColumn` is answerable from `sorts`, `DynamicCode.Supported` travels with `Reflective`, and
+`ComposedInMemory` stops being a reference at all.
+
+**`ComposedInMemory` becomes part of the answer.** That is the single cleanest win here: a return value
+currently smuggled out through a field becomes something a caller can read - and act on - rather than
+merely observe afterwards. The property whose reason for existing is "for the tests, and only to them"
+stops needing to exist.
+
+### What moves and what stays
+
+**Moves - 253 lines:** `ApplyFilters(IQueryable)` 73, `ComposeInMemory` 63, `Compose` 50,
+`BuildFilters` 22, `ApplySorts` 20, `Reflective` 14, `DescriptorFor` 11.
+
+`Reflective` takes the `DynamicCode` policy with it. "This route needs dynamic code" belongs to the
+route, not to the grid.
+
+`BuildFilters` and `DescriptorFor` move even though descriptors are not purely a composition concern -
+they also feed the **public** `Filters` property and `LoadDataArgs.Filters`. That is the argument for
+moving them rather than against it: three places answer "what are the columns asking for" today, and
+§10b's recurring finding is a rule applied in one place and not in its neighbour. One place means they
+cannot disagree, and the two outside callers call the module.
+
+**Stays - 76 lines:** `View` 33, `CountAll` 30, `Page` 10, `Total` 3.
+
+All four are about *which source owns this* - `LoadData.HasDelegate`, `loadedCount`, `AsyncOwnsData`,
+`Paging` - which is a different question from what to do to it, and the module gets shallower the
+moment it has to know both. Keeping source selection on the grid is also what keeps the module a pure
+function of its arguments, which is the whole reason it becomes testable.
+
+**A side effect worth having:** the private `ApplyFilters(IQueryable<TItem>)` moving out ends its name
+collision with the public `ApplyFilters(IEnumerable<FilterDescriptor>)`, which today are kept apart by
+overload resolution and nothing else.
+
+### What the module sees of a column
+
+`IReadOnlyList<ColumnBase<TItem>>` - the whole column type, not a narrowed interface.
+
+A narrow interface exposing only `HasFilter`, the four `Apply*`, `FilterPropertyPath`,
+`FilterMemberPath`, `CurrentFilterValue`, `CurrentFilterOperator` and `FilterPropertyType` would be a
+seam with **one** adapter, since nothing but `ColumnBase` would ever satisfy it. Worse, it would decide
+§15's candidate 6 - what a column exposes - as a side effect of moving the pipeline. That decision
+should be taken deliberately, and this module is one of the call sites that will tell us whether a
+narrowing is right.
+
+Pre-projecting the columns into a value is ruled out by §3: it allocates per column per composition and
+buys nothing.
+
+**This is where the piece is most likely to grow.** If the moving code turns out to reach the grid
+through a virtual call on a column that is not in the nine above, the argument list stops being small
+and the answer is the registry moving too - which is a materially larger change. That is a stop-and-
+re-decide point, not something to push through.
+
+### Why it is internal
+
+`internal static`, reached by the tests through the `InternalsVisibleTo` the project already grants.
+
+Making it public commits a NuGet package to supporting the composition's shape forever, for a seam
+whose whole justification is internal testability, and §8 treats the package surface as a deliberately
+narrow thing. The distinction that matters is between reaching *at* a module's interface and reaching
+*past* it: internal plus `InternalsVisibleTo` is the former. What is being fixed is the present
+situation, where tests reach past the grid into `columns` and `sorts` because there is no interface at
+all.
+
+### The pass crosses by ref, and does not travel further
+
+`ref DrawPass<TItem>` - §15's candidate 2 built it as a plain mutable struct for exactly this.
+
+It stays a field on the grid and is passed explicitly **only** across this seam. The render tree is
+untouched and `TotalCount()` keeps one signature, which matters because it has callers on both sides of
+the render - the pager and `aria-rowcount` inside it, the keyboard cursor outside. Threading `ref pass`
+through `RenderGrid`, `RenderPager`, `RenderHead`, `RenderBody` and `RenderRow` would be a large diff
+through the hottest code on the branch to buy what this already has.
+
+So the honest claim after this lands is that the memo no longer crosses a module edge - not that the
+grid has no ambient state left. `ActiveFilters` still reads the field.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **`InMemoryCompositionTests` is rewritten at the seam** and its two-`TestContext` diff deleted. Two
+   calls with the same arguments and different options, compared directly.
+2. **`FilterCompositionTests` stays as it is.** It is integration coverage and catches a different class
+   of fault; it should stop *growing*, not be replaced.
+3. **One new DOM-level test that the grid actually calls the module.** Without it the module can be
+   correct and unused and everything stays green - and this branch's recorded failure mode is silent
+   wrong answers, which is exactly that shape.
+4. **Every new test mutation-checked**, and the mutation must compile: piece 1 and piece 2 each found a
+   test that passed with the rule it named deleted, and piece 2 found two branches no caller could
+   reach with a different answer.
+5. **A `gridbench --job short` control before and after**, on `*FastGridFeatureBench.Bare`,
+   `*SingleSort`, `*Filtering`. The claim is allocation-neutral. Take no time ratio from that job
+   length - the errors are wider than the differences.
+
+Expect **31 of the 32 test files that touch filtering, sorting or composition to be untouched.** If
+they are not, the boundary is wrong.
+
+### The order it lands in
+
+One commit, with the spec updated inside it rather than trailing - which is what the rest of this
+branch does, and a trailing docs commit is how a section ends up describing something that changed
+under it.
+
+**Candidate 5 follows this, not the other way round.** The four `Apply*` methods and their four
+different meanings of `null` are precisely what `Composition` consumes, so changing their return shape
+once the calls live in one module is a change to one caller instead of scattered ones.
+
+### Where this could still be wrong
+
+- **The module may end up shallow.** Five parameters is not a small interface, and if `Compose` turns
+  out to be the only thing anyone calls, `Composition` is a namespace with one function in it rather
+  than a module. The test for that is whether `Composed<TItem>` earns its place: if callers only ever
+  read `Rows`, the route flag should have stayed a field and this was a rename.
+- **`sorts` has no type yet.** It is a list on the grid whose element type this section has deliberately
+  not named, because naming it is the first thing the build will have to decide and guessing here would
+  be the kind of recorded decision §10b warns about.
+- **The memo and the module may not want the same lifetime.** `DrawPass` is a render pass; the
+  composition is asked for outside a render too - by the click resolver, by the keyboard cursor, by the
+  virtualized items provider. Passing `default` there is correct and cheap, but if it turns out most
+  calls pass `default`, the pass is a parameter three callers carry for one caller's benefit.
