@@ -1962,6 +1962,12 @@ one column type, which is the sort of hole §10b keeps finding.
 **Documented consequence:** text matching two hundred names emits two hundred ids, and providers have
 parameter limits. A cap belongs in the code with the number stated, rather than a surprise at run time.
 
+**And text matching *no* name is a filter that matches no row, not an absent one.** That is the
+opposite of what the same empty list means on the check-box list beside it, where nothing ticked is no
+filter - so `HasFilter` asks the one thing that tells them apart, which is whether the box recorded
+what was typed. It survives a settings round trip because that text is stored with the filter; see
+*What the build changed*.
+
 ### The descriptor the collection case reports is portable, and no sentinel is invented
 
 An earlier draft of this section had the collection descriptor as a grid-local encoding, on the
