@@ -153,10 +153,11 @@ namespace Radzen.FastGrid.Tests
             var inMemory = Render(ctx, columns, Filtering, data);
             var composed = Render(ctx, columns, Filtering, data.AsQueryable());
 
-            // The row carrying no ids at all is in neither answer or in both, and "not one of these
-            // brands" is true of it either way it is read - so what is pinned is that the two agree.
-            Assert.Equal(Cells(composed, 0), Cells(inMemory, 0));
-            Assert.DoesNotContain("Acme", string.Join("|", Cells(inMemory, 0)), StringComparison.Ordinal);
+            // The answer itself, not merely that the two give the same one: two empty grids agree, so a
+            // predicate that went always-false on both sides would have passed a comparison. "Not one
+            // of these brands" is true of the row carrying none, so it is in the answer.
+            Assert.Equal(new[] { "Globex", "" }, Cells(inMemory, 0));
+            Assert.Equal(Cells(inMemory, 0), Cells(composed, 0));
         }
 
         [Fact]
