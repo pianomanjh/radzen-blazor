@@ -84,8 +84,8 @@ bytes and not in time**. §12 had them the other way round, on a frame-count arg
 be about string values instead.
 
 **Not built**: editing, grouping, composite headers. Keyboard navigation is built in full - the cursor,
-the keys, range selection and positional ARIA, and so is column auto-fit (§13). §10 has what is still
-open.
+the keys, range selection and positional ARIA, and so is column auto-fit (§13). **Lookup columns are
+designed and not built** (§14). §10 has what is still open.
 
 ## 1. Why a separate component
 
@@ -579,6 +579,23 @@ Each layer below caught real faults the previous one missed. Use all of them.
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
 
+- **A check-box list's distinct scan is dropped on every parameter set, not on every data change.**
+  `lookups` is cleared on `!ReferenceEquals(lastData, Data)`, which for the sources this grid is built
+  for - `context.Rows.AsNoTracking()` read per render, a `LoadData` handler assigning a fresh page - is
+  true whenever the parent renders. So the filter row draws empty, `pendingLookups` refills, and one
+  `SELECT DISTINCT` per check-box-list column runs again, followed by a second render. It does not loop:
+  `StateHasChanged` does not re-set parameters, so it is N queries and one extra render per *parent*
+  render rather than a runaway.
+
+  The same `!ReferenceEquals` trap is recorded twice already - row expansion above, and the `Once` fit in
+  §13 which is deliberately not keyed on it. This is the third participant, and the only one where the
+  cost is a database round trip.
+
+  **Derived from reading, not measured**, and `CheckBoxListFilterTests` covers neither re-fetch nor
+  caching: its three lookup tests assert what is offered and never how often it is asked for. So the
+  first thing this needs is a control that counts the queries. §14 does not inherit it - a lookup column
+  runs no distinct scan at all - which is one of the reasons that section is shaped the way it is.
+
 ## 10b. Review status
 
 What has been read by a reviewer other than its author, what that found, and what has not. Recorded
@@ -718,6 +735,11 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
   rule for one, and what a keystroke costs on a server-rendered circuit.
 - ~~**Column auto-fit**~~ - **built**, as §13 designed it, and the sort glyph it needed went up first
   on its own. Two of that section's decisions did not survive being measured; both are marked there.
+- **Lookup columns** - **designed, not built**, as §14. A column that displays a name and carries an
+  id, so a thousand rows cost a thousand integers and one lookup rather than a thousand materialized
+  entities. Scalar and collection keys, three ways of supplying the names, and no distinct scan. The one
+  thing it needs from an existing feature is §13's: an automatic fit has to wait for the lookup or it
+  fits the column to blank cells, permanently.
 - **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
 
 **Measurement debt:**
@@ -1762,3 +1784,329 @@ and the timer has to be able to win.
   slack column rests on `table-layout: fixed`. All three are read out of the shipped theme rather than
   assumed, and all three would change silently under a custom one. The probe is what would catch it,
   and only if it is run against that theme.
+
+---
+
+## 14. Lookup columns - the design
+
+**Not built.** Argued before the code, the way §12 and §13 were, so what follows can be re-argued rather
+than merely obeyed. Every decision carries its reason; the two that rest on facts about a dependency
+rather than on preference are marked, because a change there invalidates them and nothing else here.
+
+### What it is for
+
+**A column that displays a name and carries an id.** A grid over `Product` wants to show a category,
+a brand list, an owner - and the row holds `CategoryId`, `BrandIds`, `OwnerId`. Today the only routes
+are a join the source may not have, a navigation property that drags whole entities across the wire per
+row, or a `TemplateColumn` that resolves each cell by hand and cannot filter or sort.
+
+The efficiency argument is the point rather than a side effect: **the row carries integers and the names
+are held once for the grid.** A thousand rows with a category each is a thousand ints and one lookup of
+however many categories exist, against a thousand materialized `Category` instances. What a cell renders
+is a string already in that lookup, so the cell itself allocates nothing.
+
+### The surface
+
+Two column types, split on the cardinality of the key the row carries:
+
+```razor
+<LookupColumn Property="@(p => p.CategoryId)" Lookup="@categories" Title="Category" />
+<LookupCollectionColumn Property="@(p => p.BrandIds)" Lookup="@brands" Title="Brands" />
+```
+
+`LookupColumn<TItem, TKey>` takes `Expression<Func<TItem, TKey>>`; `LookupCollectionColumn<TItem, TKey>`
+takes `Expression<Func<TItem, IEnumerable<TKey>>>`. Razor infers both type parameters from the property,
+as it already does for `CollectionColumn`.
+
+**The split is on cardinality and not on provenance, and that is the whole shape of this section.** The
+two axes are orthogonal - one id or many, against three ways of saying where the names come from - and
+folding both into one type gives a component with six mutually exclusive parameters, five of them null
+at any call site, and a run-time check of which were set that no compiler can help with. Cardinality is
+knowable at compile time from the property's type and it changes how the column renders, filters and
+sorts, so it earns a type. Provenance does not: every case ends as the same `TKey -> string` map.
+
+So provenance is **one** parameter of a closed type:
+
+```csharp
+abstract record FastGridLookup<TKey>
+    sealed record Map<TKey>            : IReadOnlyDictionary<TKey, string>
+    sealed record Items<TKey, TEntity> : IEnumerable<TEntity>,
+                                         Func<TEntity, TKey>, Func<TEntity, string>
+    sealed record Query<TKey, TEntity> : IQueryable<TEntity>,
+                                         Expression<Func<TEntity, TKey>>,
+                                         Expression<Func<TEntity, string>>
+
+// TEntity is per case and inferred at the call site, so it never reaches the column's own signature:
+// the column is LookupColumn<TItem, TKey> whichever case supplies its names.
+```
+
+This is the `FulfillmentTrait` pattern the consuming application's own guidance names for a closed set of
+cases. Illegal combinations are unrepresentable rather than validated, and a fourth source later is a new
+case rather than a fourth nullable parameter.
+
+**`Items` takes delegates and `Query` takes expressions, deliberately.** Only `Query` composes into a
+database query; `Map` and `Items` are resolved in memory, where an `Expression` buys nothing and costs a
+`Compile()` per grid. §4's rule is that the authored form should be the one the consumer needs, and
+uniformity for its own sake would make the common case pay for the rare one.
+
+### Where the lookup lives
+
+**Declared on the column, deduplicated by the grid.** Two columns over the same table is the ordinary
+case, not the exotic one - `CreatedByUserId` and `ApprovedByUserId` both resolve against users - and
+per-column ownership would fetch it twice and hold it twice.
+
+A grid-level registry would share it at the cost of a second thing to declare and a name to get wrong,
+and it makes a column's meaning non-local. Instead the grid caches on the `FastGridLookup<TKey>` value
+itself: `record` equality gives `Map` and `Items` deduplication for nothing, and the sharing is an
+optimization nobody has to name or think about.
+
+**Open, and to be settled by a spike rather than here:** whether record equality on `Query` is usable.
+Its members include an `IQueryable`, whose equality is reference equality on the expression tree, so two
+separately-written-but-identical queries will not dedupe. That is the right failure - it costs a second
+fetch, not a wrong answer - but if it turns out that the common call site rebuilds the queryable per
+render, `Query` needs an explicit identity instead. Measure before choosing.
+
+### The row carries ids, so the filter compares ids
+
+**Everywhere: the predicate, the persisted settings, the descriptor's value.** A user picks "Toys"; the
+grid translates that to `3` against the lookup it already holds and emits `CategoryId In [3]`.
+
+- **No join is needed**, which is the premise - the source has an id and no navigation.
+- **It translates on any provider**, and it is the operator the check-box list already uses.
+- **Persisted settings survive a rename.** A filter stored as a name breaks the day someone edits the
+  lookup row; stored as an id it does not.
+
+Accepted with it: a saved filter goes stale when a row is *deleted* from the lookup, and a human reading
+persisted settings sees ids rather than names. Both are better than filters that break on a rename.
+
+The collection case appends to the authored expression rather than rewriting it:
+
+```csharp
+p => p.BrandIds.Any(id => selected.Contains(id))
+```
+
+**Every generic argument there is `TKey`, which is a type parameter**, so there is no
+`MakeGenericMethod` over a type known only at run time and nothing to guard with `DynamicCode`. A
+provider translates it as a subquery.
+
+### The check-box list is the lookup, not a distinct scan
+
+**No `SELECT DISTINCT` runs for a lookup column.** The names are already held, and the ids come with
+them, so the list is the lookup's own entries.
+
+The alternative - `DistinctValues`, the way an ordinary check-box-list column works - would offer only
+ids actually present in the data, which is a real advantage on a grid narrowed to a handful of them.
+It was rejected for three reasons, in increasing order of weight:
+
+1. It is a query per column where this design has none.
+2. The list would then **change as the data changes**, so a filter control's options move under the
+   user. A stable list is worth more than a shorter one.
+3. **It inherits the defect recorded in §10.** `lookups` is dropped on `!ReferenceEquals(lastData, Data)`,
+   which is true on every parameter set for the re-materialising sources this grid is built for, so the
+   scan re-runs per column per parent render.
+
+A `FilterLookupInUseOnly` opt-in was considered and **refused**: it reintroduces exactly (3), and
+`FilterTemplate` is already the escape hatch for a grid that needs it. Build it when something asks, and
+key its cache on something better than a reference comparison when you do.
+
+### What `Simple` mode does on a lookup column
+
+**The typed text is matched against the names, in memory, and the ids it hits are emitted as `In`.** The
+lookup is already there, so this is a `Where` over a dictionary's values and the query is unchanged from
+the check-box path.
+
+The two alternatives are both worse. Filtering the ids as text is useless - nobody types `47` looking for
+Toys. Refusing `Simple` outright leaves `FilterMode` with a value that throws or silently does nothing on
+one column type, which is the sort of hole §10b keeps finding.
+
+**Documented consequence:** text matching two hundred names emits two hundred ids, and providers have
+parameter limits. A cap belongs in the code with the number stated, rather than a surprise at run time.
+
+### The descriptor the collection case reports is grid-local
+
+`DescriptorFor` emits `FilterProperty = FilterMemberPath` precisely so a collection column's predicate
+reads `Customers.Any(c => c.Name ...)` rather than a comparison against the collection. A
+`LookupCollectionColumn` has no member to name - the element *is* the id - so it emits `Property` as the
+id path and a sentinel `FilterProperty` meaning "the element itself".
+
+**It round-trips through this grid and is not promised to mean the same thing to `RadzenDataFilter`, and
+that is said out loud rather than left to be discovered.** Emitting a bare `BrandIds In [3, 7]` would
+read as a scalar comparison to any other consumer - which is the shape #2696 had to stop throwing on -
+and handing another component something that looks portable and is not is worse than admitting the
+encoding is local.
+
+**Check before choosing the sentinel** what upstream's `QueryableExtension` does with an array property
+now that #2696 has landed. It may have a convention worth matching rather than inventing.
+
+### Sorting
+
+**Not sortable unless an explicit `SortBy` names something the provider can order by.** Sorting by the id
+puts categories in insertion order under a column showing names alphabetically - a wrong answer that
+looks like a working feature. This is §4's existing rule for a column whose display cannot be ordered by,
+applied unchanged, and made visible at the call site rather than silently disabled.
+
+Where a navigation property does exist, `SortBy="@(p => p.Category.Name)"` is the honest answer, and the
+author is the one who knows whether it is there.
+
+**Ruled out, so it is not built later:** translating the lookup into the query as an ordered
+`CASE WHEN CategoryId = 3 THEN 'Toys' ...`. It works and it translates, and it is a query whose size is
+the lookup's size, which is the opposite of this feature's premise.
+
+### Loading and lifetime
+
+**The whole lookup, once, held for the life of the grid.** For the shapes this is aimed at - categories,
+brands, statuses, owners - that is tens or hundreds of rows fetched once, after which every cell resolves
+and the filter list is complete. Fetching only the ids in play would be smaller and would refetch on
+every page turn, sort and filter, which trades one small query for a stream of them.
+
+An author with a genuinely large lookup already has the answer: hand over a narrowed `IQueryable`
+(`db.Users.Where(u => u.Active)`), which is more honest than the grid guessing at a limit.
+
+**A `Query` lookup is fetched through `IFastGridQueryExecutor` even when `Data` is in memory.** What
+decides is the lookup's own queryable, not `AsyncOwnsData` - a grid over a `List<Product>` with an EF
+lookup must still not block the circuit on database I/O. The fetch happens after the render, the way
+`LoadLookupsAsync` already does, so it cannot overlap a page load on the same context.
+
+**Nothing invalidates it automatically. `Reload()` drops it.** That is the only escape hatch, and a
+lookup with no way to refresh is a cache with no invalidation at all - which produces an "I added a
+category and it never appeared" report that has no answer. The cost is bounded and only paid when
+somebody asks.
+
+**No `ReloadLookups()`.** A second refresh verb with subtly different scope is how the
+`RefreshAsync(announce:)` confusion in §0 happened, and nobody will remember which one they wanted.
+
+### What a cell draws before the lookup arrives
+
+**Blank, and the rows are not gated on it.** `Map` and `Items` have no gap; `Query` has one fetch between
+the first render and the names, so the first paint has ids and no names.
+
+- **Not the raw id.** It is a number the reader did not ask for, in a column titled "Category", and it
+  makes the settle look like a bug rather than a load.
+- **Not a gate on the rows.** Making every lookup column a blocking dependency of the first paint trades
+  a small ugliness for a large latency, and this grid's round trip has been measured at ~157ms from Hong
+  Kong (§12). The existing loading indicator already says something is in flight.
+
+One extra render, cells fill in - the shape the check-box list already has.
+
+### A null key and a missing key are different failures
+
+**A null key renders an empty cell and is offered in the filter as a "(none)" entry.** "Which products
+have no category" is a reasonable question and `In` over a nullable key answers it. Note that this
+differs from the current check-box list, which drops nulls outright in `FilterLookup`.
+
+**A missing key - an id with no lookup entry - renders the raw id and is never offered.** It is the one
+case where showing the id is right: a deleted row, a lookup narrowed by a `Where`, or a stale cache is a
+*fault*, and the id is the only thing that lets someone diagnose it. It is not a choice a user can make,
+so it does not go in the filter.
+
+Two different failures should not look the same. §10b's first lesson is that this grid's faults are
+silent; these two are the cheapest possible place to stop being.
+
+### What it collides with
+
+**Auto-fit, and it will get this wrong unless §13 is changed.** `autoFitPending` is disarmed by the
+*attempt* rather than the answer, and the script waits for **rows** rather than for cell content. So an
+`AutoFitMode.Once` grid fits on the render where lookup cells are still blank, the column settles at its
+soft floor - the header width - and the names then arrive into a column too narrow for them.
+Permanently, because §13 settled that nothing invalidates a fit.
+
+**The fix is to defer the fit until the lookup resolves**, by extending what the script waits for. Not by
+re-arming on the lookup's arrival: that makes columns jump after the grid looked settled, which is the
+behaviour §13 rejected when it decided `Once` stays instant and only an asked-for fit animates.
+
+**The wait must race a timer against the frame**, not test a deadline at the top of a loop that awaits
+one. That exact defect was found in `ready()` by the second auto-fit review - a backgrounded tab is
+precisely where the awaited frame never arrives, so the deadline is never reached to be tested. Reuse the
+fix rather than re-deriving it.
+
+**`FilterLookupData` has nothing left to do**, since the list comes from the lookup. It is inherited from
+`ColumnBase` and therefore still settable, so setting both is a **dev-time error naming both
+parameters**, not a silent loss. `DynamicCode.Unavailable` is the precedent: say what was asked for and
+what to use instead. Silently ignoring a parameter somebody deliberately set is a failure mode this
+branch has already paid for more than once.
+
+### Budget
+
+Nothing here is measured yet; these are the numbers the design predicts, and §9's protocol says to record
+the prediction so that being wrong is visible.
+
+- **A scalar lookup cell should allocate nothing.** It is `AddContent(string)` over a string already held
+  in the lookup - cheaper than a `PropertyColumn` carrying a `FormatString`, which builds one.
+- **A collection lookup cell allocates one joined string per cell per render**, through `CellText.Join`,
+  whose `[ThreadStatic]` `StringBuilder` is already reused across cells. `CollectionColumn` calls that
+  unavoidable and does not memoize; this follows it rather than inventing a cache, and a memo keyed on
+  the id sequence stays available if a measurement ever asks for one.
+- **The lookup itself is one dictionary per distinct lookup**, not per column and not per row.
+- **The filter costs what the check-box list already costs**, minus the distinct query it does not run.
+
+**A control is required before any of these is quoted.** §9's rule - a number attributed to a mechanism
+without a control has not been measured - is what the `data-r` claim cost when it went unchecked.
+
+### Native AOT
+
+**Nothing declines.** Every selector is typed, both filter shapes compose from the columns' own
+expressions, and no member is reached by name, so no path here sits behind `DynamicCode.Supported`.
+
+That is a stronger position than `CollectionColumn` manages, and it is a reason to keep the selectors
+typed even where an `object`-returning one would read more simply at the call site: §4 records that a
+selector declared as returning `object` hides its member's real type two different ways, and this branch
+has paid for that once already.
+
+### Shape 4, and why it is not built
+
+An earlier form of this design had a fourth shape: `Property="@(p => p.Brands.Select(b => b.Id))"`, the
+ids projected out of a navigation collection, with the grid loading them on demand.
+
+**It is buildable and it is not built.** Two facts settled it, and both are recorded because the first
+one was got wrong here before it was checked:
+
+- **`Include` is not required.** Projecting a collection navigation alongside the entity has been
+  first-class since EF Core 6.0 ("split queries for non-navigation collections"), so
+  `source.Select(p => new { p, Ids = p.Brands.Select(b => b.Id) })` translates. An earlier draft of this
+  section required `.Include()` and proposed a guard for its absence; that guard would have fired on
+  correct code.
+- **`ItemKey` is `Func<TItem, object>`, not an expression**, so it cannot be composed into a query. A
+  side query projecting `(key, ids)` per page therefore needs a key the grid does not have, and getting
+  one means either widening `ItemKey` to an expression - whose `Convert`-to-object node is its own
+  translation question - or a third type parameter on the column.
+
+The remaining route, projecting the item and its ids together in one query, needs a projection type with
+a member per lookup column, which means **building a type at run time** and giving back the "nothing
+declines under AOT" property above, in exchange for one round trip.
+
+**The supported answer is a DTO.** `db.Products.Select(p => new ProductRow { ..., BrandIds =
+p.Brands.Select(b => b.Id).ToList() })` makes `TItem` the projection, `BrandIds` an ordinary collection
+of ids, and the column an ordinary `LookupCollectionColumn` needing none of the above. It is one query,
+no key, no data-path change, and it drops the columns nobody renders - which is the same efficiency
+argument this whole section is built on, applied one level up.
+
+**Filtering never needed any of it.** `.Any(id => selected.Contains(id))` composes into the main query
+and materializes nothing client-side, so only the *cell* ever wanted the ids. That is worth keeping in
+mind if this is revisited: the feature at stake is display, not filtering.
+
+### Recorded open
+
+- **Whether `Query` deduplicates usefully.** Above, with the spike it wants.
+- **The `FilterProperty` sentinel for the collection case.** Above; check #2696's landing first.
+- **A lookup column's settings identity is its id path**, so it joins §10b's open collision on equal
+  terms and makes it no worse. It is named here so that whoever adopts `UniqueID` knows this is another
+  participant.
+- **Not in `RadzenFastDropDownDataGrid`**, for the same reason §13's auto-fit is not: that slice has the
+  worst review history on the branch, and its open layout question should be answered before anything
+  else is added to it.
+
+### Where this could still be wrong
+
+- **"The lookup is small" is an assumption about the caller's domain, not a fact.** Everything here -
+  fetching it whole, holding it for the grid's life, offering all of it in the filter, reverse-mapping
+  text against it - is right for hundreds of entries and wrong for hundreds of thousands. The design
+  offers a narrowed `IQueryable` as the answer and does not enforce a limit. The first grid to point a
+  lookup at a large table will find this, and the honest response is a documented ceiling rather than a
+  silent degradation.
+- **A stable filter list is asserted to be worth more than an accurate one.** That is a judgement about
+  users, not a measurement, and it is the one decision here most likely to be reversed by somebody
+  actually using it.
+- **The blank-cell interval is invisible in every test that renders synchronously.** A bUnit test with a
+  `Map` lookup never sees it, so the case that needs covering is specifically the `Query` one, and it has
+  to assert about the *first* render rather than the settled one. This is the same shape as the frozen
+  filter row in §10b: a check that looks for the resolved state can only see it once it works.
