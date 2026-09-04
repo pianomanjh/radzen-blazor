@@ -3916,3 +3916,166 @@ a fifth. Small, and recorded because the design listed six.
 not - membership is `Contains` on the caller's own collection - and §12 is corrected above. It matters
 beyond a wrong sentence: it means focus is the *only* place in the grid where an item is identified by
 key rather than compared by reference, which is a point for §15's candidate 7 rather than against it.
+
+---
+
+## 21. A row's identity is asked four times and answered once - the design
+
+Not one of §15's candidates. Its seventh is a *column's* identity - the settings key, the reorder slot,
+the picker name - and §10b's instruction not to guess at that model stands untouched here. This is a
+*row's* identity, which §15 never listed, and which two recorded faults and one found while reading all
+turn out to be.
+
+### The faults
+
+**Row expansion leaks and loses state.** §10 has it in full: `expandedRows` is a `HashSet<TItem>`
+(`RadzenFastGrid.cs:216`) added to by `ToggleRow` and emptied only by an explicit collapse. Over a source
+that re-materialises, every entity ever expanded is pinned for the life of the circuit, and because the
+set compares by reference none of those entries can ever match a new instance again: the row draws
+collapsed while the old one is held. Recorded, not fixed, with the reason - "the grid already has
+`ItemKey`, and keying expansion by it would answer the leak and the lost state together".
+
+**A multiple-select drop-down ticks nothing and publishes its value twice.** §19 measured it: bound to
+two rows over a re-materialising source, the popup ticks 2 rows before and **0** after, and clicking an
+apparently unticked row publishes **3** ids for two rows, because `OnRowClick` calls
+`SelectedItems.Remove(item)` (`RadzenFastDropDownDataGrid.razor.cs:553`), misses, and adds the new
+instance beside the old one. Left there deliberately, because fixing it is this question.
+
+**And the grid does the same thing to its own selection, which nothing had noticed.** `SelectRow`
+(`RadzenFastGrid.cs:2041`) asks `current.Contains(item)`, and on a miss takes the not-selected branch and
+`Add`s the row to a list that already holds an equal one - `next.Remove(item)` on the other branch being
+`List<TItem>.Remove`, which is `EqualityComparer<TItem>.Default`, which is reference equality for the
+entity types this grid is built for. That is §19's drop-down fault one level down, and it is why fixing
+the drop-down on its own would not have been enough: the drop-down hands the grid `SelectedItems` as its
+`Selection` (`RadzenFastDropDownDataGrid.razor:59`), so the tick that failed to appear is the *grid's*
+lookup, not the drop-down's.
+
+**A fourth, smaller.** The keyboard range builds `new HashSet<TItem>(next)` and `new HashSet<TItem>(current)`
+(`Keyboard.cs:610, 648`), and the difference between those two sets is what decides which `RowSelect` and
+`RowDeselect` events fire. Same comparison, same source, so the same wrong answer - reported as events
+rather than drawn on screen.
+
+**One place is already right, and it is the only one.** Focus keys on `ItemKey` and falls back to the row's
+position where none is supplied (`Keyboard.cs:700, 733`), which §12 argued for and got right. §12 also said
+`ItemKey` "already backs selection membership"; §20's review found that false and §12 is corrected. So the
+precedent exists, it is exactly one deep, and everything else compares instances.
+
+### What identity is, and why this is affordable
+
+**A row is named by `ItemKey` where one is supplied, and is itself where one is not.** That is not a new
+decision and it is not a new parameter - it is §12's rule for focus, applied to the three other places
+that ask the same question.
+
+**What makes the piece small is that the key is already paid for.** With `ItemKey` set the grid already
+calls it once per row while drawing, for `SetKey` (`RadzenFastGrid.cs:1733`), and §9 has measured exactly
+what that costs: `+ ItemKey` renders 1000 x 5 in **178.03 KB** against a bare **154.55**, and the same
+feature over a reference-typed key renders it in **154.59**. The 23.5 KB is boxing and nothing else. So
+for a row being drawn the key is already computed and already boxed, and a membership test that uses it
+adds no allocation at all. **Where `ItemKey` is null nothing changes anywhere** - same comparison, same
+cost, same behaviour, including the leak, which without a key has no other answer.
+
+### What changes
+
+**1. One type says how a row is named.** A readonly struct over the `Func<TItem, object>?`, answering the
+key for a row and handing out an `IEqualityComparer<TItem>` for the sets the grid builds. It is `ItemKey`
+with a name and a second question it can answer; §3 rules out its being a class, since a reference per
+grid buys nothing a field gives.
+
+**2. Row expansion holds keys, and holds one row per key.** A `Dictionary<object, TItem>` where a key
+exists: looked up by key, so a re-materialised row draws expanded; storing the last instance seen, so
+`ExpandMode.Single` can still name the row it collapsed.
+
+**§10's expectation was too strong and this is where it breaks.** "Keying expansion by `ItemKey` would
+answer the leak and the lost state together" - it answers the lost state completely and the leak only
+partly, because `RowCollapse` takes the row and the only way to name a row that is no longer on screen is
+to have kept it. What the dictionary fixes is the *accumulation*: expanding one row across ten
+re-materialisations stores one entry rather than ten, and collapsing it releases the one. What stays is
+one live instance per currently-expanded row, which is not a leak so much as the price of the event.
+
+**3. Every comparison the grid makes itself goes through identity.** `SelectRow`'s membership test and its
+removal, and the keyboard range's two sets. These are the grid's own storage and its own questions, so
+there is nothing to negotiate and no cost: a comparer on a set it was already allocating.
+
+**4. What the grid hands back knows how to compare itself.** `SelectionChanged` publishes a
+`List<TItem>` today. Published instead as a set built with the identity comparer, a caller using
+`@bind-Selection` - which is what the parameter's own documentation tells them to use - gets a `Selection`
+whose membership is keyed, and the per-row tick is then correct **for free**, with no work added to the
+render at all. It also retires the warning on `Selection` that a list of many selected rows is a scan per
+row.
+
+**5. The drop-down tells the grid what its rows are called.** It has known all along: `ValueOf` is a row's
+id, it is what `Adopt` matches on and what the component publishes. §19 said "the drop-down has no
+`ItemKey`", which is true of the parameter and false of the concept. Setting the inner grid's `ItemKey`
+from `ValueProperty`, and giving `SelectedItems` the matching comparer, fixes the measured fault with no
+new public surface on either component.
+
+### The fork this section does not settle, and how it will be
+
+Change 4 fixes the render tick for a caller who binds back what the grid published. It does **not** fix a
+caller who builds their own `HashSet<TItem>` or passes a `List<TItem>` and hands it in as the initial
+selection: that collection compares the way its owner made it compare, and `Selection.Contains(item)` is
+its method rather than the grid's.
+
+Completing it means the grid stopping asking the collection at all: build the selection's keys once per
+draw pass and probe those. Correct for every caller, and the only thing in this piece that is not free.
+The cost is arithmetic before it is measured: one `HashSet<object>` per render plus one key per selected
+row, and a key over a value type is a box - so the bench's 250 selected rows out of 1000 are about 6 KB of
+boxes and 3 KB of set, against a control of **178.49 KB** for that exact shape.
+
+**It will be built, measured, and then kept or refused with the number written here.** §3 makes that a
+design decision rather than a preference, and the fallback is already built: changes 1-5 stand on their
+own, and refusing this one leaves exactly one case wrong - a caller who supplies a selection the grid did
+not build, over a source that re-materialises - which is a narrower thing than what is wrong today and can
+be documented on the parameter.
+
+### Deliberately not proposed
+
+- **Widening `ItemKey` to `Expression<Func<TItem, TKey>>`.** §14 already recorded this as the real answer
+  to the boxing and as its own question - the `Convert`-to-object node is a translation problem, and a
+  third type parameter on the grid is a public surface change. Every number in this section would improve
+  if it were done, which is an argument for doing it deliberately rather than as a side effect here.
+- **Making the grid write to `Selection`.** The parameter's documentation is explicit that the grid
+  composes a new collection and never mutates the caller's, and the reason given - a component that
+  mutated what it was handed would change state its caller never asked it to change - is not weakened by
+  anything here.
+- **A settings identity, a reorder identity, or a picker identity.** Those are §15's candidate 7 and are a
+  *column's* identity. Nothing here touches them and §10b's instruction stands.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **`gridbench --job short` before and after** on bare, selection, one sort, a filter row, `+ ItemKey`,
+   `+ ItemKey over a reference-typed key`, `+ row detail`, and the row added for this piece,
+   `+ selection and ItemKey`. Controls at `5671edddb`: **154.55**, **154.65**, **175.87**, **158.77**,
+   **178.03**, **154.59**, **155.64**, **178.49**. The claim for changes 1-5 is that every one of them
+   holds; the claim for the fork is only that its cost is what gets quoted.
+2. **A test that a row expanded over one instance is still expanded over the next**, which is §10's fault
+   stated as an assertion, and its negative: a grid with no `ItemKey` behaves exactly as it does today.
+3. **A test that a multiple-select drop-down over a re-materialising source ticks what it holds**, and
+   that clicking an already-chosen row publishes its id **once**. §19 measured 2 ticks before and 0 after
+   and 3 ids for two rows; those are the numbers to invert.
+4. **A test that the grid's own selection does not double**, which is the fault this section found and
+   which nothing has ever asserted.
+5. **A test that the expansion dictionary does not accumulate**, since bounding the leak rather than
+   closing it is the claim most likely to be wrong and the one nothing would otherwise check.
+6. **Every new test mutation-checked, and the mutation must compile.**
+
+### Where this could still be wrong
+
+- **A null key.** `ValueOf` can answer null for a lookup row, and `ItemKey` may too. `SetKey(null)`,
+  a dictionary keyed on null, and a set containing null are three different behaviours and the design
+  above has not said which it wants. The likeliest right answer is that a row with no key falls back to
+  being itself, which keeps the fallback rule already stated - but it means identity is per row rather
+  than per grid, and that is a wider claim than "a grid has a key or does not".
+- **Publishing a set rather than a list changes what a caller receives.** It is still an
+  `ICollection<TItem>`, so nothing breaks at the type level, but the order rows were selected in is gone.
+  Nothing in this library reads that order; a caller might.
+- **The drop-down's comparer calls `ValueOf` on both sides of every comparison**, which boxes twice per
+  probe for a value-typed id. It is on the popup's rows rather than the grid's, and a popup draws a page -
+  but §19 measured this exact call being the expensive thing about `Adopt`, and the same call in a
+  comparer has not been measured at all.
+- **Bounding the expansion leak may not be worth the dictionary.** A `HashSet<TItem>` with an
+  identity comparer would fix the lost state alone, in one line and with no second storage, and would
+  leave the accumulation. If the dictionary's own cost is visible on the row-detail row, that is the
+  cheaper piece and this section should say so.

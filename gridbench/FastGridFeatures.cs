@@ -424,6 +424,17 @@ public class FastGridFeatureBench
     public Task ItemKeyedByReference() =>
         Render(p => p["ItemKey"] = (Func<Person, object>)(x => x.Name));
 
+    // Selection and ItemKey together, which neither row above measures and which is the only shape
+    // where the grid has both a selection to look rows up in and a key to look them up by. Any answer
+    // to "does the selection already hold this row" that is keyed rather than compared is paid for
+    // here, and nowhere else.
+    [Benchmark(Description = "+ selection and ItemKey")]
+    public Task SelectionItemKeyed() => Render(p =>
+    {
+        p["Selection"] = selection;
+        p["ItemKey"] = (Func<Person, object>)(x => x.Id);
+    });
+
     [Benchmark(Description = "+ settings raised on every reload")]
     public Task Settings() => Render(p =>
         p["SettingsChanged"] = EventCallback.Factory.Create<FastGridSettings>(new object(), _ => { }));
