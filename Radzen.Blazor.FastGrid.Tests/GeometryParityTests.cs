@@ -838,15 +838,46 @@ namespace Radzen.Blazor.FastGrid.Tests
                 fit.RowsMeasured.ToString(CultureInfo.InvariantCulture),
                 fit.ToString());
 
-            // Deliberately loose. §13 records the pass at ~1.7ms plus ~0.03ms a rendered row, which
-            // puts this pane near 32ms - but those are numbers to read off a quiet machine, and a CI
-            // box asserting one of them is a flaky test rather than a budget. What this catches is the
-            // order-of-magnitude regression: a write left inside a read loop, which turns the pass's
-            // one layout into one per cell.
-            ParityAssert.True(fit.Elapsed < 100,
-                "the measure-and-write pass is not an order of magnitude off",
+            // §25. What stood here was `Elapsed < 100`, and its own comment conceded that a CI box
+            // asserting a wall-clock number is a flaky test rather than a budget - and then asserted
+            // one. It measured 36.7ms on a quiet machine, so the whole budget was 2.7x, and a reviewer
+            // watched it fail once in fifteen runs of a mutation that had nothing to do with it.
+            //
+            // The two assertions below are what that budget was reaching for, in units the machine
+            // cannot move. Neither is redundant: each is blind to the fault the other catches, which
+            // §25 has the mutations for.
+
+            // A batched pass forces a fixed number of layouts however many cells it walks; a write left
+            // inside the read loop forces one per cell, because every read after it finds the tree
+            // dirty. Four, here, over 5000 cells - in 22 runs, quiet and with every core busy. At a
+            // fiftieth of full strength that fault reads 104; at full strength the probe never returns.
+            ParityAssert.True(fit.Layouts <= 8,
+                "the pass forces a fixed number of layouts rather than one per cell",
                 "every read is batched behind one class toggle, and moving a single write between two of them turns one layout into thousands",
-                "under 100ms",
+                "at most 8 layouts, against the 4 this pass takes",
+                fit.Layouts.ToString(CultureInfo.InvariantCulture),
+                fit.ToString());
+
+            ParityAssert.True(fit.LayoutMs > 0,
+                "the browser attributed some of the pass to layout",
+                "the ratio below is taken against this, and a zero would make it vacuously true rather than false - which is the way a cost check stops being one",
+                "more than 0ms in layout",
+                string.Create(CultureInfo.InvariantCulture, $"{fit.LayoutMs}ms"),
+                fit.ToString());
+
+            // The count above cannot see a read taken *after* the writes: that fault adds no layout at
+            // all, it moves one the browser was going to run anyway to inside the pass. What it does
+            // change is how much of the pass is not layout - so the pass is measured against its own
+            // layout time rather than against a constant. Both numbers come off the same machine in the
+            // same run, so a slow or busy box moves them together and the ratio does not move: 1.61 to
+            // 1.87 over seventeen runs, six of them with every core saturated. The fault reads 2.89 to
+            // 3.17, and it is the regression this gate has already caught once - see fastgrid.js, where
+            // the two figures are read with the others rather than after them, and why.
+            ParityAssert.True(fit.Elapsed <= 2.4 * fit.LayoutMs,
+                "the pass costs about what its own layouts cost",
+                "a read taken after the widths are written forces a whole-table layout inside the pass that would otherwise have run on the next frame; the pass is then twice its own cost while every count stays where it was",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"at most {2.4 * fit.LayoutMs}ms, being 2.4x the {fit.LayoutMs}ms the browser spent in layout"),
                 string.Create(CultureInfo.InvariantCulture, $"{fit.Elapsed}ms"),
                 fit.ToString());
         }

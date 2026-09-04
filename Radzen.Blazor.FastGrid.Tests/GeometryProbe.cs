@@ -435,7 +435,29 @@ namespace Radzen.Blazor.FastGrid.Tests
         [JsonPropertyName("written")] public string[] Written { get; set; }
 
         /// <summary>How long the whole measure-and-write pass took, in milliseconds.</summary>
+        /// <remarks>
+        /// Recorded and reported, never asserted on. A wall-clock number measures the machine as much as
+        /// the code, and asserting one is what made this pane's own cost check flaky - see
+        /// <see cref="Layouts"/>, which is what the check asserts instead.
+        /// </remarks>
         [JsonPropertyName("elapsed")] public double Elapsed { get; set; }
+
+        /// <summary>
+        /// How many layouts Chromium ran during the pass, from its own counter rather than a clock.
+        /// </summary>
+        /// <remarks>
+        /// A batched pass takes every read before any write and forces one layout however many cells it
+        /// walks. A single write moved inside the read loop forces one per cell, because each read then
+        /// finds the tree dirty. So this separates the two by the number of cells rather than by a
+        /// ratio, and it does not move when the machine running it is busy.
+        /// </remarks>
+        [JsonPropertyName("layouts")] public int Layouts { get; set; }
+
+        /// <summary>How many style recalculations Chromium ran during the pass, from the same counter.</summary>
+        [JsonPropertyName("styleRecalcs")] public int StyleRecalcs { get; set; }
+
+        /// <summary>How long Chromium spent in layout during the pass, by its own attribution.</summary>
+        [JsonPropertyName("layoutMs")] public double LayoutMs { get; set; }
 
         /// <summary>How many rows it walked, so a fast number cannot come from an empty table.</summary>
         [JsonPropertyName("rowsMeasured")] public int RowsMeasured { get; set; }
@@ -445,7 +467,8 @@ namespace Radzen.Blazor.FastGrid.Tests
         public override string ToString() =>
             $"before: {Before}; after: {After}; wrote [{string.Join(", ", Written ?? Array.Empty<string>())}]; " +
             string.Create(CultureInfo.InvariantCulture,
-                $"{Elapsed}ms over {RowsMeasured} rows in a {PaneWidth}px pane");
+                $"{Layouts} layouts and {StyleRecalcs} style recalcs ({LayoutMs}ms in layout), {Elapsed}ms " +
+                $"over {RowsMeasured} rows in a {PaneWidth}px pane");
     }
 
     /// <summary>What one measurement run read back out of the browser.</summary>
