@@ -285,6 +285,7 @@ async function main() {
                     steps.push({
                         pane: width,
                         widths,
+                        floorTotal: round(parseFloat(table.style.minWidth) || 0),
                         requiredHeld: widths[0] === wide[0] && widths[1] === wide[1],
                         // A column whose content is narrower than the floor is not widened to reach
                         // it, so its effective floor is its own content width.
@@ -371,6 +372,48 @@ async function main() {
                     headingsHoldWhenEased: eased.headings.every(t => !t),
                     valuesHoldWhenHard: hard.values.every(t => !t),
                     narrowest: hard.narrowest
+                };
+            })();
+
+            // A MinWidth written in something other than pixels. Under Scroll the browser is handed
+            // `max(5rem, 123px)` and resolves it; fitting to a container is arithmetic and has to
+            // arrive at the same number without parsing the string.
+            const units = await (async () => {
+                const restore = pane.style.width;
+
+                // What 5rem is on this page, asked of the browser rather than assumed to be 80.
+                const yardstick = document.createElement('div');
+                yardstick.style.cssText = 'position:absolute;visibility:hidden;width:5rem;';
+                pane.appendChild(yardstick);
+                const rem5 = round(yardstick.getBoundingClientRect().width);
+                pane.removeChild(yardstick);
+
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                pane.style.width = '900px';
+                table.getBoundingClientRect();
+
+                await window.__fastgrid.autoFit(table.id, indices,
+                    indices.map(() => '5rem'), indices.map(() => null), 0, columns - 1, false, false,
+                    true, indices.map(() => false));
+
+                pane.style.width = '150px';
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                const widths = at();
+
+                window.__fastgrid.releaseFit(table.id);
+                table.style.minWidth = '';
+                pane.style.width = restore;
+                [...cols.children].forEach(col => { col.style.width = ''; });
+                table.getBoundingClientRect();
+
+                return {
+                    rem5,
+                    widths,
+                    narrowest: round(Math.min(...widths)),
+                    // Every column floored at 5rem rather than at what its values happened to need.
+                    honoured: widths.every(w => w >= rem5 - 1)
                 };
             })();
 
@@ -462,6 +505,7 @@ async function main() {
 
             return {
                 animation,
+                units,
                 stackedWhileWatching,
                 withReserved,
                 defaultFloor,

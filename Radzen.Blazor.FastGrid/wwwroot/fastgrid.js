@@ -450,18 +450,56 @@ function cellData(cell) {
   return null;
 }
 
-// A CSS length as a number, or the fallback when it is not one this can use. MinWidth and MaxWidth are
-// free-form CSS - `50%`, `4rem`, `min(...)` - and only px can be arithmetic here.
-function lengthOf(value, fallback) {
-  if (typeof value === 'string' && value.endsWith('px')) {
-    const parsed = parseFloat(value);
+// MinWidth and MaxWidth are free-form CSS - `50%`, `4rem`, `clamp(...)` - and fitting to a container is
+// arithmetic, which needs numbers. Rather than parse them, which works for pixels and is quietly wrong
+// for everything else, each one is given to the browser on a probe element and measured back.
+//
+// The probes go in the table's own wrapper so a percentage resolves against the width it was written
+// against and a relative unit against the font it would inherit. All of them are written, then all of
+// them are read: one layout for the set rather than one apiece. Once per fit, never on a resize.
+function resolveLengths(table, values) {
+  const resolved = new Array(values.length).fill(null);
+  const host = table.parentElement;
 
-    if (!Number.isNaN(parsed)) {
-      return parsed;
+  if (!host) {
+    return resolved;
+  }
+
+  const probes = [];
+  const holder = document.createElement('div');
+
+  holder.style.cssText = 'position:absolute;visibility:hidden;height:0;overflow:hidden;';
+
+  for (let i = 0; i < values.length; i++) {
+    if (typeof values[i] !== 'string' || values[i].length === 0) {
+      continue;
+    }
+
+    const probe = document.createElement('div');
+
+    probe.style.width = values[i];
+    holder.appendChild(probe);
+    probes.push([i, probe]);
+  }
+
+  if (probes.length === 0) {
+    return resolved;
+  }
+
+  host.appendChild(holder);
+
+  for (const [i, probe] of probes) {
+    const width = probe.getBoundingClientRect().width;
+
+    // A length the browser could not make sense of measures as nothing, which is not a bound.
+    if (width > 0) {
+      resolved[i] = width;
     }
   }
 
-  return fallback;
+  host.removeChild(holder);
+
+  return resolved;
 }
 
 function headCells(table) {
@@ -859,10 +897,25 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
     let floors = 0;
     let needed = 0;
 
+    const minimums = resolveLengths(table, minWidths);
+    const maximums = resolveLengths(table, maxWidths);
+
     for (let k = 0; k < n; k++) {
       state.cols[k] = colgroup.children[toggleOffset + indices[k]];
       state.required[k] = !!(required && required[k]);
-      state.content[k] = Math.min(pixels[k], lengthOf(maxWidths[k], Infinity));
+
+      // The same bounds `bound()` hands the browser under Scroll, applied here as numbers: a MinWidth
+      // wider than the content widens the column, exactly as its `max()` does. Doing only the `min()`
+      // half made the one parameter mean two different things depending on the mode.
+      //
+      // Ordered the way `clamp()` orders it - the minimum applied last, so it wins over a maximum
+      // beneath it, as CSS has min-width beat max-width. The other order leaves a floor above the
+      // width it is a floor for, and the table's min-width then overstates what the columns can
+      // actually sum to: the browser scales them back up to reach it, and columns that were promised
+      // they would not move, move.
+      state.content[k] = Math.max(
+        minimums[k] === null ? 0 : minimums[k],
+        Math.min(pixels[k], maximums[k] === null ? Infinity : maximums[k]));
       // Where required-ness lives: both floors at the content width, so the distribution has nothing
       // to take in either round. There is no second test for it anywhere.
       if (state.required[k]) {
@@ -871,9 +924,9 @@ export async function autoFit(tableId, indices, minWidths, maxWidths, toggleOffs
       } else {
         // The floor an author gave, or what the values themselves need. This is as narrow as the
         // column ever goes, and below it the grid scrolls instead.
-        state.hard[k] = Math.min(
-          state.content[k],
-          lengthOf(minWidths[k], Math.max(VESTIGE, bodies[k] || 0)));
+        state.hard[k] = minimums[k] === null
+          ? Math.min(state.content[k], Math.max(VESTIGE, bodies[k] || 0))
+          : minimums[k];
 
         // And above it, the width that still shows the heading - never below the hard floor, since a
         // heading is worth less than the values it labels.

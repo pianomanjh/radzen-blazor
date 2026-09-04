@@ -251,6 +251,7 @@ namespace Radzen.Blazor.FastGrid.Tests
     {
         [JsonPropertyName("pane")] public int Pane { get; set; }
         [JsonPropertyName("widths")] public double[] Widths { get; set; }
+        [JsonPropertyName("floorTotal")] public double FloorTotal { get; set; }
 
         /// <summary>Whether the required columns still have the width they were measured at.</summary>
         [JsonPropertyName("requiredHeld")] public bool RequiredHeld { get; set; }
@@ -263,7 +264,7 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         public override string ToString() =>
             $"{Pane}px -> [{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
-            $" total {Total:0}" +
+            $" total {Total:0} floor {FloorTotal:0}" +
             (RequiredHeld ? string.Empty : ", REQUIRED MOVED") +
             (AboveFloor ? string.Empty : ", BELOW FLOOR") +
             (Scrolls ? ", scrolls" : string.Empty);
@@ -326,6 +327,21 @@ namespace Radzen.Blazor.FastGrid.Tests
         public override string ToString() => $"asked: {Asked}; automatic: {Automatic}";
     }
 
+    /// <summary>A fit whose MinWidth was given in rem rather than px.</summary>
+    public sealed class AutoFitUnits
+    {
+        /// <summary>What 5rem measures on the page, asked of the browser rather than assumed.</summary>
+        [JsonPropertyName("rem5")] public double Rem5 { get; set; }
+
+        [JsonPropertyName("widths")] public double[] Widths { get; set; }
+        [JsonPropertyName("narrowest")] public double Narrowest { get; set; }
+        [JsonPropertyName("honoured")] public bool Honoured { get; set; }
+
+        public override string ToString() =>
+            $"5rem is {Rem5:0}px; [{(Widths is null ? "-" : string.Join("/", Widths.Select(w => w.ToString("0"))))}]" +
+            $", narrowest {Narrowest:0}px" + (Honoured ? string.Empty : ", BOUND IGNORED");
+    }
+
     /// <summary>What a fit already watching a container did once that table stopped being one.</summary>
     public sealed class AutoFitAfterStacking
     {
@@ -361,6 +377,9 @@ namespace Radzen.Blazor.FastGrid.Tests
     /// </summary>
     public sealed class AutoFitRun
     {
+        /// <summary>Whether a bound written in something other than pixels was honoured.</summary>
+        [JsonPropertyName("units")] public AutoFitUnits Units { get; set; }
+
         /// <summary>What a live fit's observer did once the table stopped being one.</summary>
         [JsonPropertyName("stackedWhileWatching")] public AutoFitAfterStacking StackedWhileWatching { get; set; }
 

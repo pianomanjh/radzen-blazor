@@ -1630,6 +1630,24 @@ Two things the design has to keep holding:
 - **Changing `AutoFitOverflow` re-arms a `Once` fit.** The two modes produce different widths, and the
   fit that already ran produced the other ones.
 
+**`MinWidth` and `MaxWidth` mean the same thing in both modes, and neither is parsed.** Under `Scroll`
+they go to the browser inside a `clamp()` and it resolves them, so any unit works. Fitting to a
+container is arithmetic and needs a number - and the first version got one by reading the string, which
+is exactly what this section rules out elsewhere: *"Parsing CSS is the option that works for pixels and
+is quietly wrong for everything else."* `MinWidth="10rem"` was silently ignored under `Fit` alone.
+
+The number now comes from the browser too: each bound is written to a probe element in the table's own
+wrapper - so a percentage resolves against the width it was written against - and measured back. All
+of them are written and then all of them read, one layout for the set, once per fit and never on a
+resize.
+
+The bounds are applied in `clamp()`'s order, the minimum last, so a `MinWidth` above a `MaxWidth` wins
+the way CSS has `min-width` beat `max-width` - and so a `MinWidth` wider than the content *widens* the
+column, which the first version only did under `Scroll`. Getting that order wrong is not cosmetic: it
+leaves a floor above the width it is a floor for, the table's `min-width` then overstates what the
+columns can sum to, and the browser scales them back up to reach it - so columns promised they would
+not move, moved.
+
 **There are two floors, and they are spent in order.** A column headed "Manufacturing Code" over
 six-character codes carries width its values never needed, and holding that width while the grid
 scrolls is the wrong trade. So the distribution runs twice:
