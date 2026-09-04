@@ -3,6 +3,7 @@ using System.Collections;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -577,6 +578,28 @@ namespace Radzen.FastGrid
         /// filter. Composed as a query rather than materialized, so a provider can translate it.
         /// </summary>
         public virtual IQueryable? DistinctValues(IQueryable<TItem> source) => null;
+
+        /// <summary>
+        /// Whether this column is still waiting for names it cannot draw a cell without.
+        /// </summary>
+        /// <remarks>
+        /// The one automatic auto-fit defers while this is true. It measures what is on the page, and
+        /// what is on the page meanwhile is a blank cell - so the column would settle at its header
+        /// width and the names would arrive into a column too narrow for them, permanently.
+        /// </remarks>
+        internal virtual bool LookupOutstanding => false;
+
+        /// <summary>
+        /// Fetches the names this column asked for, after the render. True when they arrived and the
+        /// grid should redraw.
+        /// </summary>
+        internal virtual Task<bool> FetchLookupAsync(IFastGridQueryExecutor? executor,
+            CancellationToken cancellationToken) => Task.FromResult(false);
+
+        /// <summary>Drops resolved names, so the next render resolves them again.</summary>
+        internal virtual void DropLookup()
+        {
+        }
 
         /// <summary>
         /// Replaces the built-in filter input for this column. The built-in one is a text box and
