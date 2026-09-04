@@ -551,7 +551,8 @@ Each layer below caught real faults the previous one missed. Use all of them.
   `OnAfterRenderAsync`, which is the first moment the column list is complete: one query, composed from
   everything the markup declared, rather than one composed from nothing followed by a correction. The
   rule it settled is that **nothing composing from column state may run before the first render** -
-  which the settings restore two bullets down had already been obeying alone. The record of what was
+  which the settings restore had already been obeying alone, from `RenderTable` behind `Defer`. The
+  record of what was
   wrong, kept because the diagnosis is worth more than the fix: A column's declared filter becomes
   its current one, and its declared sort reaches the grid, in the column's own `OnParametersSet`, which
   runs as the table is drawn - and the load that fetches the first page is started from the grid's
@@ -4520,8 +4521,10 @@ Then the mutation §9 asks for, on the deferral itself rather than on any test: 
 **The design's central claim held exactly: no existing test had to be rewritten.** §23 said load counts
 would stay one - one load, later - and that the counts pinned across the executor, `LoadData` and
 virtualization suites should therefore survive. They did, all of them, including
-`FastGridLoadDataTests.IsInvokedOnceOnTheFirstRender`, whose name the deferral makes literally true for
-the first time. The suite went 825 → 834 by addition alone.
+`FastGridLoadDataTests.IsInvokedOnceOnTheFirstRender`, whose name the deferral makes true in substance
+for the first time - though only in substance: the handler is now invoked *after* the first render
+rather than on it, and that test asserts how many times it was called, never when. The suite grew by
+addition alone.
 
 **The paragraph about the empty template was wrong about its own mechanism.** §23 said a deferred load
 would make a grid "flash *no records* before its first query had even started". `RenderEmpty` draws
@@ -4558,11 +4561,11 @@ runs" the design warned about, arriving from the one direction it did not name.
   deferral fails both `LoadDataArgs` tests and nothing else. Not marking the grid loading when it defers
   fails the scrim ordering and nothing else. The two controls - in memory, virtualized - and
   `TheDeclaredStateCostsNoSecondQuery` passed under all three, which is what a control is for.
-- **Benchmarks: no measurable change**, and there is no mechanism for one. Control at `9b4711381` and
-  the run after the change agree within the ~0.3 KB noise floor on every row, with the deltas split 24
-  down and 22 up - the signature of noise rather than of a regression. The change adds two `bool` fields
-  set once per component and a branch in a lifecycle method; the bench renders in-memory grids, which
-  never reach either. bare 154.66 → 154.73, `+ sorted by one column` 175.82 → 175.74, `+ a filter row`
+- **Benchmarks: no measurable change**, and there is no mechanism for one. The change adds two `bool`
+  fields and some branching in a lifecycle method. `drawn = true` *is* written on every after-render,
+  including by the in-memory grids the bench measures - it is a store to an existing field, not an
+  allocation - and `OweLoad` is what those grids never reach. (Numbers below are from the final run,
+  after the review fixes.) bare 154.66 → 154.73, `+ sorted by one column` 175.82 → 175.74, `+ a filter row`
   158.80 → 159.13, `+ ItemKey` 178.17 → 178.04, `+ selection and ItemKey` 190.14 → 190.13. No time ratio
   is quoted; `--job short` does not support one.
 
@@ -4570,9 +4573,97 @@ runs" the design warned about, arriving from the one direction it did not name.
 
 The three bullets the design section ends with all still stand. Two more the build added:
 
-- **The two flags are ordered, and the ordering is still not asserted.** `settingsNeedReload` subsumes
-  `loadOwed` by an `else`, and a test that fails when the `else` becomes an `if` was not written. §22's
-  parting gap is the same shape and this widens it rather than closing it.
+- ~~**The two flags are ordered, and the ordering is still not asserted.**~~ - **this bullet was wrong
+  about its own mechanism, and review found it.** It claimed a test was missing that "fails when the
+  `else` becomes an `if`". No such test can exist: `loadOwed = false` is assigned *inside* the settings
+  branch, before the `else if` is reached, so that edit is a semantic no-op. The line actually carrying
+  the subsumption was the assignment, and deleting it failed nothing in 872 tests. It is asserted now -
+  see the review section below.
 - **`drawn` says the grid has rendered, which is only a proxy for "the columns have registered".** They
   coincide because `Defer` makes them coincide. Nothing checks the coincidence, and the failure mode if
   it ever broke is silent - a query composed from a partial column list looks exactly like a correct one.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. Between them they found one real defect, one spec claim that
+was wrong about its own mechanism, an untested path that hid both, and three statements that overstated
+what the code does. The defect and the untested path are the ones worth carrying forward.
+
+**The rule was stated globally and enforced at two call sites.** §23 says "nothing that composes from
+column state may run before the first render", and the build put a `!drawn` test in the two places that
+had the bug: the `LoadData` branch and the executor branch of `OnParametersSetAsync`. `RefreshAsync` -
+which the file itself calls the funnel, "the one place the grid has to say so" - had no such test, and
+four public methods reach it: `Reload`, `ClearFilters`, `ApplyFilters`, `GoToPage`.
+
+**That is reachable from ordinary code, and it costs exactly what §23 rejected the alternative for.** The
+renderer runs a parent's `OnAfterRenderAsync` before its child's, so a parent that calls
+`grid.Reload()` on its own first render reaches the grid while `drawn` is still false and `loadOwed` is
+still true. Nothing clears it. The reload's load goes out - composed correctly, since the columns did
+register during the render - and then the grid's own `OnAfterRenderAsync` pays the owed load on top of
+it. **Two loads, concurrent rather than sequential**: on the `LoadData` route, the application's handler
+invoked twice, overlapping. §23 argued against the reload design because it "invokes the application's
+own handler twice", and the build shipped a way to do that and be worse about it. Confirmed by a test
+before it was fixed, and `TheDeclaredStateCostsNoSecondQuery` did not see it, because it renders a grid
+nobody calls into.
+
+The fix is where the reviewer said it belonged: **`RefreshAsync` owes rather than loads while `!drawn`**,
+so the rule holds for every caller by construction rather than by roll call. That also closes the one
+place the *original* fault survived - `if (loadDataInvoked) return pagingChanged ? RefreshAsync() : ...`,
+which composed a `LoadData` call from an empty column list in the same one-render-wide window.
+Virtualizing is exempt there as it is everywhere else, and finding out that it had to be exempted cost
+three failing tests: the first version of the guard owed a load for a virtualized grid, which put a
+fetch behind the provider's own.
+
+**`PayOwedLoadAsync` was `RefreshAsync`'s dispatch written a second time, and disagreed with it twice.**
+Same three-way "which route owns this data" decision, minus the virtualized branch, plus an
+`IsLoading = false` the funnel did not have. It is gone; paying an owed load is now
+`RefreshAsync(announce: false)`. The two branches that start no load - virtualized, and nothing-to-load -
+lower the scrim themselves, which is where that responsibility belonged: they are the branches that know
+nothing will run. Without that, a settings restore arriving on the same render took the settings branch,
+bypassed `PayOwedLoadAsync` entirely, and left a scrim nothing would ever lift - contradicting
+`FastGridLoadingTests`' own standing claim that this grid has "nothing to leave stuck on".
+
+**Nothing in the suite covered a settings restore over a source that loads at all.** That is what let the
+wrong bullet above stand: the reviewer deleted the subsumption outright - both flags firing, two queries
+going out - and all 872 tests passed. There is a test now, and both mutations fail it: dropping the
+discard, and dropping it together with the `else`.
+
+**Three claims that overstated the code**, all corrected in place above: `IsInvokedOnceOnTheFirstRender`
+is true in substance rather than literally, since it asserts a count and not a moment; the benchmark
+note said two fields are "set once per component" when `drawn = true` is written on every after-render;
+and §10's struck bullet pointed "two bullets down" at a bullet about something else.
+
+**One thing the reviews confirmed rather than refuted, and it was the load-bearing one.** §23's whole
+design choice rests on the prerender cost being what `RadzenDataGrid` already pays. Upstream's
+`PagedDataBoundComponent.OnParametersSetAsync` reloads only `if (Visible && !LoadData.HasDelegate)`, its
+`ReloadOnFirstRender` fires from `OnAfterRenderAsync`, and every other `InvokeAsync(Reload)` in
+`SetParametersAsync` is guarded by `!firstRender`. Upstream never invokes `LoadData` before its first
+after-render either. The parity claim stands.
+
+### Verified, after the review
+
+- 836 unit tests, 38 browser tests, 0 warnings.
+- **Six mutations, each discriminating exactly.** The three from the build still do. Removing
+  `RefreshAsync`'s owe fails the public-reload test and nothing else; dropping the settings discard, and
+  dropping it together with the `else`, each fail the settings test and nothing else.
+- **Benchmarks re-run after the review fixes**, since the code changed materially. Against the control
+  at `9b4711381`, **not one of the 24 FastGrid rows moved beyond the ~0.3 KB noise floor**, and the
+  deltas split 13 up and 11 down - noise, not a regression. bare 154.66 → 154.58, `+ sorted by one
+  column` 175.82 → 175.92, `+ a filter row` 158.80 → 158.80, `+ ItemKey` 178.17 → 178.17, `+ selection
+  and ItemKey` 190.14 → 190.13, `+ a filter that actually filters, over a queryable` 86.16 → 86.02. No
+  time ratio is quoted; `--job short` does not support one.
+
+### Where this could still be wrong, after the review
+
+- **A statically rendered grid now shows a permanent scrim.** `OweLoad` raises `IsLoading` and
+  `OnAfterRenderAsync` never runs without a circuit, so a prerendered-and-never-interactive `LoadData`
+  grid draws the loading indicator where upstream draws its empty message. Arguably the better of the
+  two - "not yet" rather than "no records" for a grid that is about to load - but it is a change nobody
+  asked for and no test covers it.
+- **The scrim-ordering argument is specific to the executor route.** `InvokeLoadDataAsync` sets
+  `IsLoading` without a `StateHasChanged`, so on the `LoadData` route the deferral's own `IsLoading` is
+  the *only* thing that ever paints a scrim on the first load. The test asserts the executor route.
+- **The `pagingChanged` window is closed by construction and not by a test.** It needs two parameter sets
+  before the first render, which the renderer does not appear to produce - the child's render and its
+  after-render both fall inside the batch that set its parameters. "Does not appear to" is the honest
+  strength of that claim.

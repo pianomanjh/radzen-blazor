@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -163,6 +164,41 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ARestoredSettingsSortCostsOneQuery()
+        {
+            // Two flags can want a load on the same render: ApplySettings runs during it and asks for a
+            // reload, and the first load is owed from before it. The settings branch subsumes the owed
+            // one - and nothing in the suite covered a settings restore over a source that loads at all,
+            // so both firing would have gone out as two queries with every test still green.
+            using var ctx = new TestContext();
+            var executor = new RecordingExecutor();
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample().AsQueryable());
+                p.Add(g => g.AllowSorting, true);
+                p.Add(g => g.Settings, new FastGridSettings
+                {
+                    Columns = new List<FastGridColumnSettings>
+                    {
+                        new() { Property = "First", SortOrder = SortOrder.Descending },
+                    },
+                });
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Property<Person, int>(x => x.Id)));
+            });
+
+            // The restore reached the query, and it was the only query.
+            Assert.Contains("OrderByDescending(", Assert.Single(executor.Materialized),
+                StringComparison.Ordinal);
+            Assert.Equal(new[] { "Dave", "Carol", "Bob", "Alice" }, FirstNames(cut));
+        }
+
+        [Fact]
         public void ADeclaredFilterReachesTheFirstLoadDataCall()
         {
             using var ctx = new TestContext();
@@ -208,6 +244,48 @@ namespace Radzen.FastGrid.Tests
                     host.Serve(all, all.Count);
                 });
             });
+        }
+
+
+        /// <summary>A parent that reloads the grid from its own first OnAfterRenderAsync.</summary>
+        sealed class EagerReloadHost : ComponentBase
+        {
+            [Parameter] public IEnumerable<Person> Data { get; set; } = default!;
+
+            public RadzenFastGrid<Person>? Grid { get; private set; }
+
+            protected override void BuildRenderTree(RenderTreeBuilder builder)
+            {
+                builder.OpenComponent<RadzenFastGrid<Person>>(0);
+                builder.AddAttribute(1, nameof(RadzenFastGrid<Person>.Data), Data);
+                builder.AddAttribute(2, nameof(RadzenFastGrid<Person>.ChildContent), Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Property<Person, int>(x => x.Id)));
+                builder.AddComponentReferenceCapture(3, o => Grid = (RadzenFastGrid<Person>)o);
+                builder.CloseComponent();
+            }
+
+            protected override async Task OnAfterRenderAsync(bool firstRender)
+            {
+                if (firstRender)
+                {
+                    await Grid!.Reload();
+                }
+            }
+        }
+
+        [Fact]
+        public void APublicReloadBeforeTheGridHasDrawnDoesNotAddASecondLoad()
+        {
+            using var ctx = new TestContext();
+            var executor = new RecordingExecutor();
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            ctx.RenderComponent<EagerReloadHost>(p => p.Add(h => h.Data, People.Sample().AsQueryable()));
+
+            Assert.Single(executor.Materialized);
         }
 
         // The two routes that compose after the render, which were never wrong. They are the control:
