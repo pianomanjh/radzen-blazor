@@ -313,6 +313,26 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void TheTicksSurviveARenderThatChangedNothing()
+        {
+            // The drop-down is bound to entries and the column filters by ids, so what it is handed has
+            // to be found again from the ids on every render. A multiple selection losing a tick on an
+            // unrelated render is a fault this drop-down has had before.
+            using var ctx = new TestContext();
+
+            var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))));
+
+            Pick(cut, 0, Named(cut, 0, "Toys"), Named(cut, 0, "Games"));
+
+            cut.Render();
+
+            Assert.Equal(new[] { "Games", "Toys" },
+                ((System.Collections.IEnumerable)Picker(cut, 0).Value).Cast<object>()
+                    .Select(entry => entry.ToString()).OrderBy(text => text).ToArray());
+        }
+
+        [Fact]
         public void NoDistinctQueryRunsForALookupColumn()
         {
             // The names are already held and the ids come with them, so the one query behind an
@@ -349,6 +369,50 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(FilterOperator.In, filter.FilterOperator);
             Assert.Equal(new[] { 30 }, ((System.Collections.IEnumerable)filter.FilterValue).Cast<int>());
+        }
+
+        [Fact]
+        public void TypingMatchesTheNamesAndNotTheLabelOnTheBlankEntry()
+        {
+            // "(Blank)" is a label the grid made up, not a name the lookup holds, and it is a different
+            // one in every culture Radzen ships. Matching it would make what a typed filter finds
+            // depend on the language the page is in.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int?>(
+                x => x.RegionId, FastGridLookup.Map(Lookups.Regions()))),
+                extra: p => p.Add(g => g.AllowFiltering, true));
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("bl");
+
+            Assert.Empty(cut.FindAll("tbody tr td"));
+        }
+
+        [Fact]
+        public void ANullAmongTheFilterValuesTicksNothingWhereAKeyCannotBeNull()
+        {
+            // ApplyFilters takes descriptors from outside - a RadzenDataFilter, or settings stored
+            // against some other column - so the values are not always ones this column produced. A null
+            // there means the entry with no id, and a column whose key cannot be null has none: reading
+            // it as default(TKey) would tick the entry whose id happens to be zero.
+            using var ctx = new TestContext();
+
+            var categories = new Dictionary<int, string> { [0] = "Unfiled", [10] = "Toys" };
+
+            var cut = Filtered(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(categories))));
+
+            cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
+            {
+                new FilterDescriptor
+                {
+                    Property = "CategoryId",
+                    FilterOperator = FilterOperator.In,
+                    FilterValue = new List<int?> { null },
+                },
+            })).Wait();
+
+            Assert.Empty(((System.Collections.IEnumerable)Picker(cut, 0).Value).Cast<object>());
         }
 
         [Fact]

@@ -409,11 +409,11 @@ namespace Radzen.FastGrid
             //
             // Before the columns, not after: dropping one resolves it again on the spot, and it would
             // find what it just dropped still sitting here.
-            sharedLookups.Clear();
+            sharedNames.Clear();
 
             for (var i = 0; i < columns.Count; i++)
             {
-                columns[i].DropLookup();
+                columns[i].DropNames();
             }
 
             return RefreshAsync();
@@ -674,7 +674,7 @@ namespace Radzen.FastGrid
             return materialized;
         }
 
-        readonly Dictionary<object, object> sharedLookups = new();
+        readonly Dictionary<object, object> sharedNames = new();
 
         /// <summary>
         /// The names a lookup has already been resolved to on this grid, or null for one nobody has.
@@ -693,34 +693,28 @@ namespace Radzen.FastGrid
         /// resolves once.
         /// </para>
         /// </remarks>
-        internal object? SharedLookup(object lookup) =>
-            sharedLookups.TryGetValue(lookup, out var names) ? names : null;
+        internal object? SharedNames(object lookup) =>
+            sharedNames.TryGetValue(lookup, out var names) ? names : null;
 
         /// <summary>Records what a lookup resolved to, for the next column declaring the same one.</summary>
-        internal void ShareLookup(object lookup, object names) => sharedLookups[lookup] = names;
+        internal void ShareNames(object lookup, object names) => sharedNames[lookup] = names;
 
-        readonly List<ColumnBase<TItem>> pendingLookupColumns = new();
+        readonly HashSet<ColumnBase<TItem>> pendingNameColumns = new();
 
         /// <summary>
         /// Records that a lookup column has no names yet. Called from the render; the fetch happens
         /// after it, for the same reason the check-box list's scan does.
         /// </summary>
-        internal void QueueLookup(ColumnBase<TItem> column)
-        {
-            if (!pendingLookupColumns.Contains(column))
-            {
-                pendingLookupColumns.Add(column);
-            }
-        }
+        internal void QueueNames(ColumnBase<TItem> column) => pendingNameColumns.Add(column);
 
         /// <summary>Whether any column on the page is still waiting for the names it draws.</summary>
-        internal bool LookupsOutstanding
+        internal bool NamesOutstanding
         {
             get
             {
                 for (var i = 0; i < visibleColumns.Count; i++)
                 {
-                    if (visibleColumns[i].LookupOutstanding)
+                    if (visibleColumns[i].NamesOutstanding)
                     {
                         return true;
                     }
@@ -745,24 +739,26 @@ namespace Radzen.FastGrid
         CancellationToken Lifetime => (lifetime ??= new CancellationTokenSource()).Token;
 
         /// <summary>
-        /// Fetches the names of any lookup column that asked for them during the render.
+        /// Fetches the names of any lookup column that asked for them during the render. Distinct from
+        /// <see cref="LoadLookupsAsync" /> beside it, which scans the data for a check-box list's
+        /// values: a lookup column runs no such scan and these are the names its cells draw.
         /// </summary>
-        async Task LoadColumnLookupsAsync()
+        async Task LoadColumnNamesAsync()
         {
-            if (pendingLookupColumns.Count == 0)
+            if (pendingNameColumns.Count == 0)
             {
                 return;
             }
 
-            var wanted = pendingLookupColumns.ToList();
+            var wanted = pendingNameColumns.ToList();
 
-            pendingLookupColumns.Clear();
+            pendingNameColumns.Clear();
 
             var redraw = false;
 
             foreach (var column in wanted)
             {
-                if (await column.FetchLookupAsync(Executor, Lifetime))
+                if (await column.FetchNamesAsync(Executor, Lifetime))
                 {
                     redraw = true;
                 }
@@ -979,7 +975,7 @@ namespace Radzen.FastGrid
             // put back on, and a reload started here would move the rows out from under it.
             await ReassertFocusAsync();
 
-            await LoadColumnLookupsAsync();
+            await LoadColumnNamesAsync();
 
             await LoadLookupsAsync();
         }

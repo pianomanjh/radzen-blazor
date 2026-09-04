@@ -411,7 +411,7 @@ namespace Radzen.FastGrid
             }
 
             lookups.Remove(column);
-            pendingLookupColumns.Remove(column);
+            pendingNameColumns.Remove(column);
         }
 
         /// <summary>
