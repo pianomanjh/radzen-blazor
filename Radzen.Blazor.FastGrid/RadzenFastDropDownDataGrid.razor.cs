@@ -191,12 +191,27 @@ namespace Radzen.FastGrid
         /// <summary>Whether the popup is open.</summary>
         public bool Open { get; private set; }
 
+        ICollection<TItem>? selectedItems;
+
         /// <summary>
         /// The rows currently chosen - one of them unless <see cref="Multiple" /> is set. A set, not a
         /// list: the grid looks membership up once per rendered row, and its own documentation asks for
         /// one as soon as more than a handful can be chosen.
         /// </summary>
-        public ICollection<TItem> SelectedItems { get; } = new HashSet<TItem>();
+        /// <remarks>
+        /// The set compares rows by the id <see cref="ValueProperty" /> reads, not by instance, and that
+        /// is the whole of what §19's measured fault needed. This same collection is handed to the popup
+        /// grid as its <c>Selection</c>, so one comparer fixes both halves: the tick, which is the grid
+        /// asking this set whether it holds the row being drawn, and the click, where
+        /// <c>Remove</c> used to miss a row carried over from a re-materialised source and add the new
+        /// instance beside it - two objects, one id, and a value published twice.
+        /// <para>
+        /// Built on first use rather than in a field initializer, because the comparer reads
+        /// <see cref="ValueOf" /> and a field initializer cannot.
+        /// </para>
+        /// </remarks>
+        public ICollection<TItem> SelectedItems =>
+            selectedItems ??= new HashSet<TItem>(new RowIdentity<TItem>(ValueOf));
 
         /// <summary>The popup's grid, once it has been opened at least once.</summary>
         public RadzenFastGrid<TItem>? Grid => grid;
@@ -249,6 +264,43 @@ namespace Radzen.FastGrid
                 ? Convert.ToString(get(item), CultureInfo.CurrentCulture)
                 : item.ToString();
 
+        Expression<Func<TItem, object?>>? hashedBy;
+
+        /// <summary>
+        /// Re-files the chosen rows when the member naming them changes.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="SelectedItems" /> hashes a row by the id <see cref="ValueProperty" /> reads, so a
+        /// change to that expression leaves every entry filed under a name it no longer answers to -
+        /// <c>Remove</c> and <c>Contains</c> begin missing, which is §19's fault reached by another
+        /// road. Re-filed rather than cleared: which rows are chosen has not changed, only what they
+        /// are called. Equivalent rather than reference equality, since Razor rebuilds the expression
+        /// on every render.
+        /// </remarks>
+        void Rehash()
+        {
+            if (PropertyPathResolver.Equivalent(hashedBy, ValueProperty))
+            {
+                return;
+            }
+
+            hashedBy = ValueProperty;
+
+            if (selectedItems is not { Count: > 0 } chosen)
+            {
+                return;
+            }
+
+            var carried = chosen.ToList();
+
+            chosen.Clear();
+
+            foreach (var row in carried)
+            {
+                chosen.Add(row);
+            }
+        }
+
         /// <inheritdoc />
         protected override void OnParametersSet()
         {
@@ -260,6 +312,8 @@ namespace Radzen.FastGrid
             {
                 FieldIdentifier = FieldIdentifier.Create(ValueExpression);
             }
+
+            Rehash();
 
             // On a Data change as well as a Value change. A value is routinely bound before its rows
             // arrive - the model is known and the lookup's source is still loading - and adopting only
