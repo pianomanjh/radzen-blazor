@@ -615,9 +615,18 @@ Each layer below caught real faults the previous one missed. Use all of them.
   offering the first one's values until `Reload()`. That is the same lifetime rule §14 gives its
   lookups, chosen there for the same reason.
 
-  The `!ReferenceEquals` trap now has three recorded participants - row expansion above, the `Once` fit
-  in §13 which dodges it deliberately, and this - and it is the only one whose cost was a database round
-  trip. §14 never inherits it: a lookup column runs no distinct scan at all.
+  The `!ReferenceEquals` trap now has **four** recorded participants - row expansion above, the `Once`
+  fit in §13 which dodges it deliberately, this, and the drop-down's `Adopt` found in §19 - and this is
+  the only one whose cost was a database round trip. §14 never inherits it: a lookup column runs no
+  distinct scan at all.
+- **A multiple-select drop-down over a re-materialising source loses its ticks and doubles its value.**
+  Found in §19 and left there, because fixing it is the identity question rather than a patch. The grid
+  draws a tick by asking a `HashSet<TItem>` whether it holds the row being drawn, and that set compares
+  by reference - so a source read again per render ticks nothing, and a click on an apparently unticked
+  row `Remove`s the new instance, misses, and `Add`s it beside the old one: two objects, one id, and a
+  value that publishes the id twice. Measured at two ticks before and none after. This is row expansion
+  above from the other end, it wants `ItemKey` for the same reason, and it is the first instance in this
+  list whose symptom is a wrong value rather than a wasted query.
 
 ## 10b. Review status
 
@@ -2415,7 +2424,7 @@ with a load-bearing reason should be recorded here beside it.
 | 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | Worth exploring |
 | 7 | A column's identity is a concept with no name | Worth exploring |
-| 8 | The drop-down forwards twelve parameters, then hands out the grid | **designed, §19** - and it is the scan, not the forwarding |
+| 8 | The drop-down forwards twelve parameters, then hands out the grid | ~~Worth exploring~~ **built**, §19 - it was the scan, not the forwarding |
 
 **1. Compose the view behind one interface.** **Built**, as `Composition`; §16 has the design it was
 built from and, at the end, the three of its decisions that did not survive the building.
@@ -3503,3 +3512,76 @@ change that almost never happens.
 - **The fault may be rarer than the measurement makes it look.** It needs a re-materialising in-memory
   source *and* a bound value *and* a parent that re-renders often. Each is ordinary; all three together
   may not be. The number is real; how often anyone pays it is not something this section can measure.
+
+### What the build changed
+
+The skip landed and the measured fault is gone, at a third of the reach this section designed for. Three
+of its claims were wrong, one of them badly enough to change the shape of the piece, and two things it
+went looking through turned out to be broken already.
+
+**It skips a single value only.** This section designed the skip for both and named the escape hatch -
+"if it is not [cheaper], the honest answer is to skip only the single case". Two things closed it. The
+measurement: `Adopt`'s multiple path already `break`s once every wanted value is found, so over a
+thousand rows it walks one element, and skipping it saves **136 B a render** rather than 24 KB. And the
+correctness: the grid draws its ticks by asking a `HashSet<TItem>` whether it holds the row it is
+drawing, and that set compares by reference - so rows carried over from a re-materialised source are
+ticks that do not appear. Skipping would have made that permanent, because a selection that has gone
+wrong still explains the value and so is never looked at again.
+
+**And that fault is already there, without any of this.** Bound to two rows over a source that
+re-materialises, the popup ticks 2 rows before and **0** after - and clicking an already-chosen row then
+publishes **3** ids for two rows, because `OnRowClick` removes the new instance, misses, and adds it
+beside the old one. Measured with the skip and without it: identical. So it is a fourth participant in
+§10's `!ReferenceEquals` trap and the first whose symptom is a wrong value rather than a wasted query,
+it is nothing to do with this piece, and it wants `ItemKey` - the same answer §10 recorded for row
+expansion and did not do. **Recorded, not fixed here**, and the reason is that fixing it means deciding
+the identity question §15's candidate 7 exists for.
+
+**"Until the value changes or something calls `Reload()`" was false.** This component has no `Reload`.
+The stale row is dislodged by a value change and by nothing else, and the comment says that now.
+
+**The number is 96 B, not 24.** "Turns 24,171 B into about 24" was arithmetic about one `ValueOf` call
+rather than a measurement; measured, the re-adopt column goes from 24,171 B to 96 B at a thousand rows
+and from 1,368 B to 96 B at fifty. The claim - that it stops being a function of the row count - holds.
+
+### Two mutations of this section's own, and what they found
+
+**The allocation test discriminated at one of the two row counts it runs at.** It asserted the
+re-materialising case costs less than 1.5x the held one, and at fifty rows the *unfixed* code is 1.4x -
+which this section's own table already said, and neither the table nor the test noticed. The threshold
+is 1.15 now, which fails at both, and there is a second test that has no ratio in it at all: a source
+that counts how many times it is walked, asserting zero.
+
+**A third redundant conjunct in three pieces.** `!valueChanged &&` came out of the guard because no
+value that changed can be explained by the row that explained the previous one. `Multiple ||` stayed in
+despite being redundant for the same kind of reason - `selected` is only ever written by the scalar
+branch - and that one is kept deliberately, with the reason written beside it: the exclusion is a
+correctness decision and leaving it to be inferred from which field happens to be set is how it would
+quietly stop being true. Two redundant terms, opposite answers, both argued.
+
+### Two measurements that had stopped measuring
+
+**`DropDownBench` has been reporting `NA` for every `Fast_` row.** It passes `TextProperty` as the
+string `"Name"`, which is what `RadzenDropDownDataGrid` takes and is not what this one takes, so every
+run since that parameter became an expression has thrown a cast exception behind a printed table. Fixed
+here because this section's verification asks for that bench to be quoted and a bench that throws cannot
+be. What it says now, at fifty rows and at a thousand: **15.63 KB against `RadzenDropDownDataGrid`'s
+168.6 KB closed, and 49.06 KB against 169.6 KB open** - 0.09x and 0.29x, and flat in the row count
+because a closed lookup builds nothing.
+
+**A test in the suite is flaky.** `ReviewRegressionTests.ACheckBoxListLookupIsNeverRunFromTheRenderThread`
+fails about one full run in three, and fails every time it is run alone - at this commit and at the one
+before it. Not this piece's, and recorded because "the suite is green" is a claim this branch makes
+often and that test makes it conditional.
+
+**Measured**, control at `6317cd150` sorted 175.79 KB and a filter row 158.77 KB; after, bare 154.66,
+sorted 175.79 and a filter row 158.81. Nothing here is on the grid's path and the numbers say so.
+**No time ratio is quoted**, per §9.
+
+### What is left of the candidate
+
+Of §15's three complaints about this component, one was a measured fault and is fixed for the case that
+carried the cost, one is refused with its reason above, and one - handing out the grid - is untouched.
+What this piece adds to the list is that the multiple path is *wrong* over a re-materialising source,
+which none of the three noticed, and that the benchmark meant to catch component-level regressions here
+has not run for some time.
