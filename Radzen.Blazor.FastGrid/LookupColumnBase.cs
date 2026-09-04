@@ -108,6 +108,15 @@ namespace Radzen.FastGrid
                 return;
             }
 
+            // What another column on this grid already resolved this same lookup to. Record equality
+            // does the matching, so sharing is an optimization nobody has to name or think about.
+            if (Grid?.SharedLookup(Lookup) is IReadOnlyDictionary<TKey, string> shared)
+            {
+                SetNames(shared);
+
+                return;
+            }
+
             SetNames(Lookup.Resolve());
 
             if (Names is null)
@@ -115,7 +124,11 @@ namespace Radzen.FastGrid
                 outstanding = true;
 
                 Grid?.QueueLookup(this);
+
+                return;
             }
+
+            Grid?.ShareLookup(Lookup, Names);
         }
 
         void SetNames(IReadOnlyDictionary<TKey, string>? resolved)

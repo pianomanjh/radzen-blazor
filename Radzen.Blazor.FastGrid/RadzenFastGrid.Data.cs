@@ -406,6 +406,11 @@ namespace Radzen.FastGrid
             // And the same for a lookup column's names, which nothing else invalidates: a category
             // added while the grid was open would otherwise never appear, and a cache with no
             // invalidation at all is what produces that report.
+            //
+            // Before the columns, not after: dropping one resolves it again on the spot, and it would
+            // find what it just dropped still sitting here.
+            sharedLookups.Clear();
+
             for (var i = 0; i < columns.Count; i++)
             {
                 columns[i].DropLookup();
@@ -668,6 +673,31 @@ namespace Radzen.FastGrid
 
             return materialized;
         }
+
+        readonly Dictionary<object, object> sharedLookups = new();
+
+        /// <summary>
+        /// The names a lookup has already been resolved to on this grid, or null for one nobody has.
+        /// </summary>
+        /// <remarks>
+        /// Two columns over the same table is the ordinary case rather than the exotic one -
+        /// CreatedByUserId and ApprovedByUserId both resolve against users - and per-column ownership
+        /// would build the map twice and hold it twice. A grid-level registry would share it at the
+        /// cost of a second thing to declare and a name to get wrong, and would make a column's meaning
+        /// non-local; keying on the lookup value itself needs neither.
+        /// <para>
+        /// Only what is resolved without a fetch ever lands here. A query lookup's members include
+        /// <c>Expression</c>s, which are a fresh object graph on every evaluation and do not override
+        /// <c>Equals</c>, so two of them never match whatever the call site does - which costs a lookup
+        /// shared by two columns one extra fetch at startup and nothing afterwards, because a column
+        /// resolves once.
+        /// </para>
+        /// </remarks>
+        internal object? SharedLookup(object lookup) =>
+            sharedLookups.TryGetValue(lookup, out var names) ? names : null;
+
+        /// <summary>Records what a lookup resolved to, for the next column declaring the same one.</summary>
+        internal void ShareLookup(object lookup, object names) => sharedLookups[lookup] = names;
 
         readonly List<ColumnBase<TItem>> pendingLookupColumns = new();
 

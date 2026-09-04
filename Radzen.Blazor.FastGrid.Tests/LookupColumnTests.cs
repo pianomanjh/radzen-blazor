@@ -406,6 +406,71 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(new[] { "Games", "Puzzles", "Toys", "Toys" }, Cells(cut, 0));
         }
 
+        // --- One lookup, however many columns declare it -------------------------------------------
+
+        [Fact]
+        public void TwoColumnsOverOneLookupResolveItOnce()
+        {
+            // Two columns over the same table is the ordinary case rather than the exotic one -
+            // CreatedByUserId and ApprovedByUserId both resolve against users - and per-column
+            // ownership would build it twice and hold it twice.
+            using var ctx = new TestContext();
+
+            var rows = Lookups.CategoryRows();
+            var reads = 0;
+            var lookup = FastGridLookup.Items(rows, category => { reads++; return category.Id; },
+                category => category.Name);
+
+            Render(ctx, Columns.Of(
+                Columns.Lookup<Person, int>(x => x.CategoryId, lookup, title: "Category"),
+                Columns.Lookup<Person, int>(x => x.CategoryId, lookup, title: "Also category")));
+
+            Assert.Equal(rows.Count, reads);
+        }
+
+        [Fact]
+        public void ReloadIsWhatPicksUpANameThatChanged()
+        {
+            // Nothing invalidates a lookup automatically, and one with no way to refresh at all is a
+            // cache with no invalidation - which produces an "I renamed a category and it never
+            // changed" report that has no answer. This is the only escape hatch, and there is
+            // deliberately no second refresh verb with a subtly different scope beside it.
+            using var ctx = new TestContext();
+
+            var rows = Lookups.CategoryRows();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(x => x.CategoryId,
+                FastGridLookup.Items(rows, c => c.Id, c => c.Name))));
+
+            Assert.Equal("Toys", Cells(cut, 0)[0]);
+
+            rows.Single(category => category.Id == 10).Name = "Playthings";
+
+            cut.InvokeAsync(() => cut.Instance.Reload()).Wait();
+
+            Assert.Equal("Playthings", Cells(cut, 0)[0]);
+        }
+
+        [Fact]
+        public void TwoLookupsBuiltTheSameWayAreOneLookupAndTwoQueriesNeverAre()
+        {
+            // What the sharing rests on, and the reason it is a bonus rather than a mechanism: a query
+            // lookup's members include Expressions, which are a fresh object graph on every evaluation
+            // and do not override Equals, so no call site can hold one still by being careful.
+            var rows = Lookups.CategoryRows();
+            var map = Lookups.Categories();
+            var query = rows.AsQueryable();
+
+            // Built from one call site evaluated twice, which is what markup does with an expression on
+            // every render. Two separate call sites are two cached delegates and would say nothing.
+            FastGridLookup<int> Items() => FastGridLookup.Items(rows, c => c.Id, c => c.Name);
+            FastGridLookup<int> Query() => FastGridLookup.Query(query, c => c.Id, c => c.Name);
+
+            Assert.Equal(FastGridLookup.Map(map), FastGridLookup.Map(map));
+            Assert.Equal(Items(), Items());
+            Assert.NotEqual(Query(), Query());
+        }
+
         [Fact]
         public void AScalarCellAllocatesNothing()
         {
