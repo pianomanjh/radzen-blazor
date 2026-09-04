@@ -1639,10 +1639,21 @@ container is arithmetic and needs a number - and the first version got one by re
 is exactly what this section rules out elsewhere: *"Parsing CSS is the option that works for pixels and
 is quietly wrong for everything else."* `MinWidth="10rem"` was silently ignored under `Fit` alone.
 
-The number now comes from the browser too: each bound is written to a probe element in the table's own
-wrapper - so a percentage resolves against the width it was written against - and measured back. All
-of them are written and then all of them read, one layout for the set, once per fit and never on a
-resize.
+The number now comes from the browser too: each bound is written to a probe element and measured back.
+All of them are written and then all read, one layout for the set, once per fit and never on a resize -
+and on a grid that declares no bounds there is nothing to write, so it costs nothing at all.
+
+**The probe's holder is given the container's width explicitly.** A percentage resolves against its
+containing block, and an absolutely positioned box with no width of its own is shrink-to-fit: a probe
+asking for 20% of that gets 20% of nothing, measures zero, and is discarded as a length the browser
+could not resolve. The first version left the holder to size itself and this section claimed the
+percentage resolved "against the width it was written against", which it did not. `rem` was unaffected,
+which is why the test written for units passed - it asked only for `rem`. It asks for both now.
+
+**One bounded measurement, not two.** The bounds are applied where the column is measured, so the total
+that decides whether any slack is left is the same number the fitting arithmetic uses. Applying them
+only to the string handed to the browser overstated a `MaxWidth`-capped column by whatever the cap
+removed - enough to conclude there was no slack when there was.
 
 The bounds are applied in `clamp()`'s order, the minimum last, so a `MinWidth` above a `MaxWidth` wins
 the way CSS has `min-width` beat `max-width` - and so a `MinWidth` wider than the content *widens* the
