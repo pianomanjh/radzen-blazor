@@ -21,14 +21,15 @@ namespace Radzen.FastGrid.Tests
     {
         static readonly List<Person> Source = People.Sample();
         static readonly List<Person> Other = People.Sample();
-        static readonly List<Person> Result = People.Sample();
+        static readonly List<Person> Rows = People.Sample();
+        static readonly Composed<Person> Result = new Composed<Person>(Rows, false);
 
         [Fact]
         public void OutsideAPassNothingIsRemembered()
         {
             var pass = default(DrawPass<Person>);
 
-            Assert.Same(Result, pass.Keep(Source, Result));
+            Assert.Same(Rows, pass.Keep(Source, Result).Rows);
             Assert.False(pass.Reuses(Source, out _));
 
             // A caller that is not drawing asks for exactly what it asked for and gets it fresh. The
@@ -47,7 +48,21 @@ namespace Radzen.FastGrid.Tests
             pass.Keep(Source, Result);
 
             Assert.True(pass.Reuses(Source, out var reused));
-            Assert.Same(Result, reused);
+            Assert.Same(Rows, reused.Rows);
+        }
+
+        // The route is part of what a composition worked out, so it has to survive the memo: the second
+        // caller of a pass is handed the first caller's answer whole, not its rows beside a fresh guess
+        // about how they were reached.
+        [Fact]
+        public void TheRouteIsRememberedWithTheRows()
+        {
+            var pass = DrawPass<Person>.Begin(null);
+
+            pass.Keep(Source, new Composed<Person>(Rows, true));
+
+            Assert.True(pass.Reuses(Source, out var reused));
+            Assert.True(reused.InMemory);
         }
 
         [Fact]

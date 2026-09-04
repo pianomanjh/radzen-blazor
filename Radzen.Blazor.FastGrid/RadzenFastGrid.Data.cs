@@ -464,7 +464,8 @@ namespace Radzen.FastGrid
                         // aggregate is what a provider is entitled to refuse to translate - SQL Server
                         // rejects it outright. LoadPageAsync counts the filtered query for this reason
                         // and this path was counting the sorted one.
-                        virtualTotal = await async.CountAsync(Filtered(queryable), request.CancellationToken);
+                        virtualTotal = await async.CountAsync(Composition.Filter(columns, queryable, Options),
+                            request.CancellationToken);
                     }
 
                     // Awaiting a cancelled token throws, but a query that had already finished does
@@ -1065,7 +1066,8 @@ namespace Radzen.FastGrid
         /// what `RadzenDataFilter` emits and what a `LoadData` handler receives. Empty when nothing is
         /// filtered, and never built unless something asks.
         /// </summary>
-        public IReadOnlyList<FilterDescriptor> Filters => BuildFilters() ?? (IReadOnlyList<FilterDescriptor>)Array.Empty<FilterDescriptor>();
+        public IReadOnlyList<FilterDescriptor> Filters =>
+            Composition.Filters(columns) ?? (IReadOnlyList<FilterDescriptor>)Array.Empty<FilterDescriptor>();
 
         /// <summary>
         /// Applies a set of descriptors to the columns they name, so a `RadzenDataFilter` or restored
@@ -1111,145 +1113,11 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
-        /// The columns' filters as descriptors, or null when nothing is filtered - the common case, and
-        /// the one that must allocate nothing.
+        /// The settings a composition depends on, as against the data it composes. A value rather than
+        /// three arguments repeated at five call sites, and free to build: three fields on the stack.
         /// </summary>
-        List<FilterDescriptor>? BuildFilters()
-        {
-            List<FilterDescriptor>? filters = null;
-
-            for (var i = 0; i < columns.Count; i++)
-            {
-                var column = columns[i];
-
-                if (!column.HasFilter)
-                {
-                    continue;
-                }
-
-                (filters ??= new List<FilterDescriptor>()).Add(DescriptorFor(column));
-            }
-
-            return filters;
-        }
-
-        /// <summary>
-        /// The source with the active filters on it and nothing else - what a count is taken of, since
-        /// an ordering inside a count aggregate is not translatable and changes no total anyway.
-        /// </summary>
-        IQueryable<TItem> Filtered(IQueryable<TItem> source) =>
-            ActiveFilters() is not null ? ApplyFilters(source) : source;
-
-        /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
-        /// <remarks>
-        /// Each column is asked for its own predicate first. A column that knows the filtered property's
-        /// type as a type parameter composes one directly, which is both what a provider translates and
-        /// what an ahead-of-time compiler can see through; only the columns that decline - a template
-        /// column filtering by a path, a collection column, a column declared as <c>object</c> - are
-        /// handed to <c>QueryableExtension</c>, which finds their members by reflection.
-        /// </remarks>
-        [SuppressMessage("Maintainability", "CA1508:Avoid dead conditional code",
-            Justification = "ApplyFilter is virtual; the analyzer resolves it to the base implementation, which is the one that always returns null.")]
-        IQueryable<TItem> ApplyFilters(IQueryable<TItem> source)
-        {
-            // The one place that asks. Its three callers used to ask too, and the term this replaces
-            // was `!AllowFiltering && !drawing` - which none of them could reach with a false answer,
-            // because two guarded on AllowFiltering before calling and the third only ever runs outside
-            // a render. A guard written against an ambient that cannot currently vary is the hazard the
-            // pass exists to remove rather than an example of it working: nobody can see the rule, and
-            // the next caller inherits it.
-            if (!AllowFiltering)
-            {
-                return source;
-            }
-
-            // What QueryableExtension itself checks to decide whether OrdinalIgnoreCase comparisons are
-            // available, so the two builders agree about a given source.
-            var inMemory = source is EnumerableQuery;
-
-            // Or is the case where the two groups cannot be applied separately, so it is the only case
-            // that needs every descriptor kept in case they have to be applied together. And - the
-            // default, and what a filter row produces - never does.
-            var either = LogicalFilterOperator == LogicalFilterOperator.Or;
-
-            Expression<Func<TItem, bool>>? predicate = null;
-            List<FilterDescriptor>? declined = null;
-            List<FilterDescriptor>? all = null;
-
-            for (var i = 0; i < columns.Count; i++)
-            {
-                var column = columns[i];
-
-                if (!column.HasFilter)
-                {
-                    continue;
-                }
-
-                var descriptor = either ? DescriptorFor(column) : null;
-
-                if (either)
-                {
-                    (all ??= new List<FilterDescriptor>()).Add(descriptor!);
-                }
-
-                if (column.ApplyFilter(FilterCaseSensitivity, inMemory) is { } composed)
-                {
-                    predicate = predicate is null
-                        ? composed
-                        : FilterPredicate.Join(predicate, composed, LogicalFilterOperator);
-                }
-                else
-                {
-                    (declined ??= new List<FilterDescriptor>()).Add(descriptor ?? DescriptorFor(column));
-                }
-            }
-
-            if (declined is null)
-            {
-                return predicate is null ? source : source.Where(predicate);
-            }
-
-            if (predicate is null)
-            {
-                return Reflective(source, declined);
-            }
-
-            // Two Wheres are an And between the groups, which is right for And and wrong for Or: a row
-            // that matched only a declining column would be dropped by the second Where. So a mixed Or
-            // goes through the reflective builder whole rather than being composed wrongly - one
-            // builder, one answer. It costs that grid its AOT-cleanliness, which it had already lost to
-            // the column that declined.
-            return either
-                ? Reflective(source, all!)
-                : Reflective(source.Where(predicate), declined);
-        }
-
-        /// <summary>
-        /// The one call in this component that reaches a property by name. Reserved for the columns that
-        /// cannot compose their own predicate, and reachable only while dynamic filtering is enabled.
-        /// </summary>
-        IQueryable<TItem> Reflective(IQueryable<TItem> source, List<FilterDescriptor> filters)
-        {
-            if (!DynamicCode.Supported)
-            {
-                throw DynamicCode.Unavailable(
-                    $"Filtering '{filters[0].Property}' through the column's property path");
-            }
-
-            return source.Where(filters, LogicalFilterOperator, FilterCaseSensitivity);
-        }
-
-        static FilterDescriptor DescriptorFor(ColumnBase<TItem> column) => new()
-        {
-            Property = column.FilterPropertyPath,
-
-            // Names a member of the collection's element, so the predicate becomes
-            // Customers.Any(c => c.Name ...) rather than a comparison against the collection.
-            FilterProperty = column.FilterMemberPath,
-            FilterValue = column.CurrentFilterValue,
-            FilterOperator = column.CurrentFilterOperator,
-            Type = column.FilterPropertyType,
-        };
+        CompositionOptions Options =>
+            new CompositionOptions(AllowFiltering, FilterCaseSensitivity, LogicalFilterOperator);
 
         /// <summary>
         /// What has already been worked out for the render in progress. See <see cref="DrawPass{TItem}" />
@@ -1262,10 +1130,10 @@ namespace Radzen.FastGrid
         /// outside one. Null when nothing is filtered and null when filtering is switched off, so a
         /// caller holding this does not ask about <see cref="AllowFiltering" /> a second time.
         /// </summary>
-        List<FilterDescriptor>? ActiveFilters() =>
-            pass.Drawing ? pass.Filters : AllowFiltering ? BuildFilters() : null;
+        List<FilterDescriptor>? ActiveFilters() => Composition.ActiveFilters(columns, Options, in pass);
 
-        void BeginDrawing() => pass = DrawPass<TItem>.Begin(AllowFiltering ? BuildFilters() : null);
+        void BeginDrawing() =>
+            pass = DrawPass<TItem>.Begin(AllowFiltering ? Composition.Filters(columns) : null);
 
         void EndDrawing() => pass = default;
 
@@ -1583,8 +1451,8 @@ namespace Radzen.FastGrid
         async Task LoadPageAsync(IFastGridQueryExecutor async, IQueryable<TItem> source)
         {
             var token = BeginLoad();
-            var filtered = ApplyFilters(source);
-            var ordered = ApplySorts(filtered);
+            var filtered = Composition.Filter(columns, source, Options);
+            var ordered = Composition.Sort(sorts, filtered);
             var paged = Paging ? ordered.Skip(skip).Take(pageSize) : ordered;
 
             IsLoading = true;
@@ -1634,7 +1502,7 @@ namespace Radzen.FastGrid
                 Skip = start,
                 Top = count,
                 OrderBy = OrderBy(),
-                Filters = BuildFilters(),
+                Filters = Composition.Filters(columns),
             };
 
             args.Filter = FilterString(args.Filters);
@@ -1830,54 +1698,16 @@ namespace Radzen.FastGrid
             data is IQueryable<TItem> queryable ? queryable.Count() : data.Count();
 
         /// <summary>
-        /// Filters and sorts, without paging. Nothing is wrapped in a queryable unless something is
-        /// actually filtered or sorted, so an unfiltered, unsorted grid enumerates its source directly.
+        /// Filters and sorts the source, without paging, through <see cref="Composition" /> - and
+        /// records which of its two routes ran.
         /// </summary>
         IEnumerable<TItem> Compose(IEnumerable<TItem> data)
         {
-            if (pass.Reuses(data, out var reused))
-            {
-                return reused;
-            }
+            var composed = Composition.Compose(columns, sorts, data, Options, ref pass);
 
-            var filtering = ActiveFilters() is not null;
-            var sorting = SortColumn is not null;
+            ComposedInMemory = composed.InMemory;
 
-            ComposedInMemory = false;
-
-            if (!filtering && !sorting)
-            {
-                return pass.Keep(data, data);
-            }
-
-            // A source that is already in memory is composed with delegates rather than expressions.
-            // Wrapping a list in an EnumerableQuery to hand it an expression tree makes it rewrite and
-            // recompile that tree every time the result is enumerated: measured at 1000 rows, 1,117 us
-            // and 11.8 KB to filter that way against 38 us and 0.07 KB through a delegate, on a render
-            // that costs 1,800 us in total. Composing over a real queryable still uses expressions,
-            // because there the point is for the provider to translate them.
-            if (data is not IQueryable<TItem> queryable)
-            {
-                if (ComposeInMemory(data, filtering, sorting) is { } composed)
-                {
-                    ComposedInMemory = true;
-
-                    return pass.Keep(data, composed);
-                }
-
-                // A column that cannot compose in memory - a template column filtering by a path -
-                // sends the whole composition back to the expression route rather than half of it.
-                queryable = data.AsQueryable();
-            }
-
-            if (filtering)
-            {
-                queryable = ApplyFilters(queryable);
-            }
-
-            // The column applies its own ordering, so it stays a typed expression the provider can
-            // translate rather than a parsed string.
-            return pass.Keep(data, sorting ? ApplySorts(queryable) : queryable);
+            return composed.Rows;
         }
 
         /// <summary>
@@ -1885,104 +1715,13 @@ namespace Radzen.FastGrid
         /// queryable.
         /// </summary>
         /// <remarks>
-        /// Exposed for the tests, and only to them, because the fast path is invisible in the rows: a
-        /// column that declines to compose in memory sends the whole thing to the expression route,
-        /// which produces the same answer and costs about 1.1 ms per render at 1000 rows. Without this
-        /// a column could quietly stop overriding <c>ApplySortInMemory</c> and every test would still
-        /// pass.
+        /// The module answers this; the grid only writes down what it was told. That is the whole of
+        /// what this property is now, and it is why it still exists after the composition moved out: it
+        /// is the one place a test standing outside the grid can see that the grid asked the module and
+        /// used the answer. A module can be correct and unused, and this branch's recorded failure mode
+        /// is a silent wrong answer, which is exactly that shape.
         /// </remarks>
         internal bool ComposedInMemory { get; private set; }
-
-        /// <summary>
-        /// Filters and sorts an in-memory sequence without wrapping it in a queryable, or returns null
-        /// when some column cannot be composed that way and the caller should take the other route.
-        /// </summary>
-        [SuppressMessage("Maintainability", "CA1508:Avoid dead conditional code",
-            Justification = "ApplyFilterInMemory is virtual; the analyzer resolves it to the base implementation, which is the one that always returns null.")]
-        IEnumerable<TItem>? ComposeInMemory(IEnumerable<TItem> data, bool filtering, bool sorting)
-        {
-            if (filtering)
-            {
-                Func<TItem, bool>? predicate = null;
-                var either = LogicalFilterOperator == LogicalFilterOperator.Or;
-
-                for (var i = 0; i < columns.Count; i++)
-                {
-                    var column = columns[i];
-
-                    if (!column.HasFilter)
-                    {
-                        continue;
-                    }
-
-                    if (column.ApplyFilterInMemory(FilterCaseSensitivity) is not { } composed)
-                    {
-                        return null;
-                    }
-
-                    var previous = predicate;
-
-                    predicate = previous is null ? composed
-                        : either ? item => previous(item) || composed(item)
-                        : item => previous(item) && composed(item);
-                }
-
-                if (predicate is not null)
-                {
-                    data = data.Where(predicate);
-                }
-            }
-
-            if (!sorting)
-            {
-                return data;
-            }
-
-            IOrderedEnumerable<TItem>? ordered = null;
-
-            for (var i = 0; i < sorts.Count; i++)
-            {
-                var (column, descending) = sorts[i];
-
-                var next = ordered is null
-                    ? column.ApplySortInMemory(data, descending)
-                    : column.ApplyThenByInMemory(ordered, descending);
-
-                // Null here means the column declined, which the queryable route treats as "skip this
-                // column". Taking the other route instead would be a different answer, not a slower
-                // one, so only a first column that declines sends it back - and only when no ordering
-                // has begun, since a half-applied one cannot be handed over.
-                if (next is null && ordered is null && i == 0)
-                {
-                    return null;
-                }
-
-                ordered = next ?? ordered;
-            }
-
-            return ordered ?? data;
-        }
-
-        /// <summary>
-        /// Composes every sort onto the query, in order of precedence. A column that cannot order -
-        /// which is what ApplySort returning null means - is skipped rather than allowed to break the
-        /// chain, so one uncomparable column does not cost the sort the caller asked for.
-        /// </summary>
-        IQueryable<TItem> ApplySorts(IQueryable<TItem> source)
-        {
-            IOrderedQueryable<TItem>? ordered = null;
-
-            for (var i = 0; i < sorts.Count; i++)
-            {
-                var (column, descending) = sorts[i];
-
-                ordered = ordered is null
-                    ? column.ApplySort(source, descending) ?? ordered
-                    : column.ApplyThenBy(ordered, descending) ?? ordered;
-            }
-
-            return ordered ?? source;
-        }
 
         /// <summary>
         /// How many rows there are behind whatever is on screen, memoized for the render pass.

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 
 namespace Radzen.FastGrid
 {
@@ -43,7 +42,7 @@ namespace Radzen.FastGrid
         /// </summary>
         internal List<FilterDescriptor>? Filters { get; private set; }
 
-        IEnumerable<TItem>? composed;
+        Composed<TItem> composed;
         IEnumerable<TItem>? composedOf;
         int? total;
 
@@ -59,13 +58,17 @@ namespace Radzen.FastGrid
         /// composes to the same thing, and a different one has to be composed again. Outside a pass the
         /// answer is always no, and without a second test for it: <c>Keep</c> is where
         /// <see cref="Drawing" /> is consulted, so there is nothing here to have been remembered.
+        /// <para>
+        /// What is remembered is the whole answer and not only the rows. The route a composition took is
+        /// part of what it worked out, and a memo that dropped it would hand the second caller of a pass
+        /// the right rows beside a wrong account of how they were reached.
+        /// </para>
         /// </remarks>
-        internal readonly bool Reuses(IEnumerable<TItem> data,
-            [NotNullWhen(true)] out IEnumerable<TItem>? reused)
+        internal readonly bool Reuses(IEnumerable<TItem> data, out Composed<TItem> reused)
         {
             reused = composed;
 
-            return ReferenceEquals(composedOf, data) && reused is not null;
+            return ReferenceEquals(composedOf, data) && reused.Rows is not null;
         }
 
         /// <summary>Records a composition for the rest of the pass, and answers it.</summary>
@@ -75,7 +78,7 @@ namespace Radzen.FastGrid
         /// looks safer and is not - it is a branch no caller can reach with a different answer, which is
         /// a claim no test can check.
         /// </remarks>
-        internal IEnumerable<TItem> Keep(IEnumerable<TItem> data, IEnumerable<TItem> result)
+        internal Composed<TItem> Keep(IEnumerable<TItem> data, Composed<TItem> result)
         {
             if (Drawing)
             {
