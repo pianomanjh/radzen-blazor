@@ -30,20 +30,22 @@ namespace Radzen.FastGrid.Tests
     /// </remarks>
     public class FastGridSettingsReloadTests
     {
+        /// <summary>Records the expression of every query it is asked to materialize.</summary>
         sealed class RecordingExecutor : IFastGridQueryExecutor
         {
             public List<string> Materialized { get; } = new();
 
             public bool IsSupported<T>(IQueryable<T> queryable) => true;
 
-            public Task<int> CountAsync<T>(IQueryable<T> q, CancellationToken token = default) =>
-                Task.FromResult(q.Count());
+            public Task<int> CountAsync<T>(IQueryable<T> queryable,
+                CancellationToken cancellationToken = default) => Task.FromResult(queryable.Count());
 
-            public Task<List<T>> ToListAsync<T>(IQueryable<T> q, CancellationToken token = default)
+            public Task<List<T>> ToListAsync<T>(IQueryable<T> queryable,
+                CancellationToken cancellationToken = default)
             {
-                Materialized.Add(q.Expression.ToString());
+                Materialized.Add(queryable.Expression.ToString());
 
-                return Task.FromResult(q.ToList());
+                return Task.FromResult(queryable.ToList());
             }
         }
 
@@ -90,6 +92,42 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void SettingsArrivingAtADrawnLoadDataGridAskTheHandlerAgain()
+        {
+            // The guard's other arm. A grid with a handler loads whatever its source looks like, so it
+            // has to be asked again for the same reason - and until this test, replacing the whole
+            // condition with AsyncOwnsData alone broke nothing.
+            using var ctx = new TestContext();
+            var calls = new List<LoadDataArgs>();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.AllowSorting, true);
+                p.Add(g => g.LoadData, (LoadDataArgs args) => calls.Add(args));
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Property<Person, int>(x => x.Id)));
+            });
+
+            Assert.Single(calls);
+            Assert.Null(calls[0].OrderBy);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Settings, new FastGridSettings
+            {
+                Columns = new List<FastGridColumnSettings>
+                {
+                    new() { Property = "First", SortOrder = SortOrder.Descending },
+                },
+            }));
+
+            Assert.Equal(2, calls.Count);
+            Assert.Equal("First desc", calls[1].OrderBy);
+        }
+
+        [Fact]
         public void AGridThatDoesNotLoadAnswersASettingsRestoreWithNoReloadAtAll()
         {
             // The other direction, and the one that shipped once. The parent hands back a fresh object
@@ -101,8 +139,13 @@ namespace Radzen.FastGrid.Tests
 
             var cut = ctx.RenderComponent<EchoingSettingsHost>(p => p.Add(h => h.Data, People.Sample()));
 
-            // Not "few" - none. An in-memory grid has already drawn the restored state, because the
-            // render that applied it composed from it.
+            // The grid drew, and drew the restore: without this a host that silently failed to hand
+            // its settings over would report zero echoes and pass for the wrong reason.
+            Assert.Equal(new[] { "Alice", "Bob", "Carol", "Dave" },
+                FirstNames(cut.FindComponent<RadzenFastGrid<Person>>()));
+
+            // And not "few" echoes - none. An in-memory grid has already drawn the restored state,
+            // because the render that applied it composed from it.
             Assert.Equal(0, cut.Instance.Echoes);
         }
 
@@ -110,21 +153,32 @@ namespace Radzen.FastGrid.Tests
         /// A parent that stores what the grid gives it and hands back a copy, stopping after a bounded
         /// number of exchanges so a grid that will not settle fails an assertion rather than hanging.
         /// </summary>
-        public sealed class EchoingSettingsHost : ComponentBase
+        sealed class EchoingSettingsHost : ComponentBase
         {
             [Parameter] public IEnumerable<Person> Data { get; set; } = default!;
 
             /// <summary>How many echoes to feed before refusing, which bounds a non-settling grid.</summary>
-            [Parameter] public int Limit { get; set; } = 10;
+            const int Limit = 10;
 
             public int Echoes { get; private set; }
 
-            FastGridSettings settings = new() { Columns = new List<FastGridColumnSettings>() };
+            // Carries a column rather than an empty list, for two reasons. ApplySettings returns early
+            // when Columns is null, before the line this file is about - and a restore with nothing in
+            // it makes CaptureSettings answer with an empty list, which leaves Copy's per-column arm
+            // never executed and its fidelity unmeasured.
+            FastGridSettings settings = new()
+            {
+                Columns = new List<FastGridColumnSettings>
+                {
+                    new() { Property = "First", SortOrder = SortOrder.Ascending },
+                },
+            };
 
             protected override void BuildRenderTree(RenderTreeBuilder builder)
             {
                 builder.OpenComponent<RadzenFastGrid<Person>>(0);
                 builder.AddAttribute(1, nameof(RadzenFastGrid<Person>.Data), Data);
+                builder.AddAttribute(5, nameof(RadzenFastGrid<Person>.AllowSorting), true);
                 builder.AddAttribute(2, nameof(RadzenFastGrid<Person>.Settings), settings);
                 builder.AddAttribute(3, nameof(RadzenFastGrid<Person>.SettingsChanged),
                     EventCallback.Factory.Create<FastGridSettings>(this, Store));
