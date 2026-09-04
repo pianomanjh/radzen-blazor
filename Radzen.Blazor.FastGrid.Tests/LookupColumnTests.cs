@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -296,6 +297,28 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ChangingTheWordForTheBlankEntryChangesTheEntry()
+        {
+            // Every other string the grid draws is read per render. This one is baked into a list built
+            // once, so without invalidating it a grid whose culture or whose BlankFilterText changes
+            // keeps the old word for good.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int?>(
+                x => x.RegionId, FastGridLookup.Map(Lookups.Regions()))), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
+            });
+
+            Assert.Equal("(Blank)", OfferedNames(cut, 0)[0]);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.BlankFilterText, "No region"));
+
+            Assert.Equal("No region", OfferedNames(cut, 0)[0]);
+        }
+
+        [Fact]
         public void TheOfferedListIsTheSameOneOnEveryRender()
         {
             // Rebuilding it per render would replace the drop-down's Data on every parent render, which
@@ -437,6 +460,67 @@ namespace Radzen.FastGrid.Tests
                 filterValue: "Zeta")));
 
             Assert.Null(cut.FindComponent<LookupColumn<Person, string>>().Instance.FilterSelection);
+        }
+
+        [Fact]
+        public void AGridFilteredToNothingByATypedNameComesBackFilteredToNothing()
+        {
+            // What tells "no box ticked" from "no name answered" is the text that was typed, and the
+            // stored settings carried no text - so a grid showing no rows was captured and restored as
+            // a grid showing all of them. Both are In over an empty list of ids; only the text is
+            // different.
+            using var ctx = new TestContext();
+
+            FastGridSettings captured = null;
+
+            RenderFragment Column() => Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
+                sortBy: FastGridSort<Person>.By(p => p.CategoryId)));
+
+            var cut = Render(ctx, Column(), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.SettingsChanged,
+                    EventCallback.Factory.Create<FastGridSettings>(this, s => captured = s));
+            });
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("nothing answers to this");
+
+            Assert.Empty(Cells(cut, 0));
+
+            using var second = new TestContext();
+
+            var restored = Render(second, Column(), p =>
+            {
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.Settings, captured);
+            });
+
+            Assert.Empty(Cells(restored, 0));
+        }
+
+        [Fact]
+        public void ATypedFilterStopsAtTheCapAndKeepsTheFirstNamesInOrder()
+        {
+            // Text matching six hundred names would be six hundred ids, and providers have parameter
+            // limits. Which ids survive is decided by the order the entries are in, so this pins the
+            // sort as well as the number - nothing else asserts that the list is by name.
+            using var ctx = new TestContext();
+
+            var many = Enumerable.Range(0, 600)
+                .ToDictionary(i => i, i => string.Format(CultureInfo.InvariantCulture, "Item {0:000}", i));
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(
+                x => x.CategoryId, FastGridLookup.Map(many))),
+                extra: p => p.Add(g => g.AllowFiltering, true));
+
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("Item");
+
+            var ids = ((System.Collections.IEnumerable)Assert.Single(cut.Instance.Filters).FilterValue)
+                .Cast<int>().ToArray();
+
+            Assert.Equal(LookupColumnBase<Person, int>.MatchLimit, ids.Length);
+            Assert.Equal(Enumerable.Range(0, LookupColumnBase<Person, int>.MatchLimit), ids);
         }
 
         [Fact]

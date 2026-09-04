@@ -46,6 +46,18 @@ namespace Radzen.FastGrid
         public FilterOperator? FilterOperator { get; set; }
 
         /// <summary>
+        /// What was typed into the filter box to produce the value, or null when the filter came from
+        /// anywhere else.
+        /// </summary>
+        /// <remarks>
+        /// The value cannot stand in for it. "3.0" and "3" are one value and two different things to
+        /// have typed, and on a lookup column - whose box matches names and filters by the ids they
+        /// carry - the text is the only thing that tells a name nothing answered to from a check-box
+        /// list with nothing ticked. Both are <c>In</c> over an empty list.
+        /// </remarks>
+        public string? FilterText { get; set; }
+
+        /// <summary>
         /// Whether the column is drawn, or null when nothing recorded a choice - which is the case for
         /// every column on a grid without a column picker, and for a column the picker does not offer.
         /// Null restores nothing, so the markup's own <c>Visible</c> stands.

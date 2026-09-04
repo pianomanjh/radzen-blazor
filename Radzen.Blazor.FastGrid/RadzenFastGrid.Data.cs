@@ -584,13 +584,29 @@ namespace Radzen.FastGrid
         /// default - Contains for a string column, Equals otherwise.
         /// </summary>
         public Task Filter(ColumnBase<TItem> column, object? value, FilterOperator? filterOperator = null)
+            => Filter(column, value, filterOperator, text: null);
+
+        /// <summary>
+        /// The same, recording what was typed to produce the value - or null for a filter that came from
+        /// anywhere else, which is what leaves the next thing typed applying even when it repeats.
+        /// </summary>
+        /// <remarks>
+        /// The text is recorded here rather than by the caller afterwards, because the reload below
+        /// announces the settings and the text is part of them: a lookup column's box filtering by a
+        /// name nothing answers to is an <c>In</c> over no ids, and so is a check-box list with nothing
+        /// ticked. Recorded after the announcement, the two are stored identically and the grid comes
+        /// back showing every row.
+        /// </remarks>
+        Task Filter(ColumnBase<TItem> column, object? value, FilterOperator? filterOperator, string? text)
         {
             if (column is null || !column.CanFilter)
             {
                 return Task.CompletedTask;
             }
 
+            // SetFilter clears the text, so it is put back after rather than before.
             column.SetFilter(value, filterOperator);
+            column.AppliedFilterText = text;
 
             // A narrower set has different pages; the row that was on page 3 may not exist any more.
             skip = 0;
@@ -603,18 +619,8 @@ namespace Radzen.FastGrid
         /// property type; text that is not a value of that type filters nothing rather than throwing,
         /// which is what a half-typed date or number looks like.
         /// </summary>
-        Task OnFilterInput(ColumnBase<TItem> column, string? text)
-        {
-            var task = Filter(column, column.FilterValueFromText(text));
-
-            // Filter routes through SetFilter, which clears this; recording the text afterwards is what
-            // says the box's contents are what is applied. Anything that filters by another route -
-            // descriptors, the clear button, a declared value - leaves it cleared, so the next thing
-            // typed applies even if it repeats what was typed before.
-            column.AppliedFilterText = text;
-
-            return task;
-        }
+        Task OnFilterInput(ColumnBase<TItem> column, string? text) =>
+            Filter(column, column.FilterValueFromText(text), filterOperator: null, text);
 
         /// <summary>The filter presentation this column actually uses.</summary>
         internal FilterMode FilterModeOf(ColumnBase<TItem> column) => column.FilterMode ?? FilterMode;
@@ -1019,7 +1025,9 @@ namespace Radzen.FastGrid
             // carrying ids, and the ids are what the predicate and the descriptor compare.
             //
             // An empty list is passed through rather than turned into null here: HasFilter is the single
-            // rule for what counts as a filter, and it already treats an empty sequence as none.
+            // rule for what counts as a filter, and nothing ticked is none. A column that reads an empty
+            // selection differently - a lookup column's box, where no name answered is an answer -
+            // overrides that rule rather than being special-cased here.
             return Filter(column, column.FilterValueFromSelection(sequence), Radzen.FilterOperator.In);
         }
 
@@ -1338,6 +1346,11 @@ namespace Radzen.FastGrid
                 if (stored.FilterValue is not null)
                 {
                     column.SetFilter(stored.FilterValue, stored.FilterOperator);
+
+                    // After SetFilter, which clears it: the text is what says the value came from the
+                    // box, and on a lookup column it is the only thing that tells a name nothing
+                    // answered to from a list with nothing ticked - both are In over no ids.
+                    column.AppliedFilterText = stored.FilterText;
                 }
 
                 // Only when something recorded a choice. A null leaves the markup's Visible standing,
@@ -1413,6 +1426,7 @@ namespace Radzen.FastGrid
                         SortOrder = descending ? SortOrder.Descending : SortOrder.Ascending,
                         FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
                         FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
+                        FilterText = column.HasFilter ? column.AppliedFilterText : null,
                         Visible = RecordedVisibility(column),
                         Width = RecordedWidth(column),
                         OrderIndex = RecordedOrderIndex(column),
@@ -1440,6 +1454,7 @@ namespace Radzen.FastGrid
                     Property = path,
                     FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
                     FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
+                    FilterText = column.HasFilter ? column.AppliedFilterText : null,
                     Visible = visibility,
                     Width = width,
                     OrderIndex = orderIndex,

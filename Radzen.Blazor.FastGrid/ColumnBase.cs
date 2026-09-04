@@ -681,7 +681,8 @@ namespace Radzen.FastGrid
             string text => text.Length > 0,
 
             // A check-box-list filter with nothing ticked is not a filter that matches nothing; it is no
-            // filter. Testing for null only would leave the grid empty as soon as the last box is cleared.
+            // filter. Testing for null only would leave the grid empty as soon as the last box is
+            // cleared. A column where an empty selection can mean the other thing overrides HasFilter.
             // The selection is a list in every path the grid itself builds, so the count answers without
             // an enumerator; the general case still has to walk one, and has to dispose it.
             ICollection collection => collection.Count > 0,

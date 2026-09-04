@@ -63,6 +63,15 @@ function expect(what, actual, expected) {
     expect('a lookup collection cell lists them', await column(8),
         ['Red, Green', 'Blue', '', 'Green, Blue', 'Red']);
 
+    // The provenance that composes its projection at run time. It is fetched after the first render,
+    // so the cells are blank until it lands - which is the behaviour, not a wait for a slow page.
+    await page.waitForFunction(
+        () => document.querySelector('tbody tr td:nth-child(9)')?.textContent.trim().length > 0,
+        null, { timeout: 30000 });
+
+    expect('a lookup fetched through the executor resolves too', await column(9),
+        ['Attic', 'Cellar', 'Attic', 'Cellar', 'Attic']);
+
     // Twice: the sample is already ascending by name, so only the descending click proves a sort ran.
     await page.click('thead th:first-child');
     await page.waitForTimeout(300);
@@ -114,7 +123,7 @@ function expect(what, actual, expected) {
         process.exit(1);
     }
 
-    console.log('The trimmed app renders, resolves its lookups, sorts by string and by number, and filters.');
+    console.log('The trimmed app renders, resolves all three lookup provenances, sorts by string and by number, and filters.');
 })().catch(e => {
     console.error(`Could not drive the trimmed app: ${e.message}`);
     process.exit(1);
