@@ -4797,3 +4797,45 @@ result about the harness rather than about the code.
   reasons - which is precisely what §23 did to the settings flag's first-load case.
 - **The three questions are not separated in code, only in this section.** Nothing stops a fourth
   meaning being added to the same predicate, and the name would go on answering the first question.
+
+### What the build changed
+
+**Both tests discriminate, and each fails only its own mutation.** `settingsNeedReload` mutated to
+`LoadData.HasDelegate` fails `SettingsArrivingAtADrawnGridOverAnExecutorSourceReRunTheQuery` and nothing
+else; mutated to `true` it fails `AGridThatDoesNotLoadAnswersASettingsRestoreWithNoReloadAtAll` and
+nothing else. One line, two directions, two tests, no overlap.
+
+**The loop test needed the settings object to be a copy, and needed `Columns` not to be null.**
+`ApplySettings` returns early when `settings.Columns is null` - before the line this section is about -
+so a parent handing back a bare `FastGridSettings` never reaches the flag at all and the mutation
+survives. The host starts with an empty list rather than a null one. And it hands back a *copy*: the
+grid remembers the object it raised, in `raisedSettings`, precisely so its own echo is not read as an
+instruction, so a parent that returns the same instance settles under either version of the flag and
+proves nothing. Round-tripping through storage produces a new object, which is the case the recorded
+loop needed and the case the test reproduces.
+
+**The bound is what makes it a test rather than a hang.** The host refuses to echo after ten exchanges,
+so a grid that will not settle fails the assertion instead of spinning until the runner is killed. The
+assertion is `Echoes == 0`, not "few": an in-memory grid has already drawn the restored state, because
+the render that applied it composed from it.
+
+**The sweep now confirms all seven guards discriminate**, where it began at six.
+
+### Verified
+
+- 838 unit tests (836 before, 2 added), 38 browser tests, 0 warnings.
+- **Eight mutations.** The seven-guard sweep, each guard removed in turn against the full suite, every
+  one now failing at least one test; plus the `= true` direction, which no guard removal expresses.
+- **No library code changed, so no benchmark applies and none is quoted** - the same reason §22 gave.
+
+### Where this could still be wrong, after the build
+
+- **`Echoes == 0` asserts that no reload happened, by way of nothing being announced.** A reload that
+  somehow ran without announcing would satisfy it. Announcing is what `RefreshAsync` does on every path
+  that is not `announce: false`, and the settings branch takes the announcing one, so the two coincide
+  here - but the test observes the announcement, not the reload.
+- **The over-reload test is in-memory only.** The guard's other arm, `LoadData.HasDelegate`, has no
+  matching test: a grid with a handler is *supposed* to reload, and nothing asserts that it does when
+  settings arrive after the first render.
+- **Seven guards is today's count.** §23 added two to §22's five without either section noticing the
+  total had moved, which is how §22's four came to be written. Nothing counts them but a person.
