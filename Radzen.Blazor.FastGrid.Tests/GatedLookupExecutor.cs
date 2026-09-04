@@ -44,6 +44,10 @@ namespace Radzen.FastGrid.Tests
 
         public Task<List<T>> ToListAsync<T>(IQueryable<T> queryable, CancellationToken token = default)
         {
+            // What the built-in executor does through WaitAsync and WithCancellation: a query asked for
+            // against a token that has already gone does not run.
+            token.ThrowIfCancellationRequested();
+
             if (typeof(T) == PassThrough)
             {
                 return Task.FromResult(queryable.ToList());
@@ -63,8 +67,15 @@ namespace Radzen.FastGrid.Tests
 
             Pending = gate;
 
+            // The token is honoured on the way out rather than on the way in, so a test can cancel while
+            // a query is held open - which is the only way to reach the cancelled exit from a fetch.
             return gate.Source.Task.ContinueWith(
-                _ => Fails is null ? queryable.ToList() : throw Fails,
+                _ =>
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    return Fails is null ? queryable.ToList() : throw Fails;
+                },
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
 

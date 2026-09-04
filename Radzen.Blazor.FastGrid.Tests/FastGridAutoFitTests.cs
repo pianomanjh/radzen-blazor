@@ -143,6 +143,40 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void AFitDeferredAcrossADropStillRuns()
+        {
+            // Reload while the names are in flight discards the answer and asks again, so the fit is
+            // owed across two fetches rather than one. Deferring is what gives back the property that
+            // disarming on the attempt provides, and a second round of it must not lose the fit.
+            using var ctx = new TestContext();
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule(ModulePath);
+            var executor = new GatedLookupExecutor { Holds = 1 };
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            var cut = Render(ctx, p => p.Add(g => g.AutoFitColumns, AutoFitMode.Once),
+                LookupColumns(Fetched()));
+
+            var stale = executor.Pending;
+
+            cut.InvokeAsync(() => cut.Instance.Reload()).Wait();
+
+            Assert.Empty(module.Invocations["autoFit"]);
+
+            stale.Release();
+
+            cut.WaitForAssertion(() => Assert.Equal(2, executor.Materializations));
+
+            // A render whose own OnAfterRender would fire the fit if it had not already: the deferral
+            // never lifting is what this fails on, not the render the names arrived in.
+            cut.Render();
+
+            Assert.Single(module.Invocations["autoFit"]);
+        }
+
+        [Fact]
         public void AFitIsNotHeldUpByNamesThatAreAlreadyInHand()
         {
             using var ctx = new TestContext();

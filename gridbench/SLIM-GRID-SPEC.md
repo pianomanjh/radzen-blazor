@@ -630,10 +630,20 @@ not - the whole suite passed before and after every one of them.
 | Attribute-run ordering, all render files | mechanically checked | 1 |
 | `ColumnBase.cs` and the column types | reviewed | 5: 4 fixed, 1 open |
 | `RadzenFastGrid.cs`, the core render path | reviewed | 5: 4 fixed, 2 open |
-| Lookup columns, §14 | **not reviewed** | - |
+| Lookup columns, §14 | reviewed, two axes | 7: 5 standards, 2 spec |
 
-**Every slice up to the lookup columns has been read by someone other than its author**, which was not
-true until the two passes that closed the rows above. Between them they found ten, of which eight are fixed and three are
+**Every slice has now been read by someone other than its author.** The lookup columns were read on two
+axes at once - does it follow the repo's standards, does it implement §14 - which found seven between
+them, and again the whole suite passed before and after every one.
+
+Two of that pass are worth carrying forward. **A nit is worth chasing.** The standards axis ended on
+"typing 'bl' matches the blank entry too", filed as an aside; it was a real fault - the entry is
+labelled in the reader's own language, so what a typed filter found depended on the page's culture -
+and fixing it exposed a second one underneath, where text matching no name showed every row rather than
+none. **And a test written for an exit path can fail to reach it.** The first cancellation test disposed
+the grid and asserted nothing threw; removing the catch it was written for did not fail it, because the
+wide catch below took the exception and a disposed grid renders either answer identically. It is a
+direct test of the column now, and the mutation fails it. Between them they found ten, of which eight are fixed and three are
 recorded as open because each is a design decision rather than a fix - one finding was two symptoms of
 a single cause, fixed once.
 
@@ -2169,7 +2179,10 @@ column cannot wait for a parameter set, because the renderer skips `SetParameter
 component whose parameters have not changed - which is exactly a column whose lookup is held in a field.
 So it re-queues itself, and that is a render feeding a fetch feeding a render. The bound is that an
 answer counts even when it is empty: a mutation that left the column outstanding after a *successful*
-fetch did not fail a test, it aborted the run with a stack overflow. The bound has its own test now.
+fetch did not fail a test, it aborted the run with a stack overflow. A review caught the first version
+of that claim overstating itself - the test named for the bound fetched a *non-empty* lookup, so the
+empty case it was cited for was the one it did not cover. There is a test for a lookup that resolves
+to nothing now.
 
 **The sharing is narrower than the table above suggests, and the table is still right.** Two `Items`
 built the same way are equal - but only from *one call site evaluated twice*, which is what markup does
@@ -2203,18 +2216,21 @@ both changed what is written above rather than confirming it: `Query` never dedu
 is the expressions rather than the queryable that prevent it, and the collection descriptor needs no
 sentinel because upstream already has the convention. What is left:
 
-- **A lookup column's settings identity is its id path**, so it joins §10b's open collision on equal
-  terms and makes it no worse. It is named here so that whoever adopts `UniqueID` knows this is another
-  participant.
+- **A lookup column's settings identity is its *sort* path, not its id path**, which is not what this
+  section said before it was built. `PropertyPath` is two things at once - the settings key *and* the
+  name a `LoadData` or OData sort is sent under - so giving it the id path would order a remote grid by
+  `CategoryId` under a column sorting by `Category.Name`. The consequence is `CollectionColumn`'s
+  exactly: **a lookup column with no `SortBy` has no settings identity at all**, so its width, order,
+  visibility and filter are never captured. One *with* a `SortBy` stores its filter as ids and survives
+  the rename this section argued for, and there is a test for that round trip. Separating the two
+  meanings of `PropertyPath` is §10b's open collision, and §10b's own instruction is not to close it by
+  guessing at the identity model - so this joins it as another participant rather than settling it.
 - **Not in `RadzenFastDropDownDataGrid`**, for the same reason §13's auto-fit is not: that slice has the
   worst review history on the branch, and its open layout question should be answered before anything
   else is added to it.
 
 ### Where this could still be wrong
 
-- **Nobody but its author has read this slice.** Every review pass on this branch found faults a green
-  suite did not, and this one added 34 tests without one. It belongs in §10b's table as unreviewed
-  until a pass has run against §14 as the spec axis.
 - **"The lookup is small" is an assumption about the caller's domain, not a fact.** Everything here -
   fetching it whole, holding it for the grid's life, offering all of it in the filter, reverse-mapping
   text against it - is right for hundreds of entries and wrong for hundreds of thousands. The design
