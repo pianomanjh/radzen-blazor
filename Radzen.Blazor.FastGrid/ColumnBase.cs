@@ -83,7 +83,7 @@ namespace Radzen.FastGrid
         /// parameter has to be an auto-property (BL0007) and this package builds warnings as errors.
         /// It is public because the picker names it through <c>TextProperty</c>, which reads it by name.
         /// </remarks>
-        public string PickerTitle => ColumnPickerTitle ?? Title ?? PropertyPath ?? string.Empty;
+        public string PickerTitle => ColumnPickerTitle ?? Title ?? SortPath ?? string.Empty;
 
         bool declaredVisible = true;
 
@@ -702,10 +702,10 @@ namespace Radzen.FastGrid
         public FilterOperator CurrentFilterOperator { get; private set; }
 
         /// <summary>
-        /// The dotted path this column filters by. Defaults to <see cref="PropertyPath" />; a column with
+        /// The dotted path this column filters by. Defaults to <see cref="SortPath" />; a column with
         /// no path cannot be filtered, for the same reason it cannot be sorted.
         /// </summary>
-        public virtual string? FilterPropertyPath => PropertyPath;
+        public virtual string? FilterPropertyPath => SortPath;
 
         /// <summary>The CLR type of the filtered property, which decides how a value is compared.</summary>
         public virtual Type FilterPropertyType => typeof(object);
@@ -1003,7 +1003,7 @@ namespace Radzen.FastGrid
         /// column that cannot be ordered by at all.
         /// </summary>
         /// <remarks>
-        /// It exists so that the four <c>Apply*</c> methods and <see cref="PropertyPath" /> are answered
+        /// It exists so that the four <c>Apply*</c> methods and <see cref="SortPath" /> are answered
         /// once rather than five times in each of three columns. Those five were verbatim in
         /// <see cref="TemplateColumn{TItem}" />, <c>CollectionColumn</c> and <c>LookupColumnBase</c>, and
         /// a sixth - <see cref="CanSort" /> - looks like it belongs with them and does not: a
@@ -1016,10 +1016,10 @@ namespace Radzen.FastGrid
         /// The dotted property path this column sorts, filters and persists by, or <c>null</c> when the
         /// authored expression is computed rather than a simple member access.
         /// </summary>
-        public virtual string? PropertyPath => SortSource?.Path;
+        public virtual string? SortPath => SortSource?.Path;
 
         /// <summary>Whether this column can be sorted. False for a computed column with no explicit sort.</summary>
-        public virtual bool CanSort => Sortable && PropertyPath is not null;
+        public virtual bool CanSort => Sortable && SortPath is not null;
 
         /// <summary>Writes one cell for <paramref name="item" /> into <paramref name="builder" />.</summary>
         /// <remarks>

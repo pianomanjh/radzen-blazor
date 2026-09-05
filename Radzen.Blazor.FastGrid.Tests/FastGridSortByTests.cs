@@ -143,7 +143,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<TemplateColumn<Person>>().Instance;
 
-            Assert.Equal(nameof(Person.Salary), column.PropertyPath);
+            Assert.Equal(nameof(Person.Salary), column.SortPath);
         }
 
         // A computed key can order rows but has no path to send anywhere, which is the same rule every
@@ -156,7 +156,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, People.Sample(),
                 TemplateSortedBy(FastGridSort<Person>.By(p => p.First.Length + p.Id)));
 
-            Assert.Null(cut.FindComponent<TemplateColumn<Person>>().Instance.PropertyPath);
+            Assert.Null(cut.FindComponent<TemplateColumn<Person>>().Instance.SortPath);
 
             ClickHeader(cut, 1);
 
@@ -217,7 +217,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<CollectionColumn<Person, Company>>().Instance;
 
-            Assert.Equal(nameof(Person.Salary), column.PropertyPath);
+            Assert.Equal(nameof(Person.Salary), column.SortPath);
 
             cut.SetParametersAndRender(p => p.Add(g => g.ChildContent, Columns.Of(
                 Columns.Property<Person, int>(x => x.Id, title: "Id"),
@@ -225,7 +225,7 @@ namespace Radzen.FastGrid.Tests
                     sortBy: FastGridSort<Person>.By(p => p.Hired)))));
 
             Assert.Equal(nameof(Person.Hired),
-                cut.FindComponent<CollectionColumn<Person, Company>>().Instance.PropertyPath);
+                cut.FindComponent<CollectionColumn<Person, Company>>().Instance.SortPath);
         }
 
         // The two routes have to agree, as everywhere else: a list is ordered by a delegate and a
