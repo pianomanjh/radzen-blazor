@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RootNamespace>Radzen.FastGrid</RootNamespace>
+    <PackageId>Radzen.Blazor.FastGrid</PackageId>
+    <Description>A read-only, expression-typed data grid for Radzen.Blazor, built for large row counts.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>blazor;radzen;datagrid;grid;performance</PackageTags>
+    <Version>11.2.8</Version>
+    <Copyright>Radzen Ltd.</Copyright>
+    <Authors>Radzen Ltd.</Authors>
+    <PackageProjectUrl>https://www.radzen.com</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/radzenhq/radzen-blazor</RepositoryUrl>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <ProjectReference Include="..\Radzen.Blazor\Radzen.Blazor.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Label="Allow internal members to be visible to the unit tests">
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Radzen.Blazor.FastGrid.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

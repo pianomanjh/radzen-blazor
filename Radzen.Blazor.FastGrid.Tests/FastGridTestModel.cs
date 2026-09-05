@@ -1,0 +1,663 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Linq.Expressions;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
+
+namespace Radzen.FastGrid.Tests
+{
+    /// <summary>A row type with one property of every shape the column model has to cope with.</summary>
+    public class Person
+    {
+        public int Id { get; set; }
+
+        public string First { get; set; }
+
+        public string Last { get; set; }
+
+        public decimal Salary { get; set; }
+
+        /// <summary>Nullable, so the format path for <c>Nullable&lt;T&gt;</c> has something to bind to.</summary>
+        public decimal? Bonus { get; set; }
+
+        public DateTime Hired { get; set; }
+
+        public Company Customer { get; set; }
+
+        /// <summary>A collection-valued property, which a column lists rather than stringifies.</summary>
+        public List<string> Regions { get; set; }
+
+        /// <summary>The same, of a value type, so the element type decides the filter operator.</summary>
+        public int[] Codes { get; set; }
+
+        /// <summary>A collection of objects, which is what FilterProperty exists for.</summary>
+        public List<Company> Accounts { get; set; }
+
+        /// <summary>An enum, which does not convert from a string through IConvertible.</summary>
+        public Grade Grade { get; set; }
+
+        /// <summary>A Guid, which does not either.</summary>
+        public Guid Reference { get; set; }
+
+        /// <summary>
+        /// Declared as object and holding values of more than one type, which is what a lookup has to
+        /// cope with: the first value being comparable says nothing about the rest.
+        /// </summary>
+        public object Mixed { get; set; }
+
+        /// <summary>An id with no name beside it, which is what a lookup column resolves.</summary>
+        public int CategoryId { get; set; }
+
+        /// <summary>The same, nullable, so a row with no region has one to render and to filter by.</summary>
+        public int? RegionId { get; set; }
+
+        /// <summary>A collection of ids, which is the cardinality LookupCollectionColumn exists for.</summary>
+        public List<int> BrandIds { get; set; }
+    }
+
+    public enum Grade
+    {
+        Junior,
+        Senior,
+    }
+
+    /// <summary>The far side of a lookup: rows holding a key and the name it stands for.</summary>
+    public class Category
+    {
+        public int Id { get; set; }
+
+        public string Name { get; set; }
+    }
+
+    public class Company
+    {
+        public string Name { get; set; }
+
+        /// <summary>A second member, so a test can filter on one and display the other.</summary>
+        public string Region { get; set; }
+
+        /// <summary>A value-typed member, which a selector returning object wraps in a Convert.</summary>
+        public int Size { get; set; }
+    }
+
+    /// <summary>
+    /// Column declarations for tests. Building the fragment by hand rather than in Razor keeps the test
+    /// project a plain xunit assembly, matching Radzen.Blazor.Tests.
+    /// </summary>
+    public static class Columns
+    {
+        /// <summary>
+        /// Composes column declarations into a single <see cref="RenderFragment" />, giving each one its
+        /// own sequence-number region so the renderer treats them as distinct siblings.
+        /// </summary>
+        public static RenderFragment Of(params Action<RenderTreeBuilder, int>[] declarations) => builder =>
+        {
+            for (var i = 0; i < declarations.Length; i++)
+            {
+                builder.OpenRegion(i);
+                declarations[i](builder, 0);
+                builder.CloseRegion();
+            }
+        };
+
+        public static Action<RenderTreeBuilder, int> Property<TItem, TProp>(
+            Expression<Func<TItem, TProp>> property,
+            string title = null,
+            string format = null,
+            Expression<Func<TItem, TProp>> sortBy = null,
+            bool sortable = true,
+            string cssClass = null,
+            object filterValue = null,
+            FilterOperator? filterOperator = null,
+            Expression<Func<TItem, TProp>> filterBy = null,
+            bool filterable = true,
+            RenderFragment<ColumnBase<TItem>> filterTemplate = null,
+            string separator = null,
+            Expression<Func<TItem, TProp>> sortByPath = null,
+            FilterMode? filterMode = null,
+            System.Collections.IEnumerable filterLookupData = null,
+            string width = null,
+            string minWidth = null,
+            string maxWidth = null,
+            TextAlign? textAlign = null,
+            Radzen.Blazor.WhiteSpace? whiteSpace = null,
+            bool visible = true,
+            int? orderIndex = null,
+            SortOrder? sortOrder = null,
+            RenderFragment<ColumnBase<TItem>> headerTemplate = null,
+            RenderFragment<ColumnBase<TItem>> footerTemplate = null,
+            string footerCssClass = null,
+            bool pickable = true,
+            bool resizable = true,
+            bool reorderable = true,
+            bool frozen = false,
+            FrozenColumnPosition frozenPosition = FrozenColumnPosition.Left,
+            bool autoFit = true,
+            bool required = false,
+            string columnPickerTitle = null,
+            string uniqueId = null) => (builder, seq) =>
+        {
+            builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
+            builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 2, nameof(PropertyColumn<TItem, TProp>.Title), title);
+            }
+
+            if (format is not null)
+            {
+                builder.AddAttribute(seq + 3, nameof(PropertyColumn<TItem, TProp>.Format), format);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 4, nameof(PropertyColumn<TItem, TProp>.SortBy), sortBy);
+            }
+
+            if (!sortable)
+            {
+                builder.AddAttribute(seq + 5, nameof(PropertyColumn<TItem, TProp>.Sortable), false);
+            }
+
+            if (!resizable)
+            {
+                builder.AddAttribute(seq + 42, nameof(PropertyColumn<TItem, TProp>.Resizable), false);
+            }
+
+            if (!reorderable)
+            {
+                builder.AddAttribute(seq + 43, nameof(PropertyColumn<TItem, TProp>.Reorderable), false);
+            }
+
+            if (frozen)
+            {
+                builder.AddAttribute(seq + 44, nameof(PropertyColumn<TItem, TProp>.Frozen), true);
+            }
+
+            if (frozenPosition != FrozenColumnPosition.Left)
+            {
+                builder.AddAttribute(seq + 45, nameof(PropertyColumn<TItem, TProp>.FrozenPosition), frozenPosition);
+            }
+
+            if (!autoFit)
+            {
+                builder.AddAttribute(seq + 46, nameof(PropertyColumn<TItem, TProp>.AutoFit), false);
+            }
+
+            if (required)
+            {
+                builder.AddAttribute(seq + 47, nameof(PropertyColumn<TItem, TProp>.AutoFitPriority),
+                    AutoFitPriority.Required);
+            }
+
+            if (cssClass is not null)
+            {
+                builder.AddAttribute(seq + 6, nameof(PropertyColumn<TItem, TProp>.CssClass), cssClass);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 7, nameof(PropertyColumn<TItem, TProp>.FilterValue), filterValue);
+            }
+
+            if (filterOperator is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(PropertyColumn<TItem, TProp>.FilterOperator), filterOperator);
+            }
+
+            if (filterBy is not null)
+            {
+                builder.AddAttribute(seq + 9, nameof(PropertyColumn<TItem, TProp>.FilterBy), filterBy);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 10, nameof(PropertyColumn<TItem, TProp>.Filterable), false);
+            }
+
+            if (filterTemplate is not null)
+            {
+                builder.AddAttribute(seq + 11, nameof(PropertyColumn<TItem, TProp>.FilterTemplate), filterTemplate);
+            }
+
+            if (separator is not null)
+            {
+                builder.AddAttribute(seq + 12, nameof(PropertyColumn<TItem, TProp>.Separator), separator);
+            }
+
+            if (sortByPath is not null)
+            {
+                builder.AddAttribute(seq + 13, nameof(PropertyColumn<TItem, TProp>.SortBy), sortByPath);
+            }
+
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 14, nameof(PropertyColumn<TItem, TProp>.FilterMode), filterMode);
+            }
+
+            if (filterLookupData is not null)
+            {
+                builder.AddAttribute(seq + 15, nameof(PropertyColumn<TItem, TProp>.FilterLookupData), filterLookupData);
+            }
+
+            if (width is not null)
+            {
+                builder.AddAttribute(seq + 16, nameof(PropertyColumn<TItem, TProp>.Width), width);
+            }
+
+            if (minWidth is not null)
+            {
+                builder.AddAttribute(seq + 17, nameof(PropertyColumn<TItem, TProp>.MinWidth), minWidth);
+            }
+
+            if (maxWidth is not null)
+            {
+                builder.AddAttribute(seq + 18, nameof(PropertyColumn<TItem, TProp>.MaxWidth), maxWidth);
+            }
+
+            if (textAlign is not null)
+            {
+                builder.AddAttribute(seq + 19, nameof(PropertyColumn<TItem, TProp>.TextAlign), textAlign.Value);
+            }
+
+            if (whiteSpace is not null)
+            {
+                builder.AddAttribute(seq + 20, nameof(PropertyColumn<TItem, TProp>.WhiteSpace), whiteSpace.Value);
+            }
+
+            if (!visible)
+            {
+                builder.AddAttribute(seq + 21, nameof(PropertyColumn<TItem, TProp>.Visible), false);
+            }
+
+            if (orderIndex is not null)
+            {
+                builder.AddAttribute(seq + 22, nameof(PropertyColumn<TItem, TProp>.OrderIndex), orderIndex);
+            }
+
+            if (sortOrder is not null)
+            {
+                builder.AddAttribute(seq + 23, nameof(PropertyColumn<TItem, TProp>.SortOrder), sortOrder);
+            }
+
+            if (headerTemplate is not null)
+            {
+                builder.AddAttribute(seq + 24, nameof(PropertyColumn<TItem, TProp>.HeaderTemplate), headerTemplate);
+            }
+
+            if (footerTemplate is not null)
+            {
+                builder.AddAttribute(seq + 25, nameof(PropertyColumn<TItem, TProp>.FooterTemplate), footerTemplate);
+            }
+
+            if (footerCssClass is not null)
+            {
+                builder.AddAttribute(seq + 26, nameof(PropertyColumn<TItem, TProp>.FooterCssClass), footerCssClass);
+            }
+
+            if (!pickable)
+            {
+                builder.AddAttribute(seq + 40, nameof(PropertyColumn<TItem, TProp>.Pickable), false);
+            }
+
+            if (columnPickerTitle is not null)
+            {
+                builder.AddAttribute(seq + 41, nameof(PropertyColumn<TItem, TProp>.ColumnPickerTitle), columnPickerTitle);
+            }
+
+            builder.CloseComponent();
+        };
+
+        public static Action<RenderTreeBuilder, int> Collection<TItem, TElement>(
+            Expression<Func<TItem, IEnumerable<TElement>>> property,
+            Expression<Func<TElement, object>> displayProperty = null,
+            Expression<Func<TElement, object>> filterProperty = null,
+            FastGridSort<TItem> sortBy = null,
+            string title = null,
+            string format = null,
+            string separator = null,
+            FilterMode? filterMode = null,
+            bool filterable = true,
+            object filterValue = null,
+            SortOrder? sortOrder = null,
+            string uniqueId = null) => (builder, seq) =>
+        {
+            builder.OpenComponent<CollectionColumn<TItem, TElement>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
+            builder.AddAttribute(seq + 1, nameof(CollectionColumn<TItem, TElement>.Property), property);
+
+            if (displayProperty is not null)
+            {
+                builder.AddAttribute(seq + 2, nameof(CollectionColumn<TItem, TElement>.DisplayProperty), displayProperty);
+            }
+
+            if (filterProperty is not null)
+            {
+                builder.AddAttribute(seq + 3, nameof(CollectionColumn<TItem, TElement>.FilterProperty), filterProperty);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 4, nameof(CollectionColumn<TItem, TElement>.SortBy), sortBy);
+            }
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(CollectionColumn<TItem, TElement>.Title), title);
+            }
+
+            if (format is not null)
+            {
+                builder.AddAttribute(seq + 6, nameof(CollectionColumn<TItem, TElement>.Format), format);
+            }
+
+            if (separator is not null)
+            {
+                builder.AddAttribute(seq + 7, nameof(CollectionColumn<TItem, TElement>.Separator), separator);
+            }
+
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(CollectionColumn<TItem, TElement>.FilterMode), filterMode);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 9, nameof(CollectionColumn<TItem, TElement>.Filterable), false);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 10, nameof(CollectionColumn<TItem, TElement>.FilterValue), filterValue);
+            }
+
+            if (sortOrder is not null)
+            {
+                builder.AddAttribute(seq + 11, nameof(CollectionColumn<TItem, TElement>.SortOrder), sortOrder);
+            }
+
+            builder.CloseComponent();
+        };
+
+        public static Action<RenderTreeBuilder, int> Lookup<TItem, TKey>(
+            Expression<Func<TItem, TKey>> property,
+            FastGridLookup<TKey> lookup,
+            string title = null,
+            FastGridSort<TItem> sortBy = null,
+            FilterMode? filterMode = null,
+            bool filterable = true,
+            object filterValue = null,
+            System.Collections.IEnumerable filterLookupData = null,
+            string width = null,
+            bool autoFit = true,
+            string uniqueId = null) => (builder, seq) =>
+        {
+            builder.OpenComponent<LookupColumn<TItem, TKey>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
+            builder.AddAttribute(seq + 1, nameof(LookupColumn<TItem, TKey>.Property), property);
+            builder.AddAttribute(seq + 2, nameof(LookupColumn<TItem, TKey>.Lookup), lookup);
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 3, nameof(LookupColumn<TItem, TKey>.Title), title);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 4, nameof(LookupColumn<TItem, TKey>.SortBy), sortBy);
+            }
+
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(LookupColumn<TItem, TKey>.FilterMode), filterMode);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 6, nameof(LookupColumn<TItem, TKey>.Filterable), false);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 7, nameof(LookupColumn<TItem, TKey>.FilterValue), filterValue);
+            }
+
+            if (filterLookupData is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(LookupColumn<TItem, TKey>.FilterLookupData), filterLookupData);
+            }
+
+            if (width is not null)
+            {
+                builder.AddAttribute(seq + 9, nameof(LookupColumn<TItem, TKey>.Width), width);
+            }
+
+            if (!autoFit)
+            {
+                builder.AddAttribute(seq + 10, nameof(LookupColumn<TItem, TKey>.AutoFit), false);
+            }
+
+            builder.CloseComponent();
+        };
+
+        public static Action<RenderTreeBuilder, int> LookupCollection<TItem, TKey>(
+            Expression<Func<TItem, IEnumerable<TKey>>> property,
+            FastGridLookup<TKey> lookup,
+            string title = null,
+            string separator = null,
+            FastGridSort<TItem> sortBy = null,
+            FilterMode? filterMode = null,
+            bool filterable = true,
+            object filterValue = null,
+            FilterOperator? filterOperator = null,
+            string uniqueId = null) => (builder, seq) =>
+        {
+            builder.OpenComponent<LookupCollectionColumn<TItem, TKey>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
+            builder.AddAttribute(seq + 1, nameof(LookupCollectionColumn<TItem, TKey>.Property), property);
+            builder.AddAttribute(seq + 2, nameof(LookupCollectionColumn<TItem, TKey>.Lookup), lookup);
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 3, nameof(LookupCollectionColumn<TItem, TKey>.Title), title);
+            }
+
+            if (separator is not null)
+            {
+                builder.AddAttribute(seq + 4, nameof(LookupCollectionColumn<TItem, TKey>.Separator), separator);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(LookupCollectionColumn<TItem, TKey>.SortBy), sortBy);
+            }
+
+            if (filterMode is not null)
+            {
+                builder.AddAttribute(seq + 6, nameof(LookupCollectionColumn<TItem, TKey>.FilterMode), filterMode);
+            }
+
+            if (!filterable)
+            {
+                builder.AddAttribute(seq + 7, nameof(LookupCollectionColumn<TItem, TKey>.Filterable), false);
+            }
+
+            if (filterValue is not null)
+            {
+                builder.AddAttribute(seq + 8, nameof(LookupCollectionColumn<TItem, TKey>.FilterValue), filterValue);
+            }
+
+            if (filterOperator is not null)
+            {
+                builder.AddAttribute(seq + 9, nameof(LookupCollectionColumn<TItem, TKey>.FilterOperator), filterOperator);
+            }
+
+            builder.CloseComponent();
+        };
+
+        public static Action<RenderTreeBuilder, int> Template<TItem>(
+            RenderFragment<TItem> template,
+            string title = null,
+            string sortProperty = null,
+            bool sortable = true,
+            FastGridSort<TItem> sortBy = null,
+            SortOrder? sortOrder = null,
+            string uniqueId = null) => (builder, seq) =>
+        {
+            builder.OpenComponent<TemplateColumn<TItem>>(seq);
+
+            if (sortOrder is not null)
+            {
+                builder.AddAttribute(seq + 91, nameof(TemplateColumn<TItem>.SortOrder), sortOrder);
+            }
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
+
+            if (template is not null)
+            {
+                builder.AddAttribute(seq + 1, nameof(TemplateColumn<TItem>.Template), template);
+            }
+
+            if (title is not null)
+            {
+                builder.AddAttribute(seq + 2, nameof(TemplateColumn<TItem>.Title), title);
+            }
+
+            if (sortProperty is not null)
+            {
+                builder.AddAttribute(seq + 3, nameof(TemplateColumn<TItem>.SortProperty), sortProperty);
+            }
+
+            if (sortBy is not null)
+            {
+                builder.AddAttribute(seq + 5, nameof(TemplateColumn<TItem>.SortBy), sortBy);
+            }
+
+            if (!sortable)
+            {
+                builder.AddAttribute(seq + 4, nameof(TemplateColumn<TItem>.Sortable), false);
+            }
+
+            builder.CloseComponent();
+        };
+    }
+
+    /// <summary>The far sides of the lookups the sample rows' ids point at.</summary>
+    public static class Lookups
+    {
+        /// <summary>Categories, one of which no row uses, so a stable filter list is visible as one.</summary>
+        public static Dictionary<int, string> Categories() => new()
+        {
+            [10] = "Toys",
+            [20] = "Games",
+            [30] = "Puzzles",
+            [40] = "Books",
+        };
+
+        public static Dictionary<int, string> Brands() => new()
+        {
+            [100] = "Acme",
+            [200] = "Globex",
+            [300] = "Umbrella",
+        };
+
+        public static Dictionary<int?, string> Regions() => new()
+        {
+            [1] = "North",
+            [2] = "South",
+        };
+
+        public static List<Category> CategoryRows() => Categories()
+            .Select(entry => new Category { Id = entry.Key, Name = entry.Value })
+            .ToList();
+    }
+
+    public static class People
+    {
+        /// <summary>
+        /// Four rows whose orderings by name, id, salary and hire date all differ, so a test that sorts by
+        /// one column cannot pass because the data happened to be ordered by another.
+        /// </summary>
+        public static List<Person> Sample() => new()
+        {
+            new Person
+            {
+                Grade = Grade.Senior, Reference = Reference(3), Id = 3, First = "Carol", Mixed = 3, Last = "Adams", Salary = 4000m, Bonus = 250.5m,
+                Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" },
+                Regions = new() { "North", "West" }, Codes = new[] { 10, 20 },
+                CategoryId = 10, RegionId = 1, BrandIds = new() { 100, 200 },
+                Accounts = new() { new() { Name = "Acme", Region = "North", Size = 10 }, new() { Name = "Globex", Region = "West", Size = 20 } }
+            },
+            new Person
+            {
+                Grade = Grade.Junior, Reference = Reference(1), Id = 1, First = "Alice", Mixed = "n/a", Last = "Draper", Salary = 2000m, Bonus = null,
+                Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" },
+                Regions = new() { "South" }, Codes = new[] { 20 },
+                CategoryId = 20, RegionId = null, BrandIds = new() { 200 },
+                Accounts = new() { new() { Name = "Initech", Region = "South", Size = 30 } }
+            },
+            new Person
+            {
+                Grade = Grade.Junior, Reference = Reference(4), Id = 4, First = "Dave", Mixed = 4, Last = "Bell", Salary = 1000m, Bonus = 10m,
+                Hired = new DateTime(2018, 11, 30), Customer = new Company { Name = "Xray" },
+                Regions = new(), Codes = System.Array.Empty<int>(),
+                CategoryId = 10, RegionId = 2, BrandIds = new(),
+                Accounts = new()
+            },
+            new Person
+            {
+                Grade = Grade.Senior, Reference = Reference(2), Id = 2, First = "Bob", Mixed = 2, Last = "Cook", Salary = 3000m, Bonus = 99.25m,
+                Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" },
+                Regions = new() { "North", "East", "South" }, Codes = new[] { 30 },
+                CategoryId = 30, RegionId = 1, BrandIds = new() { 300, 100 },
+                Accounts = new() { new() { Name = "Acme", Region = "East", Size = 10 }, new() { Name = "Umbrella", Region = "North", Size = 40 } }
+            },
+        };
+
+        /// <summary>A Guid that depends only on the row, so a test can name one without hard-coding it.</summary>
+        public static Guid Reference(int id) => new Guid(id, 0, 0, new byte[8]);
+
+        public static List<Person> Many(int count) => Enumerable.Range(1, count)
+            .Select(i => new Person
+            {
+                Id = 100000 + i,
+                First = "First" + i,
+                Last = "Last" + i,
+                Salary = i * 10m,
+                Bonus = i % 3 == 0 ? null : (decimal?)(i * 1.5m),
+                Hired = new DateTime(2020, 1, 1).AddDays(i),
+                Customer = new Company { Name = "Company" + i },
+                Regions = new() { "Region" + i },
+                Codes = new[] { i },
+                Accounts = new() { new Company { Name = "Account" + i, Region = "Region" + i } },
+            })
+            .ToList();
+    }
+}

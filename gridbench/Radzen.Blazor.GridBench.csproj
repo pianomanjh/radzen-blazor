@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);BL0006</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+    <PackageReference Include="bunit.web" Version="1.36.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.*-*" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid.EntityFrameworkAdapter" Version="10.*-*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.*-*" />
+    <ProjectReference Include="..\Radzen.Blazor\Radzen.Blazor.csproj" />
+    <ProjectReference Include="..\Radzen.Blazor.FastGrid\Radzen.Blazor.FastGrid.csproj" />
+  </ItemGroup>
+</Project>

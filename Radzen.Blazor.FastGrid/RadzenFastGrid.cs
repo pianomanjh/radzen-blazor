@@ -1,0 +1,2468 @@
+using System;
+using System.Collections.Generic;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
+using System.Threading.Tasks;
+using System.Collections;
+using Microsoft.AspNetCore.Components.Web;
+using Microsoft.AspNetCore.Components.Web.Virtualization;
+using Radzen.Blazor;
+
+namespace Radzen.FastGrid
+{
+    /// <summary>
+    /// A read-only data grid that renders rows and cells inline, for large row counts.
+    /// </summary>
+    /// <remarks>
+    /// Emits RadzenDataGrid's class names, so every Radzen theme - including custom ones - styles it
+    /// with no extra work. It deliberately does not instantiate a component per row, cascade per row, or
+    /// return a render fragment per cell; those are what make a general-purpose grid expensive at scale,
+    /// and they are what inline editing needs. This grid does not edit.
+    /// </remarks>
+    /// <typeparam name="TItem">The row type.</typeparam>
+    [CascadingTypeParameter(nameof(TItem))]
+    public partial class RadzenFastGrid<TItem> : ComponentBase
+    {
+        readonly List<ColumnBase<TItem>> columns = new();
+
+        // Bumped whenever the set of columns or one column's identity moves, and compared against the
+        // last value that walked cleanly. Everything between two bumps is the same question with the
+        // same answer, so the check costs one integer compare on a render that changed nothing.
+        int columnIdentityGeneration;
+
+        // The last generation that walked cleanly. Seeded level with the counter rather than below it,
+        // and a mutation is what says that is enough: seeding it at -1 to force a first walk failed no
+        // test, because any column that has a name reports one on its first parameter set and that is
+        // what moves the counter. A grid whose columns all name nothing never walks and never needs to.
+        //
+        // The ordering this depends on is confirmed by the collision tests passing with it seeded here
+        // rather than below: a walk happens at all only because every column's OnParametersSet has run
+        // by the time Defer renders the table. Note it is the unmutated code that says so, not the
+        // mutant - seeded at -1 the first walk is unconditional, so that mutant survives under either
+        // ordering and carries no information about it. A first draft of this comment claimed it did.
+        int checkedColumnIdentityGeneration;
+
+        // The columns actually drawn, in the order they are drawn, with their sort keys alongside.
+        // Rebuilt once per render pass rather than per row - three render loops read it, and a row
+        // reads it once per cell.
+        readonly List<ColumnBase<TItem>> visibleColumns = new();
+
+        // Scratch for the ordering pass, reused so a grid that declares an OrderIndex does not allocate
+        // a list per render to apply it.
+        readonly List<ColumnBase<TItem>?> placed = new();
+
+        /// <summary>The rows to display.</summary>
+        [Parameter] public IEnumerable<TItem>? Data { get; set; }
+
+        /// <summary>The column definitions.</summary>
+        [Parameter] public RenderFragment? ChildContent { get; set; }
+
+        /// <summary>Whether column headers offer sorting.</summary>
+        [Parameter] public bool AllowSorting { get; set; }
+
+        /// <summary>
+        /// Rows currently selected. Membership is looked up per row, which costs no allocation - but the
+        /// lookup is the collection's own, so a list of many selected rows is a scan per row. Pass a
+        /// <see cref="HashSet{T}" /> when more than a handful can be selected at once.
+        /// </summary>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227:Collection properties should be read only",
+            Justification = "A Blazor parameter is assigned by the renderer and must have a setter.")]
+        [Parameter] public ICollection<TItem>? Selection { get; set; }
+
+        /// <summary>Raised when a row is clicked. No handler means no per-row delegate is allocated.</summary>
+        [Parameter] public EventCallback<TItem> RowClick { get; set; }
+
+        /// <summary>Raised when a row is double-clicked. Costs a per-row delegate only when handled.</summary>
+        [Parameter] public EventCallback<TItem> RowDoubleClick { get; set; }
+
+        /// <summary>
+        /// Raised when a cell is clicked. This is a delegate per <em>cell</em> - measured at 296 bytes,
+        /// which at five columns is five times what a row click costs - so it is bound only when handled.
+        /// </summary>
+        [Parameter] public EventCallback<FastGridCellEventArgs<TItem>> CellClick { get; set; }
+
+        /// <summary>Raised when a cell is right-clicked. Per cell, and bound only when handled.</summary>
+        [Parameter] public EventCallback<FastGridCellEventArgs<TItem>> CellContextMenu { get; set; }
+
+        /// <summary>
+        /// Whether each cell carries its value as a <c>title</c>, so a truncated cell reveals itself on
+        /// hover. Off by default: it is an attribute per cell, and the cell's text has to be derived a
+        /// second time to fill it.
+        /// </summary>
+        [Parameter] public bool ShowCellDataAsTooltip { get; set; }
+
+        /// <summary>
+        /// An extra CSS class for a row. Return one of a few constant strings and this costs nothing
+        /// per row; return a freshly built string per row and it costs that string.
+        /// </summary>
+        [Parameter] public Func<TItem, string?>? RowClass { get; set; }
+
+        /// <summary>An inline style for a row, on the same terms as <see cref="RowClass" />.</summary>
+        [Parameter] public Func<TItem, string?>? RowStyle { get; set; }
+
+        /// <summary>
+        /// Called for every body cell before it is drawn, to add HTML attributes to it.
+        /// </summary>
+        /// <remarks>
+        /// The one hook on this component that is per cell rather than per row or per column, so it is
+        /// also the one to think twice about: setting it costs an arguments object for every cell of
+        /// every row, and whatever the handler itself allocates. Unset it costs a null check hoisted out
+        /// of the row loop. A class or style that depends only on the row is cheaper through
+        /// <see cref="RowClass" />; one that depends only on the column, through the column's own
+        /// <c>CssClass</c>.
+        /// </remarks>
+        [Parameter] public Action<FastGridCellRenderEventArgs<TItem>>? CellRender { get; set; }
+
+        /// <summary>
+        /// Called for every header cell before it is drawn, to add HTML attributes to it. Per column,
+        /// so it costs the same whether the grid holds ten rows or a million.
+        /// </summary>
+        [Parameter] public Action<FastGridCellRenderEventArgs<TItem>>? HeaderCellRender { get; set; }
+
+        /// <summary>
+        /// Called for every footer cell before it is drawn, to add HTML attributes to it. Per column,
+        /// and only for a grid that draws a footer at all.
+        /// </summary>
+        [Parameter] public Action<FastGridCellRenderEventArgs<TItem>>? FooterCellRender { get; set; }
+
+        /// <summary>
+        /// Whether the grid covers itself with a loading indicator while one of its own asynchronous
+        /// loads is in flight. Nothing to wire up: the grid already knows, through
+        /// <see cref="IsLoading" />.
+        /// </summary>
+        [Parameter] public bool ShowLoadingIndicator { get; set; } = true;
+
+        /// <summary>What the loading indicator shows. A spinner matching RadzenDataGrid's without one.</summary>
+        [Parameter] public RenderFragment? LoadingTemplate { get; set; }
+
+        /// <summary>Whether one row or several can be selected at once.</summary>
+        [Parameter] public DataGridSelectionMode SelectionMode { get; set; } = DataGridSelectionMode.Single;
+
+        /// <summary>Whether clicking a row selects it.</summary>
+        [Parameter] public bool AllowRowSelectOnRowClick { get; set; } = true;
+
+        /// <summary>
+        /// Raised with the new selection when a row click changes it. The grid renders from
+        /// <see cref="Selection" /> and never writes to it, so use <c>@bind-Selection</c> - or handle
+        /// this - for clicking to have a visible effect.
+        /// </summary>
+        [Parameter] public EventCallback<ICollection<TItem>> SelectionChanged { get; set; }
+
+        /// <summary>Raised with the row a click added to the selection.</summary>
+        [Parameter] public EventCallback<TItem> RowSelect { get; set; }
+
+        /// <summary>Raised with the row a click removed from the selection.</summary>
+        [Parameter] public EventCallback<TItem> RowDeselect { get; set; }
+
+        // Selection is driven from the row click, so the row needs the handler when selection is live
+        // even if nothing is listening to RowClick itself.
+        bool SelectsOnRowClick => AllowRowSelectOnRowClick
+            && (SelectionChanged.HasDelegate || RowSelect.HasDelegate || RowDeselect.HasDelegate);
+
+        /// <summary>
+        /// Whether the grid draws a selection at all - because it makes one, or because it was handed
+        /// one to show. What the theme keys its selected-row and hover rules off.
+        /// </summary>
+        bool ShowsSelection => SelectsOnRowClick || Selection is not null;
+
+        /// <summary>Extra CSS class for the grid element.</summary>
+        [Parameter] public string? CssClass { get; set; }
+
+        /// <summary>
+        /// A key for each row, as QuickGrid's <c>ItemKey</c> does - typically the row's primary key.
+        /// </summary>
+        /// <remarks>
+        /// Without one the diff matches rows by position, so re-sorting rewrites the text of every cell
+        /// in place. With one it matches them by identity and moves the rows instead, which is fewer DOM
+        /// mutations for a re-sort and none at all for a row that did not change. It is not free: the
+        /// renderer builds a dictionary of the keys, and a value-typed key boxes once per row. Worth it
+        /// where rows are reordered, not where they only scroll.
+        /// </remarks>
+        [Parameter] public Func<TItem, object>? ItemKey { get; set; }
+
+        /// <summary>Default CSS width for columns that do not set their own.</summary>
+        [Parameter] public string? ColumnWidth { get; set; }
+
+        /// <summary>Whether the header row is drawn.</summary>
+        [Parameter] public bool ShowHeader { get; set; } = true;
+
+        /// <summary>Whether alternating rows are shaded. On by default, as in RadzenDataGrid.</summary>
+        [Parameter] public bool AllowAlternatingRows { get; set; } = true;
+
+        /// <summary>Which grid lines the table draws. Theme default unless set.</summary>
+        [Parameter] public DataGridGridLines GridLines { get; set; } = DataGridGridLines.Default;
+
+        /// <summary>The pager's density.</summary>
+        [Parameter] public Density Density { get; set; } = Density.Default;
+
+        /// <summary>
+        /// Whether each cell repeats its column title, which is what lets a theme stack the table into
+        /// cards on a narrow screen. The titles are constant strings, so this allocates nothing; it does
+        /// add a span per cell, which is render time rather than memory.
+        /// </summary>
+        [Parameter] public bool Responsive { get; set; }
+
+        /// <summary>Content shown when there are no rows.</summary>
+        [Parameter] public RenderFragment? EmptyTemplate { get; set; }
+
+        /// <summary>
+        /// Detail content for an expanded row, drawn in a row of its own beneath it. Setting this is what
+        /// turns row expansion on; nothing about it is paid for while it is null.
+        /// </summary>
+        /// <remarks>
+        /// This is the one feature here whose use is not cheap: the toggle is a delegate per row, which
+        /// is the same 310 bytes a row click costs, and the toggle column is an extra cell per row. Both
+        /// are unavoidable - a row that can be expanded needs something to click.
+        /// </remarks>
+        [Parameter] public RenderFragment<TItem>? Template { get; set; }
+
+        /// <summary>Whether the toggle column is drawn. Without it, expand rows through the API.</summary>
+        [Parameter] public bool ShowExpandColumn { get; set; } = true;
+
+        /// <summary>Whether expanding a row collapses the last one.</summary>
+        [Parameter] public DataGridExpandMode ExpandMode { get; set; } = DataGridExpandMode.Single;
+
+        /// <summary>Raised with the row that was expanded.</summary>
+        [Parameter] public EventCallback<TItem> RowExpand { get; set; }
+
+        /// <summary>Raised with the row that was collapsed.</summary>
+        [Parameter] public EventCallback<TItem> RowCollapse { get; set; }
+
+        IEqualityComparer<TItem>? rowIdentity;
+
+        /// <summary>
+        /// How this grid tells one row from another - <see cref="ItemKey" /> where there is one, the row
+        /// itself where there is not. Every set the grid builds over its own rows is built with it.
+        /// </summary>
+        /// <remarks>
+        /// The comparer reads <see cref="ItemKey" /> through this component rather than capturing it, so
+        /// it is allocated once and never has to be rebuilt: a key written in markup that captures
+        /// anything is a new delegate on every render, and rebuilding on that identity is the trap §10
+        /// has four recorded participants in. With no key this is the default comparer, which is what
+        /// every one of these lookups used to be - so a grid without one behaves exactly as it did.
+        /// </remarks>
+        internal IEqualityComparer<TItem> RowComparer => ItemKey is null
+            ? EqualityComparer<TItem>.Default
+            : rowIdentity ??= new RowIdentity<TItem>(item => ItemKey!(item));
+
+        // The rows held open, in two shapes, because this is looked up once per row and §3 rules out
+        // paying for that twice.
+        //
+        // Keyed, the entry is the row's key and the value is the row last seen carrying it. The key is
+        // the one RenderRow has already computed for SetKey, so the lookup costs nothing at all - which
+        // a comparer cannot manage, because IEqualityComparer.GetHashCode is handed the row and has to
+        // read the key again, and reading it is a box. Measured: the same lookup through a comparer
+        // costs 46.9 KB per render at 1000 rows. The row is kept beside its key because RowCollapse has
+        // to name a row that may no longer be on screen, and TryAdd keeps the first one seen rather than
+        // putting an equal one beside it - which is the accumulation §10 recorded as a leak.
+        //
+        // Unkeyed there is nothing to key by, so it is the set it always was, compared the way it always
+        // was. Both are consulted, because a key that answers null for some rows and not others leaves
+        // rows in each.
+        Dictionary<object, TItem>? expandedByKey;
+        HashSet<TItem>? expandedRows;
+
+        /// <summary>This row's key, or null when there is none. One call per row, and its only one.</summary>
+        object? RowKeyOf(TItem item) => ItemKey is { } key ? key(item) : null;
+
+        bool Holds(TItem item, object? rowKey) =>
+            (rowKey is not null && expandedByKey is not null && expandedByKey.ContainsKey(rowKey))
+            || (expandedRows is not null && expandedRows.Contains(item));
+
+        // One arguments object for every cell of every render, pointed at each cell in turn. Measured:
+        // allocating one per cell costs 195 KB at 1000 x 5 before the handler does anything, and the
+        // dictionary behind it another 1,300 - which would have made this hook as expensive as a cell
+        // click, the most expensive thing this component offers. The header and footer hooks share it
+        // because those rows are drawn either side of the body, never inside it.
+        //
+        // What it costs instead is a rule: the arguments describe the cell being drawn and nothing else,
+        // so a handler must read them rather than keep them. Documented on the type.
+        FastGridCellRenderEventArgs<TItem>? cellRenderArgs;
+
+        FastGridCellRenderEventArgs<TItem> CellRenderArgs(TItem? item, ColumnBase<TItem> column)
+        {
+            cellRenderArgs ??= new FastGridCellRenderEventArgs<TItem>();
+
+            cellRenderArgs.Reset(item, column);
+
+            return cellRenderArgs;
+        }
+
+        /// <summary>Whether the given row is expanded.</summary>
+        /// <param name="item">The row.</param>
+        public bool IsRowExpanded(TItem item) => Holds(item, RowKeyOf(item));
+
+        // Whether anything is held open at all, so the Single-mode sweep below allocates nothing for the
+        // ordinary case of expanding the first row.
+        bool AnyOpen => expandedByKey is { Count: > 0 } || expandedRows is { Count: > 0 };
+
+        // Drops any entry holding this row under a key it no longer answers to.
+        void Unfile(TItem item)
+        {
+            if (expandedByKey is null)
+            {
+                return;
+            }
+
+            foreach (var entry in expandedByKey)
+            {
+                if (EqualityComparer<TItem>.Default.Equals(entry.Value, item))
+                {
+                    expandedByKey.Remove(entry.Key);
+
+                    return;
+                }
+            }
+        }
+
+        // The rows currently held open, for the one caller that has to name them all - Single mode, which
+        // collapses what was there before raising an event per row. Allocated only on that path.
+        List<TItem> OpenRows()
+        {
+            var open = new List<TItem>();
+
+            if (expandedByKey is not null)
+            {
+                open.AddRange(expandedByKey.Values);
+            }
+
+            if (expandedRows is not null)
+            {
+                open.AddRange(expandedRows);
+            }
+
+            return open;
+        }
+
+        /// <summary>Expands or collapses a row, raising the matching event.</summary>
+        /// <param name="item">The row.</param>
+        public async Task ToggleRow(TItem item)
+        {
+            if (item is null)
+            {
+                return;
+            }
+
+            var rowKey = RowKeyOf(item);
+
+            if (Holds(item, rowKey))
+            {
+                if (rowKey is not null)
+                {
+                    expandedByKey?.Remove(rowKey);
+                }
+                else
+                {
+                    // A row with no key now may have been filed under one before - ItemKey is a
+                    // parameter and a caller may stop supplying it. Removing only by the current key
+                    // would leave that entry unreachable for good, and OpenRows would then collapse a
+                    // row nobody has expanded. Walking is safe here: this is the rows held open, which
+                    // is what a person has clicked.
+                    Unfile(item);
+                }
+
+                expandedRows?.Remove(item);
+
+                await RowCollapse.InvokeAsync(item).ConfigureAwait(false);
+            }
+            else
+            {
+                // Single mode collapses what was open, and says so: a row that leaves the screen without
+                // an event is a row the caller still thinks is expanded.
+                if (ExpandMode == DataGridExpandMode.Single && AnyOpen)
+                {
+                    var open = OpenRows();
+
+                    expandedByKey?.Clear();
+                    expandedRows?.Clear();
+
+                    foreach (var previous in open)
+                    {
+                        await RowCollapse.InvokeAsync(previous).ConfigureAwait(false);
+                    }
+                }
+
+                if (rowKey is not null)
+                {
+                    // The indexer, so the row held for a key is the one last seen carrying it. Neither
+                    // this nor TryAdd can grow the store - replacing a value leaves Count alone, and
+                    // this line is only reached when Holds said no - so what the choice decides is
+                    // which instance RowCollapse hands back, and the freshest is the right one: over a
+                    // re-materialising source the first is the most detached thing the grid ever saw.
+                    (expandedByKey ??= new Dictionary<object, TItem>())[rowKey] = item;
+                }
+                else
+                {
+                    (expandedRows ??= new HashSet<TItem>()).Add(item);
+                }
+
+                await RowExpand.InvokeAsync(item).ConfigureAwait(false);
+            }
+
+            StateHasChanged();
+        }
+
+        // Whether the toggle column is drawn at all. Read in four render paths, so it is one expression
+        // rather than four that can drift.
+        bool ExpandColumn => Template is not null && ShowExpandColumn;
+
+        /// <summary>
+        /// Whether clicking a second column adds to the sort instead of replacing it. A click then
+        /// cycles a column ascending, descending, then out of the sort altogether - which is the only
+        /// way to remove one, since there is nowhere else to click.
+        /// </summary>
+        [Parameter] public bool AllowMultiColumnSorting { get; set; }
+
+        /// <summary>
+        /// Whether a control above the grid lets the user choose which columns are drawn. Off by
+        /// default; it costs one branch per render when off, and one drop-down when on.
+        /// </summary>
+        [Parameter] public bool AllowColumnPicking { get; set; }
+
+        /// <summary>Whether the picker offers a select-all entry.</summary>
+        [Parameter] public bool AllowPickAllColumns { get; set; } = true;
+
+        /// <summary>Whether the picker offers a filter box, for a grid with many columns.</summary>
+        [Parameter] public bool ColumnsPickerAllowFiltering { get; set; }
+
+        /// <summary>How many column names the picker lists before it summarises the count instead.</summary>
+        [Parameter] public int ColumnsPickerMaxSelectedLabels { get; set; } = 3;
+
+        /// <summary>Raised with the columns that are drawn, whenever the picker changes them.</summary>
+        [Parameter] public EventCallback<IEnumerable<ColumnBase<TItem>>> PickedColumnsChanged { get; set; }
+
+        // The columns the picker offers and the subset currently drawn. Both are rebuilt from the
+        // registered columns each time the picker is drawn, so a column added or removed after the first
+        // render is offered or dropped without anything else having to notice.
+        readonly List<ColumnBase<TItem>> pickable = new();
+        readonly List<object> picked = new();
+
+        /// <summary>Whether a sorted header shows its position in the sort.</summary>
+        [Parameter] public bool ShowMultiColumnSortingIndex { get; set; }
+
+        // The sort, in order of precedence. One entry is the overwhelmingly common case and the list
+        // never grows past the column count, so it is walked rather than indexed.
+        readonly List<(ColumnBase<TItem> Column, bool Descending)> sorts = new();
+
+        /// <summary>The column sorted first, if any.</summary>
+        public ColumnBase<TItem>? SortColumn => sorts.Count > 0 ? sorts[0].Column : null;
+
+        /// <summary>Whether the first sort is descending.</summary>
+        public bool SortDescending => sorts.Count > 0 && sorts[0].Descending;
+
+        /// <summary>
+        /// The sort as descriptors, in order of precedence - the form the rest of Radzen speaks, and
+        /// what <c>LoadDataArgs.Sorts</c> carries. Empty when nothing is sorted.
+        /// </summary>
+        public IReadOnlyList<SortDescriptor> Sorts
+        {
+            get
+            {
+                if (sorts.Count == 0)
+                {
+                    return Array.Empty<SortDescriptor>();
+                }
+
+                var descriptors = new List<SortDescriptor>(sorts.Count);
+
+                for (var i = 0; i < sorts.Count; i++)
+                {
+                    var (column, descending) = sorts[i];
+
+                    if (column.SortPath is { Length: > 0 } path)
+                    {
+                        descriptors.Add(new SortDescriptor
+                        {
+                            Property = path,
+                            SortOrder = descending ? SortOrder.Descending : SortOrder.Ascending,
+                        });
+                    }
+                }
+
+                return descriptors;
+            }
+        }
+
+        /// <summary>The position of a column in the sort, or -1 when it is not sorted.</summary>
+        internal int SortIndexOf(ColumnBase<TItem> column)
+        {
+            for (var i = 0; i < sorts.Count; i++)
+            {
+                if (ReferenceEquals(sorts[i].Column, column))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// Registers a column. Called on the column's first parameter set, and idempotent after that:
+        /// the list is never rebuilt, because the renderer does not re-set the parameters of a column
+        /// whose parameters have not changed, and a rebuilt list would silently lose it.
+        /// </summary>
+        internal void AddColumn(ColumnBase<TItem> column)
+        {
+            if (!columns.Contains(column))
+            {
+                columns.Add(column);
+            }
+        }
+
+        /// <summary>
+        /// Says that the answer to "can any two of these columns be told apart" may have changed, so the
+        /// next render re-asks it. One caller: a column reporting that its own identity moved.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="AddColumn" /> and <see cref="RemoveColumn" /> deliberately do <em>not</em> call
+        /// this, and a mutation is why. A joining column registers from its own SetParametersAsync and
+        /// then runs OnParametersSet, which reports an identity moving from nothing to a name - so the
+        /// bump at registration was a second signal for a case the first already covered, and deleting
+        /// it failed no test. A leaving column cannot create a collision at all, and cannot hide one it
+        /// resolved either: a walk that throws never records its generation, so the next render walks
+        /// again whatever happened in between.
+        /// </para>
+        /// <para>
+        /// A counter rather than a flag, and compared against the last generation that walked cleanly
+        /// rather than cleared: a flag cleared before the walk would let a throw be raised once and
+        /// swallowed for good, and one cleared after would be lost if a column reported in between.
+        /// </para>
+        /// </remarks>
+        internal void InvalidateColumnIdentities() => columnIdentityGeneration++;
+
+        /// <summary>
+        /// Throws when two columns cannot be told apart, so that a grid which would restore one column's
+        /// stored state onto another says so instead of doing it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Walks all registered columns rather than the drawn ones, because <see cref="CaptureSettings" />
+        /// does: a hidden column still carries a filter and still stores it.
+        /// </para>
+        /// <para>
+        /// The generation is recorded after the walk, never before. Recording it first would mean the
+        /// throw happened once, the generation matched on the next render, and the grid drew the
+        /// colliding columns as though nothing were wrong - a check that reports a fault and then hides
+        /// it, which is worse than no check.
+        /// </para>
+        /// <para>
+        /// Nested loops rather than a set: it runs only when the generation moved, and the counts here
+        /// are tens rather than thousands. §3's allocation rules are rules 1-3 and are about what a row
+        /// and a cell cost - a HashSet per check would be an allocation bought to avoid comparisons
+        /// nobody is paying for. (Rule 5, cited here in a first draft, is the boxing rule and has
+        /// nothing to say about this.)
+        /// </para>
+        /// </remarks>
+        void CheckColumnIdentities()
+        {
+            if (columnIdentityGeneration == checkedColumnIdentityGeneration)
+            {
+                return;
+            }
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var identity = columns[i].Identity;
+
+                for (var j = i + 1; j < columns.Count; j++)
+                {
+                    if (identity.Collides(columns[j].Identity))
+                    {
+                        throw new InvalidOperationException(ColumnIdentity.CollisionMessage(
+                            identity, ColumnLabel(columns[i]),
+                            columns[j].Identity, ColumnLabel(columns[j])));
+                    }
+                }
+            }
+
+            checkedColumnIdentityGeneration = columnIdentityGeneration;
+        }
+
+        /// <summary>How a column is named in the message above, which is all this is for.</summary>
+        /// <remarks>
+        /// Not <see cref="ColumnBase{TItem}.PickerTitle" />, which falls back to the identity - and an
+        /// author told that "CategoryId and CategoryId share the identity CategoryId" has been told
+        /// nothing. The type is the thing that distinguishes two columns with no titles.
+        /// </remarks>
+        static string ColumnLabel(ColumnBase<TItem> column) =>
+            column.Title is { Length: > 0 } title
+                ? $"The column titled \"{title}\""
+                : $"A {column.GetType().Name.Split('`')[0]}";
+
+        /// <summary>
+        /// Unregisters a column, when the renderer disposes one that has left the markup.
+        /// </summary>
+        internal void RemoveColumn(ColumnBase<TItem> column)
+        {
+            if (!columns.Remove(column))
+            {
+                return;
+            }
+
+            // Not left for the next RefreshVisibleColumns: Virtualize renders its rows outside the
+            // table's render pass, so this list can be read after a column has gone and before the
+            // table redraws.
+            visibleColumns.Remove(column);
+
+            // The sort must not outlive the column it orders by, or the grid keeps ordering by something
+            // nothing on screen names and nothing can clear. Nor must the column's check-box-list values,
+            // which would hold the column and everything it listed for as long as the grid lives.
+            var sorted = SortIndexOf(column);
+
+            if (sorted >= 0)
+            {
+                sorts.RemoveAt(sorted);
+            }
+
+            lookups.Remove(column);
+            pendingNameColumns.Remove(column);
+        }
+
+        /// <summary>
+        /// Sets the sort a column declared in markup. Called once, as the column registers, before the
+        /// grid has drawn anything - so it publishes the state and does not reload.
+        /// </summary>
+        internal void ApplyDeclaredSort(ColumnBase<TItem> column, SortOrder order)
+        {
+            // Sorting by one column at a time means the last declaration wins; sorting by several means
+            // they compose, in the order they were declared, which is the only order markup expresses.
+            if (!AllowMultiColumnSorting)
+            {
+                sorts.Clear();
+            }
+
+            sorts.Add((column, order == SortOrder.Descending));
+        }
+
+        // Rebuilt at the start of each render pass. The common case - every column visible, none
+        // declaring an OrderIndex - skips the ordering pass entirely.
+        void RefreshVisibleColumns()
+        {
+            PlaceVisibleColumns();
+
+            // After the placement, because a drawn position is what the indexes are read against.
+            RefreshColumnIndexes();
+        }
+
+        void PlaceVisibleColumns()
+        {
+            visibleColumns.Clear();
+
+            var ordered = false;
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.IsVisible)
+                {
+                    continue;
+                }
+
+                ordered |= column.EffectiveOrderIndex is not null;
+
+                visibleColumns.Add(column);
+            }
+
+            if (!ordered)
+            {
+                return;
+            }
+
+            // A drag and a declared OrderIndex are not the same kind of instruction, and sharing one
+            // rule let them spoil each other. OrderIndex names one position in the whole set, and the
+            // placement below honours that literally. A drag writes the *complete* arrangement of the
+            // columns that were visible at the time - so once one of them is hidden, those numbers are
+            // positions in a set that no longer exists, and clamping them into a shorter one made two
+            // columns want the same slot and sent the loser to the front.
+            //
+            // Only their order was ever meant, so only their order is read: ranking survives the set
+            // changing size, which is the one thing assigning to slots cannot do.
+            if (ReorderedColumnsInPlacementOrder())
+            {
+                return;
+            }
+
+            // A column that names an index is placed at it, and the rest fill what is left in the order
+            // they were declared. Sorting on a key of "OrderIndex, or where it happens to sit" instead
+            // reads the same for one column and differently for two: OrderIndex="0" on the third column
+            // would leave it behind the first, which is not what naming a position means.
+            placed.Clear();
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                placed.Add(null);
+            }
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                if (column.EffectiveOrderIndex is not { } index)
+                {
+                    continue;
+                }
+
+                var slot = Math.Clamp(index, 0, placed.Count - 1);
+
+                // Two columns claiming one slot is resolved by declaration order, since this walks in it.
+                // The wrap terminates: there are never more indexed columns than slots.
+                while (placed[slot] is not null)
+                {
+                    slot = (slot + 1) % placed.Count;
+                }
+
+                placed[slot] = column;
+            }
+
+            var next = 0;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                if (column.EffectiveOrderIndex is not null)
+                {
+                    continue;
+                }
+
+                while (placed[next] is not null)
+                {
+                    next++;
+                }
+
+                placed[next] = column;
+            }
+
+            for (var i = 0; i < placed.Count; i++)
+            {
+                visibleColumns[i] = placed[i]!;
+            }
+        }
+
+        /// <summary>
+        /// Puts the visible columns in the order a drag left them, when one has happened, and answers
+        /// whether it did. Columns with no dragged position keep their declaration order behind those
+        /// that have one, which is where a column added since the drag belongs.
+        /// </summary>
+        bool ReorderedColumnsInPlacementOrder()
+        {
+            // Every one of them, not any. A drag writes a position for each visible column, so a
+            // complete set is what a drag looks like - and only a complete set can be ranked, because
+            // ranking a partial one puts the columns that have a number in front of the ones that do
+            // not. A settings restore is exactly that partial case: a template column has no property
+            // path, so its order is never stored, and what comes back names some columns and not
+            // others. Those still go through the placement below, which is built to fill holes.
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                if (visibleColumns[i].ReorderedIndex is null)
+                {
+                    return false;
+                }
+            }
+
+            if (visibleColumns.Count == 0)
+            {
+                return false;
+            }
+
+            placed.Clear();
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                placed.Add(visibleColumns[i]);
+            }
+
+            // Declaration order is the tiebreak, and the keys are otherwise unique, so an unstable sort
+            // cannot be seen from the outside.
+            placed.Sort((a, b) =>
+            {
+                var left = a!.ReorderedIndex ?? int.MaxValue;
+                var right = b!.ReorderedIndex ?? int.MaxValue;
+
+                return left != right ? left.CompareTo(right) : columns.IndexOf(a).CompareTo(columns.IndexOf(b));
+            });
+
+            for (var i = 0; i < placed.Count; i++)
+            {
+                visibleColumns[i] = placed[i]!;
+            }
+
+            return true;
+        }
+
+        /// <summary>Sorts by the given column, toggling direction when it is already the sorted one.</summary>
+        /// <remarks>
+        /// With <see cref="AllowMultiColumnSorting" /> a column already in the sort cycles descending and
+        /// then out of it, and any other column is appended. Without it the grid sorts by one column and
+        /// a click only ever toggles direction - there is no "unsorted" to cycle back to, because
+        /// removing the only sort would leave the rows in an order nothing on screen explains.
+        /// </remarks>
+        /// <param name="column">The column to sort by.</param>
+        public Task SortBy(ColumnBase<TItem> column)
+        {
+            if (column is null || !column.CanSort)
+            {
+                return Task.CompletedTask;
+            }
+
+            var sorted = SortIndexOf(column);
+
+            if (!AllowMultiColumnSorting)
+            {
+                var descending = sorted >= 0 && !sorts[sorted].Descending;
+
+                sorts.Clear();
+                sorts.Add((column, descending));
+            }
+            else if (sorted < 0)
+            {
+                sorts.Add((column, false));
+            }
+            else if (!sorts[sorted].Descending)
+            {
+                sorts[sorted] = (column, true);
+            }
+            else
+            {
+                sorts.RemoveAt(sorted);
+            }
+
+            // A sort change moves the whole set, not just the page, so go back to the first page - the
+            // row that was on page 3 is not on page 3 any more.
+            skip = 0;
+
+            return RefreshAsync();
+        }
+
+        /// <inheritdoc />
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            ArgumentNullException.ThrowIfNull(builder);
+
+            builder.OpenComponent<CascadingValue<RadzenFastGrid<TItem>>>(0);
+            builder.AddAttribute(1, "Value", this);
+            builder.AddAttribute(2, "IsFixed", true);
+            builder.AddAttribute(3, "ChildContent", cascaded ??= RenderCascaded);
+            builder.CloseComponent();
+        }
+
+        // Held rather than written inline: a lambda in the render path is a delegate allocated on every
+        // render, and these two capture nothing but the component itself.
+        RenderFragment? cascaded;
+        RenderFragment? deferred;
+
+        void RenderCascaded(RenderTreeBuilder builder)
+        {
+            // The columns register while the renderer walks them ...
+            builder.AddContent(0, ChildContent);
+
+            // ... and Defer runs after, so the table below sees a populated column list.
+            builder.OpenComponent<Defer>(1);
+            builder.AddAttribute(2, "ChildContent", deferred ??= RenderDeferred);
+            builder.CloseComponent();
+        }
+
+        // Deferred so that a column added to the markup registers before the table that reads the list
+        // is written. A column that was already there needs no pass of its own: it stays registered
+        // until the renderer disposes it.
+        void RenderDeferred(RenderTreeBuilder builder) => RenderTable(builder);
+
+        void RenderTable(RenderTreeBuilder builder)
+        {
+            // Before the settings below, because applying them onto columns the grid cannot tell apart
+            // is the fault this checks for, happening. Here for the same reason they are: Defer has run,
+            // so every column has registered and derived.
+            CheckColumnIdentities();
+
+            // Before the columns are gathered, not after: stored settings can hide a column, and the
+            // drawn list is computed from what they leave. Applying them second showed the pre-settings
+            // columns for one render, and on a grid over a plain queryable there is no reload behind it
+            // to put that right.
+            //
+            // Here and not in OnParametersSet: stored state names columns by identity, and no column
+            // has registered by then. Defer has run, so by now every one of them has.
+            if (settingsPending)
+            {
+                settingsPending = false;
+
+                ApplySettings(appliedSettings!);
+            }
+
+            RefreshVisibleColumns();
+            RefreshFrozenColumns();
+
+            BeginDrawing();
+
+            try
+            {
+                RenderGrid(builder);
+            }
+            finally
+            {
+                EndDrawing();
+            }
+        }
+
+        void RenderGrid(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "div");
+
+            // rz-selectable is load-bearing, not decoration: the theme nests the selected-row and
+            // row-hover rules inside it - `.rz-selectable tbody tr.rz-data-row.rz-state-highlight > td`
+            // - so without it a clicked row carries rz-state-highlight and nothing paints it.
+            //
+            // Bound to whether the grid *shows* a selection rather than whether it makes one. A caller
+            // can hand over a Selection and own the clicking itself - which is exactly what the
+            // drop-down does, and it spent this branch's life displaying a chosen row that nothing
+            // painted, ten lines from this comment.
+            // rz-datatable-reflow is Responsive, as far as the theme is concerned: both the rule that
+            // hides the per-cell title above the breakpoint and the media block that stacks the rows
+            // into cards below it are nested under this class. The titles alone do nothing - they show
+            // beside every value at every width - so a grid that emits them without this is worse off
+            // than one with Responsive off, and pays 1.40x the render time to be.
+            //
+            // Written out per arm rather than concatenated, so a grid that declares no CssClass still
+            // takes a literal and allocates nothing, which is what this switch is for.
+            builder.AddAttribute(1, "class",
+                (string.IsNullOrEmpty(CssClass), ShowsSelection, Responsive) switch
+                {
+                    (true, false, false) => "rz-data-grid rz-datatable",
+                    (true, true, false) => "rz-data-grid rz-datatable rz-selectable",
+                    (true, false, true) => "rz-data-grid rz-datatable rz-datatable-reflow",
+                    (true, true, true) => "rz-data-grid rz-datatable rz-selectable rz-datatable-reflow",
+                    (false, false, false) => "rz-data-grid rz-datatable " + CssClass,
+                    (false, true, false) => "rz-data-grid rz-datatable rz-selectable " + CssClass,
+                    (false, false, true) => "rz-data-grid rz-datatable rz-datatable-reflow " + CssClass,
+                    (false, true, true) =>
+                        "rz-data-grid rz-datatable rz-selectable rz-datatable-reflow " + CssClass,
+                });
+
+            // The reorder script attaches its pointer tracking to the grid rather than to the header,
+            // so a drag that wanders off the row it started on keeps following the pointer. That is the
+            // only thing the root's id is for, so a grid that does not reorder does not have one.
+            if (AllowColumnReorder)
+            {
+                builder.AddAttribute(2, "id", ElementId);
+            }
+
+            if (AllowColumnPicking)
+            {
+                RenderColumnPicker(builder);
+            }
+
+            if (Paging && PagerPosition.HasFlag(PagerPosition.Top))
+            {
+                RenderPager(builder, 10, captureTopPager ??= p => topPager = (RadzenPager)p);
+            }
+
+            // 21, not 20: the top pager's band runs to 20, and the numbers a region writes must ascend
+            // in the order it writes them.
+            //
+            // The scroll container, and the element that carries role=grid. Both jobs are load-bearing:
+            // it is what a widened column overflows into rather than pushing the page sideways, and the
+            // rowgroup/row/gridcell roles below it require a grid ancestor to mean anything. The theme
+            // expects exactly this pair - .rz-data-grid is a flex column and this is its flex: 1 child.
+            builder.OpenElement(21, "div");
+            builder.AddAttribute(22, "class", "rz-data-grid-data");
+            builder.AddAttribute(23, "role", "grid");
+
+            // 24 to 28 is the band keyboard navigation writes into, which is why the table below starts
+            // at 29. The band cannot be isolated in a region: attributes may only follow the frame that
+            // opened the element, and a region opened here would sit between the two.
+            //
+            // The id outlasts the feature; the rest of the band does not. Letting the key guard go means
+            // naming the element it is bound to, and the switch that stops the grid navigating is the
+            // same switch that would stop it being named - so an id tied to that switch is dropped on
+            // the very render before the release that needs it, and the guard can never be reached
+            // again. Latched instead: a grid that has never navigated is never named and pays nothing
+            // for the feature being off, and one that has keeps its name for as long as it lives.
+            //
+            // Keeping it only while a guard is bound was tried and is worse. It is correct just as long
+            // as nothing re-renders between the switch and the release, which the component does not
+            // control - Virtualize re-renders on its own - and which no test can pin.
+            viewIsNamed |= AllowKeyboardNavigation;
+
+            if (viewIsNamed)
+            {
+                builder.AddAttribute(24, "id", ViewElementId);
+            }
+
+            // The tab stop, the key handler and the focus pair are the feature itself, and a grid that
+            // has switched it off must not keep any of them.
+            if (AllowKeyboardNavigation)
+            {
+                RenderNavigation(builder, 25);
+            }
+
+            // Where the window sits in the whole table, on the element that is the table to a screen
+            // reader. Only for a grid whose DOM is a window: an unpaged grid showing every column has
+            // all of it in the markup and the browser can count what it has.
+            //
+            // Last of this element's attributes, at 40 and 41, because the diff wants them ascending
+            // and 24 to 28 above may or may not have been written. Attributes and children are diffed
+            // as separate runs, so the table's own 29 below is not part of this sequence.
+            if (RowsAreCounted)
+            {
+                builder.AddAttribute(40, "aria-rowcount", AriaRowCount());
+            }
+
+            if (ColumnsAreCounted)
+            {
+                builder.AddAttribute(41, "aria-colcount", AriaColCount());
+            }
+
+            builder.OpenElement(29, "table");
+            builder.AddAttribute(26, "class", TableClass());
+
+            // The grid role belongs to the container above; the table is scaffolding for it, and its own
+            // implicit table role would otherwise sit between the grid and its rows.
+            builder.AddAttribute(27, "role", "presentation");
+
+            // The script walks the colgroup, the header row and the body rows together, so it is handed
+            // the one element all three hang off rather than an id apiece. 28, because the table's own
+            // attributes ascend among themselves - the 24 to 28 band above belongs to the div.
+            if (AutoFitEnabled)
+            {
+                builder.AddAttribute(28, "id", TableElementId);
+            }
+
+            RenderColumnGroup(builder);
+
+            if (ShowHeader)
+            {
+                RenderHead(builder);
+            }
+
+            RenderBody(builder);
+            RenderFoot(builder);
+
+            builder.CloseElement();
+            builder.CloseElement();
+
+            if (Paging && PagerPosition.HasFlag(PagerPosition.Bottom))
+            {
+                RenderPager(builder, 200, captureBottomPager ??= p => bottomPager = (RadzenPager)p);
+            }
+
+            if (ShowLoadingIndicator && IsLoading)
+            {
+                RenderLoading(builder);
+            }
+
+            builder.CloseElement();
+        }
+
+        // The scrim and the spinner RadzenDataGrid draws, in the elements its themes already style.
+        // Both are positioned against the nearest positioned ancestor, which in both grids is the outer
+        // .rz-datatable - so this covers the pagers as well as the table, exactly as it does there.
+        //
+        // Drawn from IsLoading, which the grid maintains for its own asynchronous loads, rather than
+        // from a parameter the application has to keep in step. RadzenDataGrid needs IsLoading passed
+        // in; here there is nothing to pass, and nothing to forget to reset on the failure path.
+        void RenderLoading(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(210, "div");
+            builder.AddAttribute(211, "class", "rz-datatable-loading");
+            builder.CloseElement();
+
+            builder.OpenElement(212, "div");
+            builder.AddAttribute(213, "class", "rz-datatable-loading-content");
+
+            if (LoadingTemplate is { } loadingTemplate)
+            {
+                builder.AddContent(214, loadingTemplate);
+            }
+            else
+            {
+                builder.OpenElement(215, "i");
+                builder.AddAttribute(216, "class", "notranslate rzi-circle-o-notch");
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+
+        // A sequence number identifies a position in the source, and the numbers a region writes must
+        // ascend in the order it writes them - the top pager's band therefore sits below the table's,
+        // and the bottom pager's above everything the table emits. They descended before, which the
+        // diff copes with by tearing the table down and rebuilding it whenever the pager appears.
+        Action<object>? captureTopPager;
+        Action<object>? captureBottomPager;
+
+        // The reference is captured because RadzenPager keeps its own page offset and offers no
+        // parameter to set it: the grid has to put it back when something other than the pager itself
+        // moves the page.
+        void RenderPager(RenderTreeBuilder builder, int sequence, Action<object> capture)
+        {
+            builder.OpenComponent<RadzenPager>(sequence);
+            builder.AddAttribute(sequence + 1, nameof(RadzenPager.Count), TotalCount());
+            builder.AddAttribute(sequence + 2, nameof(RadzenPager.PageSize), pageSize);
+            builder.AddAttribute(sequence + 3, nameof(RadzenPager.PageNumbersCount), PageNumbersCount);
+            builder.AddAttribute(sequence + 4, nameof(RadzenPager.HorizontalAlign), PagerHorizontalAlign);
+            builder.AddAttribute(sequence + 5, nameof(RadzenPager.AlwaysVisible), PagerAlwaysVisible);
+            builder.AddAttribute(sequence + 6, nameof(RadzenPager.ShowPagingSummary), ShowPagingSummary);
+            builder.AddAttribute(sequence + 7, nameof(RadzenPager.PageChanged),
+                EventCallback.Factory.Create<PagerEventArgs>(this, OnPageChanged));
+
+            if (PageSizeOptions is not null)
+            {
+                builder.AddAttribute(sequence + 8, nameof(RadzenPager.PageSizeOptions), PageSizeOptions);
+                builder.AddAttribute(sequence + 9, nameof(RadzenPager.PageSizeChanged),
+                    EventCallback.Factory.Create<int>(this, OnPageSizeChanged));
+            }
+
+            builder.AddAttribute(sequence + 10, nameof(RadzenPager.Density), Density);
+            builder.AddComponentReferenceCapture(sequence + 11, capture);
+            builder.CloseComponent();
+        }
+
+        // The picker: one drop-down above the table, in RadzenDataGrid's own wrapper elements so the
+        // themes style it unchanged.
+        //
+        // Its root frame is numbered 5 because it is written first among the grid's children, and the
+        // numbers a run is written in have to ascend - so sitting before the top pager's 10 means a
+        // number below it, not above everything else. Everything inside keeps the 700 band: those are
+        // nested runs, diffed against each other and never against this one.
+        //
+        // RadzenDropDown in Multiple mode already draws a checkbox per item with a select-all and an
+        // optional filter box, which is the whole control - the same reasoning as the check-box-list
+        // filter, and the reason picking costs a drop-down rather than a popup of the grid's own.
+        void RenderColumnPicker(RenderTreeBuilder builder)
+        {
+            RefreshPickable();
+
+            builder.OpenElement(5, "div");
+            builder.AddAttribute(701, "class", "rz-group-header");
+            builder.OpenElement(702, "div");
+            builder.AddAttribute(703, "class", "rz-column-picker");
+
+            builder.OpenComponent<RadzenDropDown<IEnumerable<object>>>(704);
+            builder.AddAttribute(705, nameof(RadzenDropDown<IEnumerable<object>>.Data), pickable);
+            builder.AddAttribute(706, nameof(RadzenDropDown<IEnumerable<object>>.Multiple), true);
+            builder.AddAttribute(707, nameof(RadzenDropDown<IEnumerable<object>>.TextProperty),
+                nameof(ColumnBase<TItem>.PickerTitle));
+            builder.AddAttribute(708, nameof(RadzenDropDown<IEnumerable<object>>.AllowSelectAll), AllowPickAllColumns);
+            builder.AddAttribute(709, nameof(RadzenDropDown<IEnumerable<object>>.SelectAllText), AllColumnsText);
+            builder.AddAttribute(710, nameof(RadzenDropDown<IEnumerable<object>>.SelectedItemsText), ColumnsShowingText);
+            builder.AddAttribute(711, nameof(RadzenDropDown<IEnumerable<object>>.MaxSelectedLabels), ColumnsPickerMaxSelectedLabels);
+            builder.AddAttribute(712, nameof(RadzenDropDown<IEnumerable<object>>.Placeholder), ColumnsText);
+            builder.AddAttribute(713, nameof(RadzenDropDown<IEnumerable<object>>.AllowFiltering), ColumnsPickerAllowFiltering);
+            builder.AddAttribute(714, nameof(RadzenDropDown<IEnumerable<object>>.FilterCaseSensitivity),
+                FilterCaseSensitivity.CaseInsensitive);
+            builder.AddAttribute(715, nameof(RadzenDropDown<IEnumerable<object>>.Value), picked);
+            builder.AddAttribute(716, nameof(RadzenDropDown<IEnumerable<object>>.Change),
+                EventCallback.Factory.Create<object>(this, OnColumnsPicked));
+
+            // Built per render rather than held, and the delegate above with it. Holding either would
+            // save one small allocation per grid render - nothing, beside the per-row costs this grid
+            // exists to remove - and buys a label that keeps announcing the culture the page was first
+            // drawn in. Blazor re-renders a child whenever its parent draws it, so a held parameter
+            // would not have saved the drop-down a render either.
+            builder.AddAttribute(717, nameof(RadzenDropDown<IEnumerable<object>>.InputAttributes),
+                new Dictionary<string, object> { ["aria-label"] = SelectVisibleColumnsAriaLabel });
+            builder.CloseComponent();
+
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        // Rebuilt rather than kept in step by hand: a column can register or go at any render, and a
+        // list that only grew would offer a column that no longer exists.
+        void RefreshPickable()
+        {
+            pickable.Clear();
+            picked.Clear();
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.Pickable)
+                {
+                    continue;
+                }
+
+                pickable.Add(column);
+
+                if (column.IsVisible)
+                {
+                    picked.Add(column);
+                }
+            }
+        }
+
+        async Task OnColumnsPicked(object value)
+        {
+            // A set rather than a scan per column: the picker on a wide grid is the one place this could
+            // be quadratic, and it costs one small allocation on an event a user raises by hand.
+            var chosen = new HashSet<object>();
+
+            if (value is IEnumerable<object> selection)
+            {
+                foreach (var column in selection)
+                {
+                    chosen.Add(column);
+                }
+            }
+
+            // Only the pickable columns are told. A column the picker never offered - Pickable="false" -
+            // keeps whatever the markup said, rather than being hidden by its absence from the list.
+            for (var i = 0; i < pickable.Count; i++)
+            {
+                pickable[i].SetPicked(chosen.Contains(pickable[i]));
+            }
+
+            RefreshPickable();
+
+            if (PickedColumnsChanged.HasDelegate)
+            {
+                await PickedColumnsChanged.InvokeAsync(VisibleColumnsPicked()).ConfigureAwait(false);
+            }
+
+            // Through the same funnel as every other user-driven change, so a grid persisting settings
+            // stores the new visibility without the picker knowing anything about settings.
+            await RefreshAsync().ConfigureAwait(false);
+        }
+
+        List<ColumnBase<TItem>> VisibleColumnsPicked()
+        {
+            var chosen = new List<ColumnBase<TItem>>(pickable.Count);
+
+            for (var i = 0; i < pickable.Count; i++)
+            {
+                if (pickable[i].IsVisible)
+                {
+                    chosen.Add(pickable[i]);
+                }
+            }
+
+            return chosen;
+        }
+
+        // Widths live here and nowhere else. A width on every td is a frame per cell; one col per column
+        // is a frame per column, and the browser applies it to the whole column either way. Written only
+        // when some column actually has a width, so a grid that sets none pays nothing for the element.
+        void RenderColumnGroup(RenderTreeBuilder builder)
+        {
+            var any = false;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                if (!string.IsNullOrEmpty(visibleColumns[i].EffectiveWidth ?? ColumnWidth))
+                {
+                    any = true;
+
+                    break;
+                }
+            }
+
+            // Without a colgroup a resize has nothing to write a width to, so switching resize on is
+            // itself a reason to emit one even when no column declares a width. An auto-fit writes to
+            // the same elements, and a grid that fits is exactly a grid whose columns declare nothing.
+            if (!any && !AllowColumnResize && !AutoFitEnabled)
+            {
+                return;
+            }
+
+            builder.OpenElement(27, "colgroup");
+
+            // The toggle column is a td in every row but has no column of its own here, so without a col
+            // standing in for it every width below lands one column to the left - the toggle takes the
+            // first column's width, the first column takes the second's, and the last column gets
+            // whatever is left. Bare, so the theme's own rz-col-icon width still applies.
+            if (ExpandColumn)
+            {
+                builder.OpenElement(31, "col");
+                builder.CloseElement();
+            }
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                builder.OpenElement(28, "col");
+
+                // The id is what the resize script finds the column by, so it is emitted only when
+                // something is going to look for it.
+                if (AllowColumnResize)
+                {
+                    builder.AddAttribute(29, "id", ColumnElementIds(i).Col);
+                }
+
+                // The column an auto-fit left bare takes what the fitted ones did not, which under
+                // table-layout:fixed is what a col with no width means. It has to be skipped here
+                // rather than merely left without a fitted width of its own: the grid's ColumnWidth
+                // would otherwise come back and give it one.
+                if (!ReferenceEquals(column, bareColumn)
+                    && column.ColStyle(column.EffectiveWidth ?? ColumnWidth) is { } style)
+                {
+                    builder.AddAttribute(30, "style", style);
+                }
+
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+
+        // Composed per render, not per row, and only when something is off the default - so the ordinary
+        // grid hands the same literal back every time.
+        string TableClass()
+        {
+            var striped = AllowAlternatingRows ? " rz-grid-table-striped" : null;
+            var lines = GridLines switch
+            {
+                DataGridGridLines.Both => " rz-grid-gridlines-both",
+                DataGridGridLines.None => " rz-grid-gridlines-none",
+                DataGridGridLines.Horizontal => " rz-grid-gridlines-horizontal",
+                DataGridGridLines.Vertical => " rz-grid-gridlines-vertical",
+                _ => null,
+            };
+
+            if (striped is not null && lines is null)
+            {
+                return "rz-grid-table rz-grid-table-fixed rz-grid-table-striped";
+            }
+
+            if (striped is null && lines is null)
+            {
+                return "rz-grid-table rz-grid-table-fixed";
+            }
+
+            return "rz-grid-table rz-grid-table-fixed" + striped + lines;
+        }
+
+        // Drawn only when a visible column asks for it, so a grid with no footer emits no tfoot. Per
+        // column and once per render, whatever the row count - the cost of a footer is whatever the
+        // templates in it do, not the row itself.
+        void RenderFoot(RenderTreeBuilder builder)
+        {
+            var any = false;
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                if (visibleColumns[i].FooterTemplate is not null)
+                {
+                    any = true;
+
+                    break;
+                }
+            }
+
+            // Only a declared footer draws one. The colgroup above has a second reason to exist - a
+            // resize needs somewhere to write a width - and that condition was copied down here with
+            // it, which gave every resizable grid an empty footer. The theme makes tfoot sticky at the
+            // bottom with a background, so it was a grey bar pinned over the rows.
+            if (!any)
+            {
+                return;
+            }
+
+            builder.OpenElement(180, "tfoot");
+            builder.AddAttribute(181, "role", "rowgroup");
+            builder.AddAttribute(182, "class", "rz-datatable-tfoot");
+            builder.OpenElement(183, "tr");
+            builder.AddAttribute(184, "role", "row");
+
+            RenderExpandSpacer(builder, 179, "td");
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                builder.OpenElement(185, "td");
+                builder.AddAttribute(186, "role", "gridcell");
+                builder.AddAttribute(187, "scope", "col");
+
+                if (column.FooterCellClass is { } footerCellClass)
+                {
+                    builder.AddAttribute(188, "class", footerCellClass);
+                }
+
+                if (column.FooterCellStyle is { } footerStyle)
+                {
+                    builder.AddAttribute(189, "style", footerStyle);
+                }
+
+                // Last of the td's attributes and numbered past them, so the run stays ascending and a
+                // handler can still override any of them - the same shape as the body cell's hook. The
+                // span below opens the children's run at 190, which is diffed separately.
+                if (FooterCellRender is { } footerCellRender)
+                {
+                    var args = CellRenderArgs(default, column);
+
+                    footerCellRender(args);
+
+                    if (args.Written is { } written)
+                    {
+                        builder.AddMultipleAttributes(193, written);
+                    }
+                }
+
+                // The span is written for every column, with or without a template: the theme's footer
+                // padding hangs off it, and a bare td renders a shorter cell beside its neighbours.
+                builder.OpenElement(190, "span");
+                builder.AddAttribute(191, "class", "rz-column-footer");
+
+                if (column.FooterTemplate is { } footerTemplate)
+                {
+                    builder.AddContent(192, footerTemplate(column));
+                }
+
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        // The filter and footer rows only reserve the toggle column's space. Written once so the three
+        // rows that have to agree on it cannot drift: a row short of a cell puts every column after it
+        // under the wrong header.
+        void RenderExpandSpacer(RenderTreeBuilder builder, int sequence, string element)
+        {
+            if (!ExpandColumn)
+            {
+                return;
+            }
+
+            builder.OpenRegion(sequence);
+            builder.OpenElement(0, element);
+            builder.AddAttribute(1, "class", ToggleFrozenClass is { } frozenSpacer
+                ? "rz-col-icon " + frozenSpacer
+                : "rz-col-icon");
+
+            // The filter row and the footer stack against different neighbours, so each takes its own
+            // raise - the same split the frozen columns beside them already make.
+            var spacerStyle = element == "th" ? ToggleFrozenHeaderStyle : ToggleFrozenFooterStyle;
+
+            if (spacerStyle is not null)
+            {
+                builder.AddAttribute(2, "style", spacerStyle);
+            }
+
+            if (NumbersToggle)
+            {
+                builder.AddAttribute(3, "aria-colindex", AriaToggleColIndex);
+            }
+
+            builder.CloseElement();
+            builder.CloseRegion();
+        }
+
+        void RenderHead(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(30, "thead");
+            builder.AddAttribute(31, "role", "rowgroup");
+            builder.OpenElement(32, "tr");
+            builder.AddAttribute(33, "role", "row");
+
+            // The header is a row of the grid, so it is numbered with the rest of them. 302 rather than
+            // 34, and the rule behind that is narrower than it looks: an element's attributes are
+            // diffed against each other and its children against each other, in two separate passes -
+            // RenderTreeDiffBuilder finds where the attributes end and walks only that range - so what
+            // has to ascend is each run on its own. An attribute numbered above a child is nothing.
+            // Two attributes out of order are a dropped fast path.
+            if (RowsAreCounted)
+            {
+                builder.AddAttribute(302, "aria-rowindex", "1");
+            }
+
+            // A region, not a bare cell, and not for the numbering: the conditional th and the first th
+            // of the loop below are both the tr's first child, so without one they would claim the same
+            // sequence and the diff would read a switched-on toggle column as a changed header. A region
+            // opens a space of its own, and costs one frame per render.
+            if (ExpandColumn)
+            {
+                builder.OpenRegion(34);
+                builder.OpenElement(0, "th");
+                builder.AddAttribute(1, "role", "columnheader");
+                builder.AddAttribute(2, "class", ToggleFrozenClass is { } frozenToggleHeader
+                    ? "rz-col-icon rz-unselectable-text " + frozenToggleHeader
+                    : "rz-col-icon rz-unselectable-text");
+                builder.AddAttribute(3, "scope", "col");
+
+                if (ToggleFrozenHeaderStyle is { } toggleHeaderStyle)
+                {
+                    builder.AddAttribute(6, "style", toggleHeaderStyle);
+                }
+
+                if (NumbersToggle)
+                {
+                    builder.AddAttribute(7, "aria-colindex", AriaToggleColIndex);
+                }
+
+                builder.OpenElement(4, "span");
+                builder.AddAttribute(5, "class", "rz-column-title");
+                builder.CloseElement();
+                builder.CloseElement();
+                builder.CloseRegion();
+            }
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+                var sortable = AllowSorting && column.CanSort;
+                var sorted = SortIndexOf(column);
+
+                builder.OpenElement(34, "th");
+                builder.AddAttribute(35, "role", "columnheader");
+                builder.AddAttribute(36, "scope", "col");
+
+                var resizable = AllowColumnResize && column.Resizable;
+
+                // Both halves of the drop, and neither exists unless the grid reorders. The mouseup is
+                // per header rather than per cell, so it is in resize's league rather than row click's.
+                //
+                // On the th, not on the padding div: a drop has to count anywhere on the header, and the
+                // touch path resolves the header it landed on by this attribute.
+                if (AllowColumnReorder)
+                {
+                    var dropIndex = i;
+
+                    builder.AddAttribute(37, "data-column-index", dropIndex);
+                    builder.AddAttribute(38, "onmouseup", EventCallback.Factory.Create<MouseEventArgs>(
+                        this, _ => EndColumnReorder(dropIndex)));
+                }
+
+                // rz-resizable-column is what gives the th position:relative, and the handle below is
+                // absolutely positioned against it. Added only when there is a handle to contain.
+                var headerClass = (sortable, resizable) switch
+                {
+                    (true, true) => "rz-unselectable-text rz-sortable-column rz-resizable-column",
+                    (true, false) => "rz-unselectable-text rz-sortable-column",
+                    (false, true) => "rz-unselectable-text rz-resizable-column",
+                    (false, false) => "rz-unselectable-text",
+                };
+
+                // The header has to be pinned along with the body, or a frozen column's title scrolls
+                // away from its own cells. What that costs the class is the column's to fold; what the
+                // header is in the first place is this grid's, so it goes in.
+                builder.AddAttribute(53, "class", column.HeaderCellClass(headerClass));
+
+                // Only while sorting is offered. A grid with AllowSorting off still applies a sort it
+                // was given - the data is ordered and reordering it would be the surprise - but it must
+                // not advertise the column as sorted-by-you when the header is inert: aria-sort on a
+                // header nothing can activate tells a screen reader about a control that is not there.
+                if (sortable && sorted >= 0)
+                {
+                    builder.AddAttribute(54, "aria-sort",
+                        sorts[sorted].Descending ? "descending" : "ascending");
+                }
+
+                if (column.HeaderCellStyle is { } headerStyle)
+                {
+                    builder.AddAttribute(55, "style", headerStyle);
+                }
+
+                // Last but one of this header's attributes, and numbered past everything before it.
+                // The whole run ascends now: the reorder pair moved down into the 37-38 gap the class
+                // and aria-sort left when they moved up to 53-54, and the hook below closes it at 304.
+                if (NumbersCell(i))
+                {
+                    builder.AddAttribute(303, "aria-colindex", AriaColIndex(i));
+                }
+
+                if (HeaderCellRender is { } headerCellRender)
+                {
+                    var args = CellRenderArgs(default, column);
+
+                    headerCellRender(args);
+
+                    if (args.Written is { } written)
+                    {
+                        builder.AddMultipleAttributes(304, written);
+                    }
+                }
+
+                // The theme gives th padding:0 and hangs the header padding off a direct child div, so
+                // this wrapper is load-bearing: without it the header row renders shorter than
+                // RadzenDataGrid's. It is per column, not per row, so it costs nothing at scale.
+                builder.OpenElement(39, "div");
+
+                if (sortable)
+                {
+                    builder.AddAttribute(40, "onclick",
+                        EventCallback.Factory.Create<MouseEventArgs>(this, _ => SortBy(column)));
+                }
+
+                // The grab handle, a child of the header's padding div and a sibling of the title span.
+                // That level is load-bearing: the script resolves the header it is dragging as this
+                // element's parentNode.parentNode, so one level out clones the wrong element and one
+                // level in clones the title instead of the header.
+                if (AllowColumnReorder && column.Reorderable)
+                {
+                    var dragIndex = i;
+
+                    builder.OpenElement(63, "span");
+                    builder.AddAttribute(64, "class", "rz-column-drag");
+                    builder.AddAttribute(65, "id", ColumnElementIds(dragIndex).Drag);
+                    builder.AddAttribute(66, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(
+                        this, _ => StartColumnReorder(dragIndex)));
+                    builder.AddEventPreventDefaultAttribute(67, "onmousedown", true);
+
+                    // The handle sits inside the header's click target, so picking a column up must not
+                    // also sort it - the same reason the resize handle stops its click.
+                    builder.AddEventStopPropagationAttribute(68, "onclick", true);
+                    builder.AddEventPreventDefaultAttribute(69, "onclick", true);
+                    builder.CloseElement();
+                }
+
+                builder.OpenElement(41, "span");
+                builder.AddAttribute(42, "class", "rz-column-title");
+                builder.OpenElement(43, "span");
+                builder.AddAttribute(44, "class", "rz-column-title-content rz-text-truncate");
+
+                // The template replaces the title text, not the wrapper: the theme hangs the header's
+                // truncation and spacing off these two spans, so content placed outside them loses both.
+                if (column.HeaderTemplate is { } headerTemplate)
+                {
+                    builder.AddContent(49, headerTemplate(column));
+                }
+                else
+                {
+                    builder.AddContent(45, column.HeaderText);
+                }
+
+                builder.CloseElement();
+
+                // The position in the sort, as RadzenDataGrid shows it - a RadzenBadge there, the markup
+                // that badge produces here, since a component per sorted header buys nothing this grid
+                // wants. One is not worth showing: the number only means anything against another.
+                if (sortable && sorted >= 0 && ShowMultiColumnSortingIndex && sorts.Count > 1)
+                {
+                    builder.OpenElement(46, "span");
+                    builder.AddAttribute(47, "class",
+                        "rz-badge rz-badge-info rz-variant-filled rz-shade-lighter rz-badge-pill");
+                    builder.AddContent(48, sorted + 1);
+                    builder.CloseElement();
+                }
+
+                // A sortable column carries the glyph whether or not it is sorted. The theme reserves a
+                // fixed width for it, reveals a transparent one on hover, and lays the title out as a
+                // flex line beside it - so a glyph that appears only once sorted is inserted into that
+                // line by the first click, and the title re-truncates and the header jumps.
+                if (sortable)
+                {
+                    builder.OpenElement(50, "span");
+                    builder.AddAttribute(51, "class", sorted < 0
+                        ? "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort"
+                        : sorts[sorted].Descending
+                            // rzi-sort as well as the direction class, which is what RadzenDataGrid
+                            // emits. The direction rule wins for both glyph and colour either way, but
+                            // matching the class list exactly is what keeps a custom theme's rules
+                            // applying to both.
+                            ? "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-desc"
+                            : "notranslate rz-sortable-column-icon rzi-grid-sort rzi-sort rzi-sort-asc");
+                    builder.CloseElement();
+                }
+
+                builder.CloseElement();
+
+                // The drag handle, a sibling of the title span inside the header's padding div - which is
+                // where RadzenDataGrid puts it, and the level the theme's positioning assumes.
+                //
+                // Nothing here exists unless the grid allows resizing: no element, and no delegates. A
+                // pair of EventCallbacks per column would otherwise be rebuilt on every render of every
+                // grid that never resizes anything.
+                if (resizable)
+                {
+                    var index = i;
+
+                    builder.OpenElement(53, "div");
+                    builder.AddAttribute(54, "class", "rz-column-resizer");
+                    builder.AddAttribute(55, "id", ColumnElementIds(index).Resizer);
+                    // Only mousedown. The script registers its own document-level mousemove, mouseup,
+                    // touchmove and touchend when the drag starts, so a handler here for the end of it
+                    // would be a second EventCallback per column that never decides anything.
+                    builder.AddAttribute(56, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(
+                        this, args => StartColumnResize(index, args.ClientX)));
+                    builder.AddEventPreventDefaultAttribute(57, "onmousedown", true);
+
+                    // Double-clicking the edge of a header to fit its column is the spreadsheet
+                    // convention, and RadzenSpreadsheet already reads it off this same handle. Only for
+                    // a grid that fits: a callback per column is what rule 3 is about.
+                    if (AutoFitEnabled)
+                    {
+                        builder.AddAttribute(58, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(
+                            this, () => AutoFitAsync(visibleColumns[index])));
+                    }
+
+                    // The handle sits inside the header's click target, and a drag that ends on it must
+                    // not also sort the column.
+                    builder.AddEventStopPropagationAttribute(59, "onclick", true);
+                    builder.AddEventPreventDefaultAttribute(60, "onclick", true);
+                    builder.AddContent(61, "\u00a0");
+                    builder.CloseElement();
+                }
+
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+
+            if (AllowFiltering)
+            {
+                RenderFilterRow(builder);
+            }
+
+            builder.CloseElement();
+        }
+
+        // Matches RadzenDataGrid's filter row exactly: a second header row whose th holds
+        // div.rz-cell-filter > div.rz-cell-filter-content > span.rz-cell-filter-label directly, with no
+        // title wrapper. The theme's th padding hangs off that first div, as it does off the title one.
+        void RenderFilterRow(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(50, "tr");
+            builder.AddAttribute(51, "role", "row");
+
+            // The second row of the header, and so the second row of the grid.
+            if (RowsAreCounted)
+            {
+                builder.AddAttribute(304, "aria-rowindex", "2");
+            }
+
+            RenderExpandSpacer(builder, 53, "th");
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                builder.OpenElement(52, "th");
+                builder.AddAttribute(53, "role", "columnheader");
+                builder.AddAttribute(54, "scope", "col");
+
+                // The filter row is a second row of the same header, so a frozen column has to pin here
+                // too - otherwise its title holds still and the box you type in slides out from under it.
+                builder.AddAttribute(55, "class", column.FilterCellClass);
+
+                // The filter row holds real inputs that Tab already reaches, so it is not in the arrow
+                // space: putting it there would make every keystroke decide whether it is navigation or
+                // typing. It swallows keydown instead, which is what stops the grid's own handler - one
+                // element up - reading a left arrow in a filter box as a move.
+                if (AllowKeyboardNavigation)
+                {
+                    builder.AddEventStopPropagationAttribute(56, "onkeydown", true);
+                }
+
+                if (column.FilterCellStyle is { } filterStyle)
+                {
+                    builder.AddAttribute(57, "style", filterStyle);
+                }
+
+                // After the rest, and numbered past them: the attribute diff walks one run and wants it
+                // ascending, and everything above may or may not have been written.
+                if (NumbersCell(i))
+                {
+                    builder.AddAttribute(71, "aria-colindex", AriaColIndex(i));
+                }
+
+                if (column.CanFilter || column.FilterTemplate is not null)
+                {
+                    builder.OpenElement(58, "div");
+                    builder.AddAttribute(59, "class", "rz-cell-filter");
+                    builder.OpenElement(60, "div");
+                    builder.AddAttribute(61, "class", "rz-cell-filter-content");
+
+                    if (column.FilterTemplate is not null)
+                    {
+                        builder.AddContent(62, column.FilterTemplate(column));
+                    }
+                    else if (FilterModeOf(column) == FilterMode.CheckBoxList)
+                    {
+                        RenderFilterList(builder, column);
+                    }
+                    else
+                    {
+                        RenderFilterInput(builder, column);
+                    }
+
+                    builder.CloseElement();
+                    builder.CloseElement();
+                }
+
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+
+        // A multi-select of the column's distinct values, filtering with In. RadzenDropDown in Multiple
+        // mode already draws a check box per item, so this is the check-box list without a popup, a
+        // toggle button or an apply step of its own.
+        void RenderFilterList(RenderTreeBuilder builder, ColumnBase<TItem> column)
+        {
+            builder.OpenComponent<RadzenDropDown<IEnumerable>>(80);
+            builder.AddAttribute(81, nameof(RadzenDropDown<IEnumerable>.Data), FilterLookup(column));
+            builder.AddAttribute(82, nameof(RadzenDropDown<IEnumerable>.Multiple), true);
+            builder.AddAttribute(83, nameof(RadzenDropDown<IEnumerable>.AllowClear), true);
+            builder.AddAttribute(84, nameof(RadzenDropDown<IEnumerable>.AllowFiltering), true);
+            builder.AddAttribute(85, nameof(RadzenDropDown<IEnumerable>.FilterCaseSensitivity),
+                FilterCaseSensitivity.CaseInsensitive);
+            builder.AddAttribute(86, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
+            builder.AddAttribute(87, nameof(RadzenDropDown<IEnumerable>.Value), column.FilterSelection);
+            builder.AddAttribute(88, nameof(RadzenDropDown<IEnumerable>.Change),
+                EventCallback.Factory.Create<object>(this, value => OnFilterSelection(column, value)));
+            builder.CloseComponent();
+        }
+
+        void RenderFilterInput(RenderTreeBuilder builder, ColumnBase<TItem> column)
+        {
+            builder.OpenElement(61, "span");
+            builder.AddAttribute(62, "class", "rz-cell-filter-label");
+            builder.AddAttribute(63, "style", "height:35px; width:100%;");
+
+            builder.OpenElement(64, "input");
+            builder.AddAttribute(65, "type", "text");
+            builder.AddAttribute(66, "autocomplete", "off");
+            builder.AddAttribute(67, "class", "rz-textbox");
+            builder.AddAttribute(68, "style", "width: 100%;");
+            builder.AddAttribute(69, "aria-label",
+                column.HeaderText + FilterValueAriaLabel + column.CurrentFilterValue);
+            builder.AddAttribute(70, "value", column.CurrentFilterValue);
+
+            // onchange is bound whether or not the filter applies as you type, because it is what a
+            // blur and an Enter raise. Typing adds oninput on top of it rather than replacing it, so
+            // turning the feature on cannot cost the box the event that commits it.
+            builder.AddAttribute(71, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
+                value => OnFilterCommitted(column, value), column.CurrentFilterValue?.ToString()));
+
+            if (FilterAsYouType)
+            {
+                // Not a binder, and not the component as receiver. A keystroke that is going to be
+                // superseded must not redraw a thousand rows to show the same thing: measured, three
+                // keystrokes into a bound box cost three full renders before the pause even ended,
+                // which is most of what the pause exists to avoid. The non-rendering receiver drops
+                // them; the render that matters comes from the reload the filter actually triggers.
+                // CreateBinder cannot carry it - it wraps the delegate, so the receiver is lost - and
+                // the box needs no binder anyway: the value attribute above already tracks the filter.
+                builder.AddAttribute(72, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this,
+                    NonRenderingHandler.Wrap<ChangeEventArgs>(
+                        args => OnFilterTyped(column, args.Value as string))));
+            }
+
+            builder.CloseElement();
+
+            if (column.HasFilter)
+            {
+                builder.OpenElement(73, "button");
+                builder.AddAttribute(74, "type", "button");
+                builder.AddAttribute(75, "tabindex", "-1");
+                builder.AddAttribute(76, "class", "notranslate rzi rz-cell-filter-clear");
+                builder.AddAttribute(77, "style", "position:absolute;inset-inline-end:10px;");
+                builder.AddAttribute(78, "aria-label", ClearFilterText);
+                builder.AddAttribute(79, "onclick",
+                    EventCallback.Factory.Create<MouseEventArgs>(this, _ => Filter(column, null)));
+                builder.AddContent(80, "close");
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+
+        // The toggle's name, resolved once for the whole body rather than once per row. Measured: at
+        // 1000 rows, a ResourceManager lookup per row cost 24 KB and 8% of the render - the one thing
+        // in this feature's a11y that was not free, and the reason it is a field rather than a property
+        // read in the loop. Refreshed here because every render arrives through this method, so a grid
+        // whose culture changes redraws with the new name; Virtualize's later windows reuse the string
+        // this render resolved, which is the same one they would have looked up.
+        string? togglerLabel;
+
+        // The selection as keys, worked out once for the render, and null when there is no key to work
+        // them out from - which is when selectionLookup below is what answers instead. The store is the
+        // same set every render; the field above is what says whether it holds this render's answer.
+        HashSet<object>? selectionKeys;
+        HashSet<object>? selectionStore;
+
+        /// <summary>
+        /// Reads the selection once per render so the per-row tick can be answered by key.
+        /// </summary>
+        /// <remarks>
+        /// The alternative was a comparer over the caller's collection, and it was built and measured
+        /// before this: <c>IEqualityComparer.GetHashCode</c> is handed the row and has to read its key,
+        /// and reading a value-typed key is a box - so the tick cost **46.9 KB** per render at 1000
+        /// rows, on top of the 23.5 KB <see cref="ItemKey" /> already costs. Probing a set of keys with
+        /// the key <c>RenderRow</c> has already computed for <c>SetKey</c> costs nothing per row; what
+        /// it costs is this pass over the selection, once.
+        /// <para>
+        /// Not cached against the <see cref="Selection" /> instance, deliberately. That identity is the
+        /// one §10 has four recorded participants in getting wrong, and here it would be worse than
+        /// usual: a caller who mutates the collection it handed in would keep a tick the grid can no
+        /// longer see is gone.
+        /// </para>
+        /// <para>
+        /// It is still a snapshot of one render, and <c>Virtualize</c> redraws its own rows on a scroll
+        /// without this running again - the same caveat the toggler label above carries. So between two
+        /// renders of the grid, a keyed tick answers from the keys read at the last one. A caller who
+        /// mutates the collection in place rather than publishing a new one sees that on scrolled rows;
+        /// the parameter's own documentation is that the grid renders from what it is given and never
+        /// writes to it, which is the contract that makes this a non-question.
+        /// </para>
+        /// </remarks>
+        void ReadSelection()
+        {
+            selectionKeys = null;
+
+            if (ItemKey is not { } key || Selection is not { Count: > 0 } chosen)
+            {
+                return;
+            }
+
+            // Refilled rather than rebuilt: the set is a grid's, not a render's, and Clear keeps the
+            // buckets - so a keyed grid with a selection allocates one of these ever, and what it pays
+            // per render is only the keys themselves.
+            var keys = selectionStore ??= new HashSet<object>(chosen.Count);
+
+            keys.Clear();
+
+            foreach (var row in chosen)
+            {
+                if (key(row) is { } rowKey)
+                {
+                    keys.Add(rowKey);
+                }
+            }
+
+            selectionKeys = keys;
+        }
+
+        void RenderBody(RenderTreeBuilder builder)
+        {
+            togglerLabel = ExpandColumn ? ExpandChildItemAriaLabel : null;
+            ReadSelection();
+
+            builder.OpenElement(100, "tbody");
+            builder.AddAttribute(101, "role", "rowgroup");
+
+            // Named once a listener is going to resolve rows inside it, and named from then on. Same
+            // latch as the view's id above, and this is the case that showed why it is needed: turning
+            // virtualization on stops the grid delegating, so an id tied to that condition disappears
+            // on the very render before the detach that needs it - leaving the listener bound and
+            // answering every click a second time beside the per-cell handlers that just replaced it.
+            // That is the sequence the comment on SyncClicksAsync has always said must not happen, and
+            // until now the id was what made it happen.
+            //
+            // A grid that never delegates a click is never named, so nothing is paid for it being off.
+            bodyIsNamed |= ClicksAreLive && !AllowVirtualization;
+
+            if (bodyIsNamed)
+            {
+                builder.AddAttribute(102, "id", BodyElementId);
+            }
+
+            if (AllowVirtualization)
+            {
+                RenderVirtualizedRows(builder);
+            }
+            else
+            {
+                var index = 0;
+
+                foreach (var item in View())
+                {
+                    RenderRow(builder, item, index++);
+                }
+
+                // What the keyboard cursor may not go past. Recorded here because this is the only place
+                // that knows it without walking the view a second time.
+                renderedRows = index;
+
+                if (index == 0)
+                {
+                    RenderEmpty(builder);
+                }
+            }
+
+            builder.CloseElement();
+        }
+
+        // rowIndex is the row's position - in the view for the inline path, in the whole data set under
+        // virtualization, which is what the window Virtualize was served is offset by. It is -1 when
+        // there is none to give, which is a virtualized grid that is not navigating: Virtualize hands
+        // its ChildContent an item and no position, and finding one costs a walk of the window that only
+        // the keyboard cursor needs. That, rather than the cost, is why delegated clicks stay off there.
+        void RenderRow(RenderTreeBuilder builder, TItem item, int rowIndex)
+        {
+            // One key for the row, and its only one: the tick reads it, the detail lookup reads it, and
+            // SetKey below is written from it rather than calling ItemKey a second time.
+            var rowKey = RowKeyOf(item);
+
+            // By key where the row has one, and as itself where it does not - the same fallback Holds
+            // makes below and RowIdentity makes for the sets. Without the second arm a keyed grid
+            // answered a flat "not selected" for every row whose key is null, which is the shape the
+            // fallback exists for: a lookup row's id legitimately is null, and it can be selected.
+            var selected = rowKey is not null && selectionKeys is not null
+                ? selectionKeys.Contains(rowKey)
+                : Selection is { } chosen && chosen.Contains(item);
+
+            // One lookup for the row, read by the toggle and by the detail row below it. Costs nothing
+            // when no Template is set, since neither store is allocated.
+            var expanded = Template is not null && Holds(item, rowKey);
+
+            builder.OpenElement(120, "tr");
+            builder.AddAttribute(121, "role", "row");
+
+            // Set on the tr, before its children: SetKey applies to the element most recently opened.
+            // From the key read above rather than by calling ItemKey again, which would be a second box
+            // per row for a value-typed key.
+            if (ItemKey is not null)
+            {
+                builder.SetKey(rowKey);
+            }
+
+            // No alternating class: rz-grid-table-striped stripes with :nth-child in CSS.
+            builder.AddAttribute(122, "class", RowClassFor(item, selected));
+
+            if (selected)
+            {
+                builder.AddAttribute(123, "aria-selected", "true");
+            }
+
+            if (RowStyle is { } rowStyle && rowStyle(item) is { } style)
+            {
+                builder.AddAttribute(124, "style", style);
+            }
+
+            var delegated = ClicksAreDelegated;
+
+            // What the listener resolves the row by. No allocation for the row counts a page ever
+            // reaches - the index strings are cached - but the frame is not free: this attribute alone
+            // is +16 KB at a thousand rows, which is most of what a row click costs. Written only where
+            // something needs it, which RowsAreAddressed decides and explains.
+            if (rowIndex >= 0 && RowsAreAddressed)
+            {
+                builder.AddAttribute(125, "data-r", IndexString(rowIndex));
+            }
+
+            // A per-row delegate costs about 310 bytes, so it is only bound when something listens and
+            // the listener that would have answered instead did not attach.
+            if (!delegated)
+            {
+                if (RowClick.HasDelegate || SelectsOnRowClick)
+                {
+                    builder.AddAttribute(126, "onclick", RowClickHandler(item));
+                }
+
+                if (RowDoubleClick.HasDelegate)
+                {
+                    builder.AddAttribute(127, "ondblclick", RowDoubleClickHandler(item));
+                }
+            }
+
+            // Where this row is in the data set rather than in the DOM, which is the whole point of it:
+            // the DOM holds a page or a scrolled window. One frame per row - about a tenth of what a
+            // frozen column costs - and none at all on a grid that renders every row. Last of the row's
+            // attributes, so the run the diff walks stays ascending whichever of the above were written.
+            if (rowIndex >= 0 && RowsAreCounted)
+            {
+                builder.AddAttribute(128, "aria-rowindex", AriaRowIndex(rowIndex));
+            }
+
+            var tooltips = ShowCellDataAsTooltip;
+            var cellClick = !delegated && CellClick.HasDelegate;
+            var cellContextMenu = !delegated && CellContextMenu.HasDelegate;
+
+            // Read once for the row rather than per cell, on the same reasoning as the two above: an
+            // unset hook has to cost a null check, not a property access times five columns.
+            var cellRender = CellRender;
+
+            // The toggle. A delegate per row, which is what makes this the one expensive feature on the
+            // list - but only for a grid that sets a Template, and nothing above reaches it otherwise.
+            if (ExpandColumn)
+            {
+                builder.OpenElement(130, "td");
+                builder.AddAttribute(131, "role", "gridcell");
+                builder.AddAttribute(132, "class", ToggleFrozenClass is { } frozenToggle
+                    ? "rz-col-icon " + frozenToggle
+                    : "rz-col-icon");
+
+                if (ToggleFrozenCellStyle is { } toggleStyle)
+                {
+                    builder.AddAttribute(133, "style", toggleStyle);
+                }
+
+                if (NumbersToggle)
+                {
+                    builder.AddAttribute(307, "aria-colindex", AriaToggleColIndex);
+                }
+                builder.OpenElement(135, "button");
+                builder.AddAttribute(136, "type", "button");
+                builder.AddAttribute(137, "tabindex", "-1");
+                builder.AddAttribute(138, "aria-expanded", expanded ? "true" : "false");
+                builder.AddAttribute(139, "aria-label", togglerLabel);
+                builder.AddAttribute(140, "class",
+                    "rz-button rz-button-sm rz-button-icon-only rz-variant-text rz-base rz-shade-default");
+                if (delegated)
+                {
+                    // What the listener recognises the toggle by, and what makes it swallow the click
+                    // the way stopPropagation did. One constant attribute per row rather than a
+                    // delegate per row, which is what row detail used to cost to have.
+                    builder.AddAttribute(150, "data-toggle", "");
+                }
+                else
+                {
+                    builder.AddAttribute(141, "onclick", ToggleHandler(item));
+                    builder.AddEventStopPropagationAttribute(142, "onclick", true);
+                }
+
+                builder.OpenElement(143, "span");
+                builder.AddAttribute(144, "class", expanded
+                    ? "notranslate rz-row-toggler rzi-chevron-circle-down"
+                    : "rz-row-toggler rzi-chevron-circle-right");
+                builder.CloseElement();
+
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                builder.OpenElement(145, "td");
+                builder.AddAttribute(146, "role", "gridcell");
+
+                // rz-cell-data belongs on the span, not here: the theme's rules for it are all
+                // descendant selectors, and RadzenDataGrid leaves the td unclassed. Carrying it in
+                // both places is inert under the shipped themes but would apply a custom
+                // `.rz-cell-data { padding: ... }` twice.
+                if (column.BodyCellClass is { } cellClass)
+                {
+                    builder.AddAttribute(147, "class", cellClass);
+                }
+
+                // Per cell, so five times a per-row delegate at five columns. Bound only when something
+                // listens - the measured cost of binding these unconditionally is 296 B per cell.
+                if (cellClick)
+                {
+                    builder.AddAttribute(148, "onclick", CellClickHandler(item, column));
+                }
+
+                if (cellContextMenu)
+                {
+                    builder.AddAttribute(149, "oncontextmenu", CellContextMenuHandler(item, column));
+                }
+
+                // Memoized on the column, so this is a reference to the same string on every row, and
+                // null - no attribute at all - for a column that aligns left, bounds nothing and is not
+                // pinned to an edge.
+                if (column.BodyCellStyle is { } cellStyle)
+                {
+                    builder.AddAttribute(150, "style", cellStyle);
+                }
+
+                // A frame per cell, which is the shape the budget rules out - so it is written only
+                // where the picker has taken a column away and the browser can no longer count the
+                // rendered cells to reach the right answer. Here rather than beside role, because the
+                // attribute diff walks one run and wants it ascending, and the hook below has to stay
+                // last.
+                if (NumbersCell(i))
+                {
+                    builder.AddAttribute(151, "aria-colindex", AriaColIndex(i));
+                }
+
+                // Last of the td's attributes, so a handler can override any of them - which is the
+                // point of a render hook, and matches where RadzenDataGrid splats its own.
+                if (cellRender is not null)
+                {
+                    var args = CellRenderArgs(item, column);
+
+                    cellRender(args);
+
+                    if (args.Written is { } written)
+                    {
+                        // AddMultipleAttributes rather than a loop of AddAttribute, and the difference
+                        // is not style: the renderer only resolves duplicate attribute names on an
+                        // element this was called for. Writing the pairs by hand instead is 56 bytes a
+                        // cell cheaper - it avoids boxing the dictionary's enumerator - and silently
+                        // costs the hook the ability to override an attribute the grid wrote, which is
+                        // half of what a render hook is for. Measured at 274 KB per 1000 x 5; paid.
+                        builder.AddMultipleAttributes(160, written);
+                    }
+                }
+
+                // The title a narrow-screen theme shows once the table is stacked into cards. Constant
+                // strings, so it allocates nothing - but it is a span and a text frame per cell, which
+                // is why it is behind a flag rather than always emitted.
+                if (Responsive)
+                {
+                    builder.OpenElement(152, "span");
+                    builder.AddAttribute(153, "class", "rz-column-title");
+                    builder.AddContent(154, column.HeaderText);
+                    builder.CloseElement();
+                }
+
+                builder.OpenElement(155, "span");
+                builder.AddAttribute(156, "class", column.CellContentClass);
+
+                // The hover affordance for a truncated cell, and the most expensive thing on this list:
+                // an attribute per cell, and the cell's text derived a second time to fill it, since
+                // RenderCell writes into the builder rather than handing a string back. Opt-in for that
+                // reason - a column that wants it everywhere can use a TemplateColumn instead.
+                if (tooltips && column.CellTextOf(item) is { } text)
+                {
+                    builder.AddAttribute(157, "title", text);
+                }
+
+                column.RenderCell(builder, 34, item);
+                builder.CloseElement();
+
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+
+            // A row of its own beneath the data row, spanning every column including the toggle. Only
+            // for the rows actually expanded, so this is per expanded row rather than per row.
+            if (expanded)
+            {
+                builder.OpenElement(172, "tr");
+                builder.AddAttribute(173, "role", "row");
+                builder.AddAttribute(174, "class", "rz-expanded-row-content");
+
+                // Its parent's number rather than one of its own. A detail row is the row's content in
+                // a second tr because a table cannot nest one, and numbering it separately would push
+                // every row below it out of step with the data set - which is the one thing this
+                // attribute exists to keep true.
+                if (rowIndex >= 0 && RowsAreCounted)
+                {
+                    builder.AddAttribute(309, "aria-rowindex", AriaRowIndex(rowIndex));
+                }
+
+                builder.OpenElement(175, "td");
+                builder.AddAttribute(176, "role", "gridcell");
+                builder.AddAttribute(177, "colspan", visibleColumns.Count + (ExpandColumn ? 1 : 0));
+
+                builder.OpenElement(178, "div");
+                builder.AddAttribute(179, "class", "rz-expanded-row-template");
+                builder.AddAttribute(193, "style", "position:sticky");
+                builder.AddContent(194, Template!(item));
+                builder.CloseElement();
+
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+        }
+
+        // Held in its own method for the reason RowClickHandler is: a lambda capturing a local of
+        // RenderRow makes the compiler allocate that method's display class on entry, for every row,
+        // whether or not the branch that needs it runs.
+        EventCallback<MouseEventArgs> ToggleHandler(TItem item) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this, _ => ToggleRow(item));
+
+        // Composing the row's class costs a string per row unless the result is memoized, and a caller
+        // returning one of a handful of constants - which is what a "highlight the overdue ones" rule
+        // does - hits this on every row after the first. ReferenceEquals rather than string equality:
+        // a caller that builds a fresh string per row pays for it, and should not silently look free.
+        string? memoRowClass;
+        bool memoRowSelected;
+        string? memoRowComposed;
+
+        string RowClassFor(TItem item, bool selected)
+        {
+            var extra = RowClass?.Invoke(item);
+
+            if (string.IsNullOrEmpty(extra))
+            {
+                return selected ? "rz-data-row rz-state-highlight" : "rz-data-row";
+            }
+
+            if (ReferenceEquals(memoRowClass, extra) && memoRowSelected == selected)
+            {
+                return memoRowComposed!;
+            }
+
+            memoRowClass = extra;
+            memoRowSelected = selected;
+
+            return memoRowComposed = (selected ? "rz-data-row rz-state-highlight " : "rz-data-row ") + extra;
+        }
+
+        // The closure lives here rather than in RenderRow: a lambda capturing a local of RenderRow makes
+        // the compiler allocate that method's display class on entry, for every row, whether or not the
+        // branch that needs it is taken. Measured at 31 B/row - a fifth of the component's whole budget.
+        EventCallback<MouseEventArgs> RowClickHandler(TItem item) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this, _ => OnRowClick(item));
+
+        EventCallback<MouseEventArgs> RowDoubleClickHandler(TItem item) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this, _ => RowDoubleClick.InvokeAsync(item));
+
+        EventCallback<MouseEventArgs> CellClickHandler(TItem item, ColumnBase<TItem> column) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => CellClick.InvokeAsync(new FastGridCellEventArgs<TItem>(item, column)));
+
+        EventCallback<MouseEventArgs> CellContextMenuHandler(TItem item, ColumnBase<TItem> column) =>
+            EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => CellContextMenu.InvokeAsync(new FastGridCellEventArgs<TItem>(item, column)));
+
+        async Task OnRowClick(TItem item)
+        {
+            if (SelectsOnRowClick)
+            {
+                await SelectRow(item).ConfigureAwait(false);
+            }
+
+            await RowClick.InvokeAsync(item).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Applies a click to the selection and raises what changed. The grid computes the new selection
+        /// rather than writing to <see cref="Selection" />: a component that mutated the collection its
+        /// caller handed it would change state the caller never asked it to change, and a caller reading
+        /// the parameter back would see a different collection than the one it bound.
+        /// </summary>
+        async Task SelectRow(TItem item)
+        {
+            var current = Selection;
+
+            // Asked of a set this grid builds, not of the collection it was handed: that collection's
+            // comparer is its owner's, and over a re-materialising source the reference one it usually
+            // is answers "not selected" for a row that is - so the branch below added the row a second
+            // time, beside the instance already there, and published one id twice. Same fault §19
+            // measured in the drop-down, which reaches this method through its own selection.
+            //
+            // Only where there is a key to ask by. With none the identity *is* the instance, so the
+            // collection already answers this and a copy would be a set per click bought for nothing.
+            var selected = ItemKey is null
+                ? current is not null && current.Contains(item)
+                : Held(current).Contains(item);
+
+            List<TItem> next;
+
+            if (SelectionMode == DataGridSelectionMode.Single)
+            {
+                // Clicking the selected row again leaves it selected, as RadzenDataGrid does: single
+                // selection is a choice, and there is no way back to "nothing chosen" by clicking.
+                if (selected)
+                {
+                    return;
+                }
+
+                if (current is not null && RowDeselect.HasDelegate)
+                {
+                    foreach (var previous in current)
+                    {
+                        await RowDeselect.InvokeAsync(previous).ConfigureAwait(false);
+                    }
+                }
+
+                next = new List<TItem> { item };
+
+                await RowSelect.InvokeAsync(item).ConfigureAwait(false);
+            }
+            else
+            {
+                // Copied from the caller's collection rather than composed out of a set: what a caller
+                // receives is not this piece's to change, and a set here would be an allocation over
+                // the whole selection bought for one membership test. Not, as this comment first said,
+                // to protect two rows that share a key - SetKey is given the same key, and the
+                // renderer refuses duplicate sibling keys, so a keyed grid cannot reach that state.
+                next = current is null ? new List<TItem>() : new List<TItem>(current);
+
+                // Exactly one row changes, and it is the one that was clicked - so which event to raise
+                // is known, rather than something to be worked out by comparing the two collections.
+                if (selected)
+                {
+                    Deselect(next, item);
+
+                    await RowDeselect.InvokeAsync(item).ConfigureAwait(false);
+                }
+                else
+                {
+                    next.Add(item);
+
+                    await RowSelect.InvokeAsync(item).ConfigureAwait(false);
+                }
+            }
+
+            await SelectionChanged.InvokeAsync(next).ConfigureAwait(false);
+        }
+
+        /// <summary>The selection as a set this grid can ask its own questions of.</summary>
+        HashSet<TItem> Held(ICollection<TItem>? rows) => rows is null
+            ? new HashSet<TItem>(RowComparer)
+            : new HashSet<TItem>(rows, RowComparer);
+
+        /// <summary>
+        /// Takes a row out of a selection by identity, in place, so the rows around it keep their order.
+        /// </summary>
+        /// <remarks>
+        /// Every match rather than the first: a selection already holding one row twice - which is what
+        /// the fault this replaces produced - is one a deselect should leave empty of it.
+        /// </remarks>
+        void Deselect(List<TItem> rows, TItem item)
+        {
+            var comparer = RowComparer;
+
+            for (var i = rows.Count - 1; i >= 0; i--)
+            {
+                if (comparer.Equals(rows[i], item))
+                {
+                    rows.RemoveAt(i);
+                }
+            }
+        }
+
+        void RenderEmpty(RenderTreeBuilder builder)
+        {
+            if (EmptyTemplate is null)
+            {
+                return;
+            }
+
+            builder.OpenElement(140, "tr");
+            builder.OpenElement(141, "td");
+            builder.AddAttribute(142, "class", "rz-datatable-emptymessage");
+            builder.AddAttribute(143, "colspan", visibleColumns.Count + (ExpandColumn ? 1 : 0));
+            builder.AddContent(144, EmptyTemplate);
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        // Virtualize renders a fragment per visible row, which is a delegate the inline path does not
+        // pay - but only for the rows on screen, which is the whole point. The cells stay inline.
+        void RenderVirtualizedRows(RenderTreeBuilder builder)
+        {
+            builder.OpenComponent<Virtualize<TItem>>(110);
+            builder.AddAttribute(111, nameof(Virtualize<TItem>.ItemsProvider),
+                provideRows ??= ProvideRows);
+
+            // The spacers Virtualize puts above and below the window are divs by default, which is not
+            // valid inside a tbody; the rendered rows would be laid out as though the table had none.
+            builder.AddAttribute(112, nameof(Virtualize<TItem>.SpacerElement), "tr");
+            builder.AddAttribute(113, nameof(Virtualize<TItem>.ItemSize), ItemSize);
+
+            if (VirtualizationOverscanCount > 0)
+            {
+                builder.AddAttribute(114, nameof(Virtualize<TItem>.OverscanCount), VirtualizationOverscanCount);
+            }
+
+            builder.AddAttribute(115, nameof(Virtualize<TItem>.ChildContent),
+                virtualRow ??= item => rows => RenderRow(rows, item, VirtualRowIndex(item)));
+
+            // Virtualize owns the body while it is on, so the empty row the inline path writes is
+            // unreachable - without this an empty virtualized grid showed a header over nothing.
+            if (EmptyTemplate is not null)
+            {
+                builder.AddAttribute(117, nameof(Virtualize<TItem>.EmptyContent),
+                    virtualEmpty ??= RenderEmpty);
+            }
+
+            builder.AddComponentReferenceCapture(116, captureVirtualize ??= CaptureVirtualize);
+            builder.CloseComponent();
+        }
+
+        ItemsProviderDelegate<TItem>? provideRows;
+        RenderFragment<TItem>? virtualRow;
+        RenderFragment? virtualEmpty;
+        Action<object>? captureVirtualize;
+
+        void CaptureVirtualize(object component) => virtualize = (Virtualize<TItem>)component;
+    }
+}
