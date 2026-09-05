@@ -46,7 +46,9 @@
                    far off the page. RadzenDropDownDataGrid bounds its own grid for the same reason.
 
                    MaxRows wants the same box for a different reason - it writes a measured height onto
-                   it - so one wrapper serves both and is named whenever either asks for it. *@
+                   it - so one wrapper serves both. The box is always named and only its bounds are
+                   conditional: the id is a string per popup render, and it is what a test holds on to
+                   in exactly the case where nothing bounds it. *@
                 <div id="@WrapperId" style="@WrapperStyle">
                 <RadzenFastGrid TItem="TItem" @ref="grid"
                                 Data="@Data"

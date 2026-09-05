@@ -6125,7 +6125,8 @@ PopupFit { None, Columns, Content }
 ```
 
 - **`None`** - today. Nothing forwarded, no script, no cost. The default.
-- **`Columns`** - the popup keeps the width it has and the grid apportions that width by content.
+- **`Columns`** - the panel is the width it would have had - its control's, or `PopupWidth` - and the
+  grid apportions that width by content. Not literally "the width it has": see the surface below.
 - **`Content`** - the panel grows to what the columns need, bounded, and the grid then apportions
   whatever it landed on.
 
@@ -6156,8 +6157,20 @@ Four parameters on the drop-down, one of them new-shaped rather than new:
 | | |
 |---|---|
 | `PopupFit` | `None` (default), `Columns`, `Content`. Above. |
-| `PopupWidth` | Under `Content`, the **cap**. Under `Columns` and `None`, a fixed width. |
+| `PopupWidth` | Under `Content`, the **cap** on the growth; under `Columns`, the width. Requires `PopupFit != None`. |
 | `MaxRows` | The panel's height in data rows. Requires `PopupFit != None`. |
+
+**`PopupWidth` and `MaxRows` both do nothing under `None`, and that is the same rule twice.** `None`
+means no script, so there is nothing to apply either of them with - the alternative would be a second
+implementation in C# for the mode whose whole definition is that it costs nothing. Neither is silently
+half-applied: `MaxRows` bounds no box at all rather than clamping the popup to `PopupHeight`, which
+would have applied the very default it exists to replace.
+
+**Turning `PopupFit` on at all supersedes a `width` in `PopupStyle`**, not merely setting `PopupWidth`.
+The pass writes the panel's width on every open and never reads what was there, because what was there
+is a shrink-to-fit answer at the moment it is measured rather than the author's intent. `PopupWidth` is
+how that intent is stated. A `min-width` in `PopupStyle` is *not* superseded - a floor and a width are
+different claims, and the floors compose.
 
 **Both non-`None` modes imply `AutoFitOverflow.Fit` on the popup's grid.** What that does *not* buy is a
 guarantee against a horizontal scrollbar - see *What the build changed*. A column with no `MinWidth` is
@@ -6466,6 +6479,58 @@ own scrollbar has been taken away, a floor past the window with growth switched 
 an uncapped base, twenty rows followed by four with the drop measured in rows rather than in pixels, and
 an empty result whose *header* is wide enough to grow the panel if anything let it. All fourteen are
 caught.
+
+### What the review found that the build had not
+
+Two axes, read-only Standards and a Spec reviewer allowed to run things. Between them four findings the
+build had missed, and three are the same shape: a *confident* sentence that was wrong rather than a
+doubtful one. §27's lesson was that a recorded doubt nobody acts on is how a regression ships; this
+piece's is that the sentences carrying no doubt at all are the ones nothing was checking.
+
+- **The feature switched itself off for a whole authoring shape, silently.** `RunAutoFitAsync` returns
+  early when no column wants fitting, which is right for a grid - there is nothing to write - and wrong
+  for a drop-down. `CanAutoFit` excludes any column declaring a `Width`, so a lookup whose columns are
+  all fixed got no panel width, no `MaxRows` height and `syncWidth` left on, with nothing saying why.
+  That is an ordinary shape - fixed columns and a row count - and it was in none of the doubt bullets.
+  The panel is the popup's, not the columns'.
+- **`MaxRows` under `None` was not the no-op this section called it.** `HasWrapper` read
+  `AllowVirtualization || MaxRows > 0` with no reference to `PopupFit`, so a `MaxRows` nothing would
+  measure still emitted a bounded, scrolling box at `PopupHeight` - clamping the popup to the 7.7-row
+  default `MaxRows` exists to replace. **And the test cited as covering it checked only the two halves
+  that were no-ops**: no script call, and the grid's mode. It asserted the harmless half of a claim and
+  read as if it had asserted the claim.
+- **`PopupWidth` does nothing under `None`**, while this section and the README both called it "the
+  width" there. Corrected in the surface above rather than in the code: `None` means no script.
+- **Turning `PopupFit` on discards a `width` in `PopupStyle`** whether or not `PopupWidth` is set,
+  because the pass never reads the existing width. Also a documentation fault; the behaviour is right.
+
+Two smaller things, both worth doing. `PopupChrome` and `PopupFitAsk` re-listed the same six fields with
+a hand copy joining them, so adding a seventh popup knob was a five-site edit - the shape a
+caller-ordered argument list has, arriving by another road; they nest now, as `AutoFitAsk` already did.
+And two names said something other than what they were: `PopupFits` is one character from the parameter
+it reads and asserts a fact about the screen, and `widen` also narrows. They are `PopupIsSized` and
+`sizePanel`.
+
+**The floor memo was a latch and is now a cache.** `PopupStyle` is a parameter and a theme is a
+stylesheet; either can put a new floor on the panel after the first open, and a memo that never looked
+again would answer with a number nobody had asked for since. It re-reads whenever the declaration is not
+the one the pass itself last wrote - **and getting that comparison wrong cost the rest of the piece**:
+the first version compared the written *string* against `getComputedStyle`'s, which normalises, so a
+width written as `409.99999px` came back as `410px`, read as somebody else's declaration, and was
+adopted as the author's floor. That ratchets - the floor becomes whatever the panel last happened to be
+- and an empty popup stayed at the width it had been grown to. Compared as numbers now.
+
+**And the probe had the same bug from the other side.** Its capped scenario restored
+`panel.style.minWidth` to what was there, which is the width *the pass* wrote, planting it as an
+author's declaration for every scenario after it; it clears the floor instead. Worth recording because
+the fixture is what decides whether any of the above is true, and it was quietly answering a different
+question than its scenario names claimed - the popup pane also carried the component's default
+`min-width: 400px` against five columns needing 376, so the floor answered everything and nothing in
+that pane ever grew. It declares no floor now, which is also the only way the "author declared nothing"
+path gets exercised at all.
+
+**Sixteen mutations, all caught**, including two the review's own fixes made reachable: sizing a popup
+none of whose columns can be fitted, and `MaxRows` bounding nothing without a fit.
 
 ### Where this could still be wrong
 

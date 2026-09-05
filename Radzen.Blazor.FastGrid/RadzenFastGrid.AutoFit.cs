@@ -210,7 +210,11 @@ namespace Radzen.FastGrid
                 }
             }
 
-            if (targets.Count == 0)
+            // A popup still has a panel to size when no column wants fitting. Returning here would be
+            // right for a grid - there is nothing to write - and is wrong for a drop-down: a lookup
+            // whose columns all declare a Width is a perfectly ordinary shape, and it would silently
+            // get no panel width, no MaxRows height, and syncWidth left on, with nothing saying why.
+            if (targets.Count == 0 && popup is null)
             {
                 return false;
             }
@@ -260,9 +264,7 @@ namespace Radzen.FastGrid
                     // One call rather than a sizing call and then a fitting one, because the panel has
                     // to carry its final width before `Radzen.openPopup` measures it - and two round
                     // trips would put a render between them for the popup to be seen at the first.
-                    var fitted = await browser.FitPopupAsync(new PopupFitAsk(chrome.Panel,
-                        chrome.Control, chrome.Wrapper, chrome.Grow, chrome.Width, chrome.MaxRows,
-                        fit));
+                    var fitted = await browser.FitPopupAsync(new PopupFitAsk(chrome, fit));
 
                     sized = fitted.Sized;
                     widths = fitted.Widths;

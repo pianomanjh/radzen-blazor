@@ -171,14 +171,14 @@ namespace Radzen.FastGrid
         int MaxRows);
 
     /// <summary>The popup's own half and the column fit's, as the one value the script is asked with.</summary>
-    internal readonly record struct PopupFitAsk(
-        string Panel,
-        string Control,
-        string? Wrapper,
-        bool Grow,
-        string? Width,
-        int MaxRows,
-        AutoFitAsk Fit);
+    /// <remarks>
+    /// The two halves nest rather than being re-listed. Spelling <see cref="PopupChrome" />'s six fields
+    /// out again here made adding a seventh popup knob a five-site edit - both records, the copy between
+    /// them, the script's destructure and the call site - which is the shape a caller-ordered argument
+    /// list has, arriving by a different road. <see cref="AutoFitAsk" /> was already nested; this makes
+    /// the two sides symmetric.
+    /// </remarks>
+    internal readonly record struct PopupFitAsk(PopupChrome Popup, AutoFitAsk Fit);
 
     /// <summary>
     /// What a popup fit answers: whether the panel now carries a width of ours, and the width to write

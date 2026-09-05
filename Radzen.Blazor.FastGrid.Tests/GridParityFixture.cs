@@ -142,6 +142,14 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(d => d.PopupFit, PopupFit.Content);
                     p.Add(d => d.MaxRows, 4);
                     p.Add(d => d.AllowPaging, false);
+
+                    // The component's default PopupStyle carries `min-width: 400px`, and these five
+                    // columns need 376 - so with the default in place the floor answers every question
+                    // and the pane cannot show growth happening at all. Dropping it leaves the control's
+                    // own 180px as the floor, which is what makes a grown panel distinguishable from an
+                    // ungrown one. It also exercises the case where an author declares no floor: the
+                    // computed min-width is `auto`, which has to read as zero rather than as NaN.
+                    p.Add(d => d.PopupStyle, "display:none;");
                 });
 
                 lookup.Find(".rz-dropdown").Click();

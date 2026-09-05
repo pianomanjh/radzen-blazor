@@ -311,13 +311,23 @@ namespace Radzen.FastGrid
         string PopupId => Id + "-popup";
 
         /// <summary>
-        /// The scrolling box the rows live in, named only when something bounds it. <c>Virtualize</c>
-        /// needs a bounded scrolling ancestor and a popup has none of its own; <see cref="MaxRows" />
-        /// wants to write a height onto exactly the same box.
+        /// The scrolling box the rows live in. Always named; only its <em>bounds</em> are conditional.
         /// </summary>
+        /// <remarks>
+        /// <c>Virtualize</c> needs a bounded scrolling ancestor and a popup has none of its own;
+        /// <see cref="MaxRows" /> wants to write a height onto exactly the same box. The id is one
+        /// string per popup render either way, and making it conditional too would take away the only
+        /// handle a test has on the case where nothing bounds it.
+        /// </remarks>
         string WrapperId => Id + "-rows";
 
-        bool HasWrapper => AllowVirtualization || MaxRows > 0;
+        /// <summary>
+        /// Whether anything bounds that box. <see cref="MaxRows" /> counts only alongside a
+        /// <see cref="PopupFit" />, because it is the fit that measures the height - so a
+        /// <c>MaxRows</c> without one has to bound nothing rather than quietly clamp the popup to
+        /// <see cref="PopupHeight" />, which is the very default it exists to replace.
+        /// </summary>
+        bool HasWrapper => AllowVirtualization || (MaxRows > 0 && PopupIsSized);
 
         /// <summary>
         /// What the wrapper starts at. The script replaces the height when <see cref="MaxRows" /> is
@@ -327,7 +337,9 @@ namespace Radzen.FastGrid
         /// </summary>
         string? WrapperStyle => HasWrapper ? $"height:{PopupHeight};overflow:auto;" : null;
 
-        bool PopupFits => PopupFit != PopupFit.None;
+        /// <summary>Whether this drop-down takes its panel's width over. One character from
+        /// <see cref="PopupFit" /> is too few, and "fits" reads as a claim about the screen.</summary>
+        bool PopupIsSized => PopupFit != PopupFit.None;
 
         /// <summary>
         /// The mode the popup's grid is given, and it is deliberately not <see cref="AutoFitMode.Once" />.
@@ -335,7 +347,7 @@ namespace Radzen.FastGrid
         /// the drop-down as the only thing that decides when a fit happens - once per open, on the path
         /// that has to measure anyway.
         /// </summary>
-        AutoFitMode PopupAutoFit => PopupFits ? AutoFitMode.OnDemand : AutoFitMode.None;
+        AutoFitMode PopupAutoFit => PopupIsSized ? AutoFitMode.OnDemand : AutoFitMode.None;
 
         // The same panel class the Radzen drop-down family emits, so a theme styles this popup with the
         // rules it already has - including the wider multi-select panel.
@@ -809,7 +821,7 @@ namespace Radzen.FastGrid
             // is its own clamp, working correctly because what it measured was final. Sizing afterwards
             // would show the panel at one width, jump it to another, and re-run the vertical flip after
             // the user had already seen it.
-            var sized = PopupFits && grid is not null
+            var sized = PopupIsSized && grid is not null
                 && await grid.FitPopupAsync(new PopupChrome(PopupId, Id, HasWrapper ? WrapperId : null,
                     PopupFit == PopupFit.Content, PopupWidth, MaxRows));
 

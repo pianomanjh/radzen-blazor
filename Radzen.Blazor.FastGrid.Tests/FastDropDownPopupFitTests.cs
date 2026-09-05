@@ -23,14 +23,18 @@ namespace Radzen.FastGrid.Tests
             FastGrid.Tests.Columns.Property<Person, string>(p => p.Last, title: "Last"));
 
         static IRenderedComponent<RadzenFastDropDownDataGrid<Person, object>> Render(TestContext ctx,
-            Action<ComponentParameterCollectionBuilder<RadzenFastDropDownDataGrid<Person, object>>>? extra = null)
+            Action<ComponentParameterCollectionBuilder<RadzenFastDropDownDataGrid<Person, object>>>? extra = null,
+            RenderFragment? columns = null)
         {
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
 
+            // Columns are a parameter of this helper rather than something `extra` sets, because adding
+            // ChildContent twice appends rather than replaces - and two copies of the same column are
+            // two columns claiming one identity, which §27's throw catches loudly and confusingly.
             return ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
             {
                 p.Add(d => d.Data, People.Sample());
-                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.ChildContent, columns ?? Columns);
                 p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
                 extra?.Invoke(p);
             });
@@ -59,6 +63,9 @@ namespace Radzen.FastGrid.Tests
         /// <summary>The call's one argument, as the type it was made with rather than by index.</summary>
         static PopupFitAsk Ask(JSRuntimeInvocation invocation) => (PopupFitAsk)invocation.Arguments[0]!;
 
+        /// <summary>The popup's own half of that argument.</summary>
+        static PopupChrome Chrome(JSRuntimeInvocation invocation) => Ask(invocation).Popup;
+
         /// <summary>What <c>Radzen.openPopup</c> was told about syncing the width.</summary>
         static bool SyncWidth(TestContext ctx) =>
             (bool)ctx.JSInterop.Invocations["Radzen.openPopup"].Last().Arguments[2]!;
@@ -66,7 +73,7 @@ namespace Radzen.FastGrid.Tests
         // --- A popup that does not fit --------------------------------------------------------
 
         [Fact]
-        public void APopupThatDoesNotFitAsksTheBrowserForNothing()
+        public void APopupThatIsNotSizedAsksTheBrowserForNothing()
         {
             using var ctx = new TestContext();
             var module = Module(ctx);
@@ -77,7 +84,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void APopupThatDoesNotFitStillHasItsWidthSyncedByUpstream()
+        public void APopupThatIsNotSizedStillHasItsWidthSyncedByUpstream()
         {
             // The default is unchanged behaviour, and this is the line that says so: syncWidth has been
             // true since the component was written and stays true for every drop-down that asks for
@@ -91,7 +98,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void APopupThatDoesNotFitGivesItsGridNoFitEither()
+        public void APopupThatIsNotSizedGivesItsGridNoFitEither()
         {
             using var ctx = new TestContext();
             Module(ctx);
@@ -108,7 +115,7 @@ namespace Radzen.FastGrid.Tests
         [Theory]
         [InlineData(PopupFit.Columns)]
         [InlineData(PopupFit.Content)]
-        public void APopupThatFitsGivesItsGridOnDemandRatherThanOnce(PopupFit fit)
+        public void APopupThatIsSizedGivesItsGridOnDemandRatherThanOnce(PopupFit fit)
         {
             // OnDemand is the mode the render loop does not fire, which leaves the drop-down as the
             // only thing that decides when a fit happens. Once would give the grid a fit of its own,
@@ -141,12 +148,12 @@ namespace Radzen.FastGrid.Tests
 
             Open(cut);
 
-            var ask = Ask(module.Invocations["fitPopup"].Single());
+            var chrome = Chrome(module.Invocations["fitPopup"].Single());
             var root = cut.Find(".rz-dropdown").Id;
 
-            Assert.Equal(root, ask.Control);
-            Assert.Equal(root + "-popup", ask.Panel);
-            Assert.Equal(root + "-rows", ask.Wrapper);
+            Assert.Equal(root, chrome.Control);
+            Assert.Equal(root + "-popup", chrome.Panel);
+            Assert.Equal(root + "-rows", chrome.Wrapper);
         }
 
         [Fact]
@@ -157,7 +164,7 @@ namespace Radzen.FastGrid.Tests
 
             Open(Render(ctx, p => p.Add(d => d.PopupFit, PopupFit.Columns)));
 
-            Assert.False(Ask(module.Invocations["fitPopup"].Single()).Grow);
+            Assert.False(Chrome(module.Invocations["fitPopup"].Single()).Grow);
         }
 
         [Fact]
@@ -168,7 +175,7 @@ namespace Radzen.FastGrid.Tests
 
             Open(Render(ctx, p => p.Add(d => d.PopupFit, PopupFit.Content)));
 
-            Assert.True(Ask(module.Invocations["fitPopup"].Single()).Grow);
+            Assert.True(Chrome(module.Invocations["fitPopup"].Single()).Grow);
         }
 
         [Fact]
@@ -185,7 +192,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(d => d.PopupWidth, "40rem");
             }));
 
-            Assert.Equal("40rem", Ask(module.Invocations["fitPopup"].Single()).Width);
+            Assert.Equal("40rem", Chrome(module.Invocations["fitPopup"].Single()).Width);
         }
 
         [Fact]
@@ -200,7 +207,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(d => d.MaxRows, 9);
             }));
 
-            Assert.Equal(9, Ask(module.Invocations["fitPopup"].Single()).MaxRows);
+            Assert.Equal(9, Chrome(module.Invocations["fitPopup"].Single()).MaxRows);
         }
 
         [Fact]
@@ -289,6 +296,45 @@ namespace Radzen.FastGrid.Tests
             Open(cut);
 
             Assert.Contains("overflow:auto", cut.Find("[id$='-rows']").GetAttribute("style"));
+        }
+
+        [Fact]
+        public void APopupWhoseColumnsAllDeclareAWidthIsStillSized()
+        {
+            // The panel is the popup's, not the columns'. A lookup whose columns all carry a Width is
+            // an ordinary shape - CanAutoFit excludes every one of them - and the grid's own "nothing
+            // to fit, nothing to do" answer would take the panel width, the MaxRows height and the
+            // syncWidth decision down with it, silently.
+            using var ctx = new TestContext();
+            var module = Module(ctx);
+
+            Open(Render(ctx, p =>
+            {
+                p.Add(d => d.PopupFit, PopupFit.Content);
+                p.Add(d => d.MaxRows, 6);
+            },
+            FastGrid.Tests.Columns.Of(
+                FastGrid.Tests.Columns.Property<Person, string>(x => x.First, title: "First", width: "100px"),
+                FastGrid.Tests.Columns.Property<Person, string>(x => x.Last, title: "Last", width: "100px"))));
+
+            Assert.Single(module.Invocations["fitPopup"]);
+            Assert.False(SyncWidth(ctx));
+        }
+
+        [Fact]
+        public void MaxRowsWithoutAFitBoundsNothing()
+        {
+            // The other half of the no-op, and the half that was not one: the wrapper is bounded by
+            // AllowVirtualization or by a MaxRows that something will measure, and by nothing else.
+            // Clamping the popup to PopupHeight instead would apply the very default MaxRows replaces.
+            using var ctx = new TestContext();
+            Module(ctx);
+
+            var cut = Render(ctx, p => p.Add(d => d.MaxRows, 6));
+
+            Open(cut);
+
+            Assert.True(string.IsNullOrEmpty(cut.Find("[id$='-rows']").GetAttribute("style")));
         }
 
         [Fact]

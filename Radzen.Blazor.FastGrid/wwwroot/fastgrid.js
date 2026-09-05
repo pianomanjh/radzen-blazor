@@ -1133,7 +1133,8 @@ export async function autoFit(ask) {
 // the panel is left block-and-hidden, which displaces nothing - it is position:absolute - and the next
 // open puts it right.
 export async function fitPopup(ask) {
-  const { panel: panelId, control: controlId, wrapper: wrapperId, grow, width, maxRows, fit } = ask;
+  const { popup, fit } = ask;
+  const { panel: panelId, control: controlId, wrapper: wrapperId, grow, width, maxRows } = popup;
 
   const panel = document.getElementById(panelId);
 
@@ -1161,8 +1162,22 @@ export async function fitPopup(ask) {
   // Read once and remembered, because every write below replaces it: on the second open the computed
   // value would be our own answer to the first, and the floor would be defined in terms of itself.
   // The same trick openPopup uses to remember where it moved a panel from.
-  if (panel.__fastgridFloor === undefined) {
-    panel.__fastgridFloor = parseFloat(getComputedStyle(panel).minWidth) || 0;
+  //
+  // Remembered against what was written rather than merely the first time, so it is a cache and not a
+  // latch. PopupStyle is a parameter and a theme is a stylesheet; either can put a new floor on this
+  // panel after the first open, and a memo that never looks again would answer with a number nobody
+  // has asked for since. Anything other than our own last answer is somebody else's declaration.
+  // Compared as numbers, not as the strings either side of it deals in. `getComputedStyle` normalises
+  // what it gives back - a width written as `409.99999px` comes back as `410px` - so a string
+  // comparison reports somebody else's declaration on almost every open, and the panel's own last
+  // answer is then adopted as the author's floor. Which ratchets: the floor becomes whatever the panel
+  // last happened to be, and an empty popup that should fall back to its base stays at the width it
+  // was grown to.
+  const declaredFloor = parseFloat(getComputedStyle(panel).minWidth) || 0;
+
+  if (panel.__fastgridFloor === undefined
+      || Math.abs(declaredFloor - panel.__fastgridWrote) > 0.5) {
+    panel.__fastgridFloor = declaredFloor;
   }
 
   const floor = Math.max(panel.__fastgridFloor + chrome, controlWidth);
@@ -1186,7 +1201,7 @@ export async function fitPopup(ask) {
   // absolutely positioned panel - growth below is relative, and a relative figure needs a known base.
   const base = Math.min(cap, Math.max(floor, declaredOuter === null ? controlWidth : declaredOuter));
 
-  widen(panel, base, chrome);
+  sizePanel(panel, base, chrome);
 
   // This call owns the waiting, and the fit below must not wait again: a lookup whose rows never come
   // would otherwise spend this ceiling and then the grid's own on top of it.
@@ -1213,7 +1228,7 @@ export async function fitPopup(ask) {
 
       // Floors first, then the viewport - which wins over all of them, including a floor, because a
       // panel wider than the window is the one failure none of this is allowed to produce.
-      widen(panel, Math.min(cap, Math.max(outer, floor)), chrome);
+      sizePanel(panel, Math.min(cap, Math.max(outer, floor)), chrome);
     }
   }
 
@@ -1227,7 +1242,7 @@ export async function fitPopup(ask) {
   return { sized: true, widths: table ? await autoFit({ ...fit, wait: false }) : null };
 }
 
-// Both declarations, always, and that is the whole of it: `min-width` beats `width`, so a cap composed
+// Sizing the panel: both declarations, always, and that is the whole of it: `min-width` beats `width`, so a cap composed
 // into the arithmetic and then written to `width` alone is a cap the browser is free to ignore. A floor
 // three times the window wide did exactly that - the number was right and the panel was 3318px in an
 // 1100px viewport - and openPopup's leftward clamp switches off above the window width, so there was
@@ -1236,11 +1251,15 @@ export async function fitPopup(ask) {
 // Writing the floor rather than clearing it: `closePopup` clears a `min-width` only when `openPopup`
 // wrote one, which it records on the element and only does under syncWidth - off here - so ours
 // survives a close, and is rewritten on every open regardless.
-function widen(panel, outer, chrome) {
+function sizePanel(panel, outer, chrome) {
   const width = (outer - chrome) + 'px';
 
   panel.style.width = width;
   panel.style.minWidth = width;
+
+  // What the floor above compares against, so a min-width that is not this one is somebody else's.
+  // The number rather than the string, because the string is not what comes back.
+  panel.__fastgridWrote = outer - chrome;
 }
 
 // The popup's height in rows rather than in pixels.

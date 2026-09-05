@@ -954,12 +954,14 @@ async function main() {
             };
 
             const ask = (over = {}) => ({
-                panel: panel.id,
-                control: control.id,
-                wrapper: wrapper.id,
-                grow: over.grow !== undefined ? over.grow : true,
-                width: null,
-                maxRows: over.maxRows !== undefined ? over.maxRows : 4,
+                popup: {
+                    panel: panel.id,
+                    control: control.id,
+                    wrapper: wrapper.id,
+                    grow: over.grow !== undefined ? over.grow : true,
+                    width: null,
+                    maxRows: over.maxRows !== undefined ? over.maxRows : 4,
+                },
                 fit: {
                     table: table.id,
                     indices: [0, 1, 2, 3, 4],
@@ -1041,11 +1043,13 @@ async function main() {
             // The viewport wins over a floor. A min-width three times the window would otherwise put
             // the panel off the right edge with nothing left to pull it back: openPopup only shifts a
             // panel left while innerWidth is greater than its width.
+            // Cleared afterwards rather than put back to what was there, and the difference matters:
+            // what was there is the width the *pass* wrote, and restoring that plants it as an author's
+            // declaration for every scenario after this one. This popup declares no floor at all.
             reset();
-            const home = panel.style.minWidth;
             panel.style.minWidth = (window.innerWidth * 3) + 'px';
             scenarios.capped = await open();
-            panel.style.minWidth = home;
+            panel.style.minWidth = '';
 
             // A panel is never narrower than the control it drops out of. syncWidth used to write that
             // floor and is being turned off, so this is the line that says the replacement holds.
@@ -1091,12 +1095,9 @@ async function main() {
             // rescues an uncapped base, so only a pass that does not grow can show whether the base
             // was capped.
             reset();
-            const floor = panel.style.minWidth;
             panel.style.minWidth = (window.innerWidth * 3) + 'px';
-            panel.__fastgridFloor = window.innerWidth * 3;
             scenarios.unfitted = await open({ grow: false });
-            panel.style.minWidth = floor;
-            delete panel.__fastgridFloor;
+            panel.style.minWidth = '';
 
             // Twenty rows and then four. The height has to be cleared before the box is measured or
             // the second answer is read off the first: scrollHeight is never less than the box itself,

@@ -1075,8 +1075,13 @@ with its columns taking an equal share of that.
 |---|---|
 | `PopupFit="Columns"` | The panel keeps the width it has; the columns are apportioned by what is in them. |
 | `PopupFit="Content"` | The panel grows to what the columns need, then the columns are apportioned inside it. |
-| `PopupWidth` | The cap under `Content`; the width under the other two. Supersedes `PopupStyle`'s `width`. |
+| `PopupWidth` | The cap under `Content`; the width under `Columns`. Needs a `PopupFit`. |
 | `MaxRows` | How many rows the popup shows before it scrolls. Needs a `PopupFit`. |
+
+`PopupWidth` and `MaxRows` both do nothing while `PopupFit` is `None`, which is what `None` means: no
+measurement, no script, nothing to apply them with. **Turning `PopupFit` on takes the panel's width over
+altogether**, so a `width` in `PopupStyle` is superseded whether or not `PopupWidth` is set - say it with
+`PopupWidth`. A `min-width` in `PopupStyle` still counts; it is a floor rather than a width.
 
 ```razor
 <RadzenFastDropDownDataGrid TItem="Customer" TValue="int" @bind-Value="customerId"
