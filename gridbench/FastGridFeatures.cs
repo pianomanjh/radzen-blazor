@@ -167,7 +167,9 @@ public class FastGridFeatureBench
         Column("Salary", "Salary", "120px", false);
     };
 
-    static readonly RenderFragment Plain = Columns(geometry: false);
+    // Internal so the allocation ladder can render the same columns rather than a copy of them:
+    // §26's probe carries a comment about exactly this hazard, and a second copy would drift.
+    internal static readonly RenderFragment Plain = Columns(geometry: false);
     static readonly RenderFragment Sized = Columns(geometry: true);
 
     // The same five columns with a filter value declared on one of them, so the grid actually filters
