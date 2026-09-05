@@ -6091,3 +6091,305 @@ for applies to BenchmarkDotNet and there is no BenchmarkDotNet here.
   runs reached D at renders 82 and 95, well inside 160, so the original run was unlucky rather than too
   short. The lesson is the harder one: the step positions are a race, which is §26's own thesis, so a
   single observation of an *absence* is worth very little however long you watch. Repeat it.
+
+---
+
+## 29. The popup sizes itself - the design
+
+§13 deferred column auto-fit for `RadzenFastDropDownDataGrid` and recorded exactly one reason: it did
+not know whether *"the popup grows to the fitted content, or the grid fits within the width the popup
+already has"*, and said both were defensible and different features. §10 has carried that bullet since.
+This section answers it, and the answer is **both, as three named modes**, because working the question
+through showed the two are not rivals - one is the other with a bound on it.
+
+Nothing here is measurement debt or a diagnosis. It is a feature, argued before it is built, which is
+the two-commit shape the branch uses for features.
+
+### The question, answered
+
+**Both, and a third that is neither.** The fork was real but the framing was not: "grow to content" and
+"fit inside a fixed width" differ only in *where the width comes from*, and once growth is capped at the
+viewport - which it must be, or the panel leaves the window - the grown case ends with a fixed width
+too, and needs the same redistribution the other case needs. So they compose:
+
+```
+PopupFit { None, Columns, Content }
+```
+
+- **`None`** - today. Nothing forwarded, no script, no cost. The default.
+- **`Columns`** - the popup keeps the width it has and the grid apportions that width by content.
+- **`Content`** - the panel grows to what the columns need, bounded, and the grid then apportions
+  whatever it landed on.
+
+`Content` is `Columns` with a growth step in front of it. That is why one parameter carries all three
+and why the inner grid's own `AutoFitColumns` and `AutoFitOverflow` are **not** part of the drop-down's
+surface: both non-`None` modes imply `Once`-semantics and both imply `AutoFitOverflow.Fit`, so exposing
+them would only create the question "what happens if I set `PopupFit=None` and `AutoFitColumns=Once`".
+Column-level `MinWidth`, `MaxWidth`, `AutoFit` and `AutoFitPriority` are unaffected: they are declared on
+the columns the author writes into `ChildContent` and reach the grid without the drop-down's help.
+
+### What it is for
+
+**A lookup popup is the one grid where truncation is the whole failure.** The user opened it to read
+values and pick one. `RadzenFastDropDownDataGrid` gives its popup a `min-width: 400px` and otherwise the
+width of the control it hangs from, and its grid is `table-layout: fixed` - so five columns get 80px
+each and every value longer than 80px ends in an ellipsis. That is the shape §13 was written for,
+arriving in the component where it hurts most.
+
+**It is also a vertical question.** The popup's height is governed by two unrelated things today: when
+paging there is **no height bound at all**, so the panel is as tall as `PageSize` rows make it, and when
+virtualizing it is `PopupHeight`, defaulting to `"285px"` against an `ItemSize` of `37`. That is **7.7
+rows** - seven and a sliver. `MaxRows` below replaces that with a number that means what it says.
+
+### The surface
+
+Four parameters on the drop-down, one of them new-shaped rather than new:
+
+| | |
+|---|---|
+| `PopupFit` | `None` (default), `Columns`, `Content`. Above. |
+| `PopupWidth` | Under `Content`, the **cap**. Under `Columns` and `None`, a fixed width. |
+| `MaxRows` | The panel's height in data rows. Requires `PopupFit != None`. |
+| `PopupStyle`, `PopupHeight` | Unchanged, and superseded by the two above when those are set. |
+
+**`PopupWidth` is a cap under `Content` and a width otherwise, and that is not two meanings.** An author
+who writes both `PopupWidth` and `PopupFit=Content` has said "size to the content, but never past this",
+which is a sentence, not a contradiction. §27 shipped a throw for two columns claiming one settings
+identity because those claims were unreconcilable; these reconcile, so the collision is resolved rather
+than reported. It also removes the `PopupMaxWidth` that would otherwise be a fourth parameter: the cap
+and the fixed width are the same number wearing two hats.
+
+**`MaxRows` supersedes `PopupHeight`, and `PopupWidth` supersedes `PopupStyle`'s width**, by the same
+rule and for the same reason: the string forms are authored CSS this feature would otherwise have to
+*parse* in order to bound, and §4's path derivation exists precisely so nothing in this codebase parses
+what it can be told.
+
+**`MaxRows` requires `PopupFit != None`**, documented rather than worked around. It needs a measurement
+- see below - and `PopupFit` is what puts the code in the browser at all. §13 set this precedent
+deliberately with `AutoFitMode.OnDemand` requiring `AllowColumnResize`, on the same grounds.
+
+### Where the work happens, and why the order is the whole design
+
+`Radzen.openPopup` **measures the panel once** - `display:block`, `visibility:hidden`,
+`getBoundingClientRect()` - and decides from that one rect whether to flip the panel above the control
+and whether to shift it left. Nothing re-runs that decision. So there are only two coherent designs, and
+one of them is wrong:
+
+1. **Size first, then let `openPopup` position the final panel.** One placement, correct, and the
+   viewport-awareness comes from upstream code this branch does not touch.
+2. Position first, then grow, then re-position. The panel appears at one width and jumps to another, and
+   the second call re-runs the *vertical* flip decision - so a popup can flip above the control after
+   the user has already seen it below.
+
+**The design is (1).** The open path becomes:
+
+1. `OpenPopup` sets `built`, arms positioning, renders. Unchanged.
+2. In `OnAfterRenderAsync`, before `Radzen.openPopup`: one call into `fastgrid.js`, which makes the
+   panel measurable, measures, and writes the panel's width and height and the column widths.
+3. `Radzen.openPopup` is then called with **`syncWidth: false`**, because the width is now ours. It
+   measures a panel that is already final and positions it accordingly.
+
+**Step 2 leaves the panel `display:block; visibility:hidden` rather than reverting it**, because those
+are the exact two properties `openPopup` sets before its own measurement. The two calls then share
+**one** layout instead of forcing two. The risk this takes is stated rather than hidden: if the circuit
+drops between the two calls, the panel is left block-and-hidden - `position: absolute` and invisible, so
+it displaces nothing - and the next open puts it right.
+
+**`Columns` takes the same path**, even though its panel width does not change. One code path, and it
+also removes the frame in which the columns are still in equal shares. `MaxRows` forces the path too:
+the panel's *height* feeds `openPopup`'s flip-up decision just as its width feeds the shift-left one.
+
+The redistribution step is not new work. The table's `parentElement` inside the popup is
+`.rz-data-grid-data`, so `AutoFitOverflow.Fit`'s container arithmetic and the `ResizeObserver` in
+`watch()` already have a bounded box to measure and need no change.
+
+### What the theme supplies, and what it does not
+
+Two facts about the shipped theme, marked as §13 marks its own, because a theme change invalidates them
+and nothing else here:
+
+- **`.rz-dropdown-panel` and `.rz-multiselect-panel` are `box-sizing: content-box`**, set deliberately
+  against the global `[class^=rz-]{box-sizing:border-box}` reset. A width written on the panel is its
+  *content* width; the border and padding land outside it. `--rz-dropdown-panel-padding` is `0` in the
+  default theme, so today only the border escapes - but a theme with panel padding makes this large, and
+  it is what `openPopup` measures and what actually overflows the window.
+- **Neither class declares a `width` or a `max-width`.** Nothing in the theme fights the growth.
+
+The chrome is therefore subtracted from the cap by reading it, through the `edges()` helper `fastgrid.js`
+already uses for exactly this problem one level down. **Not** by forcing `box-sizing: border-box` on the
+panel: reading a theme's real numbers rather than overriding them is how all three of §13's
+theme-derived decisions were made.
+
+### Two floors compose
+
+Under `Content` the panel is never narrower than **the greater of** the author's `min-width` and the
+width of the control it hangs from.
+
+The control-width floor exists because `syncWidth: false` removes one. Today `syncWidth: true` also
+writes `popup.style.minWidth` from the control's width when the panel has none; turning `PopupFit` on
+stops that, and a 600px control over a narrow grid would otherwise get a 400px panel - **a popup
+narrower than the control it drops out of**, which reads as a rendering fault.
+
+The author's floor is read off `getComputedStyle(panel).minWidth`, already resolved to pixels, on a call
+being made anyway for the chrome. That is why there is no `PopupMinWidth` and no change to
+`PopupStyle`'s default: **two floors do not conflict, they compose by maximum**, and the collision this
+looked like was an artefact of treating one of them as a width.
+
+The consequence is stated plainly because it is the feature: **a grid that turns on `PopupFit=Content`
+will get narrower popups than it gets today** whenever its content is narrower than 400px and its
+control is too.
+
+### The cap
+
+`window.innerWidth`, minus the scrollbar allowance, minus the panel's own chrome.
+
+**`window.innerWidth` rather than `document.documentElement.clientWidth`, to agree with `openPopup`.**
+Being right about scrollbars matters less than agreeing with the clamp: `openPopup` only shifts a panel
+left `if (window.innerWidth > rect.width)`. A cap that permits a panel one pixel wider than that turns
+the clamp **off entirely**, and the panel overflows with nothing left to pull it back - the single
+failure this cap exists to prevent.
+
+**The margin is `window.innerWidth - document.documentElement.clientWidth`, floored at 8px.** That
+difference *is* the classic scrollbar, which is the thing that makes `innerWidth` a lie; it is zero on
+overlay-scrollbar platforms, where the floor takes over. Deriving it from the panel's own padding was
+considered and rejected: that value is `0` in the shipped theme, so a derived margin would silently
+vanish - the case where a derived number is worse than a literal.
+
+### When a fit runs, and what it waits for
+
+**Once per open.** Not once per built grid: under `Content` a stale fit is a stale *panel width* -
+persistent, visible chrome that is wrong until something re-runs it - where under §13's outer-grid
+`Once` it was only a column a little too wide. Per-open costs nothing extra, because the open path is
+already the measurement path.
+
+**Not once per view change.** §13 rejected the continuous mode for the outer grid; here it is worse,
+because the thing that would move is the popup itself, under the pointer. The panel is still while it is
+open and re-sizes between a close and an open, where nobody is reading it.
+
+**The wait is bounded at ~250ms**, and which sources it helps follows from two facts:
+
+- **The drop-down's `OnAfterRenderAsync` runs before the inner grid's** - the renderer calls parents
+  before children, which `RadzenFastGrid.Data.cs` already relies on by name for §23's owed-load rule.
+- **`loadOwed` is set only for `LoadData` or executor-backed sources.** An in-memory `Data` composes
+  during the render itself.
+
+So an in-memory source has its rows in the DOM already and waits **zero**; an asynchronous one has not
+even *started* its load when we measure, and the wait covers a whole query from before it was issued.
+250ms therefore catches a warm local query and gives up on a cold one, and a cold one opens unfitted and
+is fitted on every subsequent open. It is a chosen number, not a derived one, and is recorded as such.
+
+`ready(tableId, wait)` already implements this shape - a `requestAnimationFrame` loop with a clock able
+to win the race, because rAF does not fire in a backgrounded tab - so what is new is a ceiling, not a
+mechanism.
+
+**1000ms, `ready`'s own ceiling, is wrong here** and the difference is the point: for the outer grid a
+slow fit costs nothing visible, because the grid is already on screen. Here it costs the panel's
+appearance, and a click that produces nothing for a second reads as broken.
+
+### Rows in height, not pixels
+
+`MaxRows` bounds the scrolling wrapper, and the height is **measured, not multiplied**.
+
+`MaxRows × ItemSize` was the cheap version and it is wrong: the wrapper bounds the *whole grid* - header
+row, filter row when `AllowFiltering`, data rows, pager - so `MaxRows=8` at `ItemSize=37` yields a 296px
+panel showing about five rows. It would be today's 7.7-row wart renamed, with a name that lies. And
+`ItemSize` is documented as the row height *when virtualizing*; a paging popup's row height is the
+theme's.
+
+Measuring is near-free because the pass that measures the columns is already running and has already
+forced the layout: the header's height, the pager's and one data row's are a handful of
+`getBoundingClientRect` reads against boxes that are already computed. That is the whole reason
+`MaxRows` requires `PopupFit != None`.
+
+**`PageSize` keeps its own meaning** - how many rows the query returns - and stops being conflated with
+the height, which today it decides by accident because nothing bounds it. An author may fetch ten and
+show six.
+
+### An empty result fits its columns and does not grow the panel
+
+A filter matching nothing leaves headers and `EmptyTemplate`. The columns are still apportioned by
+header width - a header is real content, and dividing the panel by title width beats equal shares - but
+**the panel does not grow**, because growing chrome on the strength of five column titles produces the
+one sequence nobody wants: open narrow, clear the filter, reopen wide.
+
+It also nearly falls out of the existing code, which already keeps `headerPx` separately from the body
+measurement and already treats it as the floor a column falls back to.
+
+### Deliberately not built
+
+- **No animation.** §13 animates only a fit somebody asked for. Columns settling inside a panel that is
+  itself appearing are two motions reading as one glitch. This means the drop-down must re-arm the grid's
+  *automatic* path per open rather than call the public `AutoFitAsync()`, which is the animated path and
+  the one that replaces user-chosen widths - so a small internal seam on the grid, in preference to
+  reusing a public API that would do two wrong things.
+- **No public re-fit while the popup is open.** Under `Content` it would resize and re-position the panel
+  under the pointer, which is the jump the ordering above exists to avoid. The public `Grid` property is
+  documented as not the way to do this. A version that took effect only on the *next* open was considered
+  and refused: a method whose effect is invisible until an unrelated gesture cannot be documented
+  truthfully. `PopupWidth` is the escape hatch and stays correct.
+- **No positioning of our own.** Aligning to the control's *right* edge, rather than to the window's,
+  would need `fastgrid.js` to reimplement smart positioning, RTL and the document-click dismissal wiring
+  that `OnPopupClose` depends on - in the component §13 called the worst-reviewed slice on the branch.
+  Upstream's clamp already expands leftward: a 500px panel on a control at x=600 in a 1000px window lands
+  at 500-1000, left of the control's own left edge. **The width is ours and the position is upstream's**,
+  and the two rules are not identical - this one is anchored to the window edge.
+- **No cap on what the fit measures.** A knob that changes what a measurement *sees* makes fits
+  irreproducible, and §25 has already settled what the pass may cost.
+
+### How it is verified
+
+§9's layers, with the browser layer doing the work that matters:
+
+1. **Markup / bUnit** - `PopupFit=None` forwards nothing and emits no table id; `Columns` and `Content`
+   forward `Once` and `Fit`; `MaxRows` with `PopupFit=None` is a documented no-op and is asserted as one;
+   the wrapper is emitted when `MaxRows` or `AllowVirtualization` is set and not otherwise.
+2. **Interop contract** - `Radzen.openPopup` is called with `syncWidth: false` exactly when
+   `PopupFit != None`, and with `true` otherwise. This is the seam the whole ordering rests on and it is
+   invisible in markup.
+3. **Browser, real Chromium** - the parity fixture pre-renders with bUnit, writes static HTML and exposes
+   `fastgrid.js` as `window.__fastgrid`. **`Radzen.Blazor.js` is loaded onto that page too**, so the
+   assertions can call our pass and then `Radzen.openPopup` and read the panel's final rect. What is
+   asserted: the grown width; the cap actually preventing overflow *including* the content-box chrome
+   that lands outside it; the leftward shift for a control near the right edge; the composed floor;
+   `MaxRows` yielding that many data rows; an empty result fitting columns without growing the panel.
+   Testing our pass alone would test everything except the claim the design rests on - that `openPopup`
+   positions a final width correctly - which is a claim about code we do not own.
+4. **Playground** - a drop-down on `Home.razor` under the auto-fit controls already there, and placed
+   near the **right edge** of the page, because a popup that never has to shift never exercises the
+   branch most likely to be wrong. §9 layer 6, not optional for behavioural change.
+5. **Mutations** - against the cap arithmetic, the floor composition and the `syncWidth` argument, on
+   §24's rule that a mutation whose application is not confirmed is not a mutation.
+
+The fixture's known fragility is its **auto-fit columns** - the two `x => x.Id` columns are a deliberate
+collision and the second declares `UniqueID` - and adding a panel and a second script does not touch them.
+
+### The order it lands in
+
+1. **This section**, before the code.
+2. **The feature**: `PopupFit`, `PopupWidth`, `MaxRows`, the script's measure-and-write, the internal
+   re-arm seam on the grid, `syncWidth: false`.
+3. **README, the drop-down's cost rows, §10 and §13's "Recorded open"**, which both carry the deferral
+   this closes.
+
+### Where this could still be wrong
+
+Doubt bullets are a task, not an absolution - §27 shipped one naming the exact shape that then regressed
+and nothing checked it. Each of these is to be acted on or deleted before the piece is done.
+
+- **`syncWidth: false` removes more than the width.** It also stops `openPopup` writing `minWidth`, which
+  the composed floor above replaces - but it is one branch of upstream code read once, and anything else
+  inside `if (syncWidth)` goes with it. **Read that branch again against the shipped file before
+  building**, not against this description of it.
+- **The shared-layout saving assumes `openPopup` does not early-return.** It returns early for
+  `display:block` panels carrying `rz-autocomplete-panel`; ours carry `rz-dropdown-panel` or
+  `rz-multiselect-panel`, so it proceeds. That is read off the current upstream file and is exactly the
+  kind of thing a version bump changes silently. **Assert it, do not assume it.**
+- **The panel is left block-and-hidden between the two calls.** Claimed harmless because it is
+  `position: absolute`. Confirm in the browser rather than from the stylesheet, in both panel classes.
+- **250ms is chosen, not derived**, and the source that most wants it - a warm executor-backed lookup -
+  is the one this branch has least ability to time honestly on one machine.
+- **`MaxRows` measures a pager that may not be there.** `AllowPaging` is true by default but an author
+  may switch it off, and a virtualizing popup has no pager at all. The arithmetic must read what is
+  present rather than assume the full set.
+- **Multi-select is assumed to behave like single.** `rz-multiselect-panel` shares the two theme facts
+  above, but it is a different class with its own rules elsewhere in the sheet. Check it, do not infer it.
