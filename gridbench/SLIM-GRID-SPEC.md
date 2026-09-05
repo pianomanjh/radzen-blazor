@@ -5637,10 +5637,11 @@ behaviour.
   over one property that never persists anything stops rendering. If that turns out to be common markup
   rather than a mistake, the answer is to drop both columns from capture and restore instead - which was
   the rejected option, and is recorded here so it can be picked up without re-deriving it.
-- **"Display path" is doing quiet work.** For four column types it is `PropertyPathResolver.For(Property)`,
-  which is well defined. For a `PropertyColumn` over a computed expression it is null, which is correct
-  and means those columns need a declared `UniqueID` where today they already persist nothing. Nothing
-  changes for them; it is worth checking that nothing does.
+- ~~**"Display path" is doing quiet work.**~~ **This bullet was right to ask and wrong in its answer;
+  the review found the shape it missed.** It said that for a `PropertyColumn` over a computed expression
+  the display path is null, "which is correct and means those columns need a declared `UniqueID` where
+  today they already persist nothing. Nothing changes for them; it is worth checking that nothing does."
+  Nothing checked, and something did - see the review section below.
 - **The generation counter is a memo, and memos on this branch have a record.** §10 has four recorded
   participants in the `!ReferenceEquals` trap. This one is an integer rather than a reference, which is
   what makes it safe, but the failure mode if it is wrong is a collision that stops being detected - a
@@ -5789,3 +5790,44 @@ a claim about where a line has to sit is a claim, and the cheapest way to find o
 | No bump when a column joins | **survived** - deleted, see above |
 | The gate is seeded level with the counter | **survived** - taken, see above |
 | No bump when a column leaves | **anchor missed; not a result.** The script reported it as a survival because the unmutated code passed, which is the shape §9 warns about - a run that did not happen looks exactly like nothing failing. Re-derived by argument instead, and the argument is in the code |
+
+
+### What the review found that the build had not
+
+**A column that persisted before this piece silently stopped persisting, and §27 had written the bullet
+that would have caught it.** A `PropertyColumn` whose *display* is a computed expression but which
+declares a *member* `SortBy` - `Property="@(x => x.Last + "!")" SortBy="@(x => x.Last)"` - had
+`SortPath` "Last" and no display path at all. Before §27 the settings key was the sort path, so it was
+captured under "Last". After, identity was the displayed member alone, so it was nameless: its width,
+its position in a dragged order, its visibility and its filter stopped being stored, and nothing said
+so. Measured rather than argued - `SortPath=Last`, `Identity=<null>`, `stored=[First]` - which is the
+lost-state failure the design chose over a wrong answer, but chosen here by accident rather than on
+purpose, and for a column that had not lost anything the day before.
+
+**The fix is the rule the section had already written, applied where it had not been.** §27 argued that
+a template column derives from its sort path because "it has no displayed member, so the sort path is
+not a second name beating the real one - it is the only name in the markup". That is exactly this
+column's position. So the derivation is one rule in one place now:
+
+> `IdentitySource => DisplayPath ?? SortPath` - what a column shows, and where it shows nothing
+> nameable, what it orders by.
+
+`IdentitySource` is no longer virtual; the overridable is `DisplayPath`, which the four member-bound
+column types answer and the base leaves null. **`TemplateColumn`'s override disappears entirely** - it
+was the special case that turns out to be the general rule with one operand missing - so the piece ends
+with four overrides rather than five and the ordering argued once instead of per column. Mutations pin
+both halves: removing the fallback and consulting it first are separate mutations and are caught by
+separate tests, the second by five.
+
+**And a test had been passing because of the fault.** §27's build rewrote
+`ASettingsRestoreDoesNotDropASortItCannotName` around exactly this column, on the reasoning that it
+"can still sort while nothing gives it an identity" - which was true only because the fallback was
+missing. With the fallback restored the column has a name, and the test needed a genuinely nameless
+one: a template column ordered by a computed `FastGridSort`, which sorts rows because a computed key
+still orders them and names nothing because there is no display path and the sort has no `Path` to fall
+back to. That is the shape the test used *before* §27 touched it, arrived at again from the other side.
+
+**What this says about the sweep that preceded it.** Seventeen mutations, and none of them was this,
+because a mutation asks whether a test would notice the code changing - not whether a shape nobody wrote
+a test for still works. The bullet in "where this could still be wrong" named the risk precisely and the
+build shipped without acting on it. **A recorded doubt is a task, not an absolution.**

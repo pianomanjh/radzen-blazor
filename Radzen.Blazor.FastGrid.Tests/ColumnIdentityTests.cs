@@ -188,6 +188,45 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void AComputedColumnThatOrdersByAMemberIsStillNamedByThatMember()
+        {
+            // Found by review, and it is a state-losing regression rather than a wrong answer. Before
+            // §27 this column's settings key was its sort path, which is non-null here, so its width,
+            // order, visibility and filter were captured. Deriving identity from the displayed member
+            // alone made it nameless, and it silently stopped being stored - while §27's own "where this
+            // could still be wrong" said "nothing changes for them".
+            //
+            // The rule that fixes it is the one already written for a template column: where a column
+            // shows no nameable member, its sort path is not a second name beating the real one.
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "Given"),
+                Columns.Property<Person, string>(x => x.Last + "!", title: "Shouty",
+                    sortBy: x => x.Last)), p => p.Add(g => g.AllowColumnPicking, true));
+
+            Assert.Equal(new[] { "First", "Last" }, Identities(cut));
+
+            Pick(cut, 1, false);
+
+            Assert.False(cut.Instance.CaptureSettings().Columns.Single(c => c.UniqueID == "Last").Visible);
+        }
+
+        [Fact]
+        public void AColumnThatShowsAMemberNeverFallsBackToItsSortPath()
+        {
+            // The fallback's other half, and the one that would undo §10b's second collision if it were
+            // ordered the wrong way round. A displayed member wins outright; the sort path is consulted
+            // only when there is none.
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.Last, sortBy: x => x.First, title: "Family")));
+
+            Assert.Equal(new[] { "Last" }, Identities(cut));
+        }
+
+        [Fact]
         public void ATemplateColumnIsNamedByItsSortPathBecauseNothingElseNamesIt()
         {
             using var ctx = Context();
@@ -380,7 +419,7 @@ namespace Radzen.FastGrid.Tests
 
         [Parameter] public string Name { get; set; } = string.Empty;
 
-        internal override string? IdentitySource
+        internal override string? DisplayPath
         {
             get
             {

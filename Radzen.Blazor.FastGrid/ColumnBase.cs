@@ -1069,21 +1069,15 @@ namespace Radzen.FastGrid
         public ColumnIdentity Identity => ColumnIdentity.Of(UniqueID, IdentitySource);
 
         /// <summary>
-        /// Names this column when nothing else does, and this is a member path only because that is what
-        /// a column usually has: it is not a query path and nothing queries by it.
+        /// The member this column's cells are about, or <c>null</c> for a column whose content is not a
+        /// member - a template, or an expression the resolver cannot walk.
         /// </summary>
         /// <remarks>
-        /// <para>
-        /// Null here, and overridden to the <em>displayed</em> member by every column that has one. That
-        /// is the fix for §10b's second collision: identity used to follow <c>SortBy</c>, so a column
-        /// showing <c>Last</c> and ordering by <c>First</c> answered to the same name as the column
-        /// showing <c>First</c>.
-        /// </para>
-        /// <para>
-        /// <see cref="TemplateColumn{TItem}" /> is the exception and overrides this to its sort path,
-        /// because it has no displayed member and the sort path is therefore not a second name beating
-        /// the real one - it is the only name in the markup.
-        /// </para>
+        /// Not a query path and nothing queries by it: it exists so that <see cref="IdentitySource" />
+        /// can prefer what a column <em>shows</em> over what it orders by. That preference is the fix
+        /// for §10b's second collision, where identity followed <c>SortBy</c> and a column showing
+        /// <c>Last</c> while ordering by <c>First</c> answered to the same name as the column that
+        /// really is <c>First</c>.
         /// <para>
         /// Internal, which locks an out-of-assembly column out of the derivation and out of nothing
         /// else: <see cref="UniqueID" /> is public, so such a column declares. Opening this would
@@ -1091,7 +1085,28 @@ namespace Radzen.FastGrid
         /// still waiting on §10.
         /// </para>
         /// </remarks>
-        internal virtual string? IdentitySource => null;
+        internal virtual string? DisplayPath => null;
+
+        /// <summary>
+        /// Names this column when nothing declares a <see cref="UniqueID" />: what it shows, and where
+        /// it shows nothing nameable, what it orders by.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// One rule rather than a per-column decision, and the second half is not a relapse into keying
+        /// on the sort. Where a column <em>has</em> a displayed member, that member wins and the sort
+        /// path never gets a say - which is the whole of §10b's second collision. Where it has none, the
+        /// sort path is not a second name beating the real one; it is the only name in the markup.
+        /// </para>
+        /// <para>
+        /// The fallback is load-bearing rather than tidy. A review found that without it a
+        /// <see cref="PropertyColumn{TItem, TProp}" /> whose display is computed but which declares a
+        /// member <c>SortBy</c> - identity <c>null</c>, <c>SortPath</c> non-null - **silently stopped
+        /// persisting** width, order, visibility and filter that it had persisted before §27. §27 said
+        /// "nothing changes for them" and that was the one shape where something did.
+        /// </para>
+        /// </remarks>
+        internal string? IdentitySource => DisplayPath ?? SortPath;
 
         /// <summary>
         /// What this column is called in stored settings. Declared only where the grid cannot work it

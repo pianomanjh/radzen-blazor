@@ -37,7 +37,7 @@ namespace Radzen.FastGrid
         /// PropertyColumn over the same id; §27 makes that collision throw, which is what lets this be
         /// the honest answer.
         /// </remarks>
-        internal override string? IdentitySource => path;
+        internal override string? DisplayPath => path;
 
         /// <inheritdoc />
         public override Type FilterPropertyType => typeof(TKey);

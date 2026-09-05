@@ -524,9 +524,15 @@ namespace Radzen.FastGrid.Tests
             string sortProperty = null,
             bool sortable = true,
             FastGridSort<TItem> sortBy = null,
+            SortOrder? sortOrder = null,
             string uniqueId = null) => (builder, seq) =>
         {
             builder.OpenComponent<TemplateColumn<TItem>>(seq);
+
+            if (sortOrder is not null)
+            {
+                builder.AddAttribute(seq + 91, nameof(TemplateColumn<TItem>.SortOrder), sortOrder);
+            }
 
             // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
             if (uniqueId is not null)

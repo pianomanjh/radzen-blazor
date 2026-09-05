@@ -64,7 +64,7 @@ namespace Radzen.FastGrid
         /// showing First and sorting by Last is a column of first names. Naming it "Last" is what gave
         /// it the same identity as the column that really is Last.
         /// </remarks>
-        internal override string? IdentitySource => displayPath;
+        internal override string? DisplayPath => displayPath;
 
         /// <summary>
         /// The property to filter by, when it differs from the one displayed. Must be of the same type;

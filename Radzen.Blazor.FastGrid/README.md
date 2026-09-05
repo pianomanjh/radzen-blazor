@@ -591,7 +591,9 @@ composing over a queryable in memory, the render that restores the state is the 
 A grid on `LoadData` or the async executor gets one reload after, since the load that produced what is
 on screen ran before the settings existed. **A column is identified by the member it displays**, which is what its stored width, order,
 visibility and filter come back onto. Not by what it sorts by: a column showing `Last` and ordering by
-`First` is stored under `Last`, while the sort still travels to the server as `First`.
+`First` is stored under `Last`, while the sort still travels to the server as `First`. Where a column
+displays no member it falls back to the one it sorts by - a template column, or a computed expression
+with a `SortBy` - because that is then the only member the markup names.
 
 Where nothing names a column - a template column declaring neither a sort nor a `UniqueID`, or a column
 over a computed expression - it cannot be identified across a reload and is not persisted. `UniqueID` is
