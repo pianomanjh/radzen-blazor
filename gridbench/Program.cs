@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Threading;
@@ -282,6 +283,16 @@ public class Program
         if (a.Length > 0 && a[0] == "dropdown-probe")
         {
             await DropDownProbe.Run(1000);
+            return;
+        }
+
+        // §11's measurement debt: whether the reference row's 990 KB step is the frame array's pooled
+        // rental, asked of ArrayPool's own EventSource rather than of a GC correlation.
+        if (a.Length > 0 && a[0] == "pool-probe")
+        {
+            await PoolProbe.Run(
+                a.Length > 1 ? int.Parse(a[1], CultureInfo.InvariantCulture) : 1000,
+                a.Length > 2 ? int.Parse(a[2], CultureInfo.InvariantCulture) : 12);
             return;
         }
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(a);
