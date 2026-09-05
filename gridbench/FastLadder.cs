@@ -25,6 +25,13 @@ static class FastLadder
         var services = sc.BuildServiceProvider();
         var people = Person.Make(n);
 
+        // This must stay the `bare` row of FastGridFeatureBench - same rows, same columns, same renderer -
+        // for the same reason PoolProbe carries the equivalent comment about ReferenceDataGrid: CI never
+        // compiles gridbench, so a parameter added to that bench's dictionary and not here would make
+        // this a control over a different workload, silently. The columns are shared rather than copied
+        // (that is what the `internal` on Plain buys); the dictionary is not, so `Data` and anything the
+        // bench's `configure` hook adds are the two places that can drift. `Bare()` passes no configure
+        // and no columns, which is what makes this the same render today.
         async Task RenderOnce()
         {
             using var r = new BenchmarkRenderer(services);
