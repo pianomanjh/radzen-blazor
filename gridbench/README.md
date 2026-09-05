@@ -25,6 +25,7 @@ believing a row** - the same rule the mutation sweeps learned, arriving from a d
 | `Scaffold.cs` | Isolates the cost of Blazor's per-row *component* scaffolding, with no grid code involved |
 | `Slim.cs` | `SlimGrid<T>` prototype — Radzen's markup, QuickGrid's architecture |
 | `VisualDump.cs`, `measure.js` | Ad hoc side-by-side render and Playwright geometry read-back, for looking at by hand |
+| `PoolProbe.cs` | Reads `ArrayPool`'s own EventSource during a render — what the frame arrays cost and what they only appear to |
 
 The styling contract is **not** verified from here. It lives in `../Radzen.Blazor.FastGrid.Tests`
 (`dotnet test Radzen.Blazor.FastGrid.Tests`), which runs unattended — see *Styling parity check* below.
@@ -194,32 +195,34 @@ the pool directly".
 
 **Something has now measured the pool directly, and it is not the pool.** `dotnet run --project
 gridbench -- pool-probe` listens to `ArrayPool`'s own EventSource while rendering, so a rental is a
-bucket with a size and a reason rather than an inference from a GC column. What it finds:
+bucket with a size and a reason rather than an inference from a GC column. §26 of the spec has the whole
+measurement; the short form:
 
-- The frame arrays *are* pooled, and that half is confirmed rather than refuted. Every render of this
-  row rents 65536, 32768 and 16384-element buffers from `ArrayPool<RenderTreeFrame>.Shared` - identified
-  by renting from that pool deliberately and matching the id, not assumed - and returns them. Only the
-  very first render allocates. Three forced gen2 collections did not make the next render re-allocate.
+- The large frame arrays *are* pooled, and that half is confirmed rather than refuted. Every render
+  rents 65536, 32768 and 16384-element buffers from `ArrayPool<RenderTreeFrame>.Shared` - identified by
+  renting from that pool and filtering on the id it reports, not assumed - and returns them, allocating
+  them only on the first render. Three forced gen2 collections did not make the next render re-allocate.
+  **The small buckets are a different story**: the 64-element bucket misses 1,680 times in *every*
+  render, 4,200 KB of it, dropped again on return. It is a constant on both sides of the step, so it is
+  not the step - but "only the first render allocates" was written here first and was wrong.
 - **A real pool miss is far too big to be this step.** Hold the buffers so the pool cannot satisfy the
-  rental and the render allocates **5,121 KB more**, of which 9,320 KB is frame array. The buckets are
-  2,560 / 1,280 / 640 KB. No bucket and no sum of buckets is 990 KB.
-- **The step is the JIT.** Allocation per render drops by **991 KB** after six to eight renders, with
-  identical pool events either side of the drop. `DOTNET_TieredCompilation=0` removes it entirely - flat
-  across twenty renders. So does `DOTNET_JitObjectStackAllocation=0`, and so does `DOTNET_TieredPGO=0`.
-  What moves is objects that tier-1 with dynamic PGO stack-allocates and tier-0 puts on the heap.
+  rental and the render allocates **5,120 KB more**, which the pool's own events account for exactly:
+  9,320 KB allocated, less the 4,200 KB the 64-bucket costs every render.
+- **The step is the JIT.** With the probe's listener disarmed - it costs 4,420 KB a render, a third of
+  the workload - allocation per render steps **14,157.4 KB (13.83 MB) → 13,219.9 (12.91) → 13,172.1
+  (12.86)**, by 937.5 KB and then 47.8 KB, 985.3 KB in total. `DOTNET_TieredCompilation=0` removes the
+  big step entirely; so does `DOTNET_JitObjectStackAllocation=0`, and so does `DOTNET_TieredPGO=0`. What
+  moves is objects that tier-1 with dynamic PGO stack-allocates and tier-0 puts on the heap.
 
-That also explains the shape without inverting the correlation. Two stable values with nothing in
-between is what a one-time transition produces across fresh processes: it either completes before the
-measured window or inside it. And the runs that got far enough to be promoted are the same runs that
-accumulated the gen1 and gen2 collections, which is why the cheaper value is the one with the
-collections beside it rather than the other way about.
+**Those three plateaus are the three values this row reports**, and the two ends are the historical pair.
+Which one a benchmark process reports is whether tier-1 arrived before its measured window - and that is
+demonstrable rather than inferred: `DOTNET_TC_CallCountingDelayMs=2000`, which delays promotion and
+changes nothing else, pins the row at **13.83 MB three runs out of three** against 12.86 MB in the
+default runs beside them.
 
-**What did not reproduce, and is the honest gap.** Ten runs of this row on the current SDK returned
-12.86 MB four times and 12.91 MB six times - two values again, but a **51 KB** step, not a 990 KB one.
-The 13.83 MB mode did not appear at all. So the 991 KB step is measured and its mechanism is named, but
-the identification of it with the *historical* 13.83 MB sighting rests on the two numbers matching
-rather than on the sighting being reproduced. The 51 KB split matches the smaller second step the probe
-also shows, at 18,573 KB to 18,525 KB.
+**The 1-in-4 rate is gone.** 190 fresh default-configuration processes produced the high mode zero times.
+Tier-1 now lands well before the measured window unless something delays it, and the old correlate has
+gone with it - a full-table pass reported this row in the low mode with no gen1 collections at all.
 
 **The operational consequence is the part that matters: take the modal value of several runs before
 recording anything from a reference row.** The 13,172 KB baseline in the table above is the modal value
