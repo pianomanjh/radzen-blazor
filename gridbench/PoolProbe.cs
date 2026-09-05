@@ -154,11 +154,22 @@ static class PoolProbe
         Console.WriteLine($"Allocation per render, listener disarmed ({n} rows):");
         Console.WriteLine();
         // Two counters, not one, and the second is the point. GetAllocatedBytesForCurrentThread reports
-        // the thread's allocation *contexts* - it counts a context as spent when the thread takes a new
-        // one, so the unused tail of the old one is included. GetTotalAllocatedBytes(precise: true) walks
-        // every thread's context and reports what was really committed. A difference between the two
-        // ladders is the counter's granularity rather than the program's behaviour, which is exactly the
-        // question §26 left open about its smaller step.
+        // this thread's allocation *contexts* - a context counts as spent when the thread takes the next
+        // one, so the unused tail of the old one is included, and a codegen change that alters the size
+        // mix could move the number without moving a byte. GetTotalAllocatedBytes(precise: true) stops
+        // the world, walks every thread's context and reports what was really committed.
+        //
+        // The delta between them is **not** granularity alone: the precise counter is process-wide, so
+        // it also carries whatever the finalizer and tiering threads allocated in the window. That makes
+        // it an upper bound on granularity, which is the direction §26's open question needs - a bound
+        // of ~1 KB against a 47 KB step settles it either way.
+        //
+        // The cost of asking. The precise window encloses the ctx window (both reads of the per-thread
+        // counter happen inside it), so the ctx column still measures exactly what it measured before
+        // this was added and stays comparable with §26's ladder and the benchmark's MB/op. What it does
+        // add is two runtime suspensions per render, in a loop whose subject is *when* tier transitions
+        // land - so rung positions from this probe are not comparable with §26's, and §28 says so.
+        // Plateau values are unaffected, which is what the section's argument rests on.
         Console.WriteLine("   #   ctx KB   precise KB     delta   g0 g1 g2");
         Console.WriteLine("  --  --------  -----------  --------   --------");
 

@@ -5921,45 +5921,86 @@ mechanism". It is attributed now, and getting there corrected §26's reading of 
 **48.5 bytes per row, and the linearity is the first thing that says so.** The ladder was run at 500,
 1000 and 2000 rows. Both steps scale exactly:
 
-| rows | big step | per row | small step | per row |
-| ---: | ---: | ---: | ---: | ---: |
-| 500 | 468.9 KB | 0.938 | — (below the resolution used) | — |
-| 1000 | 937.8 KB | 0.938 | 47.3 KB | **0.0473** |
-| 2000 | 1,875.2 KB | 0.938 | 94.9 KB | **0.0475** |
+| rows | big step | KB/row | small step | KB/row | bytes/row |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 500 | 468.9 KB | 0.938 | — (below the resolution used) | — | — |
+| 750 | 703.2 KB | 0.9375 | 35.8 KB | 0.0477 | 48.8 |
+| 1000 | 937.8 KB | 0.938 | 47.3 KB | 0.0473 | 48.5 |
+| 1500 | 1,406.4 KB | 0.9376 | 71.4 KB | 0.0476 | 48.7 |
+| 2000 | 1,875.2 KB | 0.938 | 94.9 KB | 0.0475 | 48.6 |
 
-So the small step is one per-row cost of about **48.5 bytes**, not a fixed artefact of process start-up,
-and not something that could be a one-off buffer.
+So the small step is one per-row cost of about **48.6 bytes** - the five rows span 48.5 to 48.8 - not a
+fixed artefact of process start-up and not something that could be a one-off buffer.
+
+**Two of those rows are review's and they are the ones that make it a fit.** The 500-row run put the
+small step below the resolution the ladder was read at, so the first version of this table established
+proportionality from **two** points, 1000 and 2000, where any line fits. 750 and 1500 were measured
+independently afterwards and land on the same slope with a zero intercept. The band first quoted here,
+0.0473-0.0475, was drawn from those two points and is about 0.5% too narrow; the slope it was drawn
+around is right.
+
+**And it is per row under the switches too, not only by default.** The endpoint table below rests on
+runs at 1000 rows alone, which cannot tell a per-row cost from a constant. Re-run under
+`DOTNET_TieredPGO=0`, the small step is **48.2 bytes a row at 750 and 48.4 at 1500** - so what survives
+PGO being off is the same per-row cost, not a fixed residue that happens to be the same size.
+
+**On 47.3 against 47.8.** §26 measured the step at 47.8 KB and this section re-measured it at 47.3 in its
+own ladder; both are the same step at 1000 rows, and the 0.5 KB between them is where the plateau means
+were taken. Nothing turns on it - the figure that matters is the slope.
 
 **It is real allocation rather than the counter's granularity.** `GetAllocatedBytesForCurrentThread`
 reports allocation *contexts* - a context counts as spent when the thread takes the next one, so the
 unused tail of the old one is included, and a codegen change that alters the size mix could move the
 number without moving a byte. The ladder reports `GC.GetTotalAllocatedBytes(precise: true)` beside it
-now, and the two agree to within 1-2 KB at every rung, against a step of 47. The hypothesis was worth
-having and it is dead.
+now, and the two agree **at every plateau** to within 1-2 KB, against a step of 47. The hypothesis was
+worth having and it is dead.
 
-**It is `RadzenDataGrid`'s, not the renderer's.** `fast-ladder` runs the identical ladder over
-`RadzenFastGrid` through the same columns `FastGridFeatureBench` uses, and it is **flat**: 154.9 KB from
-render 2 to render 239, one plateau, step -0.1 KB. Both grids share the Blazor renderer and the frame
-pool, so a step in one and not the other puts both of the reference row's steps in the grid's own
-per-row work. It is also, incidentally, the strongest statement yet of §9's control: 238 renders of the
-fast grid at one value.
+Two qualifications on that sentence, because it is doing real work. The agreement is per *plateau*, not
+per render: the first render of a process differs by 12-14 KB and an occasional later one by 10, which
+is an order of magnitude below the step and does not touch the argument. And the difference has a sign -
+239 renders out of 239 positive, mean +0.8 KB - because the precise window encloses the per-thread one
+and because the precise counter is process-wide, so it also carries whatever the finalizer and tiering
+threads allocated. That makes it an **upper** bound on granularity, which is the direction this argument
+needs.
+
+**It is not in what the fast grid exercises.** `fast-ladder` runs the identical ladder over
+`RadzenFastGrid` through the same columns `FastGridFeatureBench` uses - shared rather than copied - and
+it is **flat**: 155 KB from render 2 to render 239, one plateau, flat to within 0.1 KB. It is also,
+incidentally, the strongest statement yet of §9's control: 238 renders at one value.
+
+**What that rules out, and what it does not.** Both grids drive the same Blazor renderer and the same
+frame pool, so neither step is in code every render must run. It does **not** narrow things to
+`RadzenDataGrid` the class, for two reasons this section first got wrong:
+
+- **The comparison changes two components, not one.** The reference ladder renders
+  `RadzenDataGrid` + `RadzenDataGridColumn`; the control renders `RadzenFastGrid` + `PropertyColumn`. A
+  per-row cost in the *column* type is as consistent with the result as one in the grid.
+- **The two workloads are 85x apart.** The fast grid renders 1000 rows in 155 KB - 159 bytes a row
+  against 13,172 - because emitting fewer frames per row is what it exists to do. So it exercises the
+  shared per-row renderer path at nothing like the same rate, and "absent from the fast grid" rules the
+  renderer out only to the extent the fast grid uses it.
+
+The honest statement is the weaker one: **the step is absent from a path the fast grid exercises, and
+present in one of `RadzenDataGrid`'s or its column's.**
 
 ### The ladder has four rungs
 
 §26 published three plateaus and called them "the benchmark's modes". There are four, and the missing one
 is why the intermediate value differs between runs:
 
-| rung | KB | MB | |
+| rung | KB | MB | which steps have landed |
 | --- | ---: | ---: | --- |
 | **A** | 14,157 | 13.83 | neither optimisation |
 | **B** | 14,110 | 13.78 | small only |
 | **C** | 13,220 | 12.91 | big only |
 | **D** | 13,172 | 12.86 | both |
 
-The two steps are **independent and additive**, and they race. One run went A → C → D, which is what §26
-recorded; another went A → **B** → D on the same binary. So "12.91" is not a stage every process passes
-through - it is the rung you sit on when the big optimisation has landed and the small one has not, and
-13.78 is the rung when it is the other way round.
+The two steps are **independent and additive** - A−B and C−D are both 47.5, A−C and B−D both 938, and
+the two orders sum to within 0.5 KB of each other - and they race. Review's seven default runs went
+**A → C → D six times and A → B → D once**, on the same binary. So "12.91" is not a stage every process
+passes through: it is the rung you sit on when the big optimisation has landed and the small one has
+not, 13.78 is the rung when it is the other way round, and the second is roughly a one-in-seven event on
+this machine.
 
 **13.78 MB has never been reported by the benchmark.** Review's 190 fresh processes returned 12.86, 12.87
 and 12.91 only. That is consistent - BenchmarkDotNet warms up, so a measured window normally sits at D -
@@ -5980,13 +6021,19 @@ is the correction that mattered most:
 | `DOTNET_TC_OnStackReplacement=0` | D | yes | yes |
 | `DOTNET_TieredCompilation=0` | B, from render 1 | **no** | already applied |
 
-**The big step needs all three of dynamic PGO, object stack allocation and quick-jit-for-loops** - any
-one of them off leaves the process at B. That sharpens §26, which named PGO and stack allocation; the
-third belongs with them because it is the tier-0 loop path that collects the profile the other two spend.
+**The big step goes when any of three switches goes** - three switches, but two mechanisms: dynamic PGO
+and the object stack allocation it feeds, plus `QuickJitForLoops`, which is a *route* to disabling PGO
+for the loop path rather than a third thing. That sharpens §26, which named the first two.
 
-**The small step survives all of them, and OSR too.** What is left is the ordinary tier-0 to optimised
-transition: unoptimised code allocates ~48.5 bytes per row that optimised code does not, by some
-optimisation that is not escape analysis - `JitObjectStackAllocation=0` keeps the step.
+**The small step survives all of them, and OSR too**, and the tier boundary is where it lives. That half
+is shown rather than inferred: under `DOTNET_TieredCompilation=0` the process sits at B **from render
+1**, so code that is optimised from its first call already has the 47 KB with every other switch left
+alone. Unoptimised code allocates ~48.6 bytes per row that optimised code does not.
+
+**Which optimisation, and which object, is elimination and nothing more.** Five knobs off, step survives,
+"what is left is" - that is the shape of the remaining argument and it carries no positive evidence at
+all. It is not escape analysis, because `JitObjectStackAllocation=0` keeps the step; beyond that the
+matrix says only what it is not.
 
 ### The correction to §26's table
 
@@ -5997,6 +6044,28 @@ and "no difference" are not the same reading, and taking them as the same is wha
 no mechanism - it looked like something that only happened under tiering, when it is something that
 happens under tiering *late*.
 
+### Verified
+
+Every figure here is from a run whose output was read, not from a run that was started. The ladder prints
+one line per render, so a run that did nothing prints nothing - the `executed benchmarks:` check §9 asks
+for applies to BenchmarkDotNet and there is no BenchmarkDotNet here.
+
+- **The ladder**: `dotnet run --project gridbench -c Release --no-build -- pool-probe <rows> <iterations>`,
+  at 500, 750, 1000, 1500 and 2000 rows, 240 renders each. Plateau means are taken from steady renders
+  only - the first render of a process is 21 MB and belongs to nothing.
+- **The control**: `... -- fast-ladder 1000 240`, which renders `RadzenFastGrid` through
+  `FastGridFeatureBench.Plain` rather than a copy of it.
+- **The switch table**: each configuration run **twice** at 240 renders, reading the endpoint rather than
+  the transitions. Reading transitions from single runs is what produced the one wrong claim this section
+  records. The environment variables are the ones named in the table, set per process.
+- **No library or test code changed**, and `gridbench` is never compiled by CI, so no benchmark applies
+  to this change and none is quoted. The library still builds at 0 warnings, 0 errors and the suite is
+  `Total: 863`, all passing - unchanged either side, as it must be.
+- **Rung positions from this probe are not comparable with §26's.** The ladder now takes two runtime
+  suspensions per render for the precise counter, in a loop whose subject is when tier transitions land.
+  Plateau *values* are unaffected, and the ordering results here were seen on the single-counter probe
+  first and reproduced on the two-counter one.
+
 ### Where this is still incomplete
 
 - **The object is not named.** "Tier-0 allocates 48.5 bytes per row that optimised code does not" is a
@@ -6004,6 +6073,13 @@ happens under tiering *late*.
   under MinOpts against FullOpts; boxing elimination is the obvious candidate, since it removes real heap
   allocations, is a MinOpts-versus-FullOpts difference, and is governed by none of the switches above -
   but that is a hypothesis with no measurement behind it and is written here as one.
+- **This section and §26 disagree about the word "grid", and §26's sentence is the one to read
+  carefully.** §26 says the 937.5 KB is "Not the pool, not the grid, not `RadzenDataGrid` - the JIT
+  warming up underneath the harness", and that is right about the *mechanism*: the JIT is what changes,
+  and no grid code was edited to make the number move. But the fast grid's ladder is flat, so the
+  allocation the JIT is removing is emitted by `RadzenDataGrid` or its column type rather than by
+  anything both grids run. Mechanism and location are different questions and §26's phrasing invites
+  reading the answer to one as the answer to the other.
 - **§26's other two leftovers stand.** `DOTNET_TC_CallCountingDelayMs` still demonstrates that promotion
   timing moves the row without establishing what delayed promotion on the machines that saw the high mode
   in the first place; nothing here touches that. And the probe still renders in a loop in one process
@@ -6011,6 +6087,7 @@ happens under tiering *late*.
   benchmark values rather than three, which is a sharper thing to test than the endpoint alone.
 - **One reading in this section was wrong before repeats fixed it.** A single 160-render run put
   `DOTNET_TC_OnStackReplacement=0` at C and it was written down as "OSR owns the small step". It does
-  not: with 240 renders and two runs the endpoint is D. The step positions are a race, which is §26's own
-  thesis, and a single run can miss a step that simply had not arrived yet. **An absence claim needs a
-  window long enough to have seen the thing, and more than one of them.**
+  not: at 240 renders every run ends at D. **And the window was not really the problem** - review's OSR
+  runs reached D at renders 82 and 95, well inside 160, so the original run was unlucky rather than too
+  short. The lesson is the harder one: the step positions are a race, which is §26's own thesis, so a
+  single observation of an *absence* is worth very little however long you watch. Repeat it.
