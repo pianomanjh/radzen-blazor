@@ -350,9 +350,9 @@ namespace Radzen.FastGrid.Tests
 
             var settings = cut.Instance.CaptureSettings();
 
-            Assert.Equal(0, settings.Columns.Single(c => c.Property == nameof(Person.Id)).OrderIndex);
-            Assert.Equal(1, settings.Columns.Single(c => c.Property == nameof(Person.First)).OrderIndex);
-            Assert.Equal(2, settings.Columns.Single(c => c.Property == nameof(Person.Last)).OrderIndex);
+            Assert.Equal(0, settings.Columns.Single(c => c.UniqueID == nameof(Person.Id)).OrderIndex);
+            Assert.Equal(1, settings.Columns.Single(c => c.UniqueID == nameof(Person.First)).OrderIndex);
+            Assert.Equal(2, settings.Columns.Single(c => c.UniqueID == nameof(Person.Last)).OrderIndex);
 
             using var second = Context();
 
@@ -397,7 +397,7 @@ namespace Radzen.FastGrid.Tests
             cut.InvokeAsync(() => cut.Instance.ReorderColumn(2, 0));
 
             Assert.NotNull(seen);
-            Assert.Equal(0, seen.Columns.Single(c => c.Property == nameof(Person.Id)).OrderIndex);
+            Assert.Equal(0, seen.Columns.Single(c => c.UniqueID == nameof(Person.Id)).OrderIndex);
         }
 
         [Fact]

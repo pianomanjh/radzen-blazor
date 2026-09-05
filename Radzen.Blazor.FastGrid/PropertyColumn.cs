@@ -58,6 +58,14 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         public override string? SortPath => path;
 
+        /// <inheritdoc />
+        /// <remarks>
+        /// The displayed property, for the same reason <see cref="HeaderText" /> uses it: a column
+        /// showing First and sorting by Last is a column of first names. Naming it "Last" is what gave
+        /// it the same identity as the column that really is Last.
+        /// </remarks>
+        internal override string? IdentitySource => displayPath;
+
         /// <summary>
         /// The property to filter by, when it differs from the one displayed. Must be of the same type;
         /// a column filtered on an unrelated property is a different column.

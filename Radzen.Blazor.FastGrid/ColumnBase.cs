@@ -76,16 +76,29 @@ namespace Radzen.FastGrid
 
         /// <summary>
         /// The name the picker actually shows: <see cref="ColumnPickerTitle" />, else <see cref="Title" />,
-        /// else the property path, so a column that names neither is still identifiable in the list.
+        /// else what the column is identified by, so a column that names neither is still identifiable in
+        /// the list.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Separate from the parameter rather than a fallback inside its getter, because a component
         /// parameter has to be an auto-property (BL0007) and this package builds warnings as errors.
         /// It is public because the picker names it through <c>TextProperty</c>, which reads it by name.
+        /// </para>
+        /// <para>
+        /// The last resort is <see cref="Identity" /> rather than <see cref="SortPath" />, which it was
+        /// while the two were one string. A column displaying <c>First</c> and sorting by <c>Last</c> was
+        /// offered in the picker as "Last", which describes the ordering rather than the cells - the same
+        /// fault <see cref="PropertyColumn{TItem, TProp}.HeaderText" /> already had a comment about.
+        /// </para>
         /// </remarks>
-        public string PickerTitle => ColumnPickerTitle ?? Title ?? SortPath ?? string.Empty;
+        public string PickerTitle => ColumnPickerTitle ?? Title ?? Identity.Name ?? string.Empty;
 
         bool declaredVisible = true;
+
+        // The identity this column last told the grid about, so that a parameter set which does not move
+        // it costs a compare rather than a re-check of every column in the grid.
+        string? reportedIdentity;
 
         // What the picker last said, or null while nothing has said anything. Kept apart from Visible for
         // the same reason the filter's applied text is: the parameter is the markup's word and a component
@@ -941,6 +954,24 @@ namespace Radzen.FastGrid
         {
             OnDerive();
 
+            // After OnDerive, because the member a column identifies itself by is derived there, and
+            // above the !initialized branch below, because that branch returns - a column would then
+            // report nothing on the one parameter set where its identity is certain to have moved.
+            //
+            // Pushed rather than pulled. The grid's check is gated on being told something changed, and
+            // the set of columns changing is only half of what can change: a column's own Property or
+            // UniqueID moving between renders can make two columns collide with nothing added or
+            // removed. Reporting it here costs one ordinal compare per column per parameter set, and
+            // the alternative - walking every column's identity on every render to find out - is the
+            // cost the gate exists to avoid.
+            var identity = Identity.Name;
+
+            if (!string.Equals(reportedIdentity, identity, StringComparison.Ordinal))
+            {
+                reportedIdentity = identity;
+                Grid?.InvalidateColumnIdentities();
+            }
+
             if (!initialized)
             {
                 // Both parameters may legitimately be null, so the first pass cannot be told from a
@@ -1013,10 +1044,67 @@ namespace Radzen.FastGrid
         internal virtual FastGridSort<TItem>? SortSource => null;
 
         /// <summary>
-        /// The dotted property path this column sorts, filters and persists by, or <c>null</c> when the
-        /// authored expression is computed rather than a simple member access.
+        /// The dotted property path a remote sort travels under - what <c>OrderBy()</c> emits and what
+        /// the grid's <c>Sorts</c> descriptors carry - or <c>null</c> when the authored expression is
+        /// computed rather than a simple member access.
         /// </summary>
+        /// <remarks>
+        /// One thing, since §27. It was three: the sort's name, the default filter path, and the key a
+        /// column's stored state was restored onto. The last of those is <see cref="Identity" /> now,
+        /// and the reason it ever borrowed this is that a member called <c>PropertyPath</c> sounded
+        /// general enough for each new consumer to read it as whatever that consumer needed.
+        /// </remarks>
         public virtual string? SortPath => SortSource?.Path;
+
+        /// <summary>
+        /// Names this column across a reload, so its stored width, order, visibility and filter come
+        /// back onto it rather than onto some other column.
+        /// </summary>
+        /// <remarks>
+        /// Declared with <see cref="UniqueID" /> where the markup says so, and derived from
+        /// <see cref="IdentitySource" /> where it does not. Two columns answering to one name is a
+        /// markup fault the grid throws on, because the alternative is restoring the second column's
+        /// state onto the first, which is a wrong answer on screen rather than lost state.
+        /// </remarks>
+        public ColumnIdentity Identity => ColumnIdentity.Of(UniqueID, IdentitySource);
+
+        /// <summary>
+        /// Names this column when nothing else does, and this is a member path only because that is what
+        /// a column usually has: it is not a query path and nothing queries by it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Null here, and overridden to the <em>displayed</em> member by every column that has one. That
+        /// is the fix for §10b's second collision: identity used to follow <c>SortBy</c>, so a column
+        /// showing <c>Last</c> and ordering by <c>First</c> answered to the same name as the column
+        /// showing <c>First</c>.
+        /// </para>
+        /// <para>
+        /// <see cref="TemplateColumn{TItem}" /> is the exception and overrides this to its sort path,
+        /// because it has no displayed member and the sort path is therefore not a second name beating
+        /// the real one - it is the only name in the markup.
+        /// </para>
+        /// <para>
+        /// Internal, which locks an out-of-assembly column out of the derivation and out of nothing
+        /// else: <see cref="UniqueID" /> is public, so such a column declares. Opening this would
+        /// publish another member of the protocol §15's candidate 6 wants to publish once, and it is
+        /// still waiting on §10.
+        /// </para>
+        /// </remarks>
+        internal virtual string? IdentitySource => null;
+
+        /// <summary>
+        /// What this column is called in stored settings. Declared only where the grid cannot work it
+        /// out - a template column, a column over a computed expression, or two columns over one member.
+        /// </summary>
+        /// <remarks>
+        /// Unlike <c>RadzenDataGridColumn.UniqueID</c>, which the sibling's own <c>SetColumnDefaults</c>
+        /// overwrites from <c>OnInitialized</c> whenever there is a <c>Property</c>, nothing here
+        /// overwrites what the markup declared. An empty string is not a declaration, so a
+        /// <c>UniqueID</c> bound to a value that has not arrived yet falls back rather than naming every
+        /// such column alike.
+        /// </remarks>
+        [Parameter] public string? UniqueID { get; set; }
 
         /// <summary>Whether this column can be sorted. False for a computed column with no explicit sort.</summary>
         public virtual bool CanSort => Sortable && SortPath is not null;

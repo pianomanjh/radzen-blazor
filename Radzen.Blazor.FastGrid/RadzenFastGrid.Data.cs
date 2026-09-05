@@ -1220,18 +1220,20 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            // A reset must not reach further than the restore below it. Both are keyed on SortPath,
-            // and a column without one is never stored - so clearing its filter or its sort discards
-            // state that nothing below can put back, and the column loses what its markup declared.
+            // A reset must not reach further than the restore below it. Both are keyed on the column's
+            // identity, and a column without one is never stored - so clearing its filter or its sort
+            // discards state that nothing below can put back, and the column loses what its markup
+            // declared.
             //
-            // A CollectionColumn reaches this twice over: its SortPath is its sort's, so a column
-            // with no SortBy has none at all, and one whose SortBy is a computed key has none either -
-            // while both still filter, by FilterPropertyPath, which is a different path.
-            sorts.RemoveAll(entry => entry.Column.SortPath is { Length: > 0 });
+            // Which columns those are has changed with §27 and the set has shrunk: every column bound to
+            // a member now has an identity, where before a CollectionColumn or a lookup with no SortBy
+            // had none. What is left is a template column declaring neither a UniqueID nor a sort, and a
+            // column over a computed expression declaring no UniqueID.
+            sorts.RemoveAll(entry => entry.Column.Identity.HasName);
 
             for (var i = 0; i < columns.Count; i++)
             {
-                if (columns[i].SortPath is { Length: > 0 })
+                if (columns[i].Identity.HasName)
                 {
                     columns[i].SetFilter(null, null, null);
                 }
@@ -1240,12 +1242,12 @@ namespace Radzen.FastGrid
             // Walked in the stored order, not the columns' - it is what records the sort's precedence.
             foreach (var stored in settings.Columns)
             {
-                if (stored?.Property is not { Length: > 0 } path)
+                if (stored?.UniqueID is not { Length: > 0 } name)
                 {
                     continue;
                 }
 
-                var column = ColumnForPath(path);
+                var column = ColumnForIdentity(name);
 
                 if (column is null)
                 {
@@ -1307,11 +1309,19 @@ namespace Radzen.FastGrid
 
         static int? RecordedOrderIndex(ColumnBase<TItem> column) => column.ReorderedIndex;
 
-        ColumnBase<TItem>? ColumnForPath(string path)
+        /// <summary>
+        /// The column a stored row names, or null when no column answers to it - a column that has left
+        /// the markup since the settings were written, or one whose UniqueID has changed.
+        /// </summary>
+        /// <remarks>
+        /// First match, and that is safe here rather than the fault it used to be: CheckColumnIdentities
+        /// has already run for this render, so there is at most one.
+        /// </remarks>
+        ColumnBase<TItem>? ColumnForIdentity(string name)
         {
             for (var i = 0; i < columns.Count; i++)
             {
-                if (string.Equals(columns[i].SortPath, path, StringComparison.Ordinal))
+                if (string.Equals(columns[i].Identity.Name, name, StringComparison.Ordinal))
                 {
                     return columns[i];
                 }
@@ -1330,11 +1340,11 @@ namespace Radzen.FastGrid
             {
                 var (column, descending) = sorts[i];
 
-                if (column.SortPath is { Length: > 0 } path)
+                if (column.Identity.Name is { Length: > 0 } name)
                 {
                     stored.Add(new FastGridColumnSettings
                     {
-                        Property = path,
+                        UniqueID = name,
                         SortOrder = descending ? SortOrder.Descending : SortOrder.Ascending,
                         FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
                         FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
@@ -1356,14 +1366,14 @@ namespace Radzen.FastGrid
 
                 if ((!column.HasFilter && visibility is null && width is null && orderIndex is null)
                     || SortIndexOf(column) >= 0
-                    || column.SortPath is not { Length: > 0 } path)
+                    || column.Identity.Name is not { Length: > 0 } name)
                 {
                     continue;
                 }
 
                 stored.Add(new FastGridColumnSettings
                 {
-                    Property = path,
+                    UniqueID = name,
                     FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
                     FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
                     FilterText = column.HasFilter ? column.AppliedFilterText : null,

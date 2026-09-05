@@ -252,8 +252,8 @@ namespace Radzen.FastGrid.Tests
             Pick(cut, "First", "Id");
 
             Assert.NotNull(captured);
-            Assert.Equal(false, captured.Columns.Single(c => c.Property == "Last").Visible);
-            Assert.Equal(true, captured.Columns.Single(c => c.Property == "First").Visible);
+            Assert.Equal(false, captured.Columns.Single(c => c.UniqueID == "Last").Visible);
+            Assert.Equal(true, captured.Columns.Single(c => c.UniqueID == "First").Visible);
         }
 
         [Fact]
@@ -265,7 +265,7 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { Property = "Last", Visible = false },
+                    new() { UniqueID = "Last", Visible = false },
                 },
             };
 

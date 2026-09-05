@@ -164,7 +164,7 @@ namespace Radzen.FastGrid.Tests
             cut.InvokeAsync(() => cut.Instance.OnColumnsResized(0, 250, new double[] { 250, 0, 0 }));
 
             var settings = cut.Instance.CaptureSettings();
-            var first = settings.Columns.Single(c => c.Property == nameof(Person.First));
+            var first = settings.Columns.Single(c => c.UniqueID == nameof(Person.First));
 
             Assert.Equal("250px", first.Width);
 

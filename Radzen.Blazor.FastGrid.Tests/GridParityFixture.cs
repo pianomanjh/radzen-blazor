@@ -354,8 +354,13 @@ namespace Radzen.Blazor.FastGrid.Tests
         {
             var s = 0;
 
+            // The two Id columns are the point of this fixture and they are also two columns over one
+            // member, so one of them has to say which it is - §27's collision, in one of the three
+            // places on this branch where real markup meets it. RadzenDataGrid needs nothing here
+            // because it collides silently.
             Column<int>(builder, ref s, x => x.Id, "Id");
-            Column<int>(builder, ref s, x => x.Id, "An extremely long column heading indeed");
+            Column<int>(builder, ref s, x => x.Id, "An extremely long column heading indeed",
+                uniqueId: "IdWithTheLongHeading");
             Column<DateTime>(builder, ref s, x => x.Hired, "Hired");
             Column<string>(builder, ref s, x => x.Name, "Name", maxWidth: "40px");
 
@@ -377,11 +382,16 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         static void Column<TProp>(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder,
             ref int sequence, Expression<Func<Person, TProp>> property, string title, string width = null,
-            bool frozen = false, bool footer = false, string maxWidth = null)
+            bool frozen = false, bool footer = false, string maxWidth = null, string uniqueId = null)
         {
             builder.OpenComponent<PropertyColumn<Person, TProp>>(sequence++);
             builder.AddAttribute(sequence++, "Property", property);
             builder.AddAttribute(sequence++, "Title", title);
+
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(sequence++, "UniqueID", uniqueId);
+            }
 
             if (maxWidth is not null)
             {

@@ -224,9 +224,10 @@ and the columns nobody renders dropped, which is this column's own argument appl
 **`AutoFitMode.Once` waits** for a `Query` lookup rather than measuring the blank cells it would
 otherwise fit to. Neither lookup column is available in `RadzenFastDropDownDataGrid`.
 
-**Settings are keyed on a column's sort path**, so a lookup column is stored across a reload only when
-it has a `SortBy` - the same limitation `CollectionColumn` has. One that does store its filter as ids,
-which is what makes the filter survive a rename.
+**A lookup column is identified by the id member it is bound to**, so it is stored across a reload
+whether or not it has a `SortBy`. It stores its filter as ids, which is what makes the filter survive a
+rename. Two columns over the same id - a `LookupColumn` and a `PropertyColumn` over `CategoryId`, say -
+need a `UniqueID` on one of them; the grid says so rather than restoring one onto the other.
 
 ## Rows, selection and events
 
@@ -588,8 +589,23 @@ called from application code. `CaptureSettings()` gives the same object on deman
 Settings are applied as the grid draws, which is the first moment its columns are known - so on a grid
 composing over a queryable in memory, the render that restores the state is the render that shows it.
 A grid on `LoadData` or the async executor gets one reload after, since the load that produced what is
-on screen ran before the settings existed. A column with no property path - a template column naming no
-member - cannot be identified across a reload and is not persisted.
+on screen ran before the settings existed. **A column is identified by the member it displays**, which is what its stored width, order,
+visibility and filter come back onto. Not by what it sorts by: a column showing `Last` and ordering by
+`First` is stored under `Last`, while the sort still travels to the server as `First`.
+
+Where nothing names a column - a template column declaring neither a sort nor a `UniqueID`, or a column
+over a computed expression - it cannot be identified across a reload and is not persisted. `UniqueID` is
+how such a column is given a name:
+
+```razor
+<TemplateColumn TItem="Order" Title="Actions" UniqueID="Actions" />
+```
+
+**Two columns that answer to one name throw**, naming both and the attribute to declare. Two columns
+over one member is the ordinary way to reach that - the same property shown twice with different
+formats - and it is a fault rather than a shrug because the alternative is restoring the second column's
+state onto the first, which hides the wrong column and is a wrong answer on screen rather than lost
+state.
 
 ## Row detail
 

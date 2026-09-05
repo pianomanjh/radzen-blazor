@@ -89,6 +89,12 @@ public class FastGridFeatureBench
             if (!visible)
             {
                 b.AddAttribute(s++, "Visible", false);
+
+                // The hidden column is over the same member as a drawn one, which since §27 is two
+                // columns the grid cannot tell apart. Declared rather than worked around, because this
+                // is the shape §27 said authors would meet - and the third place on the branch to meet
+                // it, after the parity fixture and a lookup test.
+                b.AddAttribute(s++, "UniqueID", "HiddenAge");
             }
 
             b.CloseComponent();

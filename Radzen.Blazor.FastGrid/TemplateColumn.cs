@@ -50,6 +50,15 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         /// <remarks>
+        /// The sort path, and this is the one column where that is right rather than the fault §27
+        /// exists to fix. A template column has no displayed member, so its sort path is not a second
+        /// name beating the real one - it is the only name in the markup. A template column declaring
+        /// neither has no identity and persists nothing until it declares a UniqueID.
+        /// </remarks>
+        internal override string? IdentitySource => SortPath;
+
+        /// <inheritdoc />
+        /// <remarks>
         /// A path alone still makes the column sortable, because a <c>LoadData</c> grid sorts by it.
         /// </remarks>
         public override bool CanSort => Sortable && (SortBy is not null || SortProperty is not null);

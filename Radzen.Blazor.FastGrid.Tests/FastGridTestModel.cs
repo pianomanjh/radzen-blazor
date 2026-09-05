@@ -135,9 +135,16 @@ namespace Radzen.FastGrid.Tests
             FrozenColumnPosition frozenPosition = FrozenColumnPosition.Left,
             bool autoFit = true,
             bool required = false,
-            string columnPickerTitle = null) => (builder, seq) =>
+            string columnPickerTitle = null,
+            string uniqueId = null) => (builder, seq) =>
         {
             builder.OpenComponent<PropertyColumn<TItem, TProp>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
             builder.AddAttribute(seq + 1, nameof(PropertyColumn<TItem, TProp>.Property), property);
 
             if (title is not null)
@@ -320,9 +327,16 @@ namespace Radzen.FastGrid.Tests
             FilterMode? filterMode = null,
             bool filterable = true,
             object filterValue = null,
-            SortOrder? sortOrder = null) => (builder, seq) =>
+            SortOrder? sortOrder = null,
+            string uniqueId = null) => (builder, seq) =>
         {
             builder.OpenComponent<CollectionColumn<TItem, TElement>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
             builder.AddAttribute(seq + 1, nameof(CollectionColumn<TItem, TElement>.Property), property);
 
             if (displayProperty is not null)
@@ -388,9 +402,16 @@ namespace Radzen.FastGrid.Tests
             object filterValue = null,
             System.Collections.IEnumerable filterLookupData = null,
             string width = null,
-            bool autoFit = true) => (builder, seq) =>
+            bool autoFit = true,
+            string uniqueId = null) => (builder, seq) =>
         {
             builder.OpenComponent<LookupColumn<TItem, TKey>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
             builder.AddAttribute(seq + 1, nameof(LookupColumn<TItem, TKey>.Property), property);
             builder.AddAttribute(seq + 2, nameof(LookupColumn<TItem, TKey>.Lookup), lookup);
 
@@ -446,9 +467,16 @@ namespace Radzen.FastGrid.Tests
             FilterMode? filterMode = null,
             bool filterable = true,
             object filterValue = null,
-            FilterOperator? filterOperator = null) => (builder, seq) =>
+            FilterOperator? filterOperator = null,
+            string uniqueId = null) => (builder, seq) =>
         {
             builder.OpenComponent<LookupCollectionColumn<TItem, TKey>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
             builder.AddAttribute(seq + 1, nameof(LookupCollectionColumn<TItem, TKey>.Property), property);
             builder.AddAttribute(seq + 2, nameof(LookupCollectionColumn<TItem, TKey>.Lookup), lookup);
 
@@ -495,9 +523,16 @@ namespace Radzen.FastGrid.Tests
             string title = null,
             string sortProperty = null,
             bool sortable = true,
-            FastGridSort<TItem> sortBy = null) => (builder, seq) =>
+            FastGridSort<TItem> sortBy = null,
+            string uniqueId = null) => (builder, seq) =>
         {
             builder.OpenComponent<TemplateColumn<TItem>>(seq);
+
+            // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
+            if (uniqueId is not null)
+            {
+                builder.AddAttribute(seq + 90, "UniqueID", uniqueId);
+            }
 
             if (template is not null)
             {

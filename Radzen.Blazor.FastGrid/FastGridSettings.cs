@@ -15,7 +15,7 @@ namespace Radzen.FastGrid
     /// </remarks>
     public class FastGridSettings
     {
-        /// <summary>Per-column state, keyed by the column's property path.</summary>
+        /// <summary>Per-column state, keyed by the column's identity.</summary>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227:Collection properties should be read only",
             Justification = "The type is deserialized from storage, which needs the setter.")]
         public IList<FastGridColumnSettings>? Columns { get; set; }
@@ -28,13 +28,21 @@ namespace Radzen.FastGrid
     }
 
     /// <summary>
-    /// One column's stored state. A column with no property path - a template column that names no
-    /// member - cannot be identified across a reload and is not persisted.
+    /// One column's stored state. A column that nothing names - a template column declaring neither a
+    /// <c>UniqueID</c> nor a sort, or a column over a computed expression declaring no <c>UniqueID</c> -
+    /// cannot be identified across a reload and is not persisted.
     /// </summary>
     public class FastGridColumnSettings
     {
-        /// <summary>The column's dotted property path, which is what identifies it.</summary>
-        public string? Property { get; set; }
+        /// <summary>
+        /// What identifies the column: its declared <c>UniqueID</c>, or the member it displays where
+        /// nothing was declared.
+        /// </summary>
+        /// <remarks>
+        /// Not the column's sort path, which is what this was before §27 and is why a column displaying
+        /// one member and ordering by another was restored onto the wrong column.
+        /// </remarks>
+        public string? UniqueID { get; set; }
 
         /// <summary>The column's place in the sort, or null when it is not sorted.</summary>
         public SortOrder? SortOrder { get; set; }
