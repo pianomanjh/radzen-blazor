@@ -627,10 +627,16 @@ namespace Radzen.FastGrid.Tests
         [Fact]
         public void ASettingsRestoreDoesNotDropASortItCannotName()
         {
-            // The same reach problem on the sort side, and the same §27 change of shape: a column that
-            // names no member can still sort, because SortBy gives it a path to order by while nothing
-            // gives it an identity. Clearing the list wholesale threw away a sort the restore has no way
-            // to re-add.
+            // The same reach problem on the sort side. The column that shows it is a template column
+            // ordered by a computed FastGridSort: it can sort, because a computed key still orders rows,
+            // and it names nothing, because there is no displayed member and the sort has no Path to
+            // fall back to. Clearing the list wholesale threw away a sort the restore has no way to
+            // re-add.
+            //
+            // It is NOT a computed PropertyColumn with a member SortBy, which is what this test used
+            // between §27's build and its review: that column falls back to its sort path and so does
+            // have an identity. The review found the fallback missing, and this test was passing
+            // because of the bug.
             using var ctx = new TestContext();
 
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -649,13 +655,14 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.Settings, settings);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Property<Person, string>(x => x.First),
-                    Columns.Property<Person, string>(x => x.Last + "!",
-                        sortBy: x => x.Last, sortOrder: SortOrder.Ascending)));
+                    Columns.Template<Person>(item => b => b.AddContent(0, item.Salary),
+                        sortBy: FastGridSort<Person>.By(x => x.Salary * 2),
+                        sortOrder: SortOrder.Ascending)));
             });
 
-            // Last ascending: Adams, Bell, Cook, Draper.
+            // Salary ascending: Dave 1000, Alice 2000, Bob 3000, Carol 4000.
             Assert.Equal(
-                new[] { "Carol", "Dave", "Bob", "Alice" },
+                new[] { "Dave", "Alice", "Bob", "Carol" },
                 cut.FindAll("tbody tr").Select(r => r.QuerySelectorAll("td")[0].TextContent).ToArray());
         }
 

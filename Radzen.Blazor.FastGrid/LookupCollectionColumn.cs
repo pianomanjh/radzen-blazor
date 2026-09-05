@@ -39,7 +39,7 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         /// <remarks>The id collection this column is bound to. See LookupColumn for why the id.</remarks>
-        internal override string? IdentitySource => path;
+        internal override string? DisplayPath => path;
 
         /// <inheritdoc />
         public override Type FilterPropertyType => typeof(IEnumerable<TKey>);
