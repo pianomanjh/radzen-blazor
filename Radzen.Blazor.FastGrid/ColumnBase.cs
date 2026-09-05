@@ -86,13 +86,21 @@ namespace Radzen.FastGrid
         /// It is public because the picker names it through <c>TextProperty</c>, which reads it by name.
         /// </para>
         /// <para>
-        /// The last resort is <see cref="Identity" /> rather than <see cref="SortPath" />, which it was
-        /// while the two were one string. A column displaying <c>First</c> and sorting by <c>Last</c> was
-        /// offered in the picker as "Last", which describes the ordering rather than the cells - the same
-        /// fault <see cref="PropertyColumn{TItem, TProp}.HeaderText" /> already had a comment about.
+        /// The last resort is the member the column shows rather than <see cref="SortPath" />, which it
+        /// was while the two were one string. A column displaying <c>First</c> and sorting by <c>Last</c>
+        /// was offered in the picker as "Last", which describes the ordering rather than the cells - the
+        /// same fault <see cref="PropertyColumn{TItem, TProp}.HeaderText" /> already had a comment about.
+        /// </para>
+        /// <para>
+        /// <see cref="IdentitySource" /> rather than <see cref="Identity" />, and the difference is that
+        /// <see cref="Identity" /> prefers a declared <see cref="UniqueID" /> - which is a storage key
+        /// and not a label. An author writes one to tell two columns over a member apart, which is
+        /// exactly the case least likely to carry a <see cref="Title" />, so reading it here would put
+        /// "col_3" in front of a user. It is still the final fallback, because a column that names
+        /// nothing else is better identified by its key than by an empty row in the list.
         /// </para>
         /// </remarks>
-        public string PickerTitle => ColumnPickerTitle ?? Title ?? Identity.Name ?? string.Empty;
+        public string PickerTitle => ColumnPickerTitle ?? Title ?? IdentitySource ?? UniqueID ?? string.Empty;
 
         bool declaredVisible = true;
 
@@ -968,8 +976,12 @@ namespace Radzen.FastGrid
 
             if (!string.Equals(reportedIdentity, identity, StringComparison.Ordinal))
             {
-                reportedIdentity = identity;
+                // Told before recorded. SetParametersAsync throws on a null Grid so the conditional
+                // cannot decline today, but a field saying "I have reported this" when nothing was told
+                // would never report that identity again - and the two lines should not disagree about
+                // whether the call is certain.
                 Grid?.InvalidateColumnIdentities();
+                reportedIdentity = identity;
             }
 
             if (!initialized)
@@ -1079,6 +1091,12 @@ namespace Radzen.FastGrid
         /// <c>Last</c> while ordering by <c>First</c> answered to the same name as the column that
         /// really is <c>First</c>.
         /// <para>
+        /// Deliberately not defaulted through <see cref="FilterPropertyPath" />, which three of the four
+        /// columns that override this happen to answer identically. A filter path is a query and this is
+        /// not, and coupling them would rebuild §10b's class of fault from the other side: a column
+        /// given a <c>FilterBy</c> would change its name.
+        /// </para>
+        /// <para>
         /// Internal, which locks an out-of-assembly column out of the derivation and out of nothing
         /// else: <see cref="UniqueID" /> is public, so such a column declares. Opening this would
         /// publish another member of the protocol §15's candidate 6 wants to publish once, and it is
@@ -1101,8 +1119,8 @@ namespace Radzen.FastGrid
         /// <para>
         /// The fallback is load-bearing rather than tidy. A review found that without it a
         /// <see cref="PropertyColumn{TItem, TProp}" /> whose display is computed but which declares a
-        /// member <c>SortBy</c> - identity <c>null</c>, <c>SortPath</c> non-null - **silently stopped
-        /// persisting** width, order, visibility and filter that it had persisted before §27. §27 said
+        /// member <c>SortBy</c> - identity <c>null</c>, <c>SortPath</c> non-null - <em>silently stopped
+        /// persisting</em> width, order, visibility and filter that it had persisted before §27. §27 said
         /// "nothing changes for them" and that was the one shape where something did.
         /// </para>
         /// </remarks>

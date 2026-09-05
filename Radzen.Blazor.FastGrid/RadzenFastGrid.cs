@@ -35,9 +35,11 @@ namespace Radzen.FastGrid
         // test, because any column that has a name reports one on its first parameter set and that is
         // what moves the counter. A grid whose columns all name nothing never walks and never needs to.
         //
-        // That mutation surviving is also what confirms the ordering this depends on: every column's
-        // OnParametersSet has run by the time Defer renders the table, or the collision tests would have
-        // found the counter still at zero and skipped the walk.
+        // The ordering this depends on is confirmed by the collision tests passing with it seeded here
+        // rather than below: a walk happens at all only because every column's OnParametersSet has run
+        // by the time Defer renders the table. Note it is the unmutated code that says so, not the
+        // mutant - seeded at -1 the first walk is unconditional, so that mutant survives under either
+        // ordering and carries no information about it. A first draft of this comment claimed it did.
         int checkedColumnIdentityGeneration;
 
         // The columns actually drawn, in the order they are drawn, with their sort keys alongside.
@@ -546,9 +548,11 @@ namespace Radzen.FastGrid
         /// it, which is worse than no check.
         /// </para>
         /// <para>
-        /// Nested loops rather than a set: it runs only when the generation moved, the counts here are
-        /// tens rather than thousands, and §3's rule 5 is about allocation. A HashSet per check would be
-        /// an allocation to avoid comparisons nobody is paying for.
+        /// Nested loops rather than a set: it runs only when the generation moved, and the counts here
+        /// are tens rather than thousands. §3's allocation rules are rules 1-3 and are about what a row
+        /// and a cell cost - a HashSet per check would be an allocation bought to avoid comparisons
+        /// nobody is paying for. (Rule 5, cited here in a first draft, is the boxing rule and has
+        /// nothing to say about this.)
         /// </para>
         /// </remarks>
         void CheckColumnIdentities()

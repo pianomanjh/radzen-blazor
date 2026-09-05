@@ -787,9 +787,10 @@ onto the other, and the grid answered with rows neither column asked for.
 **One sentence of this entry was wrong and §27 corrects it.** It said **`RadzenDataGrid` does not have
 this problem**, because "it matches on `UniqueID` first and falls back to `Property` only when there is
 none". The matching is exactly that (`RadzenDataGrid.razor.cs:4227, 4623`) and the derivation defeats
-it: `SetColumnDefaults`, called from `OnInitialized`, overwrites the parameter unconditionally -
-`UniqueID = Property` where there is one, `FilterProperty` otherwise, the empty string where there is
-neither (`RadzenDataGridColumn.razor.cs:250-257`). A declared `UniqueID` on any column with a `Property`
+it: `SetColumnDefaults`, called from `OnInitialized` and again at `:1657`, overwrites the parameter
+unconditionally in all three of its branches - `$"{Property}.{FilterProperty}"` where both are set, else
+`Property`, else `FilterProperty`, which is the empty string where there is neither
+(`RadzenDataGridColumn.razor.cs:250-257`). A declared `UniqueID` on any column with a `Property`
 is discarded, so the escape hatch it appears to offer does not exist. What it does avoid, by keying on
 the display property rather than the sort path, is the second collision above - and that is the half
 worth adopting.
@@ -5506,9 +5507,9 @@ path doing a query path's job, and this section drops it: two symptoms, not thre
 **And §10b's comparison is half right.** It says `RadzenDataGrid` "matches on `UniqueID` first and falls
 back to `Property` only when there is none". The matching is exactly that
 (`RadzenDataGrid.razor.cs:4227, 4623`). The derivation is not: `SetColumnDefaults`, called from
-`OnInitialized`, overwrites the parameter unconditionally - `UniqueID = Property` where there is one,
-`FilterProperty` otherwise, and the empty string when there is neither
-(`RadzenDataGridColumn.razor.cs:250-257`). So a declared `UniqueID` on any column with a `Property` is
+`OnInitialized` and again at `:1657`, overwrites the parameter unconditionally in all three of its
+branches - `$"{Property}.{FilterProperty}"` where both are set, else `Property`, else `FilterProperty`,
+which is the empty string where there is neither (`RadzenDataGridColumn.razor.cs:250-257`). So a declared `UniqueID` on any column with a `Property` is
 discarded, and the escape hatch the sibling appears to offer does not exist. What it *does* avoid is our
 second fault, and by accident: it keys on the display property, so its identity never follows a `SortBy`.
 The idea is worth adopting. The implementation is the thing to not copy.
@@ -5831,3 +5832,74 @@ back to. That is the shape the test used *before* §27 touched it, arrived at ag
 because a mutation asks whether a test would notice the code changing - not whether a shape nobody wrote
 a test for still works. The bullet in "where this could still be wrong" named the risk precisely and the
 build shipped without acting on it. **A recorded doubt is a task, not an absolution.**
+### What the second review found, on both axes
+
+The first round of reviewers stalled without reporting; the second round ran against the fix above and
+found five things, one of which refuted a reviewer rather than the code.
+
+**Two more collision shapes, and one of them breaks markup that worked.** §27 weighed the decision to
+throw using three examples and called the hidden-beside-visible column "the ordinary markup of the
+three". Two more belong on that list, both found by writing the markup rather than by reasoning about it:
+
+- **A `CollectionColumn` listing one collection two ways.** `Property="x => x.Accounts"` twice, differing
+  only in `DisplayProperty` - names in one column, regions in the other. `IdentitySource` is the
+  *collection* path and ignores `DisplayProperty`, so both answer to `Accounts` and the grid throws.
+  **This is the one shape that went from working to throwing rather than from silently wrong to
+  throwing**: before §27 both columns had no key at all (no `SortBy`), so they were two nameless columns
+  that persisted nothing and rendered fine.
+- **One member shown twice with different `Format`s** - `Hired` as a date and as a time. Both answer to
+  `Hired`. This was already a silent collision before §27 and is the same shape as `gridbench`'s.
+
+Neither changes the decision, and the fix for both is one `UniqueID`. Composing the display member into
+the identity would separate them and is refused for the reason already in "Deliberately not proposed": an
+identity that moves when `DisplayProperty` or `Format` is edited is not a name.
+
+**The stored key moved for three column types and was asserted for one.** New key is
+`DisplayPath ?? SortPath`; the old key was `SortSource?.Path` (or `PropertyColumn`'s `SortBy is null ?
+displayPath : sortPath`). So the key changes wherever a column has a display path that differs from its
+sort path - which §27 narrated only for `PropertyColumn`. It happens identically, on canonical markup,
+for `LookupColumn`, `LookupCollectionColumn` and `CollectionColumn`: a lookup over `p.CategoryId` sorted
+by `Category.Name` used to be stored under `Category.Name` and is stored under `CategoryId` now. The
+lookup test asserts both strings now rather than only the identity.
+
+**`TemplateColumn`'s key is bit-for-bit unchanged**, which the review established algebraically rather
+than by testing: its `DisplayPath` is null, so `DisplayPath ?? SortPath` reduces to `SortPath`, which is
+the expression the old key already was. And because the new key is `DisplayPath ?? old key` for all five
+types, **no column can be nameless today that was named before** - the class of regression the first
+review found has exactly one member, and it is fixed.
+
+**The drop-down defers the throw to the moment the popup opens.** `RadzenFastDropDownDataGrid` forwards
+`ChildContent` into an inner grid that is only constructed when the popup opens, and that inner grid
+never binds `Settings`. So colliding columns there render fine, throw on first open, from inside a popup,
+protecting state that is never stored. §14's "not in `RadzenFastDropDownDataGrid`" exclusion meant this
+was never weighed, and it is the strongest argument yet for the alternative §27 recorded and rejected -
+dropping both columns from capture instead of throwing. **Recorded, not acted on**: making the throw
+conditional on a grid that persists is the ambient guard §27 argued against, and the drop-down's own open
+layout question comes first.
+
+**And a review finding that the compiler refuted.** The Standards axis argued that `ColumnIdentity`'s
+`IEquatable<>`, `==`, `!=` and `GetHashCode` were unearned ceremony with no caller, having checked
+`Radzen.Blazor.FastGrid.csproj` for an analyzer opt-in and found none. Removing them **does not
+compile**: CA1066, CA2231 and CA1815 are all on by default for this target, and the package builds
+warnings as errors. The reviewer was right that nothing calls them and wrong about why they are there.
+**This is the cost of the rule that one reviewer runs nothing** - it is the rule that keeps the two from
+racing, and it makes that reviewer's claims about the build a guess. The type now says why those members
+exist, so the next reader does not try the same deletion.
+
+**What the standards axis got right**, and all of it is applied: the seeding comment claimed a mutation
+proved an ordering it cannot prove (seeded at -1 the first walk is unconditional, so that mutant survives
+under either ordering - the evidence is the *unmutated* code passing with the seed level); `§3 rule 5`
+was cited for an allocation argument when rule 5 is the boxing rule and rules 1-3 are the ones that bear
+on it; the struct-versus-class rationale named "a reference per column" when the real reason is a
+reference per *read*; `reportedIdentity` was recorded before the call it records, which would have made a
+column believe it had reported when it had not; and `DisplayPath` needed a sentence saying it is
+deliberately not defaulted through `FilterPropertyPath`, which three of its four overrides happen to
+answer identically.
+
+**The picker was showing a storage key as a column name.** `PickerTitle` fell back to `Identity.Name`,
+which prefers a declared `UniqueID` - and an author writes one to tell two columns over a member apart,
+which is exactly the case least likely to carry a `Title`. A column with `UniqueID="col_3"` and no title
+was offered to the user as "col_3". It falls back to `IdentitySource` first and to `UniqueID` only when
+there is no member at all, which keeps the promise that summary has always made - that a column naming
+neither is still identifiable in the list - without putting a key in front of a user. Two tests and a
+mutation.
