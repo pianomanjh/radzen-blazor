@@ -204,7 +204,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
 
-            Assert.Equal("Customer.Name", column.PropertyPath);
+            Assert.Equal("Customer.Name", column.SortPath);
             Assert.True(column.CanSort);
         }
 
@@ -218,7 +218,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
 
-            Assert.Null(column.PropertyPath);
+            Assert.Null(column.SortPath);
             Assert.False(column.CanSort);
         }
 
@@ -232,7 +232,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
 
-            Assert.Equal("Last", column.PropertyPath);
+            Assert.Equal("Last", column.SortPath);
             Assert.True(column.CanSort);
         }
 
@@ -246,7 +246,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
 
-            Assert.Equal("First", column.PropertyPath);
+            Assert.Equal("First", column.SortPath);
             Assert.False(column.CanSort);
         }
 

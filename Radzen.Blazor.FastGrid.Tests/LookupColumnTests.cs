@@ -628,7 +628,7 @@ namespace Radzen.FastGrid.Tests
         {
             // The reason ids are what the filter carries everywhere. Stored as a name it would break the
             // day someone edited the lookup row; stored as an id it does not. Note the column needs a
-            // SortBy to be stored at all - settings are keyed on PropertyPath, which is the sort path,
+            // SortBy to be stored at all - settings are keyed on SortPath, which is the sort path,
             // so a lookup column without one shares CollectionColumn's gap. §10b has that open.
             using var ctx = new TestContext();
 

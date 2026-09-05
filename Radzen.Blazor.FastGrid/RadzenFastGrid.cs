@@ -452,7 +452,7 @@ namespace Radzen.FastGrid
                 {
                     var (column, descending) = sorts[i];
 
-                    if (column.PropertyPath is { Length: > 0 } path)
+                    if (column.SortPath is { Length: > 0 } path)
                     {
                         descriptors.Add(new SortDescriptor
                         {

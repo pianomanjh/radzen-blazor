@@ -46,7 +46,7 @@ namespace Radzen.FastGrid
         /// Not the base's answer, which is the sort's path alone: this column can name a path with no
         /// sort behind it, and a <c>LoadData</c> grid orders by exactly that.
         /// </remarks>
-        public override string? PropertyPath => SortBy?.Path ?? SortProperty;
+        public override string? SortPath => SortBy?.Path ?? SortProperty;
 
         /// <inheritdoc />
         /// <remarks>

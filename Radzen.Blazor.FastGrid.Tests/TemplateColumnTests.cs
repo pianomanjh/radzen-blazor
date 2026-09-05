@@ -80,7 +80,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<TemplateColumn<Person>>().Instance;
 
-            Assert.Equal("Customer.Name", column.PropertyPath);
+            Assert.Equal("Customer.Name", column.SortPath);
             Assert.True(column.CanSort);
         }
 
@@ -94,7 +94,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<TemplateColumn<Person>>().Instance;
 
-            Assert.Null(column.PropertyPath);
+            Assert.Null(column.SortPath);
             Assert.False(column.CanSort);
         }
 
@@ -108,7 +108,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = cut.FindComponent<TemplateColumn<Person>>().Instance;
 
-            Assert.Equal("Last", column.PropertyPath);
+            Assert.Equal("Last", column.SortPath);
             Assert.False(column.CanSort);
         }
 

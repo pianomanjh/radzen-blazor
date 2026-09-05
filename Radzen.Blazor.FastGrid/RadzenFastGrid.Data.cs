@@ -1220,18 +1220,18 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            // A reset must not reach further than the restore below it. Both are keyed on PropertyPath,
+            // A reset must not reach further than the restore below it. Both are keyed on SortPath,
             // and a column without one is never stored - so clearing its filter or its sort discards
             // state that nothing below can put back, and the column loses what its markup declared.
             //
-            // A CollectionColumn reaches this twice over: its PropertyPath is its sort's, so a column
+            // A CollectionColumn reaches this twice over: its SortPath is its sort's, so a column
             // with no SortBy has none at all, and one whose SortBy is a computed key has none either -
             // while both still filter, by FilterPropertyPath, which is a different path.
-            sorts.RemoveAll(entry => entry.Column.PropertyPath is { Length: > 0 });
+            sorts.RemoveAll(entry => entry.Column.SortPath is { Length: > 0 });
 
             for (var i = 0; i < columns.Count; i++)
             {
-                if (columns[i].PropertyPath is { Length: > 0 })
+                if (columns[i].SortPath is { Length: > 0 })
                 {
                     columns[i].SetFilter(null, null, null);
                 }
@@ -1311,7 +1311,7 @@ namespace Radzen.FastGrid
         {
             for (var i = 0; i < columns.Count; i++)
             {
-                if (string.Equals(columns[i].PropertyPath, path, StringComparison.Ordinal))
+                if (string.Equals(columns[i].SortPath, path, StringComparison.Ordinal))
                 {
                     return columns[i];
                 }
@@ -1330,7 +1330,7 @@ namespace Radzen.FastGrid
             {
                 var (column, descending) = sorts[i];
 
-                if (column.PropertyPath is { Length: > 0 } path)
+                if (column.SortPath is { Length: > 0 } path)
                 {
                     stored.Add(new FastGridColumnSettings
                     {
@@ -1356,7 +1356,7 @@ namespace Radzen.FastGrid
 
                 if ((!column.HasFilter && visibility is null && width is null && orderIndex is null)
                     || SortIndexOf(column) >= 0
-                    || column.PropertyPath is not { Length: > 0 } path)
+                    || column.SortPath is not { Length: > 0 } path)
                 {
                     continue;
                 }
@@ -1672,7 +1672,7 @@ namespace Radzen.FastGrid
             {
                 var (column, descending) = sorts[i];
 
-                if (column.PropertyPath is not { Length: > 0 } path)
+                if (column.SortPath is not { Length: > 0 } path)
                 {
                     continue;
                 }

@@ -56,7 +56,7 @@ namespace Radzen.FastGrid
         string? displayPath;
 
         /// <inheritdoc />
-        public override string? PropertyPath => path;
+        public override string? SortPath => path;
 
         /// <summary>
         /// The property to filter by, when it differs from the one displayed. Must be of the same type;

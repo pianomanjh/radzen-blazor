@@ -585,8 +585,8 @@ namespace Radzen.FastGrid.Tests
         [Fact]
         public void ASettingsRestoreDoesNotClearTheFilterOfAColumnItCannotName()
         {
-            // Settings identify a column by PropertyPath, but a column filters by FilterPropertyPath,
-            // and for a CollectionColumn without SortBy those disagree: it has no PropertyPath, so it
+            // Settings identify a column by SortPath, but a column filters by FilterPropertyPath,
+            // and for a CollectionColumn without SortBy those disagree: it has no SortPath, so it
             // is never stored - yet the restore cleared every column's filter before putting back the
             // ones it could name. A reset must not reach further than the restore that follows it.
             using var ctx = new TestContext();
