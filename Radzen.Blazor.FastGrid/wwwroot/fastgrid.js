@@ -779,21 +779,14 @@ export function releaseFit(tableId) {
   }
 }
 
-
-// One object rather than ten positional arguments. They were written in order by the caller, read in
-// order here, and read in order a third time by the test that doubled this - so swapping two of them
-// was silent in all three places at once. `AutoFitAsk` on the C# side is the same shape, and is what
-// the test now reads instead of counting arguments.
-export async function autoFit(ask) {
-  const { table: tableId, indices, min: minWidths, max: maxWidths, toggleOffset, bare, wait, animate,
-    overflow, required } = ask;
-
-  const table = await ready(tableId, wait);
-
-  if (!table) {
-    return null;
-  }
-
+// The half of a fit that reads the page, split out because two callers need it and only one of them
+// is ready to write when it has the answer. The popup sizes its own panel from `measured` against
+// `container` before any column is placed, so the numbers have to be available a step earlier than
+// the pass that produces them used to hand them over.
+//
+// Nothing here writes a width. It adds and removes the measuring class, and everything it learns comes
+// back in one object rather than being acted on where it was found.
+function measurePass(table, indices, minWidths, maxWidths, toggleOffset, bare) {
   const colgroup = table.querySelector(':scope > colgroup');
 
   if (!colgroup) {
@@ -934,6 +927,33 @@ export async function autoFit(ask) {
   } finally {
     table.classList.remove(MEASURING);
   }
+
+  return { colgroup, headRow, widths, pixels, headers, bodies, bareWidth, measured, reserved,
+    container, minimums };
+}
+
+// One object rather than ten positional arguments. They were written in order by the caller, read in
+// order here, and read in order a third time by the test that doubled this - so swapping two of them
+// was silent in all three places at once. `AutoFitAsk` on the C# side is the same shape, and is what
+// the test now reads instead of counting arguments.
+export async function autoFit(ask) {
+  const { table: tableId, indices, min: minWidths, max: maxWidths, toggleOffset, bare, wait, animate,
+    overflow, required } = ask;
+
+  const table = await ready(tableId, wait);
+
+  if (!table) {
+    return null;
+  }
+
+  const pass = measurePass(table, indices, minWidths, maxWidths, toggleOffset, bare);
+
+  if (!pass) {
+    return null;
+  }
+
+  const { colgroup, headRow, widths, pixels, headers, bodies, bareWidth, measured, reserved,
+    container, minimums } = pass;
 
   // Bareness exists to absorb slack. When the fitted columns already fill the container there is none
   // to absorb, and a col with no width in a table that has overflowed its parent is given nothing at
