@@ -5403,3 +5403,208 @@ enforces; the held buffers' lifetime explained; and `PoolProbe.cs` added to `REA
 Left as it was, with a reason: §9's benchmark protocol now carries `--buildTimeout 900` and the refuted
 mechanism's correction, which review found missing - the rulebook had not been given the rule the section
 spent a subsection deriving.
+
+---
+
+## 27. A column's identity is a concept with no name - the design
+
+§15's candidate 7, and the last of its eight. It is the one §10b twice refused to close by guessing, and
+the guess it was guarding against is real: §14 tried the obvious separation, found it created a *new*
+collision, and recorded that rather than shipping it. What follows is not that guess. It is the
+observation that the collision §14 refused to create is only intolerable because it would have been
+**silent**, and that a grid which says so can afford the model that fixes everything else.
+
+### The faults
+
+**Two columns over one property are both restored onto the first.** `ColumnForPath`
+(`RadzenFastGrid.Data.cs:1310`) answers with the first column whose `PropertyPath` matches, and
+`CaptureSettings` writes every column under that same key. Hiding the second and reloading hides the
+*first* - a wrong answer on screen, not merely lost state. §10b has it, open, since the column-model pass.
+
+**It does not take a duplicated property.** A `PropertyColumn`'s `PropertyPath` is its *sort* path when
+`SortBy` is set (`PropertyColumn.cs:125`), so a column displaying `Last` and sorting by `First` shares an
+identity with the column displaying `First`. Two ordinary columns, nothing declared twice, and a filter
+stored for one restored onto the other.
+
+**A column that names no member has no identity at all**, and is silently not persisted. That is a
+`TemplateColumn` with no `SortBy` or `SortProperty`, a `CollectionColumn` or `LookupColumn` with no
+`SortBy`, and a `PropertyColumn` whose `Property` is computed - `PropertyPathResolver.For` answers null
+for anything but a member access (`PropertyPathResolver.cs:47`). Its width, its position in a dragged
+order, its visibility and its filter are never captured, and nothing says so. §15 calls this the
+`TemplateColumn` limitation and §14 records the lookup column arriving at the same place by its own
+route; they are one fault seen three times.
+
+**And the reason all three exist is that the name is wrong.** `PropertyPath`'s own summary says the
+column "sorts, filters and persists by" it (`ColumnBase.cs:1017`). Three jobs, one string, and the two
+that are not sorting were never designed - they were inherited from a name that sounded general.
+
+### What identity is, and what it is not
+
+**A column's identity is what names it across a reload. It is not a query path.** That is the whole of
+the model, and everything below follows from taking the second sentence literally.
+
+The grid has three query paths and they are correctly plural, because each answers a question some
+*consumer outside the grid* asks:
+
+- **`SortPath`** - the string a remote sort travels under, consumed by `OrderBy()` and published as
+  `Sorts`. It is `PropertyPath` renamed, and after this piece it means one thing.
+- **`FilterPropertyPath`** - what `ApplyFilters` matches an incoming `FilterDescriptor` against
+  (`Data.cs:1137`), so a `RadzenDataFilter` or a restored remote filter can drive the grid.
+- **`FilterMemberPath`** - the member inside a collection element, for the reflective descriptor.
+
+Identity answers to none of them, because no consumer outside the grid ever asks *which column is this*.
+Only the grid does, and it asks in exactly one place.
+
+**§15's entry names three symptoms and one of them is not.** It lists `FilterPropertyPath` keying the
+filter lookup beside `PropertyPath` keying settings and the remote sort. `ColumnByFilterPath` has a
+single caller, `ApplyFilters`, which is public and takes `FilterDescriptor`s built by somebody else out
+of member names. Keying that by an identity the grid invented would break it on arrival. It is a query
+path doing a query path's job, and this section drops it: two symptoms, not three.
+
+**And §10b's comparison is half right.** It says `RadzenDataGrid` "matches on `UniqueID` first and falls
+back to `Property` only when there is none". The matching is exactly that
+(`RadzenDataGrid.razor.cs:4227, 4623`). The derivation is not: `SetColumnDefaults`, called from
+`OnInitialized`, overwrites the parameter unconditionally - `UniqueID = Property` where there is one,
+`FilterProperty` otherwise, and the empty string when there is neither
+(`RadzenDataGridColumn.razor.cs:250-257`). So a declared `UniqueID` on any column with a `Property` is
+discarded, and the escape hatch the sibling appears to offer does not exist. What it *does* avoid is our
+second fault, and by accident: it keys on the display property, so its identity never follows a `SortBy`.
+The idea is worth adopting. The implementation is the thing to not copy.
+
+### What changes
+
+**1. One type says how a column is named.** `ColumnIdentity`, a readonly struct in its own file, after
+`RowIdentity` - which is the same shape of problem one level down and was answered the same way in §21. It
+composes two things and records which it used: the column's declared `UniqueID`, and the path the column
+supplies when nothing is declared. §3 rules out a class; it is built once per parameter set over a string
+the column already memoizes.
+
+**2. `UniqueID` is a parameter on `ColumnBase`.** Declared beats derived, always, and unlike the sibling
+nothing overwrites it. It is the one-attribute answer to every case the derivation cannot name, and it is
+what the grid's own exception text tells an author to write.
+
+**3. One new `internal virtual` supplies the derived path.** `IdentitySource`, mirroring `SortSource`
+(`ColumnBase.cs:1013`) - which exists for exactly this reason, so that a rule is answered once rather
+than five times in three columns. Null by default. `PropertyColumn`, `CollectionColumn`, `LookupColumn`
+and `LookupCollectionColumn` override it to their **display** path, which is the change that fixes the
+second fault: identity stops following `SortBy`. `TemplateColumn` overrides it to its sort path.
+
+**The template column is the exception and it is deliberate.** The objection to deriving identity from a
+sort path is that it makes a column's name follow a parameter that is about something else - which is the
+second fault exactly. A template column has no competing candidate: it has no display path, so its sort
+path is not a second name beating the real one, it is the only name in the markup. Deriving from it keeps
+every template column that persists today persisting, and no test would have caught the regression if it
+had not: the suite pins a template column's *filtering* by its sort property
+(`ReviewRegressionTests.cs:238`) and its settings identity nowhere.
+
+**`IdentitySource` is `internal`, and an out-of-assembly column is not locked out.** That is the trade
+§20 would otherwise object to - it adds a member to the internal protocol candidate 6 wants to publish -
+and it is affordable because `UniqueID` is public. A third-party column cannot supply a derivation hook
+and does not need one: it declares.
+
+**4. A column with no identity persists nothing, and that is the honest failure.** The grid never invents
+one. Deriving from declaration order was available and is refused here: insert a column above and every
+invented identity below it shifts by one, so stored width and order reapply to the wrong columns - which
+is the first fault re-created in a new place, and worse than remembering nothing.
+
+**5. Two columns answering the same throw.** `InvalidOperationException` from the deferred render, naming
+both columns and the attribute to declare, in the shape of the library's two existing markup-mistake
+throws (`ColumnBase.cs:1158`, `LookupColumnBase.cs:76`). The message distinguishes two derived identities
+from two declared ones, because the fix differs and the struct knows which it is.
+
+**This is the one place this piece can break a grid that works today.** Two columns over one property,
+never persisting anything, render fine now and will throw. That is the trade: §10b's standing lesson is
+that this grid's faults are silent, and this one puts a wrong answer on screen. A grid whose columns
+cannot be told apart is misconfigured whether or not anyone has yet asked it to remember anything, and
+making the throw conditional on `Settings` being bound would mean the same markup throws or does not
+depending on a parameter set somewhere else - so an author who later binds `Settings` gets an exception
+from markup they did not touch.
+
+**6. The check runs when the column set changes, and nowhere else.** A generation counter bumped by
+`AddColumn` and `RemoveColumn`, compared once per render; the walk happens only when it moved. It goes in
+the deferred `RenderTable` (`RadzenFastGrid.cs:775`) beside `ApplySettings`, which already depends on the
+same guarantee: `Defer` exists so the table is written after every column has registered. It walks all
+registered columns rather than the drawn ones, because `CaptureSettings` does. Two columns that both
+answer *nothing* are not a collision.
+
+**7. The stored key says what it is.** `FastGridColumnSettings.Property` becomes `UniqueID`, and its
+summary stops calling a dotted property path the thing that identifies a column. Nothing has shipped -
+§8's package name is still open - so there is no format to be compatible with, and keeping `Property`
+beside a new key would put the fused identity back inside the serialized form.
+
+**8. The resolved identity is readable.** `ColumnBase.Identity`, public and read-only. An author who
+persists settings themselves gets a file keyed by strings they did not write, and without this there is
+no way to correlate a stored row back to a column except by re-deriving the rule by hand. It also gives
+a test something to assert other than the round trip, which matters because a round trip agrees with
+itself when both ends are wrong - §10b has that failure recorded twice.
+
+**9. The picker's last-resort label follows.** `PickerTitle` is `ColumnPickerTitle ?? Title ?? PropertyPath`
+(`ColumnBase.cs:86`). After the rename that reads as the *sort* path, which is a poor label for a column
+displaying something else, so it becomes `?? Identity`. This is the only user-visible change outside
+settings and the new throw: a column with no `Title` and a `SortBy` is listed in the picker under what it
+shows rather than what it orders by.
+
+### What this closes, and what it does not
+
+**§10b's open collision closes**, both halves.
+
+**§14's recorded-open item closes**, and the section that argued the opposite is corrected rather than
+quietly overwritten. §14 refused to separate the settings key from the query path because an id-path key
+would give a `LookupColumn` over `p.CategoryId` the same identity as a `PropertyColumn` over
+`p.CategoryId` - "§10b's collision newly created rather than avoided". That collision still exists under
+this model. What has changed is that it is no longer silent: the grid throws and names the fix, and the
+author writes one attribute. §14's reasoning was sound and its premise was that nothing would say so.
+
+**Candidate 6 stays blocked.** §15 refuses to open the eight `internal virtual` filter-row members while
+two things that would change them are open. This closes one of the two. §10's question - whether an
+operator menu, a date popup, a numeric range or an enum picker is built in - is untouched, so publishing
+that protocol is still publishing it twice.
+
+### Deliberately not proposed
+
+- **An identity for the sake of one.** Nothing here gives identity a second consumer. If a fourth thing
+  ever needs to name a column, it uses this; inventing that consumer now is how `PropertyPath` came to
+  mean three things.
+- **Composing the identity out of two paths**, as `RadzenDataGridColumn` does with
+  `$"{Property}.{FilterProperty}"`. It buys separation in a narrow case at the price of an identity that
+  moves when `FilterBy` is edited, and a name that moves when an unrelated parameter changes is not a
+  name.
+- **Anything in `RadzenFastDropDownDataGrid`.** §14's reason stands: its open layout question comes first.
+
+### How it is verified
+
+§9's six layers, and layer 6 is not optional - the picker label, the throw and the stored key are
+behaviour.
+
+1. The collision throws, for a duplicated property *and* for the `Last`/`First` case, and the message
+   names both columns. Mutated: with the check removed, and with it comparing the wrong strings.
+2. A declared `UniqueID` separates two columns over one property, and each is restored onto itself -
+   asserted through `Identity`, not only through the round trip.
+3. A template column with a `SortProperty` still persists its width, order and visibility; one with
+   neither persists nothing until it declares a `UniqueID`, and then persists.
+4. A column displaying `Last` and sorting by `First` stores under `Last`, and `OrderBy()` still emits
+   `First` - the two strings pulled apart in one test, which is the piece in one assertion.
+5. The generation counter: a grid whose column set never changes does not re-walk, and one that gains a
+   column does. Mutated by never bumping it, which must fail.
+6. `gridbench` at 1000 rows, before and after, alternating arms per the drift rule. The claim is
+   allocation-neutral: one struct per column per parameter set, and no per-row or per-cell path touched.
+
+### Where this could still be wrong
+
+- **The throw is the aggressive choice and it is not reversible by a parameter.** A grid with two columns
+  over one property that never persists anything stops rendering. If that turns out to be common markup
+  rather than a mistake, the answer is to drop both columns from capture and restore instead - which was
+  the rejected option, and is recorded here so it can be picked up without re-deriving it.
+- **"Display path" is doing quiet work.** For four column types it is `PropertyPathResolver.For(Property)`,
+  which is well defined. For a `PropertyColumn` over a computed expression it is null, which is correct
+  and means those columns need a declared `UniqueID` where today they already persist nothing. Nothing
+  changes for them; it is worth checking that nothing does.
+- **The generation counter is a memo, and memos on this branch have a record.** §10 has four recorded
+  participants in the `!ReferenceEquals` trap. This one is an integer rather than a reference, which is
+  what makes it safe, but the failure mode if it is wrong is a collision that stops being detected - a
+  silent return to the fault, which is the worst shape available. Its mutation is listed above for that
+  reason.
+- **Identity is derived in `OnDerive`, which runs per parameter set.** A column whose `Property` changes
+  between renders changes identity, and its stored state is then keyed under the old string. That is
+  already true of `PropertyPath` today and this changes nothing about it, but it is the kind of thing
+  that is true until someone builds dynamic columns on top.
