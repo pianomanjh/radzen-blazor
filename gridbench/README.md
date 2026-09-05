@@ -5,8 +5,16 @@ Exploratory harness, not shipped code and not in any solution — CI builds only
 
 Run it with:
 
-    dotnet run --project gridbench/Radzen.Blazor.GridBench.csproj -c Release -- --job short --filter "*SlimBench*"
+    dotnet run --project gridbench/Radzen.Blazor.GridBench.csproj -c Release -- --job short --filter "*SlimBench*" --buildTimeout 900
     dotnet run --project gridbench/Radzen.Blazor.GridBench.csproj -c Release -- probe
+    dotnet run --project gridbench/Radzen.Blazor.GridBench.csproj -c Release -- pool-probe 1000 20
+
+**`--buildTimeout 900` is not optional on a slow or busy machine, and leaving it off does not look like
+an error.** BenchmarkDotNet builds a generated project per run and gives it 120s; when that expires it
+reports `NA` in every column, prints "There are not any results runs" among a hundred other lines, and
+exits 0. A six-run loop was collected off this harness and tabulated before anyone noticed that the
+number of benchmarks executed was zero. **Check `executed benchmarks:` at the end of the run before
+believing a row** - the same rule the mutation sweeps learned, arriving from a different direction.
 
 ## What's here
 
@@ -179,13 +187,39 @@ disagreed by exactly that step on that row while every other row reproduced to w
 which is how it was noticed at all.
 
 The correlate is visible in the diagnoser's own columns: every 12.86 MB run records gen1 and gen2
-collections, and the 13.83 MB run records none. That points at `RenderTreeBuilder`'s pooled frame
-arrays - whether they survive between iterations decides whether the next one re-grows from scratch -
-and it is the same mechanism guessed at when responsive titles jumped from +0.4 KB against the pre-#8
-grid to +4,682 KB after it. That guess was recorded here as a hypothesis fitted to one measurement.
-It now has a second instance that can be reproduced on demand, so it is no longer fitted to one - but
-the mechanism is still inferred from a correlation rather than demonstrated, and it stays a hypothesis
-until something measures the pool directly.
+collections, and the 13.83 MB run records none. That was read here for three sessions as pointing at
+`RenderTreeBuilder`'s pooled frame arrays - whether they survive between iterations decides whether the
+next one re-grows from scratch - and recorded as a hypothesis that would stand "until something measures
+the pool directly".
+
+**Something has now measured the pool directly, and it is not the pool.** `dotnet run --project
+gridbench -- pool-probe` listens to `ArrayPool`'s own EventSource while rendering, so a rental is a
+bucket with a size and a reason rather than an inference from a GC column. What it finds:
+
+- The frame arrays *are* pooled, and that half is confirmed rather than refuted. Every render of this
+  row rents 65536, 32768 and 16384-element buffers from `ArrayPool<RenderTreeFrame>.Shared` - identified
+  by renting from that pool deliberately and matching the id, not assumed - and returns them. Only the
+  very first render allocates. Three forced gen2 collections did not make the next render re-allocate.
+- **A real pool miss is far too big to be this step.** Hold the buffers so the pool cannot satisfy the
+  rental and the render allocates **5,121 KB more**, of which 9,320 KB is frame array. The buckets are
+  2,560 / 1,280 / 640 KB. No bucket and no sum of buckets is 990 KB.
+- **The step is the JIT.** Allocation per render drops by **991 KB** after six to eight renders, with
+  identical pool events either side of the drop. `DOTNET_TieredCompilation=0` removes it entirely - flat
+  across twenty renders. So does `DOTNET_JitObjectStackAllocation=0`, and so does `DOTNET_TieredPGO=0`.
+  What moves is objects that tier-1 with dynamic PGO stack-allocates and tier-0 puts on the heap.
+
+That also explains the shape without inverting the correlation. Two stable values with nothing in
+between is what a one-time transition produces across fresh processes: it either completes before the
+measured window or inside it. And the runs that got far enough to be promoted are the same runs that
+accumulated the gen1 and gen2 collections, which is why the cheaper value is the one with the
+collections beside it rather than the other way about.
+
+**What did not reproduce, and is the honest gap.** Ten runs of this row on the current SDK returned
+12.86 MB four times and 12.91 MB six times - two values again, but a **51 KB** step, not a 990 KB one.
+The 13.83 MB mode did not appear at all. So the 991 KB step is measured and its mechanism is named, but
+the identification of it with the *historical* 13.83 MB sighting rests on the two numbers matching
+rather than on the sighting being reproduced. The 51 KB split matches the smaller second step the probe
+also shows, at 18,573 KB to 18,525 KB.
 
 **The operational consequence is the part that matters: take the modal value of several runs before
 recording anything from a reference row.** The 13,172 KB baseline in the table above is the modal value
@@ -859,7 +893,11 @@ and measured **+0.09 KB**. Six times the frames for a twentieth of the cost is n
 story, and the one thing the two attributes do not share is the range of their values: row indexes run
 to a thousand and column indexes run to six.
 
-The pooled frame array is still real, and the two sightings that remain are worth keeping side by side:
+The pooled frame array is still real - and it is now measured rather than supposed, by `pool-probe`
+above: the same buckets are rented and returned on every render and only the first one allocates. What
+that section takes away is its role in the bimodal step, not its existence. The two sightings that
+remain are exactly what a pooled rental that does not change bucket looks like, and the probe confirms
+the buckets do not change:
 
 - **Frozen columns**: two attribute frames on the cells of a frozen column. **1.10x time and +0.9 KB**.
 - **`aria-colindex`**: one attribute frame on every cell. **~1.2x time and +0.09 KB**.
