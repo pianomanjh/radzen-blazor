@@ -295,6 +295,17 @@ public class Program
                 a.Length > 2 ? int.Parse(a[2], CultureInfo.InvariantCulture) : 12);
             return;
         }
+        // §26's second step, localised: the same ladder over RadzenFastGrid rather than RadzenDataGrid.
+        // At 1000 rows the fast grid renders in ~155 KB, so a 48 B/row step would be a third of its
+        // total rather than 0.4% of it - which makes its absence as readable as its presence.
+        if (a.Length > 0 && a[0] == "fast-ladder")
+        {
+            await FastLadder.Run(
+                a.Length > 1 ? int.Parse(a[1], CultureInfo.InvariantCulture) : 1000,
+                a.Length > 2 ? int.Parse(a[2], CultureInfo.InvariantCulture) : 240);
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(a);
     }
 }

@@ -25,7 +25,8 @@ believing a row** - the same rule the mutation sweeps learned, arriving from a d
 | `Scaffold.cs` | Isolates the cost of Blazor's per-row *component* scaffolding, with no grid code involved |
 | `Slim.cs` | `SlimGrid<T>` prototype — Radzen's markup, QuickGrid's architecture |
 | `VisualDump.cs`, `measure.js` | Ad hoc side-by-side render and Playwright geometry read-back, for looking at by hand |
-| `PoolProbe.cs` | Reads `ArrayPool`'s own EventSource during a render — what the frame arrays cost and what they only appear to |
+| `PoolProbe.cs` | Reads `ArrayPool`'s own EventSource during a render — what the frame arrays cost and what they only appear to. Its first pass is the allocation ladder, now reported against two counters |
+| `FastLadder.cs` | The same ladder over `RadzenFastGrid`, which localises the reference row's two steps to `RadzenDataGrid` by being flat |
 
 The styling contract is **not** verified from here. It lives in `../Radzen.Blazor.FastGrid.Tests`
 (`dotnet test Radzen.Blazor.FastGrid.Tests`), which runs unattended — see *Styling parity check* below.
