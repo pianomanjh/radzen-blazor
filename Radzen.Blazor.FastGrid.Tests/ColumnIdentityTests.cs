@@ -276,12 +276,17 @@ namespace Radzen.FastGrid.Tests
             // nothing would say so.
             using var ctx = Context();
 
+            // Sorted by the name it shows, which is the canonical lookup markup and the case where the
+            // stored key MOVED: before §27 this column was stored under "Last", the path its sort
+            // travels under. Review found the move asserted nowhere for a lookup, only for a
+            // PropertyColumn - so both strings are pinned here.
             var cut = Render(ctx, Columns.Of(
                 Columns.Lookup<Person, int>(x => x.CategoryId,
                     FastGridLookup.Items(Lookups.CategoryRows(), c => c.Id, c => c.Name),
-                    title: "Category")));
+                    title: "Category", sortBy: FastGridSort<Person>.By(x => x.Last))));
 
             Assert.Equal(new[] { "CategoryId" }, Identities(cut));
+            Assert.Equal("Last", ColumnAt(cut, 0).SortPath);
         }
 
         // --- the round trip --------------------------------------------------------------------
@@ -340,6 +345,34 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, string>(x => x.First, sortBy: x => x.Last)));
 
             Assert.Equal("First", ColumnAt(cut, 0).PickerTitle);
+        }
+
+        [Fact]
+        public void ThePickerShowsTheMemberRatherThanADeclaredKey()
+        {
+            // Found by review. A UniqueID is a storage key, and an author writes one to tell two columns
+            // over a member apart - which is the case least likely to carry a Title. Reading Identity
+            // here would have put that key in front of a user as the column's name.
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, string>(x => x.First, uniqueId: "col_3")));
+
+            Assert.Equal("First", ColumnAt(cut, 1).PickerTitle);
+        }
+
+        [Fact]
+        public void ThePickerFallsBackToTheKeyOnlyWhenThereIsNoMember()
+        {
+            // The other end of the same rule: a key beats an empty row in the list, which is what
+            // PickerTitle's own summary has always promised.
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Template<Person>(item => b => b.AddContent(0, item.Last), uniqueId: "Actions")));
+
+            Assert.Equal("Actions", ColumnAt(cut, 0).PickerTitle);
         }
 
         // --- the message -----------------------------------------------------------------------

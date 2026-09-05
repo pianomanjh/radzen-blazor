@@ -22,9 +22,16 @@ namespace Radzen.FastGrid
     /// the grid. Nothing outside the grid ever asks which column this is.
     /// </para>
     /// <para>
-    /// A struct rather than a class because §3 rules out a reference per column for something a field
-    /// gives, and because there is nothing to keep: it is composed from two strings the column already
-    /// holds, whenever it is asked.
+    /// <see cref="IEquatable{T}" />, the operators and <see cref="GetHashCode" /> have no caller in this
+    /// assembly and are not ceremony: CA1066, CA2231 and CA1815 are all on by default for this target
+    /// and this package builds warnings as errors, so removing them does not compile. A review argued
+    /// they were unearned, having read the csproj for an analyzer opt-in rather than asked the compiler.
+    /// </para>
+    /// <para>
+    /// A struct because <see cref="ColumnBase{TItem}.Identity" /> is composed on every read rather than
+    /// stored, so a class would allocate once per read - per column per stored row in the settings
+    /// restore's lookup alone, and once per column per parameter set for the report that gates the
+    /// collision check. It is two strings the column already holds; there is nothing to keep.
     /// </para>
     /// </remarks>
     public readonly struct ColumnIdentity : IEquatable<ColumnIdentity>
@@ -105,7 +112,7 @@ namespace Radzen.FastGrid
                 "onto the first. Declare a distinct UniqueID on one of them.";
         }
 
-        /// <inheritdoc />
+        /// <summary>Whether two columns answer to the same name.</summary>
         /// <remarks>
         /// The name and nothing else. <see cref="IsDeclared" /> is where the name came from rather than
         /// part of it, and two columns answering to one name are the same identity however each of them
@@ -117,6 +124,11 @@ namespace Radzen.FastGrid
             string.Equals(Name, other.Name, StringComparison.Ordinal);
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Overridden because a value type that carries a custom <c>Equals</c> and not this one is
+        /// compared field by field when it arrives as an <see cref="object" /> - which would disagree
+        /// with the overload above about whether provenance counts.
+        /// </remarks>
         public override bool Equals(object? obj) => obj is ColumnIdentity other && Equals(other);
 
         /// <inheritdoc />
@@ -128,8 +140,5 @@ namespace Radzen.FastGrid
 
         /// <summary>Whether two columns answer to different names.</summary>
         public static bool operator !=(ColumnIdentity left, ColumnIdentity right) => !left.Equals(right);
-
-        /// <summary>The name, or the empty string where nothing names the column.</summary>
-        public override string ToString() => Name ?? string.Empty;
     }
 }
