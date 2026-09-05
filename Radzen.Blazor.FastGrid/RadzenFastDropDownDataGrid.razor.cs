@@ -12,6 +12,37 @@ using Radzen;
 
 namespace Radzen.FastGrid
 {
+    /// <summary>How a drop-down's popup decides how wide it is. §29.</summary>
+    /// <remarks>
+    /// <see cref="Content" /> is <see cref="Columns" /> with a growth step in front of it, which is why
+    /// one parameter carries all three rather than a switch for growing and a second for fitting. Both
+    /// of the modes that do anything imply <see cref="AutoFitMode.OnDemand" /> and
+    /// <see cref="AutoFitOverflow.Fit" /> on the popup's grid, so those are not part of this component's
+    /// surface: there is no way to ask for a popup that fits and a grid that does not.
+    /// </remarks>
+    public enum PopupFit
+    {
+        /// <summary>
+        /// Never. The popup is as wide as <c>PopupStyle</c> and the control make it, and its columns
+        /// take an equal share of that - which is what a table with <c>table-layout: fixed</c> and no
+        /// declared widths does. Nothing is measured and no script is imported.
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// The popup keeps the width it has and its columns are apportioned by what is in them. The
+        /// panel does not move; what changes is where its width is spent.
+        /// </summary>
+        Columns,
+
+        /// <summary>
+        /// The panel grows to what the columns need - bounded by <c>PopupWidth</c> if one is declared,
+        /// and by the viewport regardless - and the columns are then apportioned within whatever it
+        /// landed on. The bound only bites when the content wanted more than there was room for.
+        /// </summary>
+        Content
+    }
+
     /// <summary>
     /// A drop-down whose popup is a <see cref="RadzenFastGrid{TItem}" />, for choosing a row out of a
     /// large table.
@@ -185,6 +216,48 @@ namespace Radzen.FastGrid
         /// </summary>
         [Parameter] public string PopupHeight { get; set; } = "285px";
 
+        /// <summary>How the popup decides how wide it is. §29.</summary>
+        /// <remarks>
+        /// <see cref="FastGrid.PopupFit.None" /> by default, so a drop-down that says nothing behaves
+        /// exactly as it did before this existed.
+        /// </remarks>
+        [Parameter] public PopupFit PopupFit { get; set; }
+
+        /// <summary>
+        /// How wide the popup is, as authored CSS. Under <see cref="FastGrid.PopupFit.Content" /> it is
+        /// the <em>cap</em> on the growth rather than the width; under the other two modes it is the
+        /// width.
+        /// </summary>
+        /// <remarks>
+        /// Not two meanings. An author who writes this with <see cref="FastGrid.PopupFit.Content" /> has
+        /// said "size to the content, but never past this", which is one sentence - so both parameters
+        /// stay true rather than one of them being quietly ignored.
+        /// <para>
+        /// Supersedes any <c>width</c> in <see cref="PopupStyle" />, and is a content width for the same
+        /// reason that one would be: the panel is <c>box-sizing: content-box</c>. Its <c>min-width</c>
+        /// is <em>not</em> superseded - a floor and a width are different claims, and the floors compose.
+        /// The viewport caps this as it caps everything else.
+        /// </para>
+        /// </remarks>
+        [Parameter] public string? PopupWidth { get; set; }
+
+        /// <summary>
+        /// How many data rows the popup shows before it scrolls. Zero, the default, means
+        /// <see cref="PopupHeight" /> decides instead.
+        /// </summary>
+        /// <remarks>
+        /// Requires <see cref="PopupFit" /> to be something other than
+        /// <see cref="FastGrid.PopupFit.None" />, because the height is measured rather than multiplied
+        /// out and it is the fit that puts the code in the browser to measure it. Documented rather than
+        /// worked around, as §13 documented <see cref="AutoFitMode.OnDemand" /> needing a resize handle.
+        /// <para>
+        /// Not <c>PageSize</c>, which keeps its own meaning: that is how many rows the query returns and
+        /// this is how many are shown. They are only conflated today because a paging popup bounds its
+        /// height with nothing at all, so the page size decides it by accident.
+        /// </para>
+        /// </remarks>
+        [Parameter] public int MaxRows { get; set; }
+
         /// <summary>Shown in the popup when there are no rows.</summary>
         [Parameter] public RenderFragment? EmptyTemplate { get; set; }
 
@@ -236,6 +309,33 @@ namespace Radzen.FastGrid
         string Id { get; } = "rz-fastlookup-" + Guid.NewGuid().ToString("N");
 
         string PopupId => Id + "-popup";
+
+        /// <summary>
+        /// The scrolling box the rows live in, named only when something bounds it. <c>Virtualize</c>
+        /// needs a bounded scrolling ancestor and a popup has none of its own; <see cref="MaxRows" />
+        /// wants to write a height onto exactly the same box.
+        /// </summary>
+        string WrapperId => Id + "-rows";
+
+        bool HasWrapper => AllowVirtualization || MaxRows > 0;
+
+        /// <summary>
+        /// What the wrapper starts at. The script replaces the height when <see cref="MaxRows" /> is
+        /// set, so this is what a popup falls back to when there is no script to replace it - which
+        /// matters most for the virtualizing case, where an unbounded box makes <c>Virtualize</c> size
+        /// its spacers to the whole row count and run the popup off the page.
+        /// </summary>
+        string? WrapperStyle => HasWrapper ? $"height:{PopupHeight};overflow:auto;" : null;
+
+        bool PopupFits => PopupFit != PopupFit.None;
+
+        /// <summary>
+        /// The mode the popup's grid is given, and it is deliberately not <see cref="AutoFitMode.Once" />.
+        /// <see cref="AutoFitMode.OnDemand" /> is the mode the render loop does not fire, which leaves
+        /// the drop-down as the only thing that decides when a fit happens - once per open, on the path
+        /// that has to measure anyway.
+        /// </summary>
+        AutoFitMode PopupAutoFit => PopupFits ? AutoFitMode.OnDemand : AutoFitMode.None;
 
         // The same panel class the Radzen drop-down family emits, so a theme styles this popup with the
         // rules it already has - including the wider multi-select panel.
@@ -701,7 +801,22 @@ namespace Radzen.FastGrid
             // reopened it - three clicks to reopen a lookup.
             reference ??= DotNetObjectReference.Create(this);
 
-            await Interop("Radzen.openPopup", element, PopupId, true, null, null, null, reference,
+            // Before the popup is opened, not after, and that ordering is the whole of §29.
+            // `Radzen.openPopup` measures the panel exactly once and decides from that single rect
+            // whether to flip above the control and whether to shift left, and nothing revisits it. So
+            // the panel is given its final width here and opened at that width - which is also what
+            // keeps the placement upstream's: the leftward expansion for a control near the right edge
+            // is its own clamp, working correctly because what it measured was final. Sizing afterwards
+            // would show the panel at one width, jump it to another, and re-run the vertical flip after
+            // the user had already seen it.
+            var sized = PopupFits && grid is not null
+                && await grid.FitPopupAsync(new PopupChrome(PopupId, Id, HasWrapper ? WrapperId : null,
+                    PopupFit == PopupFit.Content, PopupWidth, MaxRows));
+
+            // syncWidth is off exactly when the width is already ours. It is not off merely because the
+            // mode asks for a fit: a popup whose script never loaded has been sized by nothing, and
+            // must still get the width upstream would have given it rather than shrinking to fit.
+            await Interop("Radzen.openPopup", element, PopupId, !sized, null, null, null, reference,
                 nameof(OnPopupClose));
         }
 

@@ -81,6 +81,18 @@ namespace Radzen.Blazor.FastGrid.Tests
                     ThemeStylesheet);
             }
 
+            // §29 rests on a claim about code this branch does not own: that `Radzen.openPopup`
+            // positions a panel correctly if the panel is already its final width. Testing our own
+            // pass alone would test everything except that claim, so the shipped upstream script is
+            // loaded onto the page and actually called.
+            UpstreamScript = Path.Combine(RepositoryRoot, "Radzen.Blazor", "wwwroot", "Radzen.Blazor.js");
+            if (!File.Exists(UpstreamScript))
+            {
+                throw new FileNotFoundException(
+                    "The popup half of the check calls Radzen.openPopup and cannot run without it.",
+                    UpstreamScript);
+            }
+
             var people = Person.Make(RowCount);
 
             using (var ctx = new Bunit.TestContext())
@@ -117,6 +129,24 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(g => g.ChildContent, FastGridDetailColumns);
                     p.Add(g => g.Template, Detail);
                 }).Markup;
+
+                // Opened, because a closed drop-down builds no grid at all - and the panel is what the
+                // popup fit is about. PopupFit is set so the table carries the id the script resolves
+                // it by; MaxRows so the wrapper is bounded and has a height to be replaced.
+                var lookup = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, object>>(p =>
+                {
+                    p.Add(d => d.Data, people);
+                    p.Add(d => d.ChildContent, FastGridColumns);
+                    p.Add(d => d.TextProperty,
+                        (System.Linq.Expressions.Expression<Func<Person, object>>)(x => x.Name));
+                    p.Add(d => d.PopupFit, PopupFit.Content);
+                    p.Add(d => d.MaxRows, 4);
+                    p.Add(d => d.AllowPaging, false);
+                });
+
+                lookup.Find(".rz-dropdown").Click();
+
+                FastGridPopupMarkup = lookup.Markup;
 
                 // And again with the first row selected. The theme nests its selected-row rule inside
                 // .rz-selectable, so a grid can carry rz-state-highlight on the right tr and still paint
@@ -211,6 +241,9 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// <summary>Absolute path to the theme stylesheet the geometry is measured against.</summary>
         public string ThemeStylesheet { get; }
 
+        /// <summary>The shipped upstream script, whose <c>openPopup</c> the popup check calls.</summary>
+        public string UpstreamScript { get; }
+
         public string DataGridMarkup { get; }
 
         public string FastGridMarkup { get; }
@@ -252,6 +285,12 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// <summary>The pane the auto-fit script is actually run against.</summary>
         public const string FastGridAutoFit = "RadzenFastGrid auto-fit";
 
+        /// <summary>
+        /// A drop-down, opened, sitting hard against the right edge of the page - which is the only
+        /// place the leftward expansion can be exercised at all.
+        /// </summary>
+        public const string FastGridPopup = "RadzenFastGrid popup";
+
         static Func<Person, string> Focused(Person row) =>
             person => ReferenceEquals(person, row) ? "rz-state-focused" : null;
 
@@ -280,6 +319,17 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         /// <summary>Rendered geometry for both grids, measured once through Chromium.</summary>
         public GeometryReport Geometry => geometry.Value;
+
+        /// <summary>
+        /// The drop-down's markup, opened, so the panel and the grid inside it are both present.
+        /// </summary>
+        /// <remarks>
+        /// Rendered rather than written out, because what §29 has to be checked against is the real
+        /// panel: <c>box-sizing: content-box</c>, the <c>min-width</c> the component's own default
+        /// <c>PopupStyle</c> carries, and a grid nested behind two wrappers. A transcription of that
+        /// would prove the transcription right.
+        /// </remarks>
+        public string FastGridPopupMarkup { get; }
 
         static string Wrap(string markup) =>
             "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>" + markup + "</body></html>";
@@ -432,7 +482,7 @@ namespace Radzen.Blazor.FastGrid.Tests
                 Path.Combine(RepositoryRoot, "Radzen.Blazor.FastGrid", "wwwroot", "fastgrid.js"));
 
             return System.Text.RegularExpressions.Regex.Replace(source, "(?m)^export ", "")
-                + "\nwindow.__fastgrid = { autoFit, releaseFit };";
+                + "\nwindow.__fastgrid = { autoFit, releaseFit, fitPopup };";
         }
 
         static string FindRepositoryRoot()
@@ -475,6 +525,12 @@ namespace Radzen.Blazor.FastGrid.Tests
   .pane {{ margin-bottom: 40px; }}
   .pane-narrow {{ width: 500px; }}
   .pane-fit {{ width: 900px; }}
+
+  /* Hard against the right edge, which is the only place openPopup's leftward clamp does anything.
+     The control is narrow on purpose: a panel wider than its control is the ordinary case, and it is
+     the case where the panel has to expand somewhere. */
+  .pane-popup {{ display: flex; justify-content: flex-end; }}
+  .pane-popup .rz-dropdown {{ width: 180px; }}
 </style>
 </head><body>
 <div class=""pane"" data-grid=""{DataGrid.Name}"">{DataGridMarkup}</div>
@@ -487,6 +543,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 <div class=""pane"" data-grid=""{FastGridFocus}"">{FastGridFocusMarkup}</div>
 <div class=""pane pane-narrow"" data-grid=""{FastGridFrozenFocus}"">{FastGridFrozenFocusMarkup}</div>
 <div class=""pane pane-fit"" data-grid=""{FastGridAutoFit}"" data-autofit=""1"">{FastGridAutoFitMarkup}</div>
+<div class=""pane pane-popup"" data-grid=""{FastGridPopup}"" data-popup=""1"">{FastGridPopupMarkup}</div>
+<script src=""{new Uri(UpstreamScript).AbsoluteUri}""></script>
 <script>{AutoFitScript()}</script>
 </body></html>";
 

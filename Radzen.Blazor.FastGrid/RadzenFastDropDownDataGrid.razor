@@ -43,8 +43,11 @@
             {
                 @* Virtualize needs a scrolling ancestor with a bounded height, and the popup has none:
                    without this its spacer rows size themselves to the whole row count and run the popup
-                   far off the page. RadzenDropDownDataGrid bounds its own grid for the same reason. *@
-                <div style="@(AllowVirtualization ? $"height:{PopupHeight};overflow:auto;" : null)">
+                   far off the page. RadzenDropDownDataGrid bounds its own grid for the same reason.
+
+                   MaxRows wants the same box for a different reason - it writes a measured height onto
+                   it - so one wrapper serves both and is named whenever either asks for it. *@
+                <div id="@WrapperId" style="@WrapperStyle">
                 <RadzenFastGrid TItem="TItem" @ref="grid"
                                 Data="@Data"
                                 Count="@Count"
@@ -59,6 +62,8 @@
                                 Selection="@SelectedItems"
                                 RowClick="@OnRowClick"
                                 EmptyTemplate="@EmptyTemplate"
+                                AutoFitColumns="@PopupAutoFit"
+                                AutoFitOverflow="AutoFitOverflow.Fit"
                                 CssClass="rz-lookup-panel-grid"
                                 ChildContent="@ChildContent" />
                 </div>

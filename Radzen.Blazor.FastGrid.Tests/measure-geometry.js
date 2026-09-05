@@ -921,8 +921,204 @@ async function main() {
                 failures.join('\n  '));
         }
 
+        // The popup pane is the only place this script runs code it does not own. §29 rests on a claim
+        // about `Radzen.openPopup` - that it positions a panel correctly when the panel is already its
+        // final width - and our own pass can be checked without it while that claim cannot. So the
+        // shipped upstream script is on the page and is actually called, and everything below is read
+        // off the placed panel rather than off either side's arithmetic.
+        const popup = await page.evaluate(async () => {
+            const pane = document.querySelector('.pane[data-popup]');
+
+            if (!pane || !window.__fastgrid || !window.Radzen) {
+                return null;
+            }
+
+            const control = pane.querySelector('.rz-dropdown');
+            const panel = pane.querySelector('.rz-dropdown-panel')
+                || document.querySelector('.rz-dropdown-panel');
+            const table = panel.querySelector('table');
+            const headRow = table.querySelector(':scope > thead > tr');
+            const wrapper = panel.querySelector('[id$="-rows"]');
+
+            if (!control || !panel || !table || !wrapper || !headRow) {
+                return null;
+            }
+
+            const round = value => Math.round(value * 100) / 100;
+
+            const edges = element => {
+                const style = getComputedStyle(element);
+
+                return (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+                    + (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.borderRightWidth) || 0);
+            };
+
+            const ask = (over = {}) => ({
+                panel: panel.id,
+                control: control.id,
+                wrapper: wrapper.id,
+                grow: over.grow !== undefined ? over.grow : true,
+                width: null,
+                maxRows: over.maxRows !== undefined ? over.maxRows : 4,
+                fit: {
+                    table: table.id,
+                    indices: [0, 1, 2, 3, 4],
+                    min: [null, null, null, null, null],
+                    max: [null, null, null, null, null],
+                    toggleOffset: 0,
+                    bare: -1,
+                    wait: true,
+                    animate: false,
+                    overflow: 'fit',
+                    required: [false, false, false, false, false],
+                },
+            });
+
+            // Between scenarios. Deliberately not Radzen.closePopup: that hides behind an animation
+            // end, and - the point of doing it this way - it does not put the panel back either. Only
+            // a full teardown does, so from the second open onwards the panel lives in document.body,
+            // which is precisely the state the next scenario has to be measured in.
+            const reset = () => {
+                panel.style.display = 'none';
+                panel.style.left = '';
+                panel.style.top = '';
+            };
+
+            const open = async (over = {}) => {
+                const started = performance.now();
+                const sized = await window.__fastgrid.fitPopup(ask(over));
+                const waitedMs = Math.round(performance.now() - started);
+
+                // The width we wrote, before anything else touches it. The panel is box-sizing:
+                // content-box, so this is not what overflows the window - the rect below is.
+                const written = parseFloat(panel.style.width);
+
+                Radzen.openPopup(control, panel.id, false, null, null, null, null, null);
+
+                const rect = panel.getBoundingClientRect();
+
+                return {
+                    sized: sized && sized.sized === true,
+                    waitedMs,
+                    // Read back rather than recomputed: the pass remembers the author's floor on the
+                    // element, and a check of the floor has to be against the same number.
+                    authorFloor: panel.__fastgridFloor,
+                    written: round(written),
+                    outer: round(rect.width),
+                    chrome: round(edges(panel)),
+                    left: round(rect.left),
+                    right: round(rect.right),
+                    inBody: panel.parentElement === document.body,
+                    // The early-return in openPopup wants rz-autocomplete-panel, which ours is not -
+                    // so leaving the panel display:block for it to reuse does not skip the placement.
+                    // `left` having been written is the proof that it ran.
+                    placed: panel.style.left !== '',
+                    display: panel.style.display,
+                };
+            };
+
+            const controlRect = () => {
+                const rect = control.getBoundingClientRect();
+
+                return { left: round(rect.left), right: round(rect.right) };
+            };
+
+            const scenarios = {};
+
+            scenarios.initial = await open();
+            scenarios.initial.control = controlRect();
+            scenarios.initial.rowHeight =
+                round(table.querySelector('tbody tr.rz-data-row').getBoundingClientRect().height);
+            scenarios.initial.wrapperHeight = round(wrapper.getBoundingClientRect().height);
+            scenarios.initial.tableWidth = round(table.getBoundingClientRect().width);
+
+            // Again, with the panel now living in document.body rather than in the control. Every
+            // input the pass takes is either a width it writes itself or an element it looks up by id,
+            // so the answer has to be the same one - and if it is not, this is what says so.
+            reset();
+            scenarios.reopened = await open();
+
+            // The viewport wins over a floor. A min-width three times the window would otherwise put
+            // the panel off the right edge with nothing left to pull it back: openPopup only shifts a
+            // panel left while innerWidth is greater than its width.
+            reset();
+            const home = panel.style.minWidth;
+            panel.style.minWidth = (window.innerWidth * 3) + 'px';
+            scenarios.capped = await open();
+            panel.style.minWidth = home;
+
+            // A panel is never narrower than the control it drops out of. syncWidth used to write that
+            // floor and is being turned off, so this is the line that says the replacement holds.
+            reset();
+            control.style.width = '900px';
+            scenarios.floored = await open();
+            scenarios.floored.control = controlRect();
+            control.style.width = '';
+
+            // An empty result apportions its columns by their headers and does not grow the panel.
+            // Sizing chrome to chrome gives a popup that is narrow while a filter matches nothing and
+            // wide the moment it is cleared.
+            // No rows, and a header made deliberately wide. Without the widened header the guard is
+            // invisible: growth from titles alone lands under the panel's own floor, so the floor
+            // answers correctly whether or not the growth was skipped. The header has to be able to
+            // push past that floor before skipping it means anything.
+            reset();
+            const body = table.querySelector('tbody');
+            const rows = body.innerHTML;
+            const heading = headRow.querySelector('.rz-column-title');
+            const headingSaid = heading.textContent;
+            body.innerHTML = '';
+            heading.textContent = 'H'.repeat(300);
+            scenarios.empty = await open();
+            heading.textContent = headingSaid;
+            body.innerHTML = rows;
+
+            // Content genuinely wider than the window, with the page's own scrollbar taken away so the
+            // margin is the only allowance there is. One scenario, two guards: without the cap on the
+            // growth the panel is three thousand pixels wide, and without the 8px floor under the
+            // scrollbar allowance it is exactly the window width - which is the one width at which
+            // openPopup stops clamping.
+            reset();
+            const cell = table.querySelector('tbody tr.rz-data-row .rz-cell-data');
+            const said = cell.textContent;
+            cell.textContent = 'W'.repeat(400);
+            document.documentElement.style.overflow = 'hidden';
+            scenarios.wide = await open();
+            document.documentElement.style.overflow = '';
+            cell.textContent = said;
+
+            // The same width with no growth at all, and a floor far past the window. Growth is what
+            // rescues an uncapped base, so only a pass that does not grow can show whether the base
+            // was capped.
+            reset();
+            const floor = panel.style.minWidth;
+            panel.style.minWidth = (window.innerWidth * 3) + 'px';
+            panel.__fastgridFloor = window.innerWidth * 3;
+            scenarios.unfitted = await open({ grow: false });
+            panel.style.minWidth = floor;
+            delete panel.__fastgridFloor;
+
+            // Twenty rows and then four. The height has to be cleared before the box is measured or
+            // the second answer is read off the first: scrollHeight is never less than the box itself,
+            // so a wrapper only ever grows.
+            reset();
+            await open({ maxRows: 20 });
+            scenarios.tallThenShort = { before: round(wrapper.getBoundingClientRect().height) };
+            reset();
+            await open({ maxRows: 4 });
+            scenarios.tallThenShort.after = round(wrapper.getBoundingClientRect().height);
+
+            scenarios.viewport = {
+                innerWidth: window.innerWidth,
+                clientWidth: document.documentElement.clientWidth,
+            };
+
+            return scenarios;
+        });
+
         report.stylesheets = stylesheets;
         report.autoFit = autoFit;
+        report.popup = popup;
 
         process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     } finally {

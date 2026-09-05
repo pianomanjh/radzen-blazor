@@ -504,6 +504,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         [JsonPropertyName("autoFit")] public AutoFitRun AutoFit { get; set; }
 
+        [JsonPropertyName("popup")] public PopupRun Popup { get; set; }
+
         public GridGeometry this[string grid] =>
             Grids.Find(g => g.Grid == grid)
             ?? throw new InvalidOperationException(
@@ -515,6 +517,108 @@ namespace Radzen.Blazor.FastGrid.Tests
             "  stylesheets: " + (Stylesheets.Count == 0
                 ? "(none requested)"
                 : string.Join("; ", Stylesheets.ConvertAll(s => s.ToString())));
+    }
+
+    /// <summary>
+    /// One opening of the drop-down: what our pass wrote, and what <c>Radzen.openPopup</c> then made
+    /// of it. §29.
+    /// </summary>
+    public sealed class PopupOpen
+    {
+        /// <summary>Whether the pass reports having taken the width over.</summary>
+        [JsonPropertyName("sized")] public bool Sized { get; set; }
+
+        /// <summary>How long the whole pass took, which for a popup with no rows is its patience.</summary>
+        [JsonPropertyName("waitedMs")] public double WaitedMs { get; set; }
+
+        /// <summary>The author's declared floor, as the pass remembered it.</summary>
+        [JsonPropertyName("authorFloor")] public double AuthorFloor { get; set; }
+
+        /// <summary>The content width written onto the panel.</summary>
+        [JsonPropertyName("written")] public double Written { get; set; }
+
+        /// <summary>The panel's border-box width, which is what actually overflows a window.</summary>
+        [JsonPropertyName("outer")] public double Outer { get; set; }
+
+        /// <summary>The panel's own horizontal border and padding, which content-box puts outside the width.</summary>
+        [JsonPropertyName("chrome")] public double Chrome { get; set; }
+
+        [JsonPropertyName("left")] public double Left { get; set; }
+
+        [JsonPropertyName("right")] public double Right { get; set; }
+
+        /// <summary><c>openPopup</c> reparents the panel; a second open is measured in that state.</summary>
+        [JsonPropertyName("inBody")] public bool InBody { get; set; }
+
+        /// <summary>Whether <c>openPopup</c> placed the panel rather than returning early.</summary>
+        [JsonPropertyName("placed")] public bool Placed { get; set; }
+
+        [JsonPropertyName("display")] public string Display { get; set; }
+
+        [JsonPropertyName("control")] public Edges Control { get; set; }
+
+        [JsonPropertyName("rowHeight")] public double RowHeight { get; set; }
+
+        [JsonPropertyName("wrapperHeight")] public double WrapperHeight { get; set; }
+
+        [JsonPropertyName("tableWidth")] public double TableWidth { get; set; }
+
+        public override string ToString() =>
+            $"written {Written}, outer {Outer}, chrome {Chrome}, left {Left}, right {Right}, " +
+            $"placed {Placed}, inBody {InBody}";
+    }
+
+    /// <summary>A box's horizontal extent, for comparing a panel against the control it hangs from.</summary>
+    public sealed class Edges
+    {
+        [JsonPropertyName("left")] public double Left { get; set; }
+
+        [JsonPropertyName("right")] public double Right { get; set; }
+    }
+
+    /// <summary>How wide the window thinks it is, both ways, so a scrollbar allowance can be checked.</summary>
+    public sealed class Viewport
+    {
+        [JsonPropertyName("innerWidth")] public double InnerWidth { get; set; }
+
+        [JsonPropertyName("clientWidth")] public double ClientWidth { get; set; }
+    }
+
+    /// <summary>The five openings the popup pane is put through.</summary>
+    public sealed class PopupRun
+    {
+        [JsonPropertyName("initial")] public PopupOpen Initial { get; set; }
+
+        /// <summary>The same open again, with the panel now living in <c>document.body</c>.</summary>
+        [JsonPropertyName("reopened")] public PopupOpen Reopened { get; set; }
+
+        /// <summary>A floor three times the window wide, which the viewport has to beat.</summary>
+        [JsonPropertyName("capped")] public PopupOpen Capped { get; set; }
+
+        /// <summary>A 900px control, which the panel may not be narrower than.</summary>
+        [JsonPropertyName("floored")] public PopupOpen Floored { get; set; }
+
+        /// <summary>No rows at all: columns are still apportioned, the panel does not grow.</summary>
+        [JsonPropertyName("empty")] public PopupOpen Empty { get; set; }
+
+        /// <summary>Content wider than a window with no scrollbar of its own: cap and margin at once.</summary>
+        [JsonPropertyName("wide")] public PopupOpen Wide { get; set; }
+
+        /// <summary>A floor past the window with no growth to rescue it, which is what caps the base.</summary>
+        [JsonPropertyName("unfitted")] public PopupOpen Unfitted { get; set; }
+
+        /// <summary>Twenty rows and then four, which only shrinks if the box is cleared first.</summary>
+        [JsonPropertyName("tallThenShort")] public HeightPair TallThenShort { get; set; }
+
+        [JsonPropertyName("viewport")] public Viewport Viewport { get; set; }
+    }
+
+    /// <summary>The wrapper's height across two passes that asked for different row counts.</summary>
+    public sealed class HeightPair
+    {
+        [JsonPropertyName("before")] public double Before { get; set; }
+
+        [JsonPropertyName("after")] public double After { get; set; }
     }
 
     /// <summary>

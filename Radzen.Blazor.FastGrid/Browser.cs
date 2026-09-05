@@ -5,13 +5,13 @@ using Microsoft.JSInterop;
 namespace Radzen.FastGrid
 {
     /// <summary>
-    /// The nine calls this component makes into its own browser module, each named and typed once.
+    /// The ten calls this component makes into its own browser module, each named and typed once.
     /// </summary>
     /// <remarks>
     /// Not an abstraction, and deliberately not one. There is no fake behind this and no interface over
     /// it: bUnit's module double already reaches every export - including the ones that answer a value,
     /// which is how a test stages a <see cref="RadzenFastGrid{TItem}.NavigationMetrics" /> - so an
-    /// <c>IBrowser</c> would buy reach the suite has and cost a second nine-method implementation to be
+    /// <c>IBrowser</c> would buy reach the suite has and cost a second ten-method implementation to be
     /// kept in step with a script it cannot see. §18 has the probes that settled that. <c>Attachment</c>
     /// earns its two delegates because it has rules of its own to test; this forwards.
     /// <para>
@@ -101,6 +101,19 @@ namespace Radzen.FastGrid
         /// </summary>
         internal ValueTask<string?[]?> AutoFitAsync(AutoFitAsk ask) =>
             module.InvokeAsync<string?[]?>("autoFit", ask);
+
+        /// <summary>
+        /// Sizes the drop-down's panel and then the columns inside it, answering whether the panel was
+        /// sized as well as what the columns became.
+        /// </summary>
+        /// <remarks>
+        /// Two answers rather than one because the caller has a decision to make with the first:
+        /// <c>Radzen.openPopup</c> is told not to sync the width only when this says the width is
+        /// already ours, so a popup whose script never loaded still gets the width upstream would have
+        /// given it.
+        /// </remarks>
+        internal ValueTask<PopupFitResult> FitPopupAsync(PopupFitAsk ask) =>
+            module.InvokeAsync<PopupFitResult>("fitPopup", ask);
     }
 
     /// <summary>Which pointer events the delegating listener has to answer.</summary>
@@ -139,6 +152,39 @@ namespace Radzen.FastGrid
         bool Animate,
         string Overflow,
         IReadOnlyList<bool> Required);
+
+    /// <summary>
+    /// What the popup needs sizing that a grid does not have: its panel, the control the panel hangs
+    /// from, and the two bounds an author may declare on it.
+    /// </summary>
+    /// <remarks>
+    /// Built by the drop-down and handed to the grid, which is the only holder of the script module.
+    /// It carries no column state, which is the grid's half and is composed there - the two meet once,
+    /// in <see cref="PopupFitAsk" />.
+    /// </remarks>
+    internal readonly record struct PopupChrome(
+        string Panel,
+        string Control,
+        string? Wrapper,
+        bool Grow,
+        string? Width,
+        int MaxRows);
+
+    /// <summary>The popup's own half and the column fit's, as the one value the script is asked with.</summary>
+    internal readonly record struct PopupFitAsk(
+        string Panel,
+        string Control,
+        string? Wrapper,
+        bool Grow,
+        string? Width,
+        int MaxRows,
+        AutoFitAsk Fit);
+
+    /// <summary>
+    /// What a popup fit answers: whether the panel now carries a width of ours, and the width to write
+    /// into each fitted column or null for one the fit did not settle.
+    /// </summary>
+    internal readonly record struct PopupFitResult(bool Sized, string?[]? Widths);
 
     /// <summary>
     /// The half of the browser seam that appears in no signature: what the script selects the grid's

@@ -16,3 +16,8 @@ h1 { font-size: 1.1rem; margin: 0 0 1rem; }
            font-family:ui-monospace, monospace; }
 .metrics b { font-weight:600; }
 .metrics .bad { color:#c00; }
+
+/* The lookup sits against the right edge so its popup has to expand leftward to fit - which is the
+   part of §29 that is upstream's clamp reacting to a width this component chose. In the middle of
+   the page the feature is visible and untested. */
+.lookup-bar { display: flex; justify-content: flex-end; margin-bottom: 1rem; }

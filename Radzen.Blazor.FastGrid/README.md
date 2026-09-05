@@ -1065,6 +1065,48 @@ are set through the same parameter names; a virtualized popup scrolls inside `Po
 `Virtualize` needs a bounded ancestor and a popup has none of its own. Without a `ValueProperty` the row
 itself is the value, which is what a drop-down bound to an entity wants.
 
+### Sizing the popup
+
+`PopupFit` decides how wide the popup is, and it is `None` by default - a drop-down that says nothing
+behaves as it always did, at the width of its control or `PopupStyle`'s `min-width`, whichever is larger,
+with its columns taking an equal share of that.
+
+| | |
+|---|---|
+| `PopupFit="Columns"` | The panel keeps the width it has; the columns are apportioned by what is in them. |
+| `PopupFit="Content"` | The panel grows to what the columns need, then the columns are apportioned inside it. |
+| `PopupWidth` | The cap under `Content`; the width under the other two. Supersedes `PopupStyle`'s `width`. |
+| `MaxRows` | How many rows the popup shows before it scrolls. Needs a `PopupFit`. |
+
+```razor
+<RadzenFastDropDownDataGrid TItem="Customer" TValue="int" @bind-Value="customerId"
+                            Data="@customers" TextProperty="@(c => c.Name)" ValueProperty="@(c => c.Id)"
+                            PopupFit="PopupFit.Content" PopupWidth="60rem" MaxRows="8">
+    <PropertyColumn TItem="Customer" TProp="string" Property="@(c => c.Name)" MinWidth="120px" />
+    <PropertyColumn TItem="Customer" TProp="string" Property="@(c => c.City)" MinWidth="80px" />
+</RadzenFastDropDownDataGrid>
+```
+
+**`Content` grows the panel leftward when it has to.** A lookup near the right edge of the page opens a
+wide panel to the left of its own control, and the panel is never allowed past the edge of the window -
+if the content wants more room than the window has, the columns give up the difference instead.
+
+**Give the columns a `MinWidth` if the popup must not scroll sideways.** A column with no floor of its
+own is floored at the width of its own values, so it never truncates and the fit has nothing to take:
+once the viewport cap bites, the table ends up wider than the panel and the popup scrolls. This is the
+same rule the grid's own `AutoFitOverflow.Fit` follows, and a `MinWidth` is what changes the answer from
+"scroll" to "truncate".
+
+**The panel is never narrower than the control it drops out of**, and never narrower than any `min-width`
+in `PopupStyle`. Those are two floors and they compose; neither is ignored.
+
+**A fit runs once per open, not once per drop-down.** Reopening a lookup whose data has changed sizes it
+again. Nothing re-fits while the popup is open: that would move the panel under the pointer, so
+`PopupWidth` is the way to pin a width rather than an imperative call.
+
+**`MaxRows` is not `PageSize`.** `PageSize` is how many rows the query returns; `MaxRows` is how many are
+shown before the popup scrolls, and an author may fetch ten and show six. It supersedes `PopupHeight`.
+
 It is an `IRadzenFormComponent`, so a `RadzenRequiredValidator` inside a `RadzenTemplateForm` finds it by
 `Name`.
 

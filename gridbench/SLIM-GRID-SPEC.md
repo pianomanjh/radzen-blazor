@@ -622,9 +622,15 @@ Each layer below caught real faults the previous one missed. Use all of them.
   longer inserts an element into the flex line and re-truncates the title. It became urgent rather
   than cosmetic once §13 needed to measure a header: a header measured around a missing glyph fits a
   glyph too narrow, which makes the jump permanent instead of momentary.
-- **Column auto-fit for `RadzenFastDropDownDataGrid`**, deferred out of §13 with the question it is
-  waiting on stated: does the popup grow to the fitted content, or does the grid fit within the width
-  the popup already has? Both are defensible and they are different features.
+- ~~**Column auto-fit for `RadzenFastDropDownDataGrid`**~~ - **done in §29**, and the fork this bullet
+  was waiting on turned out to be a false one. "Grow to the content" and "fit within the width the popup
+  has" differ only in where the width comes from, and growth has to be capped at the viewport or the
+  panel leaves the window - so the grown case ends with a fixed width too and needs the same
+  redistribution. They compose: `PopupFit { None, Columns, Content }`, where `Content` is `Columns` with
+  a bounded growth step in front of it. What the section had to settle instead was *ordering*, which
+  this bullet did not anticipate at all: `Radzen.openPopup` measures the panel once and decides the flip
+  above the control and the shift left from that single rect, so the panel has to carry its final width
+  before it is opened, and `syncWidth` goes off because the width is then ours.
 - The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no date
   popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
   code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
@@ -1697,11 +1703,13 @@ Landed as three commits, in this order.
 
 ### Recorded open
 
-- **`RadzenFastDropDownDataGrid` does not get this in v1, and the question it is waiting on is: does
-  the popup grow to the fitted content, or does the grid fit within the width the popup already has?**
-  Both are defensible and they are different features. It is also the slice with the worst review
-  history on this branch - fifteen findings, then six more on a re-read three commits later - so a
-  change to its layout is the wrong place to spend that risk before the question is answered.
+- ~~**`RadzenFastDropDownDataGrid` does not get this in v1**~~ - **it does now, in §29**, and the
+  question this bullet was waiting on had a third answer: the two candidates are one feature with a
+  bound on it. The risk this bullet was protecting was spent carefully - the slice's own layout is
+  untouched, because the width is written by the script and the *placement* stays upstream's.
+  §29 also withdraws one thing said here by implication: forcing `AutoFitOverflow.Fit` on the popup does
+  not prevent a horizontal scrollbar, because the hard floor below is a column's own body width and an
+  unbounded column will not truncate.
 - **No event.** Above, with its reason.
 
 **A fit somebody asked for animates.** `transition: width` on a `col` works - worth stating because it
@@ -6150,6 +6158,11 @@ Four parameters on the drop-down, one of them new-shaped rather than new:
 | `PopupFit` | `None` (default), `Columns`, `Content`. Above. |
 | `PopupWidth` | Under `Content`, the **cap**. Under `Columns` and `None`, a fixed width. |
 | `MaxRows` | The panel's height in data rows. Requires `PopupFit != None`. |
+
+**Both non-`None` modes imply `AutoFitOverflow.Fit` on the popup's grid.** What that does *not* buy is a
+guarantee against a horizontal scrollbar - see *What the build changed*. A column with no `MinWidth` is
+floored at its own body width and will not truncate, so a popup whose columns declare no floor scrolls
+sideways once the viewport cap bites. Declaring `MinWidth` is what gives the fit something to take.
 | `PopupStyle`, `PopupHeight` | Unchanged, and superseded by the two above when those are set. |
 
 **`PopupWidth` is a cap under `Content` and a width otherwise, and that is not two meanings.** An author
@@ -6371,25 +6384,106 @@ collision and the second declares `UniqueID` - and adding a panel and a second s
 3. **README, the drop-down's cost rows, §10 and §13's "Recorded open"**, which both carry the deferral
    this closes.
 
+### What the build changed
+
+**A cap the browser is free to ignore is not a cap.** The arithmetic above was right and the panel was
+still 3318px wide in an 1100px window, because `min-width` beats `width` and the author's floor was
+still sitting on the element. The fix is that the pass writes **both** declarations, always, to the same
+number - so the width it chose is the width the browser is allowed to use. This is the single most
+important thing the build found, it was found by the browser layer rather than by reading, and it is the
+exact failure the cap exists to prevent: `openPopup` only shifts a panel left while `window.innerWidth >
+rect.width`, so a panel that reaches the window width disarms the only thing that would pull it back.
+
+**Writing `min-width` means it can no longer be read.** On the second open `getComputedStyle` answers
+with our own answer to the first, and the floor becomes defined in terms of itself - it would ratchet
+downwards, one open at a time. The author's floor is therefore read once and remembered on the element,
+which is the idiom `openPopup` itself uses to remember where it moved a panel from.
+
+**Nothing has to be re-armed.** This section said the drop-down would "re-arm the automatic path per
+open" and would need a seam for it. The seam is real but it is not about re-arming: forwarding
+`AutoFitMode.OnDemand` gives a grid whose render loop never fires a fit of its own, so the drop-down is
+already the only thing that decides when one happens. What the seam is actually for is the word
+*automatic* - not animated, and not permitted to replace a width the user chose - which the public
+`AutoFitAsync` would get wrong in both directions.
+
+**The margin does not keep the panel off the edge, and this section said it did.** `openPopup` clamps
+flush - `left = window.innerWidth - rect.width` - so a panel that has to shift ends up against the window
+edge whatever margin we left. The margin has exactly one job, and it is the other one this section gave
+it: keeping the *width* below `innerWidth` so that clamp stays armed at all. The claim about how it looks
+was wrong; the claim about what it prevents was right.
+
+**Forcing `Fit` does not prevent a horizontal scrollbar**, and the sentence above saying it does is
+withdrawn. §13 gives a column with no declared `MinWidth` a hard floor at its own body width, so an
+unbounded column never truncates, the distribution has nothing to take, and a capped popup ends with a
+table wider than its panel - which scrolls. That is §13's rule working exactly as argued, not a fault
+here, and it is the same answer the outer grid gives. **A popup that must fit needs `MinWidth` on its
+columns**, and the playground declares them for that reason. Found by running the playground, not by any
+test: with floors the table goes 676px to 560px inside a 594px panel and eight cells truncate instead.
+
+**The measuring pass runs twice under `Content`.** Once to choose a width, once inside the fit to measure
+against the width that was chosen. Accepted rather than engineered around: a popup renders `PageSize`
+rows - five by default - so the second layout is over a handful of cells, and the alternative is a second
+seam through the placement half of a function §13 spent a long time getting right.
+
+### What the build met that this section treated as hypothetical
+
+Both "read the shipped upstream file again" bullets were read, and both found more than they asked for.
+
+- **`if (syncWidth)` holds exactly two writes**, and the second is `popup.minWidth = true` - an *element
+  property* used as bookkeeping, which `closePopup` reads to decide whether to clear `style.minWidth`.
+  It is not the typo it looks like. `closePopup` never resets it, so it latches once set; with
+  `syncWidth: false` it is never set, and our floor therefore survives a close. It is already never set
+  today, because `PopupStyle`'s `min-width: 400px` makes the guard that writes it false.
+- **The early return needs `rz-autocomplete-panel`.** Ours are `rz-dropdown-panel` and
+  `rz-multiselect-panel`, so leaving the panel displayed for `openPopup` to reuse does not skip the
+  placement. Asserted rather than assumed.
+- **`openPopup` reparents the panel to `document.body`** - it must, because `.rz-dropdown` is
+  `position: relative; overflow: hidden` and would otherwise clip its own popup - and **`closePopup` does
+  not put it back**; only a full teardown does. So every open after the first is measured with the panel
+  somewhere else in the tree. The pass is insensitive to that because every input it takes is either a
+  width it writes itself or an element it resolves by id, and that insensitivity is now a test rather
+  than a claim.
+- **`openPopup` installs a `visualViewport` handler that rewrites `maxHeight`** - but only when the panel
+  contains `.rz-dropdown-items-wrapper` or `.rz-multiselect-items-wrapper`. Ours holds a
+  `.rz-lookup-panel` and a grid, so it is never installed and cannot fight `MaxRows`.
+
+### The mutations
+
+Fourteen, each confirmed to have applied to the file on disk and each run against a suite that reported
+a non-zero total - §24's rule, and §27's variant of it where an anchor silently missed.
+
+**Six survived the first pass, and every one of them was a gap in the checks rather than dead code.** The
+page the browser layer measures always has a vertical scrollbar, so the margin's 8px floor never bound;
+the popup's content is 760px in an 1100px window, so no scenario ever wanted more room than there was,
+which left both viewport caps unexercised; the rows are in the static DOM, so the patience ceiling was
+never reached; the box was always shorter than its content, so clearing it before measuring changed
+nothing; and two assertions were one-sided - "the empty popup is narrower than the grown one" is true
+whether the growth was skipped or merely small, and "four rows is shorter than twenty" is true even when
+the height was read off the previous answer.
+
+Four scenarios and two sharper assertions close all six: content deliberately wider than a window whose
+own scrollbar has been taken away, a floor past the window with growth switched off so nothing rescues
+an uncapped base, twenty rows followed by four with the drop measured in rows rather than in pixels, and
+an empty result whose *header* is wide enough to grow the panel if anything let it. All fourteen are
+caught.
+
 ### Where this could still be wrong
 
-Doubt bullets are a task, not an absolution - §27 shipped one naming the exact shape that then regressed
-and nothing checked it. Each of these is to be acted on or deleted before the piece is done.
-
-- **`syncWidth: false` removes more than the width.** It also stops `openPopup` writing `minWidth`, which
-  the composed floor above replaces - but it is one branch of upstream code read once, and anything else
-  inside `if (syncWidth)` goes with it. **Read that branch again against the shipped file before
-  building**, not against this description of it.
-- **The shared-layout saving assumes `openPopup` does not early-return.** It returns early for
-  `display:block` panels carrying `rz-autocomplete-panel`; ours carry `rz-dropdown-panel` or
-  `rz-multiselect-panel`, so it proceeds. That is read off the current upstream file and is exactly the
-  kind of thing a version bump changes silently. **Assert it, do not assume it.**
-- **The panel is left block-and-hidden between the two calls.** Claimed harmless because it is
-  `position: absolute`. Confirm in the browser rather than from the stylesheet, in both panel classes.
 - **250ms is chosen, not derived**, and the source that most wants it - a warm executor-backed lookup -
-  is the one this branch has least ability to time honestly on one machine.
-- **`MaxRows` measures a pager that may not be there.** `AllowPaging` is true by default but an author
-  may switch it off, and a virtualizing popup has no pager at all. The arithmetic must read what is
-  present rather than assume the full set.
-- **Multi-select is assumed to behave like single.** `rz-multiselect-panel` shares the two theme facts
-  above, but it is a different class with its own rules elsewhere in the sheet. Check it, do not infer it.
+  is the one this branch has least ability to time honestly on one machine. What is measured is only
+  that the ceiling is reached and left; whether it is the right ceiling is not measured by anything.
+- **`MaxRows` measures a pager that may not be there.** The arithmetic subtracts the rows from the box
+  and keeps whatever else is in it, so a missing pager or filter row costs nothing - but the only shape
+  checked is the one the fixture renders. A virtualizing popup in particular has no pager at all and its
+  rows arrive after the measurement rather than before.
+- **Multi-select is inferred, not checked.** `rz-multiselect-panel` shares both theme facts above and
+  takes the same code path, but it is a different class with its own rules elsewhere in the sheet and no
+  scenario opens one.
+- **The panel is left block-and-hidden between the two calls**, and if the circuit drops between them it
+  stays that way until the next open. Claimed harmless because it is `position: absolute` and
+  `visibility: hidden`; the browser layer only ever sees the pair complete.
+- **Growth is relative to a base, and the base is trusted.** `outer = base + (measured - container)`
+  assumes every box between the panel's content edge and the table's container is full-width chrome that
+  does not change. That is true of the markup this component emits and is not enforced anywhere: a
+  `CssClass` that makes one of those boxes narrower than its parent would make every growth answer wrong
+  by the difference, silently.

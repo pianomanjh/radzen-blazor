@@ -79,6 +79,26 @@
     </fieldset>
 
     <fieldset>
+        <legend>Lookup popup</legend>
+        <label title="Content grows the panel and then fits inside it; Columns only apportions the width it already has"
+               >Sizing
+            <select @bind="popupFit">
+                <option value="@PopupFit.None">off</option>
+                <option value="@PopupFit.Columns">fit columns</option>
+                <option value="@PopupFit.Content">grow to content</option>
+            </select>
+        </label>
+        <label title="Under 'grow to content' this is the cap rather than the width. Blank means the viewport is the only cap."
+               >Width
+            <input @bind="popupWidth" style="width:6rem" placeholder="e.g. 40rem" />
+        </label>
+        <label title="Rows shown before the popup scrolls. Needs a sizing mode: the height is measured, not multiplied out."
+               >Rows
+            <input type="number" @bind="popupRows" style="width:5rem" min="0" max="30" />
+        </label>
+    </fieldset>
+
+    <fieldset>
         <legend>Interaction</legend>
         <label><input type="checkbox" @bind="keyboard" /> Keyboard</label>
         <label><input type="checkbox" @bind="responsive" /> Responsive</label>
@@ -103,6 +123,35 @@
     <span>heap <b>@Kb(metrics.ManagedHeapBytes)</b></span>
     <span>GC <b>@metrics.Gen0 / @metrics.Gen1 / @metrics.Gen2</b></span>
     <span>settings raised <b>@settingsRaised</b></span>
+</div>
+
+@* Against the right edge on purpose. A popup that never has to shift never exercises the branch
+   most likely to be wrong - the leftward expansion, and the viewport cap behind it - so a lookup
+   sitting comfortably in the middle of the page would demonstrate the feature without testing it.
+   The control is narrow for the same reason: a panel wider than its control is the ordinary case. *@
+<div class="lookup-bar">
+    <RadzenFastDropDownDataGrid TItem="Row" TValue="int" @bind-Value="lookupValue"
+                                Data="@Data"
+                                TextProperty="@(x => x.Name)"
+                                ValueProperty="@(x => x.Id)"
+                                Placeholder="Pick a row"
+                                PopupFit="@popupFit"
+                                PopupWidth="@PopupWidthOrNull"
+                                MaxRows="@popupRows"
+                                AllowPaging="@allowPaging"
+                                PageSize="8"
+                                AllowVirtualization="@virtualize"
+                                Style="width:180px">
+        @* MinWidth on every one of them, and it is load-bearing rather than decoration. A column with
+           no floor of its own is given one at its own body width, so it never truncates and the fit
+           has nothing to take - which means a capped popup ends up with a table wider than its panel
+           and a horizontal scrollbar. That is §13's rule working, not a fault, but it is only visible
+           here with the floors present to compare against. *@
+        <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" MinWidth="@Floor" />
+        <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" MinWidth="@Floor" />
+        <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" MinWidth="@Floor" />
+        <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes" MinWidth="@Floor" />
+    </RadzenFastDropDownDataGrid>
 </div>
 
 <div class="stage" style="@StageStyle">
@@ -192,6 +241,15 @@
     bool stageFull = true;
 
     string? StageStyle => stageFull ? null : $"width:{stageWidth}px";
+
+    // The popup's own sizing, which is a different question from the grid's: the grid fits inside a
+    // container somebody else decided, and the popup decides its own. §29.
+    PopupFit popupFit = PopupFit.Content;
+    string popupWidth = "";
+    int popupRows = 6;
+    int lookupValue;
+
+    string? PopupWidthOrNull => string.IsNullOrWhiteSpace(popupWidth) ? null : popupWidth;
 
     AutoFitPriority Identity =>
         requireIdentity ? AutoFitPriority.Required : AutoFitPriority.BestEffort;

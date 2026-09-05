@@ -383,6 +383,19 @@ const ANIMATING = 'rz-fastgrid-animating';
 // the columns leave quickly and settle into the new width rather than stopping dead on it.
 const ANIMATION_MS = 200;
 
+// How long a fit waits for rows before giving up and measuring what is there.
+//
+// The grid's figure is generous because nothing is waiting on it: the grid is already drawn, and a fit
+// that lands late costs a column that was briefly the wrong width. The popup's is short because the
+// panel does not appear until the measurement is done - a click that produces nothing for a second
+// reads as broken - and because of what the wait is actually waiting for. An in-memory source has its
+// rows in the DOM already and waits none of this; an asynchronous one has not started its query when
+// we measure, since the grid owes that load to its own OnAfterRenderAsync and the renderer runs a
+// parent's before a child's. So this catches a warm query and gives up on a cold one, and a cold one
+// opens unfitted and is fitted on every open after. A chosen number, not a derived one.
+const GRID_PATIENCE_MS = 1000;
+const POPUP_PATIENCE_MS = 250;
+
 // The narrowest a column is ever left when nothing else says how narrow it may be. Wide enough to see
 // and to grab a resize handle on, narrow enough that it is obviously not the whole column.
 const VESTIGE = 5;
@@ -454,12 +467,12 @@ function cellData(cell) {
 // arithmetic, which needs numbers. Rather than parse them, which works for pixels and is quietly wrong
 // for everything else, each one is given to the browser on a probe element and measured back.
 //
-// The probes go in the table's own wrapper so a percentage resolves against the width it was written
-// against and a relative unit against the font it would inherit. All of them are written, then all of
+// The probes go in the element the length was written against - the table's own wrapper for a column
+// bound, the page for a popup's declared width - so a percentage resolves against the width it meant
+// and a relative unit against the font it would inherit. All of them are written, then all of
 // them are read: one layout for the set rather than one apiece. Once per fit, never on a resize.
-function resolveLengths(table, values) {
+function resolveLengths(host, values) {
   const resolved = new Array(values.length).fill(null);
-  const host = table.parentElement;
 
   if (!host) {
     return resolved;
@@ -545,7 +558,7 @@ function bound(px, min, max) {
 // window arrives without a render of the grid, so the server cannot tell when there is anything to
 // measure. Bounded, and it gives up into a header-only fit rather than never landing - an empty grid
 // would otherwise re-arm on every render and wait again.
-async function ready(tableId, wait) {
+async function ready(tableId, wait, patience = GRID_PATIENCE_MS) {
   // Bounded by the clock as well as by frames. requestAnimationFrame does not fire in a backgrounded
   // tab, so waiting on frames alone waits as long as the tab stays hidden - and the server has already
   // disarmed by then, so nothing would ever ask again.
@@ -553,7 +566,10 @@ async function ready(tableId, wait) {
   // The clock has to be able to win the race rather than merely be consulted between frames: testing
   // the deadline at the top of the loop reads as a timeout and is not one, because the await above it
   // never returns for the tab that needs it.
-  const deadline = performance.now() + 1000;
+  //
+  // How long is the caller's, because what a wait costs is the caller's too. A grid already on screen
+  // pays nothing visible for a slow fit; a popup pays its own appearance.
+  const deadline = performance.now() + patience;
 
   for (;;) {
     const table = document.getElementById(tableId);
@@ -828,8 +844,8 @@ function measurePass(table, indices, minWidths, maxWidths, toggleOffset, bare) {
 
   // Nothing to resolve on a grid that declares no bounds, which is most of them, so this costs nothing
   // there and one layout where it does.
-  const minimums = resolveLengths(table, minWidths);
-  const maximums = resolveLengths(table, maxWidths);
+  const minimums = resolveLengths(table.parentElement, minWidths);
+  const maximums = resolveLengths(table.parentElement, maxWidths);
 
   try {
     for (let k = 0; k < indices.length; k++) {
@@ -1100,4 +1116,159 @@ export async function autoFit(ask) {
   // The strings that were written, not the numbers behind them: the server stores these and re-emits
   // them on its next render, and anything it derives differently is a width that drifts from the page.
   return widths;
+}
+
+// Sizing the drop-down's popup, and the columns inside it, in the one call that has to happen before
+// `Radzen.openPopup` runs.
+//
+// The ordering is the whole design. `openPopup` measures the panel exactly once - display:block,
+// visibility:hidden, one getBoundingClientRect - and decides from that single rect whether to flip the
+// panel above the control and whether to shift it left, and nothing ever revisits it. So the panel is
+// given its final width here and `openPopup` is then called with syncWidth false, which is what keeps
+// the placement upstream's and out of this file: the leftward expansion for a control near the right
+// edge is upstream's clamp, working correctly because what it measured was final.
+//
+// The two properties set below are the two `openPopup` sets itself, and they are deliberately left on:
+// the two calls then share one layout rather than forcing one each. If the circuit drops between them
+// the panel is left block-and-hidden, which displaces nothing - it is position:absolute - and the next
+// open puts it right.
+export async function fitPopup(ask) {
+  const { panel: panelId, control: controlId, wrapper: wrapperId, grow, width, maxRows, fit } = ask;
+
+  const panel = document.getElementById(panelId);
+
+  if (!panel) {
+    // Nothing was sized, which is what tells the caller to let `openPopup` sync the width as before.
+    return { sized: false, widths: null };
+  }
+
+  const control = document.getElementById(controlId);
+
+  panel.style.display = 'block';
+  panel.style.visibility = 'hidden';
+
+  // The panel is box-sizing:content-box - the theme sets that deliberately, against the reset that
+  // makes every other rz- element border-box - so a width written here is its content width and the
+  // border and padding land outside it. Everything below is reasoned in outer widths and converted
+  // once, at each write, because it is the outer width that overflows the window.
+  const chrome = edges(panel);
+  const controlWidth = control ? control.getBoundingClientRect().width : 0;
+
+  // Two floors, not a collision: the author's and the control's. A panel narrower than the control it
+  // drops out of reads as a rendering fault, and syncWidth - which used to write that floor - is being
+  // turned off. Floors compose by maximum. `none` parses as NaN, which || turns into the 0 it means.
+  //
+  // Read once and remembered, because every write below replaces it: on the second open the computed
+  // value would be our own answer to the first, and the floor would be defined in terms of itself.
+  // The same trick openPopup uses to remember where it moved a panel from.
+  if (panel.__fastgridFloor === undefined) {
+    panel.__fastgridFloor = parseFloat(getComputedStyle(panel).minWidth) || 0;
+  }
+
+  const floor = Math.max(panel.__fastgridFloor + chrome, controlWidth);
+
+  // The classic scrollbar is exactly what makes window.innerWidth a lie, so it is the margin. On an
+  // overlay-scrollbar platform that difference is zero and the floor takes over. innerWidth rather
+  // than clientWidth for the cap itself, to agree with `openPopup`: it only shifts a panel left while
+  // `innerWidth > rect.width`, so a cap that allowed one pixel more would turn the clamp off entirely
+  // and leave nothing to pull an overflowing panel back.
+  const margin = Math.max(8, window.innerWidth - document.documentElement.clientWidth);
+  const cap = window.innerWidth - margin;
+
+  // A content width, because that is what the `width` in PopupStyle it supersedes would have been.
+  // Resolved against the page rather than against the control, so a percentage means what an author
+  // writing one would expect.
+  const declared = width ? resolveLengths(document.body, [width])[0] : null;
+  const declaredOuter = declared === null ? null : declared + chrome;
+
+  // What syncWidth used to write, bounded. Written before anything is measured so that the columns are
+  // measured against a width the code chose rather than against whatever shrink-to-fit made of an
+  // absolutely positioned panel - growth below is relative, and a relative figure needs a known base.
+  const base = Math.min(cap, Math.max(floor, declaredOuter === null ? controlWidth : declaredOuter));
+
+  widen(panel, base, chrome);
+
+  // This call owns the waiting, and the fit below must not wait again: a lookup whose rows never come
+  // would otherwise spend this ceiling and then the grid's own on top of it.
+  const table = await ready(fit.table, fit.wait, POPUP_PATIENCE_MS);
+
+  if (table && grow && dataRows(table).length > 0) {
+    // An empty result does not grow the panel. Header widths are real content and the columns below
+    // are still apportioned by them, but sizing chrome to chrome gives a popup that is narrow while a
+    // filter matches nothing and wide when it is cleared.
+    const pass = measurePass(table, fit.indices, fit.min, fit.max, fit.toggleOffset, fit.bare);
+
+    if (pass) {
+      // Growth is relative and needs no walk of the boxes in between. The columns need `deficit` more
+      // room than the container currently gives them, and every box between the panel's content edge
+      // and that container is full-width chrome that does not change - so the panel needs exactly that
+      // much more too. Negative when the content is narrower than the panel, which is how it shrinks.
+      let outer = base + (pass.measured - pass.container);
+
+      if (declaredOuter !== null) {
+        // Under Content, PopupWidth is the cap rather than the width: "size to the content, but never
+        // past this" is one sentence, so both parameters stay true instead of one being ignored.
+        outer = Math.min(outer, declaredOuter);
+      }
+
+      // Floors first, then the viewport - which wins over all of them, including a floor, because a
+      // panel wider than the window is the one failure none of this is allowed to produce.
+      widen(panel, Math.min(cap, Math.max(outer, floor)), chrome);
+    }
+  }
+
+  if (table && maxRows > 0 && wrapperId) {
+    sizeToRows(document.getElementById(wrapperId), table, maxRows);
+  }
+
+  // Measured a second time, inside the fit. Accepted rather than engineered around: the pass above
+  // exists to choose a width, this one measures against the width that was chosen, and a popup renders
+  // PageSize rows - five by default - so the layout it costs is over a handful of cells.
+  return { sized: true, widths: table ? await autoFit({ ...fit, wait: false }) : null };
+}
+
+// Both declarations, always, and that is the whole of it: `min-width` beats `width`, so a cap composed
+// into the arithmetic and then written to `width` alone is a cap the browser is free to ignore. A floor
+// three times the window wide did exactly that - the number was right and the panel was 3318px in an
+// 1100px viewport - and openPopup's leftward clamp switches off above the window width, so there was
+// nothing left to pull it back.
+//
+// Writing the floor rather than clearing it: `closePopup` clears a `min-width` only when `openPopup`
+// wrote one, which it records on the element and only does under syncWidth - off here - so ours
+// survives a close, and is rewritten on every open regardless.
+function widen(panel, outer, chrome) {
+  const width = (outer - chrome) + 'px';
+
+  panel.style.width = width;
+  panel.style.minWidth = width;
+}
+
+// The popup's height in rows rather than in pixels.
+//
+// `MaxRows x ItemSize` was the cheap version and it lies: the wrapper bounds the whole grid - the
+// header, the filter row that is a second row of it, the pager, a footer - so eight rows of pixels
+// shows about five rows. And ItemSize is the row height only when virtualizing; a paging popup's is
+// the theme's, which is not ours to know.
+//
+// So it is measured, which costs a handful of reads against a layout the caller has already forced.
+// `scrollHeight - tbody` is everything that is not rows, and both terms include a virtualized spacer's
+// full height, so it cancels and one formula serves both modes.
+function sizeToRows(wrapper, table, maxRows) {
+  const rows = dataRows(table);
+  const tbody = table.querySelector(':scope > tbody');
+
+  if (!wrapper || !tbody || rows.length === 0) {
+    return;
+  }
+
+  // Cleared first. scrollHeight is never less than the box itself, so a height written on a previous
+  // open would measure itself back and the panel could only ever grow.
+  wrapper.style.height = '';
+
+  const height = wrapper.scrollHeight - tbody.getBoundingClientRect().height
+    + maxRows * rows[0].getBoundingClientRect().height;
+
+  if (height > 0) {
+    wrapper.style.height = height + 'px';
+  }
 }

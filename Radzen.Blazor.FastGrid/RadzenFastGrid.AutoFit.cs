@@ -127,6 +127,26 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
+        /// Sizes the drop-down's popup and then this grid's columns inside it, answering whether the
+        /// panel was sized. §29.
+        /// </summary>
+        /// <remarks>
+        /// The automatic path, on a call somebody's click caused - which looks like a contradiction and
+        /// is the point. "Automatic" here means what §13 made it mean: not animated, and not permitted
+        /// to replace a width the user chose. Opening a popup is a click, but the panel is appearing
+        /// anyway, and columns settling inside a panel that is itself arriving are two motions reading
+        /// as one glitch. The public <see cref="AutoFitAsync()" /> is the other path and would do both
+        /// of those wrong things, which is why this exists rather than reusing it.
+        /// <para>
+        /// Nothing has to be re-armed for this to run per open. The popup forwards
+        /// <see cref="AutoFitMode.OnDemand" />, which is precisely the mode the render loop does not
+        /// fire, so this is the only fit the inner grid ever runs and the drop-down decides when.
+        /// </para>
+        /// </remarks>
+        internal Task<bool> FitPopupAsync(PopupChrome chrome) =>
+            RunAutoFitAsync(null, wait: true, automatic: true, chrome);
+
+        /// <summary>
         /// Arms the one automatic fit, if this grid owes one. Called from the render loop; the script
         /// waits for rows rather than this deciding whether there are any, because
         /// <c>Virtualize</c> re-renders itself and its window arrives without a render of the grid.
@@ -167,11 +187,16 @@ namespace Radzen.FastGrid
             await RunAutoFitAsync(null, wait: true, automatic: true);
         }
 
-        async Task RunAutoFitAsync(ColumnBase<TItem>? column, bool wait, bool automatic)
+        /// <summary>
+        /// Measures and writes, answering whether a popup panel was sized - which is false, and means
+        /// nothing, for every caller that is not one.
+        /// </summary>
+        async Task<bool> RunAutoFitAsync(ColumnBase<TItem>? column, bool wait, bool automatic,
+            PopupChrome? popup = null)
         {
             if (await BrowserAsync() is not { } browser || visibleColumns.Count == 0)
             {
-                return;
+                return false;
             }
 
             var targets = new List<int>();
@@ -187,7 +212,7 @@ namespace Radzen.FastGrid
 
             if (targets.Count == 0)
             {
-                return;
+                return false;
             }
 
             var minimums = new string?[targets.Count];
@@ -211,6 +236,7 @@ namespace Radzen.FastGrid
             var generation = viewGeneration;
 
             string?[]? widths;
+            var sized = false;
 
             try
             {
@@ -226,8 +252,25 @@ namespace Radzen.FastGrid
                     ? "scroll"
                     : column is null ? "fit" : "keep";
 
-                widths = await browser.AutoFitAsync(new AutoFitAsk(TableElementId, targets, minimums,
-                    maximums, ExpandColumn ? 1 : 0, bare, wait, !automatic, overflow, required));
+                var fit = new AutoFitAsk(TableElementId, targets, minimums, maximums,
+                    ExpandColumn ? 1 : 0, bare, wait, !automatic, overflow, required);
+
+                if (popup is { } chrome)
+                {
+                    // One call rather than a sizing call and then a fitting one, because the panel has
+                    // to carry its final width before `Radzen.openPopup` measures it - and two round
+                    // trips would put a render between them for the popup to be seen at the first.
+                    var fitted = await browser.FitPopupAsync(new PopupFitAsk(chrome.Panel,
+                        chrome.Control, chrome.Wrapper, chrome.Grow, chrome.Width, chrome.MaxRows,
+                        fit));
+
+                    sized = fitted.Sized;
+                    widths = fitted.Widths;
+                }
+                else
+                {
+                    widths = await browser.AutoFitAsync(fit);
+                }
             }
 #pragma warning disable CA1031
             catch (Exception)
@@ -236,12 +279,15 @@ namespace Radzen.FastGrid
                 // The circuit going away mid-measurement, which is an ordinary way for this to end and
                 // has no caller to report to. Same reasoning as the click attach; JSDisconnectedException
                 // does not derive from JSException, so the narrow catch misses the case this is for.
-                return;
+                return false;
             }
 
             if (widths is null || generation != viewGeneration || disposed)
             {
-                return;
+                // The panel may still have been sized before the columns were given up on - an empty
+                // popup is exactly that case - and the caller has to know, or `openPopup` would sync a
+                // width over the one just written.
+                return sized;
             }
 
             for (var i = 0; i < widths.Length && i < targets.Count; i++)
@@ -266,6 +312,8 @@ namespace Radzen.FastGrid
             {
                 StateHasChanged();
             }
+
+            return sized;
         }
 
         /// <summary>
