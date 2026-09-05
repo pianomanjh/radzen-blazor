@@ -597,7 +597,7 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { Property = "First", Width = "333px" }
+                    new() { UniqueID = "First", Width = "333px" }
                 }
             };
 
@@ -617,7 +617,7 @@ namespace Radzen.FastGrid.Tests
 
             // And still there to be saved again.
             cut.Find("thead th div").Click();
-            Assert.Equal("333px", captured.Columns.Single(c => c.Property == "First").Width);
+            Assert.Equal("333px", captured.Columns.Single(c => c.UniqueID == "First").Width);
         }
 
         [Fact]

@@ -586,6 +586,11 @@ namespace Radzen.FastGrid.Tests
             // Two columns over the same table is the ordinary case rather than the exotic one -
             // CreatedByUserId and ApprovedByUserId both resolve against users - and per-column
             // ownership would build it twice and hold it twice.
+            //
+            // Those two are different members and so have different identities. This test shares one
+            // member to keep the lookup the only variable, which makes it §27's collision, so the second
+            // column declares a UniqueID - which is what §14 said a lookup column would have to do once
+            // its identity became its id path, and the first place on the branch it is needed.
             using var ctx = new TestContext();
 
             var rows = Lookups.CategoryRows();
@@ -595,7 +600,8 @@ namespace Radzen.FastGrid.Tests
 
             Render(ctx, Columns.Of(
                 Columns.Lookup<Person, int>(x => x.CategoryId, lookup, title: "Category"),
-                Columns.Lookup<Person, int>(x => x.CategoryId, lookup, title: "Also category")));
+                Columns.Lookup<Person, int>(x => x.CategoryId, lookup, title: "Also category",
+                    uniqueId: "AlsoCategory")));
 
             Assert.Equal(rows.Count, reads);
         }

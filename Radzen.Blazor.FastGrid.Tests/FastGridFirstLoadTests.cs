@@ -184,7 +184,7 @@ namespace Radzen.FastGrid.Tests
                 {
                     Columns = new List<FastGridColumnSettings>
                     {
-                        new() { Property = "First", SortOrder = SortOrder.Descending },
+                        new() { UniqueID = "First", SortOrder = SortOrder.Descending },
                     },
                 });
                 p.Add(g => g.ChildContent, Columns.Of(

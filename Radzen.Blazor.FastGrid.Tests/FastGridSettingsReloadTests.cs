@@ -81,7 +81,7 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { Property = "First", SortOrder = SortOrder.Descending },
+                    new() { UniqueID = "First", SortOrder = SortOrder.Descending },
                 },
             }));
 
@@ -119,7 +119,7 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { Property = "First", SortOrder = SortOrder.Descending },
+                    new() { UniqueID = "First", SortOrder = SortOrder.Descending },
                 },
             }));
 
@@ -170,7 +170,7 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { Property = "First", SortOrder = SortOrder.Ascending },
+                    new() { UniqueID = "First", SortOrder = SortOrder.Ascending },
                 },
             };
 
@@ -208,7 +208,7 @@ namespace Radzen.FastGrid.Tests
                 CurrentPage = from.CurrentPage,
                 Columns = from.Columns?.Select(c => new FastGridColumnSettings
                 {
-                    Property = c.Property,
+                    UniqueID = c.UniqueID,
                     SortOrder = c.SortOrder,
                     FilterValue = c.FilterValue,
                     FilterOperator = c.FilterOperator,

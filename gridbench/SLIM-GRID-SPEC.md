@@ -166,7 +166,8 @@ abstract class ColumnBase<TItem>
     string Title, CssClass, FormatString        // genuinely strings, leave them alone
     abstract void RenderCell(RenderTreeBuilder b, int seq, TItem item)
     virtual IOrderedQueryable<TItem> ApplySort(IQueryable<TItem> source, bool descending)
-    string PropertyPath { get; }                // derived, see below
+    string SortPath { get; }                    // derived, see below
+    ColumnIdentity Identity { get; }            // what names it across a reload, §27
 
 sealed class PropertyColumn<TItem, TProp> : ColumnBase<TItem>
     Expression<Func<TItem, TProp>> Property
@@ -758,9 +759,12 @@ From the column model, likewise:
   contract its own base declares. Together they ordered a grid by a `List<string>`, which has no
   comparer: the render threw and drew nothing.
 - A settings reset cleared every column's filter and the whole sort list, but the restore that
-  follows can only name a column by `PropertyPath` - so a column without one lost what its markup
-  declared. A `CollectionColumn` has no `PropertyPath` when it has no `SortBy`, and none when its
-  `SortBy` is over a computed key, while filtering perfectly well by `FilterPropertyPath` throughout.
+  follows could only name a column by `PropertyPath` - so a column without one lost what its markup
+  declared. A `CollectionColumn` had no `PropertyPath` when it had no `SortBy`, and none when its
+  `SortBy` was over a computed key, while filtering perfectly well by `FilterPropertyPath` throughout.
+  **The rule survives §27 and the column that shows it has changed**: both sides now ask one question,
+  `Identity.HasName`, and a collection column bound to a member has a name. What is left with none is a
+  column that names no member at all.
 - A computed column borrowed its sort key as a filter path. `ApplyFilter` composes from the display
   expression and the reflective route filters by the path, so the column filtered two different
   members depending on which route ran - and which one runs is decided by whether some *other* column
@@ -770,20 +774,31 @@ From the column model, likewise:
   check-box-list filter differently - and the list was the side disagreeing with `QueryableExtension`.
   Every other operator in that builder already coalesced; `In` was the one missed.
 
-**Open, and a design decision rather than a fix: a column's settings identity is not unique.**
-`ColumnForPath` answers with the first column matching a stored path, and `CaptureSettings` writes
-every column under that same key - so two columns over one property are both restored onto the first.
-Hiding the second and reloading hides the *first* instead, which is a wrong answer on screen and not
-merely lost state.
+**~~Open~~ Closed by §27: a column's settings identity was not unique.** `ColumnForPath` answered with
+the first column matching a stored path, and `CaptureSettings` wrote every column under that same key -
+so two columns over one property were both restored onto the first. Hiding the second and reloading hid
+the *first* instead, which is a wrong answer on screen and not merely lost state.
 
-**It does not take a duplicated property to collide.** A `PropertyColumn`'s path is its *sort* path
-when `SortBy` is set, so a column displaying `Last` and sorting by `First` shares an identity with the
-column displaying `First` - two ordinary columns, nothing declared twice. A filter stored for one is
-restored onto the other, and the grid answers with rows neither column asked for. **`RadzenDataGrid` does not have this problem**: it matches on `UniqueID` first and
-falls back to `Property` only when there is none. Adopting the same idea would close this *and* the
-`TemplateColumn` limitation below, which is the same missing concept seen from the other side - a
-column with no property path has no settings identity at all, so its position in a dragged order is
-never stored. Both are open; neither should be closed by guessing at the identity model.
+**It did not take a duplicated property to collide.** A `PropertyColumn`'s path is its *sort* path when
+`SortBy` is set, so a column displaying `Last` and sorting by `First` shared an identity with the column
+displaying `First` - two ordinary columns, nothing declared twice. A filter stored for one was restored
+onto the other, and the grid answered with rows neither column asked for.
+
+**One sentence of this entry was wrong and §27 corrects it.** It said **`RadzenDataGrid` does not have
+this problem**, because "it matches on `UniqueID` first and falls back to `Property` only when there is
+none". The matching is exactly that (`RadzenDataGrid.razor.cs:4227, 4623`) and the derivation defeats
+it: `SetColumnDefaults`, called from `OnInitialized`, overwrites the parameter unconditionally -
+`UniqueID = Property` where there is one, `FilterProperty` otherwise, the empty string where there is
+neither (`RadzenDataGridColumn.razor.cs:250-257`). A declared `UniqueID` on any column with a `Property`
+is discarded, so the escape hatch it appears to offer does not exist. What it does avoid, by keying on
+the display property rather than the sort path, is the second collision above - and that is the half
+worth adopting.
+
+Both halves are closed together, with the `TemplateColumn` limitation that is the same missing concept
+seen from the other side. §27 has the model and the two claims of its own that did not survive being
+built. The instruction not to guess at the identity model stood for four sections and was right to: what
+closed it was not a better derivation but the observation that the collision §14 refused to create is
+only intolerable while it is silent.
 
 **What the passes have taught about where to look**, which is worth more than the counts:
 
@@ -2358,23 +2373,25 @@ both changed what is written above rather than confirming it: `Query` never dedu
 is the expressions rather than the queryable that prevent it, and the collection descriptor needs no
 sentinel because upstream already has the convention. What is left:
 
-- **A lookup column's settings identity is its *sort* path, not its id path**, which is not what this
-  section said before it was built. `PropertyPath` is two things at once - the settings key *and* the
-  name a `LoadData` or OData sort travels under - so it cannot simply carry the id: a remote grid would
-  order by `CategoryId` under a column sorting by `Category.Name`.
+- **~~A lookup column's settings identity is its *sort* path, not its id path~~ - closed by §27, and
+  the separation this bullet refused is the one that was taken.** What it said, and the reasoning is
+  worth keeping because it was sound: `PropertyPath` is two things at once - the settings key *and* the
+  name a `LoadData` or OData sort travels under - so it cannot simply carry the id, or a remote grid
+  would order by `CategoryId` under a column sorting by `Category.Name`. Separating them was available
+  and was **not taken**, not because it could not be done, but because an id-path settings key gives a
+  `LookupColumn` over `p.CategoryId` **the same identity as a `PropertyColumn` over `p.CategoryId`** -
+  §10b's collision newly created rather than avoided.
 
-  Separating them was available and was **not taken**, and the reason is not that it could not be done -
-  a `SettingsKey` defaulting to `PropertyPath` is four call sites. It is that the separation makes
-  things worse rather than better here: an id-path settings key gives a `LookupColumn` over
-  `p.CategoryId` **the same identity as a `PropertyColumn` over `p.CategoryId`**, which is §10b's
-  collision newly created rather than avoided. §10b's own instruction is not to close that by guessing
-  at the identity model, and this would have been a guess.
+  **That collision is real and §27 creates it deliberately.** What changed is the word *silent*: the
+  grid throws, names both columns and names the attribute to declare, and the author writes one
+  `UniqueID`. This bullet's premise was that nothing would say so, and it was the premise rather than
+  the reasoning that was wrong - which is a different kind of mistake from the ones this file usually
+  records, and worth the distinction.
 
-  So the consequence stands and is `CollectionColumn`'s exactly: **a lookup column with no `SortBy` has
-  no settings identity at all**, and its width, order, visibility and filter are never captured. One
-  *with* a `SortBy` stores its filter as ids and survives the rename this section argued for, and that
-  round trip has a test. This joins §10b's open collision as another participant rather than settling
-  it.
+  So the consequence it recorded is gone rather than standing: a lookup column with no `SortBy` is
+  identified by the id member it is bound to, and its width, order, visibility and filter are captured
+  like any other column's. Its filter still stores as ids and still survives the rename this section
+  argued for, and that round trip still has its test.
 - **Not in `RadzenFastDropDownDataGrid`**, for the same reason §13's auto-fit is not: that slice has the
   worst review history on the branch, and its open layout question should be answered before anything
   else is added to it.
@@ -2476,7 +2493,7 @@ with a load-bearing reason should be recorded here beside it.
 | 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
 | 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
 | 6 | `ColumnBase`'s internal half is a field-by-field protocol | ~~Worth exploring~~ **built**, §20 - and it is four sections, not seventeen members |
-| 7 | A column's identity is a concept with no name | Worth exploring |
+| 7 | A column's identity is a concept with no name | ~~Worth exploring~~ **built**, §27 - and one of this row's three symptoms was not one |
 | 8 | The drop-down forwards twelve parameters, then hands out the grid | ~~Worth exploring~~ **built**, §19 - it was the scan, not the forwarding |
 
 **1. Compose the view behind one interface.** **Built**, as `Composition`; §16 has the design it was
@@ -2611,13 +2628,23 @@ which would give a column an identity the filter lookup is currently keyed by. P
 now and revising them after either lands is worse than publishing them once. §20 records it the same
 way.
 
-**7. A column's identity is a concept with no name.** Settings, reorder and the picker all need to name
-a column and all three borrow a *query* path to do it. `PropertyPath` is the settings key and the name
-a remote sort travels under; `FilterPropertyPath` keys the filter lookup; `FilterMemberPath` builds the
-reflective descriptor. §10b's collision and the `TemplateColumn` limitation and §14's lookup-identity
-consequence are three symptoms of one missing module. **This section does not re-open them** — §10b's
-instruction not to guess at the identity model stands. The only claim here is that they are one
-question and should be designed once rather than three times.
+**7. A column's identity is a concept with no name.** **Built**; §27 has the design it was built from,
+and corrects this entry's count. It said settings, reorder and the picker all need to name a column and
+all three borrow a *query* path to do it, listing `PropertyPath` as the settings key and the remote
+sort's name, `FilterPropertyPath` as the filter lookup's key, and `FilterMemberPath` as the reflective
+descriptor's.
+
+**One of those three is not a symptom.** `ColumnByFilterPath` has exactly one caller - the public
+`ApplyFilters`, which takes `FilterDescriptor`s built by somebody else out of member names, so a
+`RadzenDataFilter` or a restored remote filter can drive the grid. Keying it by an identity the grid
+invented would break it on arrival: it is a query path doing a query path's job. Reorder and the picker
+are not separate participants either - both persist *through* settings and have no key of their own, so
+`ColumnForPath` had a single caller too.
+
+What was left after that narrowing is what §27 built: `PropertyPath` meaning both the sort's name and
+the settings key, and nothing naming a column that names no member. §10b's collision, the
+`TemplateColumn` limitation and §14's lookup consequence are all closed by it. **The claim that survives
+is the one this entry actually made** - that they were one question and should be designed once.
 
 **8. The drop-down forwards twelve parameters, then hands out the grid.** It is not a shallow
 pass-through overall: `Adopt`, `Chosen`/`ElementOf`, the popup lifetime and the form participation are
@@ -3751,9 +3778,9 @@ cheapest it will ever be.
 **4. The four `Apply*` methods default to a sort the column supplies.** `TemplateColumn`,
 `CollectionColumn` and `LookupColumnBase` each carry the same four one-line forwards to `SortBy` -
 twelve methods, verbatim across three classes, and two of the three also carry the same
-`PropertyPath => SortBy?.Path`. An `internal virtual FastGridSort<TItem>? SortSource => null` on the
-base, with the four `Apply*` and `PropertyPath` defaulting through it, turns twelve methods and two
-properties into three overrides of one member.
+`PropertyPath => SortBy?.Path` (`SortPath` since §27, which took the settings key out of it). An
+`internal virtual FastGridSort<TItem>? SortSource => null` on the base, with the four `Apply*` and that
+path defaulting through it, turns twelve methods and two properties into three overrides of one member.
 
 Nothing public changes behaviour: the default `SortSource` is null, so every `Apply*` still answers null
 for a column that supplies no sort - which is what an out-of-assembly column inherits today.
@@ -3967,6 +3994,21 @@ a fifth. Small, and recorded because the design listed six.
 not - membership is `Contains` on the caller's own collection - and §12 is corrected above. It matters
 beyond a wrong sentence: it means focus is the *only* place in the grid where an item is identified by
 key rather than compared by reference, which is a point for §15's candidate 7 rather than against it.
+
+### What §27 added to the protocol this section is about
+
+**One member, `internal virtual string? IdentitySource`**, joining the internal half whose publication
+this section argued should happen once rather than twice. It is the same trade §20 already makes for
+`SortSource` and is affordable for the same reason plus one: the escape hatch is public. `UniqueID` is a
+`[Parameter]`, so an out-of-assembly column that cannot supply a derivation can declare a name, and the
+only thing `internal` withholds is the convenience of not having to.
+
+**One of candidate 6's two blockers is gone and the other is not.** §15 refuses to open the eight
+`internal virtual` filter-row members while two things that would change them are open. Candidate 7 is
+built, so the identity the filter lookup was said to be keyed by is settled - and §27 found that the
+filter lookup was never keyed by identity in the first place, which weakens that half of the blocker
+further. §10's question of whether an operator menu, a date popup, a numeric range or an enum picker is
+built in is untouched, so publishing the protocol is still publishing it twice.
 
 ---
 
@@ -5608,3 +5650,142 @@ behaviour.
   between renders changes identity, and its stored state is then keyed under the old string. That is
   already true of `PropertyPath` today and this changes nothing about it, but it is the kind of thing
   that is true until someone builds dynamic columns on top.
+
+### What the build changed
+
+Four of this section's own decisions did not survive it, and two of the four were deleted by mutations
+rather than by argument.
+
+**Identity is asked rather than kept.** This section said it would be "built once per parameter set over
+a string the column already memoizes". It is a property with no field behind it -
+`ColumnIdentity.Of(UniqueID, IdentitySource)`, composed whenever it is read. Both are free, and the
+computed one is better for a reason the field version would have had to solve: there is no ordering rule
+about deriving before the base, nothing to invalidate, and no third memo on a branch that has four
+recorded participants in the `!ReferenceEquals` trap. The readers are `CaptureSettings`, `ApplySettings`,
+the check and `PickerTitle`, none of which is on a per-row or per-cell path.
+
+**The gate has one signal, and this section named the two it does not have.** It said the counter would
+be "bumped by `AddColumn` and `RemoveColumn`". Building it that way showed a hole immediately: two
+columns can come to share a name with nothing added or removed, when a `Property` or a `UniqueID`
+changes between renders. So a third signal went in - a column reporting from `OnParametersSet` that its
+own identity moved - and then a mutation deleted the other two. **Removing the bump at registration
+failed no test**, because a joining column registers from its own `SetParametersAsync` and *then* runs
+`OnParametersSet`, which reports an identity moving from nothing to a name. Removal needs none either: a
+leaving column cannot create a collision, and cannot hide one it resolved, because a walk that throws
+never records its generation. What is left is one caller, and the rule is written where the two dead
+ones were.
+
+**The gate's seed went the same way, and its mutation proved something else.** The first version seeded
+the "last clean generation" at -1 to force a first walk, with a comment saying an empty grid and a grid
+whose first column had just registered would otherwise be indistinguishable. Seeding it level with the
+counter instead **failed no test** - any column with a name reports one on its first parameter set, and
+a grid whose columns all name nothing cannot collide. That mutation surviving is also the evidence for
+the ordering the whole check depends on: every column's `OnParametersSet` has run by the time `Defer`
+renders the table, or the collision tests would have found the counter still at zero and skipped.
+
+**The walk allocates nothing.** Nested loops rather than a set, because it runs only when the generation
+moved and the counts are tens. A `HashSet` per check would be an allocation bought to avoid comparisons
+nobody is paying for.
+
+**And one thing the type got wrong on the way through.** Its first version compared *where* a name came
+from as part of equality, so two columns answering to "First" - one declaring it, one deriving it - were
+unequal while `Collides` said they were the same column. Two members of one type disagreeing about the
+only question that type exists to answer. `Equals` is the name and nothing else now, `Collides` is
+`HasName && Equals`, and `IsDeclared` is provenance: it changes the advice in the message and nothing
+else.
+
+### What the build met that this section treated as hypothetical
+
+**"The one place this piece can break a grid that works today" is three places, and they were all in
+this repository.** Each was found by the throw itself, and each took one attribute to fix - which is the
+escape hatch working. The frequency is the finding:
+
+- **`GridParityFixture`'s auto-fit columns** declare `x => x.Id` twice, deliberately: "two columns hold
+  the same values and differ only in their titles, so a width difference between them can only have come
+  from the header". Seven `MarkupParityTests` failed on it, through the shared fixture.
+- **`LookupColumnTests.TwoColumnsOverOneLookupResolveItOnce`** puts two lookup columns on one member to
+  keep the lookup the only variable. Its own comment says the realistic case - `CreatedByUserId` and
+  `ApprovedByUserId` - is two *different* members, so the test's markup is the artificial one; but this
+  is §14's collision, met for the first time.
+- **`gridbench`'s `PickedColumnSet`** declares `x => x.Age` twice, once hidden and once drawn, which is
+  the condition column numbering is written under. **This is the ordinary markup of the three** - a
+  hidden column beside a visible one over the same member is not a contrivance - and it is the one worth
+  weighing against the decision to throw. It also cost a benchmark run: the row printed `NA` while the
+  other 49 ran, which is the failure mode §9 already has a rule about.
+
+**Two tests changed shape rather than being deleted.** `ReviewRegressionTests`'s two "a column it cannot
+name" tests pinned the reach rule - a reset must not clear what the restore cannot put back - using a
+`CollectionColumn` with no `SortBy`, which had no settings identity while filtering perfectly well by a
+different path. That disagreement is what this section removes, so the column no longer shows it. The
+rule is unchanged and both sides of it now ask one question; what exercises it is a `PropertyColumn` over
+a computed expression, which can still filter through `FilterBy` and still sort through `SortBy` while
+naming no member at all.
+
+**And one verification item is weaker than it was written.** "A grid whose column set never changes does
+not re-walk" is not directly observable, so it is asserted as an upper bound on how often a counting
+column is asked its identity across three renders that change nothing. It discriminates - removing the
+gate multiplies the count - but it is a bound rather than the statement.
+
+### Measured
+
+`--job short` at 1000 rows, `executed benchmarks: 49` - checked, because §26 tabulated six runs of
+zeroes before anyone did. Against §16's two post-build runs, which are the last recorded values on this
+path:
+
+| | before | after |
+| --- | ---: | ---: |
+| bare | 154.54 / 154.65 KB | **154.67 KB** |
+| + sorted by one column | 175.79 KB twice | **176.13 KB** |
+| + a filter row | 158.77 KB twice | **158.89 KB** |
+
+**Read as marginals rather than absolutes, because the whole table moved together.** Bare is +0.02 over
+the closest prior value, which is well inside the ~0.3 KB floor §9's control table established. The sort
+row's absolute is +0.34, which is just past that floor - but its *marginal* over bare is 21.46 KB against
+21.14 and 21.25 before, so +0.21, inside it. The filter row's marginal is 4.22 against 4.12 and 4.23.
+
+**No time ratio is quoted**, per §9 and the drift rule: at this job length the errors are wider than any
+difference, and this machine moved 2.7x within a session while §25 was measuring it.
+
+The mechanism agrees with the numbers, which is the part worth stating: nothing here is on a per-row or
+per-cell path. A column composes a struct over two strings it already holds, once per parameter set for
+the report and once per read for the four readers - `CaptureSettings`, `ApplySettings`, the check and
+`PickerTitle`, none of which runs per row. The check itself allocates nothing and usually does not run.
+
+**The first run of this table is thrown away rather than quoted**, and why is in the section above: the
+hidden-column row printed `NA` because `gridbench`'s own markup collided. Fixing the markup and
+re-running is what produced the numbers here.
+
+### The playground
+
+§9's layer 6, which is not optional here - the picker's label, the throw and the stored key are all
+behaviour. Nine columns over 500 rows, in-memory: the grid draws, sorts (Department ascending, arrow and
+all), the picker lists all nine by their titles, hiding Salary drops it to eight and leaves the sort
+standing, and `settings raised` counts up on both the sort and the hide - which is the capture and the
+restore going through the new key in a real browser rather than a `TestContext`. Console clean but for a
+`favicon.ico` 404 the playground has always had.
+
+### The mutations
+
+Seventeen, on the code and on the tests it came with. Fifteen caught, two survived and both survivals
+became deletions above. Two of the sixteen were run against comments rather than against behaviour -
+a claim about where a line has to sit is a claim, and the cheapest way to find out is to move it.
+
+| Mutation | Result |
+| --- | --- |
+| The check is never called | caught, 3 tests |
+| `Collides` drops its `HasName` guard, so two nameless columns collide | caught |
+| The generation is recorded before the walk rather than after | caught |
+| `IdentitySource` on `PropertyColumn` goes back to the sort path | caught, 3 tests |
+| A declared `UniqueID` is ignored | caught, 4 tests |
+| An empty `UniqueID` counts as a declaration | caught |
+| `TemplateColumn` supplies no identity | caught |
+| A column stops reporting that its identity moved | caught, 2 tests |
+| `PickerTitle` falls back to the sort path again | caught |
+| The collision message gives the same advice whatever the sources | caught |
+| The settings reset reaches past the restore, on the sort side | caught |
+| The settings reset reaches past the restore, on the filter side | caught - both rewritten regression tests still discriminate |
+| `Equals` compares where the name came from as well as the name | caught, 2 tests |
+| The identity report moves below `OnParametersSet`'s early return | caught - the branch returns, so a column would report nothing on the one parameter set where its identity is certain to have moved |
+| No bump when a column joins | **survived** - deleted, see above |
+| The gate is seeded level with the counter | **survived** - taken, see above |
+| No bump when a column leaves | **anchor missed; not a result.** The script reported it as a survival because the unmutated code passed, which is the shape §9 warns about - a run that did not happen looks exactly like nothing failing. Re-derived by argument instead, and the argument is in the code |

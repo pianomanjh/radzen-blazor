@@ -25,6 +25,21 @@ namespace Radzen.FastGrid
     {
         readonly List<ColumnBase<TItem>> columns = new();
 
+        // Bumped whenever the set of columns or one column's identity moves, and compared against the
+        // last value that walked cleanly. Everything between two bumps is the same question with the
+        // same answer, so the check costs one integer compare on a render that changed nothing.
+        int columnIdentityGeneration;
+
+        // The last generation that walked cleanly. Seeded level with the counter rather than below it,
+        // and a mutation is what says that is enough: seeding it at -1 to force a first walk failed no
+        // test, because any column that has a name reports one on its first parameter set and that is
+        // what moves the counter. A grid whose columns all name nothing never walks and never needs to.
+        //
+        // That mutation surviving is also what confirms the ordering this depends on: every column's
+        // OnParametersSet has run by the time Defer renders the table, or the collision tests would have
+        // found the counter still at zero and skipped the walk.
+        int checkedColumnIdentityGeneration;
+
         // The columns actually drawn, in the order they are drawn, with their sort keys alongside.
         // Rebuilt once per render pass rather than per row - three render loops read it, and a row
         // reads it once per cell.
@@ -494,6 +509,85 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
+        /// Says that the answer to "can any two of these columns be told apart" may have changed, so the
+        /// next render re-asks it. One caller: a column reporting that its own identity moved.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="AddColumn" /> and <see cref="RemoveColumn" /> deliberately do <em>not</em> call
+        /// this, and a mutation is why. A joining column registers from its own SetParametersAsync and
+        /// then runs OnParametersSet, which reports an identity moving from nothing to a name - so the
+        /// bump at registration was a second signal for a case the first already covered, and deleting
+        /// it failed no test. A leaving column cannot create a collision at all, and cannot hide one it
+        /// resolved either: a walk that throws never records its generation, so the next render walks
+        /// again whatever happened in between.
+        /// </para>
+        /// <para>
+        /// A counter rather than a flag, and compared against the last generation that walked cleanly
+        /// rather than cleared: a flag cleared before the walk would let a throw be raised once and
+        /// swallowed for good, and one cleared after would be lost if a column reported in between.
+        /// </para>
+        /// </remarks>
+        internal void InvalidateColumnIdentities() => columnIdentityGeneration++;
+
+        /// <summary>
+        /// Throws when two columns cannot be told apart, so that a grid which would restore one column's
+        /// stored state onto another says so instead of doing it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Walks all registered columns rather than the drawn ones, because <see cref="CaptureSettings" />
+        /// does: a hidden column still carries a filter and still stores it.
+        /// </para>
+        /// <para>
+        /// The generation is recorded after the walk, never before. Recording it first would mean the
+        /// throw happened once, the generation matched on the next render, and the grid drew the
+        /// colliding columns as though nothing were wrong - a check that reports a fault and then hides
+        /// it, which is worse than no check.
+        /// </para>
+        /// <para>
+        /// Nested loops rather than a set: it runs only when the generation moved, the counts here are
+        /// tens rather than thousands, and §3's rule 5 is about allocation. A HashSet per check would be
+        /// an allocation to avoid comparisons nobody is paying for.
+        /// </para>
+        /// </remarks>
+        void CheckColumnIdentities()
+        {
+            if (columnIdentityGeneration == checkedColumnIdentityGeneration)
+            {
+                return;
+            }
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var identity = columns[i].Identity;
+
+                for (var j = i + 1; j < columns.Count; j++)
+                {
+                    if (identity.Collides(columns[j].Identity))
+                    {
+                        throw new InvalidOperationException(ColumnIdentity.CollisionMessage(
+                            identity, ColumnLabel(columns[i]),
+                            columns[j].Identity, ColumnLabel(columns[j])));
+                    }
+                }
+            }
+
+            checkedColumnIdentityGeneration = columnIdentityGeneration;
+        }
+
+        /// <summary>How a column is named in the message above, which is all this is for.</summary>
+        /// <remarks>
+        /// Not <see cref="ColumnBase{TItem}.PickerTitle" />, which falls back to the identity - and an
+        /// author told that "CategoryId and CategoryId share the identity CategoryId" has been told
+        /// nothing. The type is the thing that distinguishes two columns with no titles.
+        /// </remarks>
+        static string ColumnLabel(ColumnBase<TItem> column) =>
+            column.Title is { Length: > 0 } title
+                ? $"The column titled \"{title}\""
+                : $"A {column.GetType().Name.Split('`')[0]}";
+
+        /// <summary>
         /// Unregisters a column, when the renderer disposes one that has left the markup.
         /// </summary>
         internal void RemoveColumn(ColumnBase<TItem> column)
@@ -774,13 +868,18 @@ namespace Radzen.FastGrid
 
         void RenderTable(RenderTreeBuilder builder)
         {
+            // Before the settings below, because applying them onto columns the grid cannot tell apart
+            // is the fault this checks for, happening. Here for the same reason they are: Defer has run,
+            // so every column has registered and derived.
+            CheckColumnIdentities();
+
             // Before the columns are gathered, not after: stored settings can hide a column, and the
             // drawn list is computed from what they leave. Applying them second showed the pre-settings
             // columns for one render, and on a grid over a plain queryable there is no reload behind it
             // to put that right.
             //
-            // Here and not in OnParametersSet: stored state names columns by property path, and no
-            // column has registered by then. Defer has run, so by now every one of them has.
+            // Here and not in OnParametersSet: stored state names columns by identity, and no column
+            // has registered by then. Defer has run, so by now every one of them has.
             if (settingsPending)
             {
                 settingsPending = false;

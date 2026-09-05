@@ -31,6 +31,15 @@ namespace Radzen.FastGrid
         public override string? FilterPropertyPath => path;
 
         /// <inheritdoc />
+        /// <remarks>
+        /// The id member, which is what the column is bound to even though its cells show a name. §14
+        /// refused to make this the settings key while doing so would silently collide with a
+        /// PropertyColumn over the same id; §27 makes that collision throw, which is what lets this be
+        /// the honest answer.
+        /// </remarks>
+        internal override string? IdentitySource => path;
+
+        /// <inheritdoc />
         public override Type FilterPropertyType => typeof(TKey);
 
         /// <inheritdoc />

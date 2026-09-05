@@ -279,7 +279,7 @@ namespace Radzen.FastGrid.Tests
 
             var column = Assert.Single(raised.Columns);
 
-            Assert.Equal("First", column.Property);
+            Assert.Equal("First", column.UniqueID);
             Assert.Equal(SortOrder.Ascending, column.SortOrder);
             Assert.Equal(0, raised.CurrentPage);
         }
@@ -322,7 +322,7 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { Property = "First", SortOrder = SortOrder.Descending },
+                    new() { UniqueID = "First", SortOrder = SortOrder.Descending },
                 },
             };
 
@@ -349,7 +349,7 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { Property = "Grade", FilterValue = Grade.Junior, FilterOperator = FilterOperator.Equals },
+                    new() { UniqueID = "Grade", FilterValue = Grade.Junior, FilterOperator = FilterOperator.Equals },
                 },
                 PageSize = 1,
                 CurrentPage = 1,

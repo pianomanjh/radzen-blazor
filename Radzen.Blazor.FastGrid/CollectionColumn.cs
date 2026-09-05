@@ -75,6 +75,10 @@ namespace Radzen.FastGrid
         public override string? FilterPropertyPath => collectionPath;
 
         /// <inheritdoc />
+        /// <remarks>The collection this column lists, which is the member its cells are about.</remarks>
+        internal override string? IdentitySource => collectionPath;
+
+        /// <inheritdoc />
         public override string? FilterMemberPath => memberPath;
 
         /// <inheritdoc />
