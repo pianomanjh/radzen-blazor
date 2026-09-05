@@ -392,13 +392,21 @@ Each layer below caught real faults the previous one missed. Use all of them.
    `AllowRowSelectOnRowClick`, so "off" measured a grid that selected into a bin. A control that does
    not drive the grid teaches the wrong thing about it.
 
-7. **Benchmarks** — `--job short --filter "*FastGridFeatureBench*"`. Numbers last: they say nothing
-   about correctness.
+7. **Benchmarks** — `--job short --filter "*FastGridFeatureBench*" --buildTimeout 900`. Numbers last:
+   they say nothing about correctness.
+
+   **`--buildTimeout 900` is not optional, and omitting it does not look like an error.** The generated
+   project takes ~200s to build here against a 120s default; when that expires the run prints `NA` in
+   every column, buries "There are not any results runs", and **exits 0**. **Check `executed benchmarks:`
+   is non-zero before believing a row** - §26 has the six-run table that was collected and tabulated
+   before anyone noticed none of them had run.
 
    **Take the modal value of several runs.** The `RadzenDataGrid` reference rows are bimodal between
-   two values about 990 KB apart - every low run records gen1 and gen2 collections and the high one
-   records neither, which points at `RenderTreeBuilder`'s pooled frame arrays. One pass of the table
-   reported a 507 KB regression that was an artefact of that.
+   two values about 990 KB apart. One pass of the table reported a 507 KB regression that was an
+   artefact of that. This was read for three sessions as `RenderTreeBuilder`'s pooled frame arrays and
+   **is refuted in §26**: the step is tier-1 JIT with dynamic PGO stack-allocating objects tier-0 puts
+   on the heap, it is reproducible on demand with `DOTNET_TC_CallCountingDelayMs`, and the gen1/gen2
+   correlate no longer holds on the current SDK.
 
    **`--job short` measures allocation, not time.** Allocation repeats to two decimals across runs;
    the time column does not.
@@ -416,8 +424,10 @@ Each layer below caught real faults the previous one missed. Use all of them.
 
    **Read the numbers against what the feature does per row.** Frozen columns cost +0.9 KB and 1.10x
    time, which looks contradictory until you count what changed: two attribute frames on the cells of
-   a frozen column. Frames are pooled, so the work shows up in time and not in bytes - the same
-   observation as the bimodal rows, from the other side.
+   a frozen column. Frames are pooled, so the work shows up in time and not in bytes - and *that* half
+   §26 confirms directly off `ArrayPool`'s own events, where the large buckets are rented and returned
+   every render without allocating. It is not the same observation as the bimodal rows, which turned out
+   to be the JIT; the pooling is real, its role in that step was not.
 
    **Sequence numbers ascend per run, not per element.** `RenderTreeDiffBuilder` finds where an
    element's attributes end and diffs that range on its own, then diffs the children on their own - so
@@ -1301,7 +1311,7 @@ and is written down. Concretely:
 - The numbers land in **three places**: the cost table in §0, the "what each of these costs" and
   "where that leaves it against `RadzenDataGrid`" tables in `README.md`, and `gridbench/README.md` for
   the raw data. Take the modal value of several runs before trusting the `RadzenDataGrid` column, which
-  is bimodal between two values about 990 KB apart.
+  is bimodal between two values about 990 KB apart - the JIT warming up, measured in §26.
 
 ### How it is verified
 
@@ -5174,107 +5184,222 @@ measures the pool directly".
 This measures it directly. There is no design section: it is a measurement, and it refutes what it was
 sent to confirm.
 
-### How the pool was asked
+### How the pool was asked, and why the probe runs twice
 
 `ArrayPool<T>` publishes an EventSource of its own. `dotnet run --project gridbench -- pool-probe`
-attaches an `EventListener` to it and renders `RadzenDataGrid` over the same thousand rows, so a rental
-is a bucket with a size and a reason rather than a shape inferred from a GC column.
+attaches an `EventListener` to it and renders `RadzenDataGrid` over the same thousand rows as the
+benchmark row, so a rental is a bucket with a size and a reason rather than a shape inferred from a GC
+column. The pool names itself rather than being assumed: the events carry a `poolId` and no element
+type, so the probe rents a known size from `ArrayPool<RenderTreeFrame>.Shared`, matches the event by
+that size, and filters everything afterwards on the id it reports. **A probe that cannot identify its
+own pool throws**, because an unidentified one would make every count below read as "nothing happened".
 
-**The pool names itself rather than being assumed.** The events carry a `poolId` and no element type, so
-every `ArrayPool<T>.Shared` looks alike in them. The probe rents from
-`ArrayPool<RenderTreeFrame>.Shared` deliberately, keeps the id that rental reports, and only then reads
-the render's own rentals. Everything below is that id.
+**The listener is not free, and the first version of this section did not notice.** Subscribing to every
+ArrayPool event costs about **4,420 KB per render** - a third of the workload - because this render rents
+thousands of small buffers. So the probe runs in two passes: the allocation ladder with the listener
+**disarmed**, which makes its numbers the render's own and directly comparable with the benchmark's
+MB/op, and the pool questions with it **armed**, where only differences matter and a constant overhead
+cancels. Every allocation figure below says which pass it came from.
 
-### What it found
+### What the pool does
 
-`RenderTreeFrame` is 40 bytes. Every render of this row rents 65536, 32768 and 16384-element buffers and
-returns them.
+`RenderTreeFrame` is 40 bytes. Every render rents and returns the same ladder of buckets, from 65536
+elements down to 32, and the ladder does not change from render to render.
 
-| the question | answer | how |
-| --- | --- | --- |
-| Are the frame arrays pooled? | **Yes** | rented and returned every render; only render 0 allocates |
-| Does a gen2 make them re-grow? | **No** | three forced gen2 collections, no re-allocation after any |
-| What does a pool miss actually cost? | **5,121 KB or more** | buffers held so the pool cannot serve the rental |
+| the question | answer |
+| --- | --- |
+| Are the large frame arrays pooled? | **Yes** - 65536, 32768 and 16384 rented and returned every render, allocated only on the first |
+| Does a forced gen2 make them re-grow? | **No** - no re-allocation of those buckets after a forced gen2 |
+| Is any bucket missing the pool every render? | **Yes, and this section first said otherwise** |
 
-The last row is the one that settles it. Held empty, the render allocates 5,121 KB more than it does in
-steady state, and the pool's own events report **9,320 KB** of frame array allocated over the same
-render. The buckets are **2,560 / 1,280 / 640 KB**. No bucket, and no sum of buckets, is 990 KB.
-**A frame array re-growing from scratch is an order of magnitude too expensive to be this step**, and it
-does not happen anyway: the pool serves every render after the first.
+**The last row is a correction.** The first version of this section said "only the very first render
+allocates". That is true of the three large buckets and false of the render: the **64-element bucket
+misses 1,680 times in every render**, allocating 4,200 KB and having the pool drop each buffer again on
+return because its per-core stacks are full. That is about a third of the render's own bytes, it happens
+identically on both sides of the step, and it was invisible because the probe's summary printed only its
+top five groups by size - so the small-bucket allocations never reached the line. **The section read a
+display truncation as a finding.** The summary prints every group now.
 
-**Those two figures disagree, and the disagreement is reported rather than reconciled.** 9,320 KB of
-array cannot fit inside a 5,121 KB rise in allocation. The likeliest reason is the counter rather than
-the events: `GC.GetAllocatedBytesForCurrentThread` is per thread and the renderer dispatches, so a
-rental served on another thread is invisible to it while the EventSource still sees it. Whichever is
-nearer the truth, both are several megabytes and the conclusion does not turn on which: the step under
-investigation is 990 KB.
+It does not rescue the pooled-array hypothesis - a constant cannot be a step - but "only render 0
+allocates" was wrong and is the kind of wrong this file exists to record.
+
+### What a pool miss costs
+
+Forcing a gen2 does not reliably make `ArrayPool` let go. So the probe takes the buffers away instead:
+rent the same buckets, hold them, and the next render's rental cannot be served. Armed, that render
+allocates **23,694.9 KB against an armed steady state of 18,574.9 KB - 5,120 KB more**, and the pool's
+own events account for it exactly:
+
+| bucket | count | bytes | reason |
+| --- | --- | --- | --- |
+| 65536 | 1 | 2,560 KB | exhausted |
+| 32768 | 1 | 1,280 KB | exhausted |
+| 16384 | 1 | 640 KB | exhausted |
+| 8192 | 2 | 640 KB | exhausted |
+| 64 | 1,680 | 4,200 KB | exhausted |
+| | | **9,320 KB** | |
+
+**9,320 minus the 4,200 KB the 64-bucket costs in every render is 5,120 KB**, against a measured rise of
+5,120 KB. The two figures the first version of this section reported as an unexplained disagreement -
+5,121 KB counted against 9,320 KB of events - never disagreed. One is a difference and the other is a
+total, and the constant cancels. The explanation offered for the gap, that
+`GC.GetAllocatedBytesForCurrentThread` is per thread while the renderer dispatches, is **false**: review
+measured the render and the measurement on the same thread, with `GC.GetTotalAllocatedBytes` agreeing
+with the per-thread counter to 0.0 KB.
+
+A miss on the large buckets costs megabytes, then - and it does not happen at all after the first render.
 
 ### What the step actually is
 
-Allocation per render drops by **991 KB** after six to eight renders, with *identical pool events either
-side of the drop*. Then:
+Listener disarmed, one process, 220 renders. These are the render's own bytes:
 
-| | allocation per render |
+| renders | KB | MB |
+| --- | --- | --- |
+| 1-19 | 14,157.4 | **13.83** |
+| ~20-105 | 13,219.9 | **12.91** |
+| ~106-219 | 13,172.1 | **12.86** |
+
+**Those are the benchmark's modes.** 13.83 and 12.86 are the historical bimodal pair; 12.91 is the third
+value ten runs of the row produced this session. The steps are **937.5 KB** and **47.8 KB**, and
+13.83 to 12.86 is **985.3 KB** - the ~990 KB step, which is the two sub-steps together rather than one.
+
+It is the JIT, and three switches say so:
+
+| | ladder |
 | --- | --- |
-| default | 18,579 KB, stepping down at renders 6-8, settling **17,588 KB** |
-| `DOTNET_TieredCompilation=0` | **flat 18,525-18,532 KB across twenty renders** |
-| `DOTNET_JitObjectStackAllocation=0` | settles 18,525 KB - no 991 KB drop |
-| `DOTNET_TieredPGO=0` | settles 18,525 KB - no 991 KB drop |
+| default | steps down as above |
+| `DOTNET_TieredCompilation=0` | no step |
+| `DOTNET_JitObjectStackAllocation=0` | no big step |
+| `DOTNET_TieredPGO=0` | no big step |
 
-The step is **objects that tier-1 with dynamic PGO stack-allocates and tier-0 puts on the heap**. It is
-not the pool, it is not the grid, and it is not `RadzenDataGrid` - it is the JIT warming up underneath
-the harness.
+The 937.5 KB is **objects that tier-1 with dynamic PGO stack-allocates and tier-0 puts on the heap**. Not
+the pool, not the grid, not `RadzenDataGrid` - the JIT warming up underneath the harness.
 
-That also explains the shape without having to invert the correlation that started this. Two stable
-values with nothing in between is exactly what a one-time transition produces across fresh benchmark
-processes: it either completes before the measured window or inside it. And the runs that got far enough
-to be promoted are the same runs that accumulated the gen1 and gen2 collections - which is why the
-*cheaper* value is the one with the collections beside it, and not the other way about.
+### The bimodality, reproduced on demand
 
-### What did not reproduce, which is half of this section
+The first version of this section could not reproduce the 13.83 MB mode and said so. It is reproducible,
+and the experiment is one switch:
 
-**The bimodality itself did not appear.** Ten runs of the row on the current SDK returned 12.86 MB four
-times and 12.91 MB six times - two values again, but a **51 KB** step. The 13.83 MB mode never showed.
+    DOTNET_TC_CallCountingDelayMs=2000 dotnet run --project gridbench -c Release -- \
+        --job short --filter "*FastGridFeatureBench.ReferenceDataGrid*" --buildTimeout 900
 
-So the 991 KB step is measured and its mechanism is named, but **identifying it with the historical
-13.83 MB sighting rests on the two numbers matching, not on the sighting being reproduced.** That is an
-inference, it is the same kind of inference this section was written to retire, and it is labelled
-rather than buried. What did reproduce is the 51 KB split, which matches the probe's own smaller second
-step at 18,573 KB to 18,525 KB.
+Tiering on, PGO on, promotion merely **delayed** past the measured window. The row reports **13.83 MB,
+three runs out of three**, against **12.86 MB** in the two default runs beside them, every one of them
+confirming `executed benchmarks: 2`. Changing nothing but when tier-1 arrives moves the row between the
+two historical values. That is the mechanism demonstrated rather than inferred, and it is what the first
+version of this section listed as its own largest gap.
+
+**The 1-in-4 rate is gone, though.** Review took 190 fresh benchmark processes in the default
+configuration and saw the high mode **zero** times - 57 at 12.86, 17 at 12.87, 116 at 12.91 - including
+runs under load and ten-at-a-time. At the historical rate that has probability `0.75^190`, about
+`10^-24`. So the old rate is ruled out on this SDK rather than merely suspected: tier-1 now arrives well
+before the measured window unless something delays it. The recorded correlate is gone with it - a
+full-table pass reported the row at 12.91 MB with **no gen1 collections at all**, where the old note has
+every low run recording gen1 and gen2.
 
 ### The harness could not run at all, and said so quietly
 
 Before any of the above: six runs of the reference row were collected and tabulated before anyone
 noticed that **zero benchmarks had executed**. BenchmarkDotNet builds a generated project per run and
-gives it 120 seconds; on this machine - the same one §25 measured drifting 2.7x over a session - that
-expired. The failure prints `NA` in every column, buries "There are not any results runs" in a hundred
-lines of output, and **exits 0**.
+gives it 120 seconds; here that build takes ~200s - on the machine §25 measured drifting 2.7x over a
+session - and when it expires the failure prints `NA` in every column, buries "There are not any results
+runs" in a hundred lines, and **exits 0**.
 
-`--buildTimeout 900` fixes it, and `README.md` now carries that in its run instructions with the reason.
-The rule it cost is one this branch already had from the other direction: **check that the run ran.**
-`Total:` for the test suites, `executed benchmarks:` for this one. A harness that cannot run looks
-exactly like a harness that found nothing.
+`--buildTimeout 900` fixes it, and it is in `README.md`'s run instructions and §9's protocol now, with
+the reason. The rule it cost is one this branch already had from the other direction: **check that the
+run ran.** `Total:` for the test suites, `executed benchmarks:` for this one. A harness that cannot run
+looks exactly like a harness that found nothing.
 
 ### Verified
 
 - `pool-probe` is a diagnostic subcommand in `gridbench`, which CI never compiles; no library or test
   code changed, so no benchmark applies to the change itself and none is quoted.
-- The pool identification is by matched `poolId`, not by buffer size - a buffer of the same length from
-  a different `ArrayPool<T>` would not be counted.
-- Every number above is from a run that printed its rows; the benchmark rows are from runs that printed
-  `executed benchmarks: 2`.
+- Every pool figure is filtered on the frame pool's own `poolId`, and the probe throws rather than
+  reporting anything if it cannot identify that pool.
+- The allocation ladder is measured with the listener disarmed; the pool figures with it armed, and only
+  as differences.
+- Every benchmark number is from a run that printed `executed benchmarks: 2` or more.
 
 ### Where this could still be wrong
 
-- **The link to the 13.83 MB mode is a matching number, not a reproduction.** Stated above and worth
-  repeating here, because it is the one claim in this section that a later session could overturn.
-- **Ten runs is few for a mode that was one in four.** Seeing none of it in ten has a probability of
-  about 6% if the old rate still held, which is low enough to suspect the rate has changed - a different
-  SDK, a different machine, or tier-1 arriving earlier than it used to - and not low enough to prove it.
-- **The probe renders in a loop in one process; the benchmark renders in a fresh one.** The 991 KB step
-  is measured in the loop. That it lands where BenchmarkDotNet's warmup ends is the mechanism proposed
-  for the bimodality, and it is reasoning about the harness rather than a measurement of it.
-- **`GC.GetAllocatedBytesForCurrentThread` is per thread**, and the pool-miss figures above show it:
-  5,121 KB counted against 9,320 KB of array the pool says it allocated. The per-iteration allocation
-  column has the same blind spot, so the 991 KB step is a floor rather than a total - which does not
-  move the argument, since a floor of 991 KB is already the whole step being explained.
+- **The ladder's plateaus are the benchmark's modes, but a plateau is not a benchmark process.** The
+  probe renders in a loop in one process; the benchmark uses a fresh one each time. The delayed-promotion
+  experiment is what ties them, and it ties them at the endpoint - 13.83 - rather than along the whole
+  ladder.
+- **Where the steps land moves.** They were at renders 19 and ~105 here, at 2-4 and 9-10 in review's
+  runs, and at 6-8 with the listener armed. It is a timing race, which is this section's own thesis, so
+  no reading should depend on the render number.
+- **`DOTNET_TC_CallCountingDelayMs` is a knob, not the field condition.** It demonstrates that promotion
+  timing moves the row between the two values. It does not establish what delayed promotion on the
+  machines that saw the high mode in the first place.
+- **The 12.91 plateau is unexplained.** The 47.8 KB step is smaller than anything this section chases and
+  is not attributed to a mechanism; `DOTNET_JitObjectStackAllocation=0` and `DOTNET_TieredPGO=0` both
+  leave it in place.
+- **The bucket arithmetic that stood here was wrong and is gone.** This section said "no bucket, and no
+  sum of buckets, is 990 KB". The frame pool's real ladder runs 32 to 65536 elements - 1.25 KB to
+  2,560 KB - and 640 + 320 + 20 + 10 is exactly 990. The claim survives only as a plausibility argument,
+  which is not what it was written as, so it is withdrawn rather than restated: the refutation rests on
+  the large buckets not missing at all after the first render, and on the three JIT switches.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. The Spec reviewer built a standalone copy of BenchmarkDotNet's
+generated executable so a fresh benchmark process cost 3.3s instead of 3.5 minutes, and took ~190 samples
+where this section had taken ten. **It resolved the gap this section had called its own largest**, and
+falsified four of its claims.
+
+**The bimodality is reproducible, and the section had given up on it too early.** Delaying tier-1
+promotion past the measured window with `DOTNET_TC_CallCountingDelayMs=2000` - tiering on, PGO on,
+nothing else changed - lands the row on 13.83 MB, the historical high mode, on demand. Reproduced here
+independently: three runs of three at 13.83 against 12.86 in the default runs beside them. What this
+section had as "two numbers matching" is a controlled experiment.
+
+**And the sample it drew its caution from was far too small.** This section said seeing no high mode in
+ten runs had "a probability of about 6% … not low enough to prove" the rate had changed. At 0 in 190 it
+is about `10^-24`. The historical one-in-four is ruled out on this SDK, not suspected - a stronger and
+safer statement than the one that stood here, and the section had been timid rather than wrong.
+
+**The probe was measuring itself.** Its `EventListener` costs ~4,420 KB a render, a third of the
+workload, and every allocation figure in the first version of this section was instrumented and printed
+beside the benchmark's uninstrumented MB/op as though the two were comparable. Disarmed, the ladder is
+14,157.4 → 13,219.9 → 13,172.1 KB, which is 13.83 → 12.91 → 12.86 MB - **the row's own three values**,
+which is the evidence the section said it lacked. The 991 KB step was instrumented too; uninstrumented it
+is 937.5 KB, with 47.8 KB after it and 985.3 KB across the pair.
+
+**"Only the very first render allocates" was false, and a display bug is why.** The 64-element bucket
+misses 1,680 times per render - 4,200 KB, about a third of the render - and the pool drops each buffer
+again on return. The probe's summary printed its top five groups by size, so every small-bucket
+allocation fell off the line. **A truncated display was read as a finding**, in a section about not
+reading correlations as mechanisms. The summary prints every group now.
+
+**The two figures that "disagreed" never disagreed.** 9,320 KB of events against a 5,121 KB rise
+reconciles exactly once the 4,200 KB constant is removed: 5,120 against 5,120. The explanation this
+section offered - that `GC.GetAllocatedBytesForCurrentThread` is per thread while the renderer dispatches
+- is **measurably false**: the render and the measurement are on the same thread, and
+`GC.GetTotalAllocatedBytes` agrees with the per-thread counter to 0.0 KB. The "floor rather than a total"
+bullet went with it. **A cause was named for a discrepancy that was arithmetic**, which is the same move
+this section was written to retire, made inside it.
+
+**The impossibility claim was not one.** "No bucket, and no sum of buckets, is 990 KB" was written from
+the three buckets the truncated display happened to show. The frame pool's ladder runs 32 to 65536
+elements, and 640 + 320 + 20 + 10 is exactly 990. Withdrawn rather than restated.
+
+**A "Verified" bullet described code that did not exist.** It claimed pool identification was by matched
+`poolId` - "a buffer of the same length from a different `ArrayPool<T>` would not be counted" - and
+neither the total nor the summary filtered on it, while multiplying every pool's buffers by
+`sizeof(RenderTreeFrame)`. Harmless in this run, since no other pool allocated in the window, and both
+reviewers found it independently. Both filters are in place now, the identification matches on the size
+it rented rather than taking the first event to arrive, and the probe throws instead of reporting a pool
+it could not identify.
+
+Standards fixes in the same commit: the dead `BucketId` and `Reason` fields either surfaced or removed -
+`Reason` is printed now, mapped to names rather than the enum's underlying integer it would have shown;
+non-rental events whitelisted out, since `BufferTrimPoll` carries a different payload shape and arrives
+exactly when this probe forces a gen2; the `EventListener` null window closed, where events can arrive
+before the subclass's field initialisers have run; the duplicated render extracted with a comment naming
+`FastGridFeatureBench.ReferenceDataGrid` as the row it must stay identical to, which nothing else
+enforces; the held buffers' lifetime explained; and `PoolProbe.cs` added to `README.md`'s file table.
+
+Left as it was, with a reason: §9's benchmark protocol now carries `--buildTimeout 900` and the refuted
+mechanism's correction, which review found missing - the rulebook had not been given the rule the section
+spent a subsection deriving.
