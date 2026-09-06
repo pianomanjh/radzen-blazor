@@ -225,7 +225,7 @@ of them:
 | `LoadDataArgs.OrderBy` | it is a `string` — the whole `LoadData` contract |
 | OData | `$orderby=Customer/Name` goes over the wire |
 | Settings persistence | `DataGridColumnSettings` keys state by property name across reloads |
-| `FilterDescriptor.Property` | a string, and it is what `RadzenDataFilter` emits |
+| `CompositeFilterDescriptor.Property` | a string, and it is what `RadzenDataFilter` emits (§33 - this row named `FilterDescriptor` and had the type wrong) |
 
 So the expression is the *authored* form and the path is *derived* from it once at init and cached.
 Walk `MemberExpression`, stripping any `Convert`/`ConvertChecked` wrapper (the boxed
@@ -590,8 +590,11 @@ Each layer below caught real faults the previous one missed. Use all of them.
   with paging: the two solve the same problem, so `Paging` is a single property both the pager and the
   view read.
 - ~~Whether to support `RadzenDataFilter` interop in v1~~ - **resolved.** The grid speaks
-  `FilterDescriptor` in both directions, which is what `RadzenDataFilter` emits. The path derivation of
-  §4 is what makes that possible.
+  `CompositeFilterDescriptor` in both directions, which is what `RadzenDataFilter` emits. The path
+  derivation of §4 is what makes that possible.
+  **This said `FilterDescriptor` until §33, and that was wrong about the component it named.**
+  `RadzenDataFilter.Filters` is `IEnumerable<CompositeFilterDescriptor>`, so the reason given here for
+  the choice never held, and the interop it was meant to serve was the one the choice fitted worst.
 - **A column's settings identity is not unique, and a column may have none.** Both are the same gap:
   settings key a column by its property path. Two columns over one property are restored onto the
   first of them, so hiding the second and reloading hides the first; a column with no path - a
@@ -6866,6 +6869,10 @@ Everything defaults to today's behaviour, as `AutoFitColumns` and `PopupFit` do.
 shape `FilterDescriptor` already speaks, which is what keeps §10's `RadzenDataFilter` interop working,
 and it is what the settings format has to be able to hold.
 
+**§33 replaces this paragraph and most of the piece it belongs to.** Two conditions survive, on the
+`In [...] OR IsNull` case alone; the reasoning from the struct does not, and `Between` stops being a
+condition pair. `RadzenDataFilter` emits `CompositeFilterDescriptor`, not `FilterDescriptor` - see §10.
+
 **The menu exposes less: single-condition operators, plus *between*.** A general two-condition editor in
 a header popup is the clunkiness this section exists to remove. The model being able to express more
 than the UI offers is normal, and `FilterTemplate` authors get the rest.
@@ -7321,3 +7328,194 @@ sequencing is in the grid, and there is one caller of each. The method's doc now
   filter row and the filter callbacks, never per row or per cell".** A settings restore is neither of
   those, and this adds a call per stored column per restore. It is far off any per-row budget, but the
   comment is now slightly less true than it was.
+
+## 33. The grid owns its filter model - the design
+
+§31's piece ② was "second condition, within-column logical operator, expression and OData, settings
+format", and every one of those was shaped by a struct rather than by the grid. Grilling it turned up
+that the struct is the wrong master, and this section is the answer: **the grid owns what it filters by;
+what it hands a provider stays upstream's.** That is §31's own `FilterUI`/`FilterMode` rule, one layer
+down.
+
+**Nothing here is built when this section lands.** It replaces §31's ② and it is bigger than ② was.
+
+### Why the model moves, and why now
+
+Three symptoms, one cause.
+
+**§32 exists because `FilterValue` is `object?`, and it is `object?` because `FilterDescriptor.FilterValue`
+is.** A whole piece went into four heuristic attempts to guess a type back out of a value a serializer
+had flattened, and it still left a documented hole - a check-box list stored as a JSON array cannot be
+rebuilt at all. That is not a bug in §32; it is what inheriting an untyped slot costs.
+
+**Upstream's vocabulary cannot say what §31 wants.** There is no `Between`, and a fifth `FilterMode`
+cannot be added without editing a file this branch does not own - §31 met that once and invented
+`FilterUI` beside it. §31's ③, relative date tokens, has no representation in `FilterOperator` at all.
+
+**The width of the model was inherited, not chosen.** §31 argued two conditions partly because
+"`FilterDescriptor` already speaks that shape". It does; that is a fact about a struct, and it was
+deciding this grid's data model.
+
+**And this is the last cheap moment.** §31 budgeted exactly one settings format change and ② is where it
+lands. Building ② on the inherited shape means changing the format twice. Nothing is tagged or packed -
+`git tag` knows nothing of this component - so every public break below costs nothing today and cannot
+be had again later.
+
+### What is owned and what is not
+
+**Owned: the value model.** The operator vocabulary, how a value is represented, how a filter is stored.
+
+**Not owned: the machinery.** `QueryableExtension` still builds the reflective predicate for columns that
+cannot compose their own, and still generates the `LoadData` and OData strings. Reimplementing an OData
+dialect is a large bug-shaped project with no upside. **If that boundary starts moving during the build,
+the piece is going wrong** - that is the stated tripwire, not a hope.
+
+### The shape
+
+**A filter is up to two conditions joined by an And or an Or. A condition is an operator and the values
+that operator takes.** Arity belongs to the operator: `IsNull` takes none, `Equals` one, `Between` two,
+`In` many. That makes `In`, `Between` and `IsNull` one shape rather than three special cases, and it
+gives ③'s tokens somewhere to live without new machinery - a token is a *value*, not an operator, so
+`Hired Between [last-7-days]` needs nothing this section does not already build.
+
+Two conditions rather than one because §31's worked case survives its own justification: *"these three
+values or blank"* on a nullable column is `In [...] OR IsNull`, which no single condition expresses.
+Two rather than n because nothing has asked for a third and the menu will never offer one.
+
+**`Between` is an operator here, not a condition pair.** It was a pair in §31 only because
+`FilterDescriptor` had two slots to spend; with arity on the operator it is one condition, and it stops
+consuming the compound that the `OR IsNull` case needs.
+
+**Condition 1 gates.** A column is filtered when condition 1 is present - a value, or one of §32's
+`NeedsNoValue` operators - and condition 2 only joins. A filter whose first half is blank is a state
+nothing can author and every reader of the model would have to cope with. The cost is a rule rather than
+a discovery: **a `FilterTemplate` author who sets only the second condition gets nothing**, and that is
+documented rather than found.
+
+### Values are strings, and that is the whole point
+
+**A stored filter value is an invariant-culture string, parsed against the column's type on restore.** A
+date is `2019-05-04T00:00:00.0000000`, a decimal `250.5`, an enum its name, an `In` list an array of
+strings. No serializer can turn a string into anything but a string, so the round trip is lossless by
+construction: **§32's four attempts collapse to one parse, and its check-box-list hole closes** - an
+array of strings survives `System.Text.Json` as an array of strings.
+
+What that costs, stated rather than discovered: the column's type is load-bearing at restore. A column
+whose type changed since the blob was written parses nothing and drops, which is §32's policy already. A
+column whose `EffectiveFilterType` is `object` cannot parse either, so §32's rule for those survives
+intact.
+
+**`FilterText` stays, and keeps its §32 job.** It is what the user *typed*, in their own culture, and on
+a lookup column it is the only thing that can turn a name back into ids. The stored value is canonical;
+the text is human. They are different records and collapsing them was never on the table.
+
+### The vocabulary
+
+**`FastGridFilterOperator`** - upstream's set minus `Custom`, which this grid has never implemented, plus
+`Between`. Prefixed rather than bare: the namespace is `Radzen.FastGrid`, every column file already
+references `Radzen.FilterOperator`, and a bare `FilterOperator` of our own would be an ambiguous
+reference in exactly those files. It matches `FastGridSettings`, `FastGridLookup`, `FastGridSort`.
+
+**Upstream's enum keeps working in markup.** `[Parameter] public FilterOperator? FilterOperator` stays and
+maps in, because every upstream value maps onto exactly one of ours. An app migrating from
+`RadzenDataGrid` compiles and behaves identically; only an author who wants `Between` reaches for the new
+type. That is the `FilterUI`/`FilterMode` precedent: the new vocabulary sits beside the old rather than
+redefining it.
+
+### The projection, and a claim of §10's that is wrong
+
+**`CompositeFilterDescriptor` is the single currency** - the reflective `Where`, the string and OData
+forms, and the public `Filters` and `ApplyFilters`.
+
+`FilterDescriptor` carries two value slots, so an owned filter can overflow it: two conditions where one
+is a `Between` needs three. That overflow is not a problem to be handled, it is the wrong container.
+`CompositeFilterDescriptor` nests, `AddWhereExpression` recurses into `filter.Filters`, and
+`Where<T>(IQueryable<T>, IEnumerable<CompositeFilterDescriptor>, …)` exists - so the reflective route
+nests too and the overflow stops existing.
+
+Three things line up behind it. The string and OData paths **already** build composites. Composites are
+still upstream's type, so this is not a step away from parity but onto the branch of it that fits. And:
+
+> **§10 says the grid speaks `FilterDescriptor` "which is what `RadzenDataFilter` emits". It is not.**
+> `RadzenDataFilter.Filters` is `IEnumerable<CompositeFilterDescriptor>`. The stated reason for the
+> current choice is a factual error, and the interop it was meant to serve is the thing it fits worst.
+
+§10's bullet is corrected in the commit that makes the correction true.
+
+### The column's surface
+
+**`CurrentFilter` replaces `CurrentFilterValue` and `CurrentFilterOperator`.** Neither can stay honest: a
+column with two conditions, or one `Between`, has no single "the value". Keeping them as forwarding
+properties over condition 1 would put two sources of truth in the model on day one, which is the exact
+shape §32's review spent a finding on - a rule read from two places that can disagree. Both are public
+with 38 readers, and the readers are `FilterExpression`, `Composition` and the lookup columns, all of
+which this piece rewrites anyway.
+
+**The second condition gets markup parameters**, as upstream's column has: without them §31's sentence
+about `FilterTemplate` authors getting what the menu does not offer is false on delivery, and "the rest"
+would be reachable only through a settings blob. The cost is honest and small - three more comparisons
+in the declared-parameter change detection, per column, per parameter set, which is off the axis this
+branch defends.
+
+### Restoring a compound
+
+**Any condition that cannot be rebuilt takes the whole filter with it.** §32 rebuilds a value or drops
+it; with two conditions they can disagree, and degrading to the survivor is the trap. `In [...] OR
+IsNull` that loses its `In` array degrades to `IsNull` alone - the grid then shows *only* the blank rows,
+a narrower and entirely different answer presented as the user's. An `AND` pair that loses a half
+silently widens. §32 already chose "show everything rather than hide some for a reason nothing on screen
+explains"; this is that rule applied to a compound.
+
+**The second condition gets its own text** for the same reason the first has one. Without it a date range
+- this piece's headline case - is the filter most likely to die on a round trip.
+
+### The format
+
+**Defined here, not extended.** §31 promised "one deliberate, additive format change" with old builds
+degrading silently. That sentence was written when the change was additive and this one is not:
+`FilterValue`-as-`object?` goes, and values become strings. Nothing is released, so no blob written by a
+shipped build exists to degrade. **§31's sentence is amended rather than honoured**, and the honest
+version is that the format is settled *here* - future readers of a *newer* blob are what degrade, which
+is what the promise was actually for.
+
+Reading both shapes was rejected: it keeps §32's four attempts alive forever to serve blobs that cannot
+exist, and deleting them is the entire benefit of this section.
+
+### The gate
+
+**Per-row and per-cell allocation unchanged, and the single-condition path unchanged in time.** The
+second half is new and it is where a model like this leaks. If the builders compose `c1 ⊕ c2`
+unconditionally - a constant-true second half - then every filtered column pays an extra delegate call
+per row, forever, so that a feature almost nobody switches on can exist. **With no second condition the
+predicate and the expression tree must be what they are today**, and that is a gate that can fail the
+piece rather than a number to report afterwards.
+
+**All three routes compose the compound themselves** - the in-memory delegate route, the typed expression
+route, and the reflective one. Letting a two-condition column decline instead was the cheap option and it
+buys a cliff: declining drops an in-memory grid off the composed-delegate route onto `Queryable.Where`
+over a `List`, which `EnumerableQuery` recompiles on every enumeration - the 1,117 us against 38 us at
+1000 rows that `FilterExpression` records in its own remarks. A date range would cost roughly an extra
+render, which is a performance cliff attached to a feature, and this branch exists to not have those.
+
+### The order it lands in
+
+Three commits, because a mechanical move and a model change in one diff is unreviewable.
+
+1. **The currency moves to `CompositeFilterDescriptor`** - reflective route, `Filters`, `ApplyFilters`,
+   the string forms. No model change, no behaviour change, the whole suite green.
+2. **The model.** Vocabulary, arity, string values, the format, the column surface.
+3. **The review fix.**
+
+### Where this could still be wrong
+
+- **Owning a model is a second vocabulary, and I argued against exactly that** when rejecting a
+  grid-owned `Between` operator an hour before proposing this. The distinction claimed is coherence - one
+  owned model with a documented projection at a named seam, against one stray enum value leaking into
+  descriptors `QueryableExtension` cannot read. That distinction is real and it is also convenient, and
+  it deserves a reader who does not believe it.
+- **The near-drop-in promise is §1's, and filters are the most-used surface after columns.** Every break
+  here is free *today* and the promise is about a reader carrying knowledge across, which a second
+  vocabulary taxes whether or not the old one still compiles.
+- **"Parsed against the column's type" makes the type load-bearing at restore** in a way it was not. §32
+  made `EffectiveFilterType` matter more than its own comment claimed; this makes it decisive.
+- **Nothing here is measured.** The gate is a budget until piece 2 of the order above has run.
