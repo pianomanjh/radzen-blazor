@@ -6895,7 +6895,11 @@ convert.** This is not new work for the new feature; it fixes something already 
 `RadzenFastGrid.Data.cs` restores with `SetFilter(stored.FilterValue, ...)` and never looks at the text.
 `FilterExpression.Converted` anticipates the case in its own doc comment - *"a stored setting read back
 from JSON"* - but `Convert.ChangeType` cannot convert a `JsonElement`, so it reaches the catch and
-returns null: **the date filter silently disappears.** `FilterText` was stored all along and unused.
+returns null.
+
+**The sentence that stood here said the date filter silently disappears. It does not - it throws, and
+§32 measured it.** The rest of this paragraph is right and the conclusion drawn from it was sized
+against the wrong fault; §32 replaces it and is the design that was built.
 
 Restoring by re-parsing the text *only* was rejected for the reason the text exists in the first place:
 a filter that never came from a box has no text, so lookup columns and programmatic filters would lose
@@ -7019,3 +7023,146 @@ where a settings-format mistake is cheapest to catch.
   compose once - which is the same shape as §23's owed-load problem and may want the same answer.
 - **Nothing here is measured.** No piece is built, so every performance claim above is a budget rather
   than a result, including the one that is a gate.
+
+## 32. The stored filter does not disappear, it throws - the design
+
+§31's piece ① was argued from a sentence that is wrong. This is the same piece, re-argued from what the
+code actually does, and it is larger than the fallback §31 prescribed while being narrower than fixing
+restore properly - which is ②'s, because ② is where the format stops being lossy.
+
+**Nothing here is built when this section lands.** The order is §31's; only this piece's content changes.
+
+### What was measured
+
+A grid with four columns, filters set, `CaptureSettings()`, through `System.Text.Json`, back in as
+`Settings`. Every row is what the grid does today:
+
+| stored filter | after the round trip |
+| --- | --- |
+| date `Equals` (with text, or without) | **throws `ArgumentException` mid-render** |
+| int `Equals` | **throws** |
+| enum `Equals` | **throws** |
+| string `Contains` | works |
+| int `In` (a check-box list) | **shows every row** |
+
+The string works by accident: `FilterExpression.Text` reads its value as `value as string ?? value?.ToString()`,
+and a `JsonElement` holding a string stringifies to the string. Nothing else in the builder does that.
+
+### It is two faults, and neither is a disappearance
+
+**The scalars throw on the decline path.** `Coerce` cannot convert a `JsonElement`, so the column
+returns null from `ApplyFilter` - it *declines*. `Composition.Filter` routes a decline to `Reflective`,
+which exists for columns that cannot compose a predicate at all, and hands the raw value to
+`QueryableExtension`, where `Expression.Constant(value, type)` throws. Inside `BuildRenderTree`, so on
+Blazor Server it is a dead circuit, and the application never sees it to catch it.
+
+**The `In` list matches everything on the success path.** It never declines: `FilterExpression.In` sees a
+value that is not `IEnumerable` and composes `Expression.Constant(true)`, deliberately and with a comment,
+because that is what `QueryableExtension` answers - and `FilterExpressionParityTests` pins the pair. So
+the fix cannot be there.
+
+**And a third fault, in the same three lines.** `ApplySettings` restores under `if (stored.FilterValue is
+not null)`. An `IsNull` filter's value is legitimately null, `HasFilter` counts it as a filter and
+`CaptureSettings` writes it - so it is stored on every save and restored on none. Measured: a column
+filtered to its blank rows comes back showing all of them. `IsNotNull`, `IsEmpty` and `IsNotEmpty` are
+the same shape.
+
+**There is a second restore path and it never has text.** `Data.cs:1139`, the `Filters` setter that §10's
+`RadzenDataFilter` interop drives, calls `SetFilter(filter.FilterValue, filter.FilterOperator, null)`.
+A fallback keyed on `FilterText` cannot reach it, which is most of why §31's prescription was the wrong
+size: the crash needs no text and this path never has any.
+
+### The gate
+
+**No stored filter may crash the grid, and fidelity is best-effort.** The first half is absolute and is
+what makes this piece worth doing before the feature that makes it easier to hit. The second half is the
+concession: a value the format cannot carry is dropped, the column restores unfiltered, and the rows the
+user sees are all of them - which is the safe direction to fail in, because nothing is hidden.
+
+Dropping means the *next* `CaptureSettings` writes the filter away for good. Preserving the unreadable
+blob across a capture was considered and rejected: it makes `CaptureSettings` stop describing the grid's
+actual state, so the grid and its settings disagree permanently and every later restore re-runs the same
+failure. Raising a callback was rejected too - there is no other diagnostic surface on this component,
+and inventing one for a case ② should end is the wrong order.
+
+Failing loudly - leaving the throw - was rejected on what the throw actually is. It is not a diagnostic
+the application can act on; it is an unhandled exception inside the grid's own render.
+
+### The rule, which is one sentence
+
+**Reconstruct the filter from the stored value, then from the stored text, and drop what neither
+produces.** Four attempts, in this order:
+
+1. the value is already the column's type - use it;
+2. the value converts to the column's type - **invariant**;
+3. the value's *string form* converts to the column's type - **invariant**;
+4. `FilterText` re-parsed by the column - **`CurrentCulture`, column-aware**.
+
+3 is the new one and it is what fixes the crash without any text: a `JsonElement` holding a date
+stringifies to `2019-05-04T00:00:00`, which converts. It also makes §31's headline fallback the *last*
+of four rather than the second of two - after `ConvertType`, 4 catches mostly a `Guid` and an enum
+stored by name.
+
+**3 is type-based and must not be the column's own text parser**, and lookup columns are why. There the
+value is ids and the text is names, and `FilterValueFromText` matches *names*: hand it `"[3]"` and it
+matches nothing, which on a lookup column is not a failure that falls through - §14 made "In over no
+ids" a real filter - so a wrong filter gets built and 4 never runs. Type-based, `"[3]"` fails to become
+an `int` and the real text, `"Acme"`, gets its turn.
+
+**4 before 3 was rejected**: text is the lossier record - one person's typing in one culture - and
+preferring it over a value that still converts throws away the better of the two.
+
+**The text re-parses in `CurrentCulture` only**, which is what `FilterValueFromText` already does. Trying
+`InvariantCulture` as a fifth attempt was rejected: `5/4/2019` parses under both to different days, so
+the extra attempt's whole effect is to turn some drops into silently wrong dates - on the type this piece
+exists for. Storing the culture beside the text is the right answer and it is a format change, so it is
+②'s to consider.
+
+### The `In` list waits for ②
+
+An `In` value that is not a sequence is dropped - it is not a filter this build can reconstruct. The rule
+above is why, and it is the same rule: a JSON scalar's string form converts, a JSON array's string form
+is `[3,1]` and does not.
+
+Special-casing `System.Text.Json` - unwrapping `ValueKind.Array` through `EnumerateArray` - was
+considered seriously and rejected. It costs no package reference, `System.Text.Json` is in the shared
+framework, and it is the serializer §31's own text names, so it would fix the realistic user's check-box
+lists now rather than next piece. Against that: it puts a named dependency on one serializer inside the
+type system's conversion path, to buy a working list for one release before ② makes the value round-trip
+losslessly and leaves behind a branch nobody dares delete. One rule for the piece, with a dated hole in
+it, beats a rule plus an exception.
+
+**Newtonsoft survives for free**, and that is a consequence of the rule rather than a favour: `JArray`
+*is* `IEnumerable` and `JValue` implements `IConvertible`, so its elements convert at step 2 without
+anything here knowing its name.
+
+The consequence to write down: **a lookup column filtered from a check-box list stores ids and no text,
+so it restores unfiltered.** §14 argues that "In over no ids" is a meaningful filter on a lookup column -
+the name nothing answered to - and dropping is deliberately not that. It is no filter, showing all rows.
+
+### Where it goes
+
+One method on `ColumnBase<TItem>`, non-generic, driven by `EffectiveFilterType` - a runtime `Type` the
+column already resolves for the filter row. No generic override is needed: steps 1-3 are a conversion to
+a `Type`, and the only thing step 1-3 has to know about `In` is whether the value is a sequence, which
+needs no type at all. Both restore paths call it - `ApplySettings` with the stored text, the `Filters`
+setter with null - so the rule is written once and neither path can drift from the other.
+
+`Composition` is not touched. The guard against the crash is that the column never holds an unusable
+value, not that the reflective absorber learns to refuse one: `Reflective` exists to absorb columns that
+decline for *structural* reasons - a collection element, a column declared as `object`, a filter aimed
+through a path - and teaching it to tell those apart from a value that would not convert is a bigger
+change for a case that no longer arrives.
+
+### Where this could still be wrong
+
+- **A markup-declared `FilterValue` of a type that will not convert still throws.** It is not a stored
+  filter, so it is outside the gate as written, and it reaches `Reflective` exactly as it does today.
+  Whether the gate should have been "no filter from anywhere crashes the grid" is a real question that
+  was not asked, and the answer would move work into `Composition` that this section says not to.
+- **Best-effort fidelity is unmeasured as a *user* outcome.** The matrix above says what the grid does;
+  nothing says how often a check-box-list filter is the one someone saved.
+- **`EffectiveFilterType` resolving through the property path is described as "reached only from the
+  filter row and the filter callbacks, never per row or per cell".** A settings restore is neither of
+  those, and this adds a call per stored column per restore. It is far off any per-row budget, but the
+  comment is now slightly less true than it was.
