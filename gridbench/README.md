@@ -26,6 +26,7 @@ believing a row** - the same rule the mutation sweeps learned, arriving from a d
 | `Slim.cs` | `SlimGrid<T>` prototype — Radzen's markup, QuickGrid's architecture |
 | `VisualDump.cs`, `measure.js` | Ad hoc side-by-side render and Playwright geometry read-back, for looking at by hand |
 | `PoolProbe.cs` | Reads `ArrayPool`'s own EventSource during a render — what the frame arrays cost and what they only appear to. Its first pass is the allocation ladder, now reported against two counters |
+| `AllocTypes.cs` | Histograms allocation by type off the runtime's own `GCAllocationTick`, so the tier-0 and optimised arms of the reference row can be differenced and the object named. Prints KB per render, which is the check that the arm held its rung |
 | `FastLadder.cs` | The same ladder over `RadzenFastGrid`. Being flat, it rules the shared renderer out of the reference row's two steps — to the extent the fast grid exercises it |
 
 The styling contract is **not** verified from here. It lives in `../Radzen.Blazor.FastGrid.Tests`

@@ -141,6 +141,29 @@ public class SlimBench
     /// <summary>The same five columns, for the feature bench's reference rows.</summary>
     internal static RenderFragment RadzenColumnsForComparison => RadzenCols;
 
+    /// <summary>
+    /// The render every probe of the reference row makes, in one place rather than copied into each.
+    /// </summary>
+    /// <remarks>
+    /// This must stay identical to <c>FastGridFeatureBench.ReferenceDataGrid</c>, which is the row all
+    /// of §26, §28 and §30 exist to explain. That bench keeps its own body deliberately - a probe may
+    /// call through a helper, a measured benchmark method should not gain a frame for tidiness - so the
+    /// two are still linked by nothing but this sentence. What that buys is one link instead of three:
+    /// the probes can no longer drift from *each other*, which is the failure that would make two
+    /// measurements of "the same workload" quietly incomparable.
+    /// </remarks>
+    internal static async Task RenderReferenceDataGrid(IServiceProvider services, List<Person> people)
+    {
+        using var r = new BenchmarkRenderer(services);
+
+        await r.RenderComponent(typeof(RadzenDataGrid<Person>), ParameterView.FromDictionary(
+            new Dictionary<string, object?>
+            {
+                ["Data"] = people,
+                ["Columns"] = RadzenColumnsForComparison,
+            }));
+    }
+
     static readonly RenderFragment RadzenCols = builder =>
     {
         int s = 0;

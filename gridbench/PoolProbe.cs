@@ -128,21 +128,10 @@ static class PoolProbe
         var people = Person.Make(n);
         var frameSize = Unsafe.SizeOf<RenderTreeFrame>();
 
-        // This must stay identical to `FastGridFeatureBench.ReferenceDataGrid` - same container, same
-        // rows, same columns, same renderer. That row is the thing this probe exists to explain, and
-        // nothing links them but this comment: CI never compiles gridbench, so a parameter added there
-        // and not here would make the explanation be of a different workload, silently.
-        async Task RenderOnce()
-        {
-            using var r = new BenchmarkRenderer(services);
-
-            await r.RenderComponent(typeof(RadzenDataGrid<Person>), ParameterView.FromDictionary(
-                new Dictionary<string, object?>
-                {
-                    ["Data"] = people,
-                    ["Columns"] = SlimBench.RadzenColumnsForComparison,
-                }));
-        }
+        // Shared with the other probe of this row rather than copied into both, so the two cannot drift
+        // from each other. What it must stay identical to - `FastGridFeatureBench.ReferenceDataGrid` -
+        // and why nothing enforces it are said where the helper is declared.
+        Task RenderOnce() => SlimBench.RenderReferenceDataGrid(services, people);
 
         Console.WriteLine($"RenderTreeFrame is {frameSize} bytes.");
         Console.WriteLine();
