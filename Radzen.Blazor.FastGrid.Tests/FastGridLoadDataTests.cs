@@ -22,13 +22,17 @@ namespace Radzen.FastGrid.Tests
         /// </summary>
         IRenderedComponent<LoadDataHost> Render(TestContext ctx,
             Action<ComponentParameterCollectionBuilder<LoadDataHost>>? extra = null,
-            Func<IEnumerable<Person>, IEnumerable<Person>>? source = null)
+            Func<IEnumerable<Person>, IEnumerable<Person>>? source = null,
+            RenderFragment? columns = null)
         {
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
 
             return ctx.RenderComponent<LoadDataHost>(p =>
             {
-                p.Add(h => h.Columns, Columns.Of(
+                // A parameter rather than something `extra` overrides: adding Columns a second time
+                // concatenates the fragments rather than replacing them, so the grid gets both sets and
+                // throws on the duplicate identity.
+                p.Add(h => h.Columns, columns ?? Columns.Of(
                     Columns.Property<Person, string>(x => x.First),
                     Columns.Property<Person, string>(x => x.Customer.Name)));
                 p.Add(h => h.OnLoad, (args, host) =>
@@ -283,6 +287,29 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void TheFilterStringNamesTheCollectionMemberTheColumnFiltersBy()
+        {
+            // §33. FilterString used to copy each descriptor into a composite field by field, and the
+            // copy left FilterProperty behind - so a CollectionColumn filtering by a member of its
+            // element sent the handler a string that compared against the collection itself. Composites
+            // are the one currency now and the copy is gone with it.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p => p.Add(h => h.AllowFiltering, true),
+                columns: Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Collection<Person, Company>(x => x.Accounts, filterProperty: c => c.Name)));
+
+            TypeInFilter(cut, 1, "Acme");
+
+            // The member, not just the collection: "Accounts.Any(Name...)" rather than a comparison
+            // against Accounts. Asserting the member alone is what discriminates - the collection's own
+            // name was in the string before this too.
+            Assert.Contains("Name", calls[^1].Filter!, StringComparison.Ordinal);
+            Assert.Contains("Accounts", calls[^1].Filter!, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void CarriesTheFilterAsAnODataStringForAnODataSource()
         {
             using var ctx = new TestContext();
@@ -318,7 +345,7 @@ namespace Radzen.FastGrid.Tests
 
             cut.InvokeAsync(() => cut.Instance.Grid!.ApplyFilters(new[]
             {
-                new FilterDescriptor
+                new CompositeFilterDescriptor
                 {
                     Property = "First", FilterValue = "First1", FilterOperator = FilterOperator.Custom,
                 },

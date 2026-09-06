@@ -430,7 +430,7 @@ namespace Radzen.FastGrid.Tests
 
             cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
             {
-                new FilterDescriptor
+                new CompositeFilterDescriptor
                 {
                     Property = "CategoryId",
                     FilterOperator = FilterOperator.In,

@@ -106,7 +106,7 @@ namespace Radzen.FastGrid.Tests
         [Fact]
         public void ThePassCarriesTheFiltersItWasOpenedOver()
         {
-            var filters = new List<FilterDescriptor> { new FilterDescriptor { Property = "First" } };
+            var filters = new List<CompositeFilterDescriptor> { new CompositeFilterDescriptor { Property = "First" } };
 
             Assert.Same(filters, DrawPass<Person>.Begin(filters).Filters);
             Assert.Null(DrawPass<Person>.Begin(null).Filters);
@@ -144,7 +144,7 @@ namespace Radzen.FastGrid.Tests
         static Task Filter(IRenderedComponent<RadzenFastGrid<Person>> cut, string value) =>
             cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
             {
-                new FilterDescriptor
+                new CompositeFilterDescriptor
                 {
                     Property = "First",
                     FilterValue = value,

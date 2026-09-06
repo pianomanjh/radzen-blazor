@@ -44,13 +44,20 @@ namespace Radzen.FastGrid.Tests
             return people;
         }
 
-        /// <summary>The rows the reflective builder keeps, which is the answer to match.</summary>
+        /// <summary>
+        /// The rows the reflective builder keeps, which is the answer to match.
+        /// </summary>
+        /// <remarks>
+        /// Through the <c>CompositeFilterDescriptor</c> overload since §33, because that is the one
+        /// <c>Composition.Reflective</c> now calls. Pinning parity against an overload the grid no longer
+        /// reaches would be a test agreeing with itself.
+        /// </remarks>
         static int[] Reflective(string path, FilterOperator op, object value, Type type,
             FilterCaseSensitivity sensitivity, bool inMemory)
         {
             var filters = new[]
             {
-                new FilterDescriptor
+                new CompositeFilterDescriptor
                 {
                     Property = path,
                     FilterOperator = op,

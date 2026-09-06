@@ -136,7 +136,7 @@ namespace Radzen.FastGrid.Tests
             var applied = Record.Exception(() => cut.InvokeAsync(() =>
                 cut.Instance.ApplyFilters(new[]
                 {
-                    new FilterDescriptor { Property = "Id", FilterValue = 3 },
+                    new CompositeFilterDescriptor { Property = "Id", FilterValue = 3 },
                 })).GetAwaiter().GetResult());
 
             Assert.Null(applied);

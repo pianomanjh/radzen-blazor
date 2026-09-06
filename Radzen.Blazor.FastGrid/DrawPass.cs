@@ -40,14 +40,14 @@ namespace Radzen.FastGrid
         /// nothing is filtered and when filtering is switched off, which is why nothing downstream needs
         /// to ask about <c>AllowFiltering</c> a second time.
         /// </summary>
-        internal List<FilterDescriptor>? Filters { get; private set; }
+        internal List<CompositeFilterDescriptor>? Filters { get; private set; }
 
         Composed<TItem> composed;
         IEnumerable<TItem>? composedOf;
         int? total;
 
         /// <summary>Opens a pass over the filters that hold for the whole of it.</summary>
-        internal static DrawPass<TItem> Begin(List<FilterDescriptor>? filters) =>
+        internal static DrawPass<TItem> Begin(List<CompositeFilterDescriptor>? filters) =>
             new DrawPass<TItem> { Drawing = true, Filters = filters };
 
         /// <summary>

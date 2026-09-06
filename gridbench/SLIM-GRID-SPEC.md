@@ -1390,6 +1390,29 @@ that paints nothing.
 One commit each, which is what every other feature on this branch did, and the only reason resize,
 reorder and frozen columns have separate numbers at all.
 
+### What the currency move changed
+
+**"One currency" is not reachable, and the seam that refuses it is upstream's.**
+`LoadDataArgs.Filters` is `IEnumerable<FilterDescriptor>` - not ours to retype - so a handler's
+*structured* view is projected back from the composites, while `LoadDataArgs.Filter`, the string and the
+half a handler usually reads, is built from the composites and keeps whatever nesting they carry. The
+projection is faithful while a column carries one condition, which is all there is to carry until the
+model lands. Where it starts losing something is a compound wider than two value slots, and that is the
+model commit's problem.
+
+**One behaviour change, named rather than absorbed.** `FilterString` used to copy each descriptor into a
+composite field by field, and the copy dropped `FilterProperty` - the member of a collection's element
+that a `CollectionColumn` filters by. So the string a `LoadData` handler received compared against the
+collection itself rather than the member. Composites go straight through now and the copy is gone with
+it. It is a fix, it is not what the commit is for, and it has a test that fails against the copy.
+
+**The parity suite now references the overload the grid actually calls.** `FilterExpressionParityTests`
+compared the typed builder against `QueryableExtension.Where(FilterDescriptor)`; `Composition.Reflective`
+calls the `CompositeFilterDescriptor` overload since this commit, so the reference moved with it -
+pinning parity against an overload the grid no longer reaches would be a test agreeing with itself. All
+of it passes against the new reference, which is also the first evidence that the two upstream overloads
+agree everywhere the suite looks.
+
 ### Where this could still be wrong
 
 - **The row/column asymmetry** of "focus follows the item, focus follows the position" will read as an
@@ -7502,7 +7525,7 @@ render, which is a performance cliff attached to a feature, and this branch exis
 Three commits, because a mechanical move and a model change in one diff is unreviewable.
 
 1. **The currency moves to `CompositeFilterDescriptor`** - reflective route, `Filters`, `ApplyFilters`,
-   the string forms. No model change, no behaviour change, the whole suite green.
+   the string forms. No model change, and one named behaviour change rather than none: see below.
 2. **The model.** Vocabulary, arity, string values, the format, the column surface.
 3. **The review fix.**
 

@@ -338,7 +338,7 @@ namespace Radzen.FastGrid.Tests
 
             cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
             {
-                new FilterDescriptor { Property = "Id", FilterValue = 2, FilterOperator = FilterOperator.GreaterThan },
+                new CompositeFilterDescriptor { Property = "Id", FilterValue = 2, FilterOperator = FilterOperator.GreaterThan },
             }));
 
             Assert.Equal(new[] { "Carol", "Dave" }, FirstNames(cut));
@@ -353,7 +353,7 @@ namespace Radzen.FastGrid.Tests
 
             cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
             {
-                new FilterDescriptor { Property = "Nonexistent", FilterValue = "x" },
+                new CompositeFilterDescriptor { Property = "Nonexistent", FilterValue = "x" },
             }));
 
             Assert.Equal(4, cut.FindAll("tbody tr").Count);
@@ -367,7 +367,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, People.Sample(), TwoColumns());
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("Bob");
-            cut.InvokeAsync(() => cut.Instance.ApplyFilters(Array.Empty<FilterDescriptor>()));
+            cut.InvokeAsync(() => cut.Instance.ApplyFilters(Array.Empty<CompositeFilterDescriptor>()));
 
             Assert.Equal(4, cut.FindAll("tbody tr").Count);
         }
@@ -383,7 +383,7 @@ namespace Radzen.FastGrid.Tests
 
             cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
             {
-                new FilterDescriptor
+                new CompositeFilterDescriptor
                 {
                     Property = "First",
                     FilterValue = new List<string>(),

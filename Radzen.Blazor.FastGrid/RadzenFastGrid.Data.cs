@@ -1116,14 +1116,15 @@ namespace Radzen.FastGrid
         /// what `RadzenDataFilter` emits and what a `LoadData` handler receives. Empty when nothing is
         /// filtered, and never built unless something asks.
         /// </summary>
-        public IReadOnlyList<FilterDescriptor> Filters =>
-            Composition.Filters(columns) ?? (IReadOnlyList<FilterDescriptor>)Array.Empty<FilterDescriptor>();
+        public IReadOnlyList<CompositeFilterDescriptor> Filters =>
+            Composition.Filters(columns)
+                ?? (IReadOnlyList<CompositeFilterDescriptor>)Array.Empty<CompositeFilterDescriptor>();
 
         /// <summary>
         /// Applies a set of descriptors to the columns they name, so a `RadzenDataFilter` or restored
         /// settings can drive the grid. Descriptors naming no column are ignored.
         /// </summary>
-        public Task ApplyFilters(IEnumerable<FilterDescriptor> filters)
+        public Task ApplyFilters(IEnumerable<CompositeFilterDescriptor> filters)
         {
             ArgumentNullException.ThrowIfNull(filters);
 
@@ -1189,7 +1190,7 @@ namespace Radzen.FastGrid
         /// outside one. Null when nothing is filtered and null when filtering is switched off, so a
         /// caller holding this does not ask about <see cref="AllowFiltering" /> a second time.
         /// </summary>
-        List<FilterDescriptor>? ActiveFilters() => Composition.ActiveFilters(columns, Options, in pass);
+        List<CompositeFilterDescriptor>? ActiveFilters() => Composition.ActiveFilters(columns, Options, in pass);
 
         void BeginDrawing() =>
             pass = DrawPass<TItem>.Begin(AllowFiltering ? Composition.Filters(columns) : null);
@@ -1646,15 +1647,20 @@ namespace Radzen.FastGrid
 
         async Task InvokeLoadDataAsync(int? start, int? count)
         {
+            var filters = Composition.Filters(columns);
+
             var args = new LoadDataArgs
             {
                 Skip = start,
                 Top = count,
                 OrderBy = OrderBy(),
-                Filters = Composition.Filters(columns),
+
+                // Projected back, because this property is upstream's and typed to FilterDescriptor.
+                // The string below is built from the composites themselves. See Composition.Descriptors.
+                Filters = Composition.Descriptors(filters),
             };
 
-            args.Filter = FilterString(args.Filters);
+            args.Filter = FilterString(filters);
 
             IsLoading = true;
 
@@ -1755,20 +1761,12 @@ namespace Radzen.FastGrid
         /// The filter in the string form `LoadData` and OData consume. Built only for a `LoadData`
         /// handler; a grid composing over a queryable filters with the descriptors themselves.
         /// </summary>
-        string? FilterString(IEnumerable<FilterDescriptor>? filters)
+        string? FilterString(IEnumerable<CompositeFilterDescriptor>? filters)
         {
             if (filters is null)
             {
                 return null;
             }
-
-            var composites = filters.Select(f => new CompositeFilterDescriptor
-            {
-                Property = f.Property,
-                FilterValue = f.FilterValue,
-                FilterOperator = f.FilterOperator,
-                Type = f.Type,
-            }).ToList();
 
             // The string form a LoadData handler receives, which is built by walking the descriptors'
             // property paths. There is no typed equivalent: the point of it is to be a string.
@@ -1777,9 +1775,13 @@ namespace Radzen.FastGrid
                 return null;
             }
 
+            // Handed on as they are. This used to copy each descriptor into a composite field by field
+            // and the copy dropped FilterProperty, which is the member of a collection's element that a
+            // CollectionColumn filters by - so the string a LoadData handler received compared against
+            // the collection itself. §33 made composites the one currency and the copy went with it.
             var text = IsOData()
-                ? composites.ToODataFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity)
-                : composites.ToFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity);
+                ? filters.ToODataFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity)
+                : filters.ToFilterString<TItem>(LogicalFilterOperator, FilterCaseSensitivity);
 
             return string.IsNullOrEmpty(text) ? null : text;
         }

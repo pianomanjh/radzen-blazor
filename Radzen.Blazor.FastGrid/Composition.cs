@@ -74,9 +74,9 @@ namespace Radzen.FastGrid
         /// them is one place for them to disagree in, which is the recurring finding of §10b - a rule
         /// applied here and not in its neighbour.
         /// </remarks>
-        internal static List<FilterDescriptor>? Filters<TItem>(IReadOnlyList<ColumnBase<TItem>> columns)
+        internal static List<CompositeFilterDescriptor>? Filters<TItem>(IReadOnlyList<ColumnBase<TItem>> columns)
         {
-            List<FilterDescriptor>? filters = null;
+            List<CompositeFilterDescriptor>? filters = null;
 
             for (var i = 0; i < columns.Count; i++)
             {
@@ -87,7 +87,7 @@ namespace Radzen.FastGrid
                     continue;
                 }
 
-                (filters ??= new List<FilterDescriptor>()).Add(DescriptorFor(column));
+                (filters ??= new List<CompositeFilterDescriptor>()).Add(DescriptorFor(column));
             }
 
             return filters;
@@ -99,7 +99,7 @@ namespace Radzen.FastGrid
         /// caller holding this does not ask about <see cref="CompositionOptions.AllowFiltering" /> a
         /// second time.
         /// </summary>
-        internal static List<FilterDescriptor>? ActiveFilters<TItem>(
+        internal static List<CompositeFilterDescriptor>? ActiveFilters<TItem>(
             IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options,
             in DrawPass<TItem> pass) =>
             pass.Drawing ? pass.Filters : DeclaredFilters(columns, options);
@@ -114,7 +114,7 @@ namespace Radzen.FastGrid
         /// applied in one place and not in its neighbour, and two spellings of <c>AllowFiltering ? ... :
         /// null</c> is that shape before it has gone wrong.
         /// </remarks>
-        internal static List<FilterDescriptor>? DeclaredFilters<TItem>(
+        internal static List<CompositeFilterDescriptor>? DeclaredFilters<TItem>(
             IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options) =>
             options.AllowFiltering ? Filters(columns) : null;
 
@@ -152,8 +152,8 @@ namespace Radzen.FastGrid
             var either = options.LogicalFilterOperator == LogicalFilterOperator.Or;
 
             Expression<Func<TItem, bool>>? predicate = null;
-            List<FilterDescriptor>? declined = null;
-            List<FilterDescriptor>? all = null;
+            List<CompositeFilterDescriptor>? declined = null;
+            List<CompositeFilterDescriptor>? all = null;
 
             for (var i = 0; i < columns.Count; i++)
             {
@@ -168,7 +168,7 @@ namespace Radzen.FastGrid
 
                 if (either)
                 {
-                    (all ??= new List<FilterDescriptor>()).Add(descriptor!);
+                    (all ??= new List<CompositeFilterDescriptor>()).Add(descriptor!);
                 }
 
                 if (column.ApplyFilter(options.FilterCaseSensitivity, inMemory) is { } composed)
@@ -180,7 +180,7 @@ namespace Radzen.FastGrid
                 else
                 {
                     // Declined; this route absorbs it by reflection. See this class's remarks.
-                    (declined ??= new List<FilterDescriptor>()).Add(descriptor ?? DescriptorFor(column));
+                    (declined ??= new List<CompositeFilterDescriptor>()).Add(descriptor ?? DescriptorFor(column));
                 }
             }
 
@@ -385,7 +385,7 @@ namespace Radzen.FastGrid
         /// be asked from.
         /// </remarks>
         static IQueryable<TItem> Reflective<TItem>(IQueryable<TItem> source,
-            List<FilterDescriptor> filters, CompositionOptions options)
+            List<CompositeFilterDescriptor> filters, CompositionOptions options)
         {
             if (!DynamicCode.Supported)
             {
@@ -396,7 +396,50 @@ namespace Radzen.FastGrid
             return source.Where(filters, options.LogicalFilterOperator, options.FilterCaseSensitivity);
         }
 
-        static FilterDescriptor DescriptorFor<TItem>(ColumnBase<TItem> column) => new()
+        /// <summary>
+        /// The same filters in the shape <see cref="LoadDataArgs.Filters" /> is typed as, or null when
+        /// nothing is filtered.
+        /// </summary>
+        /// <remarks>
+        /// §33 made <see cref="CompositeFilterDescriptor" /> this grid's one filter currency and then met
+        /// the seam where it cannot be: <c>LoadDataArgs.Filters</c> is
+        /// <c>IEnumerable&lt;FilterDescriptor&gt;</c>, upstream's type and not ours to change. So the
+        /// handler's structured view is projected back, while <c>LoadDataArgs.Filter</c> - the string,
+        /// and the half a handler usually reads - is built from the composites themselves and keeps
+        /// whatever nesting they carry.
+        /// <para>
+        /// Faithful while a column carries one condition, which is all there is to carry today. A
+        /// compound wider than a descriptor's two value slots is where this starts losing something, and
+        /// that is the model commit's problem rather than this one's.
+        /// </para>
+        /// </remarks>
+        internal static List<FilterDescriptor>? Descriptors(List<CompositeFilterDescriptor>? filters)
+        {
+            if (filters is null)
+            {
+                return null;
+            }
+
+            var descriptors = new List<FilterDescriptor>(filters.Count);
+
+            for (var i = 0; i < filters.Count; i++)
+            {
+                var filter = filters[i];
+
+                descriptors.Add(new FilterDescriptor
+                {
+                    Property = filter.Property,
+                    FilterProperty = filter.FilterProperty,
+                    FilterValue = filter.FilterValue,
+                    FilterOperator = filter.FilterOperator ?? Radzen.FilterOperator.Equals,
+                    Type = filter.Type,
+                });
+            }
+
+            return descriptors;
+        }
+
+        static CompositeFilterDescriptor DescriptorFor<TItem>(ColumnBase<TItem> column) => new()
         {
             Property = column.FilterPropertyPath,
 
