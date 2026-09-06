@@ -46,6 +46,11 @@ namespace Radzen.FastGrid.Tests
         /// </summary>
         static BunitJSModuleInterop Module(TestContext ctx, bool sized = true)
         {
+            // Here rather than only in Render, because a test that builds its own component - the
+            // multi-select one does, for a different TValue - would otherwise trip over
+            // `Radzen.openPopup` rather than over whatever it is checking.
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
             var module = ctx.JSInterop.SetupModule(ModulePath);
 
             module.Setup<PopupFitResult>("fitPopup", _ => true)
@@ -256,6 +261,32 @@ namespace Radzen.FastGrid.Tests
             Open(Render(ctx, p => p.Add(d => d.PopupFit, PopupFit.Content)));
 
             Assert.True(SyncWidth(ctx));
+        }
+
+        [Fact]
+        public void AMultipleSelectPopupIsSizedThroughTheSamePath()
+        {
+            // Multi-select varies exactly one thing - which panel class is emitted - and §29 inferred
+            // the rest rather than asking. This is the C# half of closing that: the ask still names the
+            // panel, and the panel is the multi-select one.
+            using var ctx = new TestContext();
+            var module = Module(ctx);
+
+            var cut = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, IEnumerable<object>>>(p =>
+            {
+                p.Add(d => d.Data, People.Sample());
+                p.Add(d => d.ChildContent, Columns);
+                p.Add(d => d.TextProperty, (Expression<Func<Person, object>>)(x => x.First));
+                p.Add(d => d.Multiple, true);
+                p.Add(d => d.PopupFit, PopupFit.Content);
+            });
+
+            cut.Find(".rz-dropdown").Click();
+
+            var chrome = (PopupFitAsk)module.Invocations["fitPopup"].Single().Arguments[0]!;
+
+            Assert.Equal(cut.Find(".rz-multiselect-panel").Id, chrome.Popup.Panel);
+            Assert.False(SyncWidth(ctx));
         }
 
         // --- Once per open ----------------------------------------------------------------------

@@ -1117,9 +1117,78 @@ async function main() {
             return scenarios;
         });
 
+        // The multi-select pane. §29 inferred that `.rz-multiselect-panel` behaves like
+        // `.rz-dropdown-panel` because it shares the theme's two facts and takes the same code path;
+        // this is what opens one. It is also the only pane carrying a pager, which `MaxRows` has to
+        // treat as chrome it does not know about rather than chrome it accounts for.
+        const multiPopup = await page.evaluate(async () => {
+            const pane = document.querySelector('.pane[data-multipopup]');
+
+            if (!pane || !window.__fastgrid || !window.Radzen) {
+                return null;
+            }
+
+            const control = pane.querySelector('.rz-dropdown, .rz-multiselect');
+            const panel = pane.querySelector('.rz-multiselect-panel');
+
+            if (!control || !panel) {
+                return null;
+            }
+
+            const table = panel.querySelector('table');
+            const wrapper = panel.querySelector('[id$="-rows"]');
+            const round = value => Math.round(value * 100) / 100;
+
+            const edges = element => {
+                const style = getComputedStyle(element);
+
+                return (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+                    + (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.borderRightWidth) || 0);
+            };
+
+            const sized = await window.__fastgrid.fitPopup({
+                popup: { panel: panel.id, control: control.id, wrapper: wrapper.id, grow: true,
+                    width: null, maxRows: 3 },
+                fit: {
+                    table: table.id, indices: [0, 1, 2, 3, 4],
+                    min: [null, null, null, null, null], max: [null, null, null, null, null],
+                    toggleOffset: 0, bare: -1, wait: true, animate: false, overflow: 'fit',
+                    required: [false, false, false, false, false],
+                },
+            });
+
+            const written = parseFloat(panel.style.width);
+
+            Radzen.openPopup(control, panel.id, false, null, null, null, null, null);
+
+            const rect = panel.getBoundingClientRect();
+            const rows = table.querySelectorAll('tbody tr.rz-data-row');
+
+            return {
+                sized: sized && sized.sized === true,
+                written: round(written),
+                outer: round(rect.width),
+                chrome: round(edges(panel)),
+                left: round(rect.left),
+                right: round(rect.right),
+                placed: panel.style.left !== '',
+                // The class is what the whole pane is for: a panel the theme styles by a different
+                // rule, reported so the assertion is about the panel that was actually measured.
+                panelClass: panel.className,
+                renderedRows: rows.length,
+                rowHeight: rows.length ? round(rows[0].getBoundingClientRect().height) : 0,
+                wrapperHeight: round(wrapper.getBoundingClientRect().height),
+                // A pager is chrome MaxRows keeps without knowing about it. Counted so the test can
+                // say the pane exercised the shape rather than assuming it did.
+                pagers: panel.querySelectorAll('.rz-pager-pages').length,
+                tableWidth: round(table.getBoundingClientRect().width),
+            };
+        });
+
         report.stylesheets = stylesheets;
         report.autoFit = autoFit;
         report.popup = popup;
+        report.multiPopup = multiPopup;
 
         process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     } finally {

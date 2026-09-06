@@ -156,6 +156,27 @@ namespace Radzen.Blazor.FastGrid.Tests
 
                 FastGridPopupMarkup = lookup.Markup;
 
+                var multi = ctx.RenderComponent<RadzenFastDropDownDataGrid<Person, IEnumerable<object>>>(p =>
+                {
+                    p.Add(d => d.Data, people);
+                    p.Add(d => d.ChildContent, FastGridColumns);
+                    p.Add(d => d.TextProperty,
+                        (System.Linq.Expressions.Expression<Func<Person, object>>)(x => x.Name));
+                    p.Add(d => d.Multiple, true);
+                    p.Add(d => d.PopupFit, PopupFit.Content);
+                    p.Add(d => d.MaxRows, 3);
+
+                    // Paging left on - this is the pane that carries a pager - and the page smaller than
+                    // MaxRows would make, so the bound has to be the rows there are rather than the rows
+                    // that were asked for.
+                    p.Add(d => d.PageSize, 5);
+                    p.Add(d => d.PopupStyle, "display:none;");
+                });
+
+                multi.Find(".rz-dropdown").Click();
+
+                FastGridMultiPopupMarkup = multi.Markup;
+
                 // And again with the first row selected. The theme nests its selected-row rule inside
                 // .rz-selectable, so a grid can carry rz-state-highlight on the right tr and still paint
                 // nothing - which is what happened, and what no markup assertion could see.
@@ -299,6 +320,22 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// </summary>
         public const string FastGridPopup = "RadzenFastGrid popup";
 
+        /// <summary>
+        /// The same again in <c>Multiple</c> mode and with its pager on - a different panel class and
+        /// the one shape the single-select pane cannot show.
+        /// </summary>
+        /// <remarks>
+        /// §29 inferred that multi-select behaves like single because it shares both theme facts and
+        /// takes the same code path, and recorded the inference as a gap. `.rz-multiselect-panel` is a
+        /// different class with its own rules elsewhere in the sheet, and this is what opens one.
+        /// <para>
+        /// Paging on, because the other pane has it off: `MaxRows` subtracts the rendered rows from the
+        /// whole box and keeps everything else in it, so a pager is chrome it has to carry rather than
+        /// chrome it knows about, and no pane was carrying one.
+        /// </para>
+        /// </remarks>
+        public const string FastGridMultiPopup = "RadzenFastGrid popup multi";
+
         static Func<Person, string> Focused(Person row) =>
             person => ReferenceEquals(person, row) ? "rz-state-focused" : null;
 
@@ -338,6 +375,9 @@ namespace Radzen.Blazor.FastGrid.Tests
         /// would prove the transcription right.
         /// </remarks>
         public string FastGridPopupMarkup { get; }
+
+        /// <summary>The multi-select drop-down's markup, opened, with a pager.</summary>
+        public string FastGridMultiPopupMarkup { get; }
 
         static string Wrap(string markup) =>
             "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>" + markup + "</body></html>";
@@ -552,6 +592,7 @@ namespace Radzen.Blazor.FastGrid.Tests
 <div class=""pane pane-narrow"" data-grid=""{FastGridFrozenFocus}"">{FastGridFrozenFocusMarkup}</div>
 <div class=""pane pane-fit"" data-grid=""{FastGridAutoFit}"" data-autofit=""1"">{FastGridAutoFitMarkup}</div>
 <div class=""pane pane-popup"" data-grid=""{FastGridPopup}"" data-popup=""1"">{FastGridPopupMarkup}</div>
+<div class=""pane pane-popup"" data-grid=""{FastGridMultiPopup}"" data-multipopup=""1"">{FastGridMultiPopupMarkup}</div>
 <script src=""{new Uri(UpstreamScript).AbsoluteUri}""></script>
 <script>{AutoFitScript()}</script>
 </body></html>";

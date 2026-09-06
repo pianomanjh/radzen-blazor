@@ -6544,13 +6544,20 @@ none of whose columns can be fitted, and `MaxRows` bounding nothing without a fi
 - **250ms is chosen, not derived**, and the source that most wants it - a warm executor-backed lookup -
   is the one this branch has least ability to time honestly on one machine. What is measured is only
   that the ceiling is reached and left; whether it is the right ceiling is not measured by anything.
-- **`MaxRows` measures a pager that may not be there.** The arithmetic subtracts the rows from the box
-  and keeps whatever else is in it, so a missing pager or filter row costs nothing - but the only shape
-  checked is the one the fixture renders. A virtualizing popup in particular has no pager at all and its
-  rows arrive after the measurement rather than before.
-- **Multi-select is inferred, not checked.** `rz-multiselect-panel` shares both theme facts above and
-  takes the same code path, but it is a different class with its own rules elsewhere in the sheet and no
-  scenario opens one.
+- **`MaxRows` measures a pager that may not be there** - **half closed.** Two shapes are checked now,
+  not one: the single-select pane has `AllowPaging` off and carries no pager, and a second pane was added
+  with paging on that does. The arithmetic subtracts the rendered rows from the whole box and keeps
+  everything else, so a pager is chrome it never names and therefore never has to know about - and that
+  is now measured rather than argued. **A virtualizing popup is still unchecked**, and it is the shape
+  with an actual interaction rather than merely an untested one: its rows arrive *after* the measurement,
+  and `Virtualize` needs a bounded height to decide the window that `MaxRows` is about to rewrite.
+- ~~**Multi-select is inferred, not checked.**~~ - **closed.** A second browser pane opens a `Multiple`
+  drop-down and asserts what the single-select pane asserts: it sizes itself, it is placed, its chrome
+  lands outside the width written on it - the `content-box` fact, which had been read off the theme for
+  both classes and asserted for one - and it stays inside the window. A `Multiple` bUnit case covers the
+  C# half. Both are held by a mutation that swaps the two panel classes over, which the analyzer would
+  not let be written as the more obvious "always return the dropdown class": `CA1822` fires the moment
+  the member stops reading `Multiple`, and this library treats warnings as errors.
 - **The panel is left block-and-hidden between the two calls**, and if the circuit drops between them it
   stays that way until the next open. Claimed harmless because it is `position: absolute` and
   `visibility: hidden`; the browser layer only ever sees the pair complete.

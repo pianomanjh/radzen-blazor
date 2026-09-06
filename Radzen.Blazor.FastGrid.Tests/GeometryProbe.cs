@@ -506,6 +506,8 @@ namespace Radzen.Blazor.FastGrid.Tests
 
         [JsonPropertyName("popup")] public PopupRun Popup { get; set; }
 
+        [JsonPropertyName("multiPopup")] public MultiPopupOpen MultiPopup { get; set; }
+
         public GridGeometry this[string grid] =>
             Grids.Find(g => g.Grid == grid)
             ?? throw new InvalidOperationException(
@@ -566,6 +568,41 @@ namespace Radzen.Blazor.FastGrid.Tests
         public override string ToString() =>
             $"written {Written}, outer {Outer}, chrome {Chrome}, left {Left}, right {Right}, " +
             $"placed {Placed}, inBody {InBody}";
+    }
+
+    /// <summary>
+    /// One opening of the multi-select drop-down: a different panel class, and the only pane with a
+    /// pager. §29 inferred both behaved like the single-select case and recorded the inference.
+    /// </summary>
+    public sealed class MultiPopupOpen
+    {
+        [JsonPropertyName("sized")] public bool Sized { get; set; }
+
+        [JsonPropertyName("written")] public double Written { get; set; }
+
+        [JsonPropertyName("outer")] public double Outer { get; set; }
+
+        [JsonPropertyName("chrome")] public double Chrome { get; set; }
+
+        [JsonPropertyName("left")] public double Left { get; set; }
+
+        [JsonPropertyName("right")] public double Right { get; set; }
+
+        [JsonPropertyName("placed")] public bool Placed { get; set; }
+
+        /// <summary>The panel's classes, so the assertion is about the panel actually measured.</summary>
+        [JsonPropertyName("panelClass")] public string PanelClass { get; set; }
+
+        [JsonPropertyName("renderedRows")] public int RenderedRows { get; set; }
+
+        [JsonPropertyName("rowHeight")] public double RowHeight { get; set; }
+
+        [JsonPropertyName("wrapperHeight")] public double WrapperHeight { get; set; }
+
+        /// <summary>How many pagers the panel holds - the chrome no other pane carries.</summary>
+        [JsonPropertyName("pagers")] public int Pagers { get; set; }
+
+        [JsonPropertyName("tableWidth")] public double TableWidth { get; set; }
     }
 
     /// <summary>A box's horizontal extent, for comparing a panel against the control it hangs from.</summary>

@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 using Xunit;
 
@@ -303,6 +304,105 @@ namespace Radzen.Blazor.FastGrid.Tests
                 + "multiple of the row height alone shows fewer rows than it names",
                 $"a height between {Px(4 * rows)} and {Px(GridParityFixture.RowCount * rows)}",
                 $"wrapper {Px(height)}, row {Px(rows)}");
+        }
+
+        // --- The multi-select panel, which §29 inferred rather than opened ---------------------
+
+        MultiPopupOpen Multi
+        {
+            get
+            {
+                var open = fixtures.Geometry.MultiPopup;
+
+                ParityAssert.True(open is not null,
+                    "the multi-select pane was measured at all",
+                    "§29 inferred that this panel behaves like the single-select one; a pane the probe "
+                    + "could not find would leave that inference exactly where it was",
+                    "a measured multi-select pane",
+                    "the probe returned nothing");
+
+                return open;
+            }
+        }
+
+        [Fact]
+        public void The_multiselect_panel_is_sized_the_same_way()
+        {
+            // A different class with its own rules elsewhere in the theme's sheet, and the only thing
+            // the component varies by is which of the two it emits. That is a reason to expect this to
+            // hold, not a reason to skip asking.
+            var open = Multi;
+
+            ParityAssert.True(open.PanelClass.Contains("rz-multiselect-panel", StringComparison.Ordinal),
+                "the pane measured is the multi-select panel",
+                "an assertion about multi-select that ran against a dropdown panel would pass for the "
+                + "wrong reason and leave the gap open",
+                "a panel carrying rz-multiselect-panel",
+                open.PanelClass);
+
+            ParityAssert.True(open.Sized && open.Placed && open.Written > 0,
+                "the multi-select popup sizes itself and is placed",
+                "the code path is shared, so the thing this checks is that the theme's other panel class "
+                + "does not change what the measurements mean",
+                "sized, placed, with a width written",
+                $"sized {open.Sized}, placed {open.Placed}, written {Px(open.Written)}");
+        }
+
+        [Fact]
+        public void The_multiselect_panels_chrome_also_lands_outside_the_width()
+        {
+            // The content-box fact was read off the theme for both classes and asserted for one.
+            var open = Multi;
+
+            ParityAssert.True(System.Math.Abs(open.Outer - (open.Written + open.Chrome)) <= Tolerance,
+                "the multi-select panel is content-box too",
+                "the cap is applied to the outer width, so a panel class whose chrome sat inside the "
+                + "width would be capped wrongly by exactly its border",
+                $"outer = written + chrome = {Px(open.Written + open.Chrome)}",
+                $"outer {Px(open.Outer)}, written {Px(open.Written)}, chrome {Px(open.Chrome)}");
+        }
+
+        [Fact]
+        public void The_multiselect_popup_stays_inside_the_window()
+        {
+            var open = Multi;
+            var width = Popup.Viewport.InnerWidth;
+
+            ParityAssert.True(open.Right <= width + Tolerance && open.Left >= -Tolerance,
+                "the multi-select popup is on the page",
+                "it hangs from a control at the right edge like the other pane, so it is the same "
+                + "leftward clamp being relied on",
+                $"the panel within 0..{Px(width)}",
+                $"left {Px(open.Left)}, right {Px(open.Right)}");
+        }
+
+        [Fact]
+        public void MaxRows_carries_a_pager_it_does_not_know_about()
+        {
+            // The other pane has paging off, so no pane was carrying a pager and §29 recorded that as a
+            // gap. MaxRows subtracts the rendered rows from the whole box and keeps everything else, so
+            // a pager should need no special handling - which is a prediction until something has one.
+            var open = Multi;
+
+            ParityAssert.True(open.Pagers > 0,
+                "the multi-select pane actually carries a pager",
+                "this test is about chrome MaxRows does not account for; without a pager present it "
+                + "asserts nothing and would pass forever",
+                "at least one .rz-pager-pages inside the panel",
+                $"{open.Pagers} pagers");
+
+            // Three rows asked for against five rendered: the bound has to be below the content and
+            // above three rows plus the header and pager it keeps.
+            ParityAssert.True(open.RowHeight > 0
+                && open.WrapperHeight > 3 * open.RowHeight
+                && open.WrapperHeight < open.RenderedRows * open.RowHeight + 3 * open.RowHeight,
+                "MaxRows bounds a paged popup to its rows plus its chrome",
+                "a pager is height inside the scrolling box that the arithmetic never names, so it is "
+                + "kept only because the subtraction is of rows rather than of everything-but-rows",
+                $"a height between {Px(3 * open.RowHeight)} and "
+                + $"{Px(open.RenderedRows * open.RowHeight + 3 * open.RowHeight)}",
+                $"wrapper {Px(open.WrapperHeight)}, row {Px(open.RowHeight)}, "
+                + $"rendered {open.RenderedRows}");
         }
 
         [Fact]
