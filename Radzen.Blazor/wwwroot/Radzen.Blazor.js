@@ -5545,13 +5545,34 @@ window.Radzen = {
         resize.mouseUpHandler();
     }
   },
+  // A grid rendered inside another grid's row-detail template is a descendant of it, so every lookup
+  // here is scoped to this grid's own table and to a row's own cells. Descendant queries reach the
+  // inner grid and pin its cells to the outer grid's offsets.
+  frozenCellsOf: function(row, side) {
+      var found = [];
+      if (!row) return found;
+      var prefix = 'rz-frozen-cell-' + side;
+      for (var i = 0; i < row.children.length; i++) {
+          var cell = row.children[i];
+          if (cell.classList.contains(prefix)
+              || cell.classList.contains(prefix + '-end')
+              || cell.classList.contains(prefix + '-inner')) {
+              found.push(cell);
+          }
+      }
+      return found;
+  },
   updateFrozenColumnPositions: function(gridElement) {
       if (!gridElement) return;
+      // This grid's own table. querySelector returns the first in document order, which is this
+      // grid's rather than one nested inside it.
+      var table = gridElement.querySelector('.rz-grid-table');
+      if (!table) return;
       // Get frozen cell positions from the header row first, then apply to all rows
-      var headerRow = gridElement.querySelector('thead tr');
+      var headerRow = table.querySelector(':scope > thead > tr');
       if (!headerRow) return;
-      var leftHeaderCells = headerRow.querySelectorAll('.rz-frozen-cell-left, .rz-frozen-cell-left-end, .rz-frozen-cell-left-inner');
-      var rightHeaderCells = headerRow.querySelectorAll('.rz-frozen-cell-right, .rz-frozen-cell-right-end, .rz-frozen-cell-right-inner');
+      var leftHeaderCells = Radzen.frozenCellsOf(headerRow, 'left');
+      var rightHeaderCells = Radzen.frozenCellsOf(headerRow, 'right');
       // Calculate offsets from header widths
       var leftOffsets = [];
       var offset = 0;
@@ -5565,15 +5586,15 @@ window.Radzen = {
           rightOffsets[i] = offset;
           offset += rightHeaderCells[i].getBoundingClientRect().width;
       }
-      // Apply offsets to all rows
-      var rows = gridElement.querySelectorAll('tr');
+      // Apply offsets to this grid's own rows
+      var rows = table.querySelectorAll(':scope > thead > tr, :scope > tbody > tr, :scope > tfoot > tr');
       for (var r = 0; r < rows.length; r++) {
           var row = rows[r];
-          var leftCells = row.querySelectorAll('.rz-frozen-cell-left, .rz-frozen-cell-left-end, .rz-frozen-cell-left-inner');
+          var leftCells = Radzen.frozenCellsOf(row, 'left');
           for (var i = 0; i < leftCells.length && i < leftOffsets.length; i++) {
               leftCells[i].style.setProperty('inset-inline-start', leftOffsets[i] + 'px');
           }
-          var rightCells = row.querySelectorAll('.rz-frozen-cell-right, .rz-frozen-cell-right-end, .rz-frozen-cell-right-inner');
+          var rightCells = Radzen.frozenCellsOf(row, 'right');
           for (var i = 0; i < rightCells.length && i < rightOffsets.length; i++) {
               rightCells[i].style.setProperty('inset-inline-end', rightOffsets[i] + 'px');
           }
