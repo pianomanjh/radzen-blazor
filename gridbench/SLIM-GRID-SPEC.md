@@ -890,15 +890,28 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 
 **Upstream, separable from everything else:**
 
-- **`updateFrozenColumnPositions` is not scoped to its own grid.** A resize drag calls the shared
-  `Radzen.startColumnResize`, whose move handler runs that routine on every frame once any
-  `.rz-frozen-cell` exists. It measures the header's frozen cells and then writes an inline inset to
+- ~~**`updateFrozenColumnPositions` is not scoped to its own grid.**~~ - **sent up on its own** as
+  radzenhq/radzen-blazor#2702, from a branch off `upstream/master` rather than from here. A resize drag
+  calls the shared `Radzen.startColumnResize`, whose move handler runs that routine on every frame once
+  any `.rz-frozen-cell` exists. It measured the header's frozen cells and then wrote an inline inset to
   every frozen cell of `gridElement.querySelectorAll('tr')` - which reaches the rows of a grid rendered
-  inside a row-detail template, and pins them to the *outer* grid's offsets. It affects
-  `RadzenDataGrid` identically, and fixing it means changing `Radzen.Blazor.js`, which this branch
-  deliberately does not touch. So it goes up on its own, the way the array-filter fix did. Since the
-  toggle cell is pinned the offsets it computes for this grid's own rows now agree with the server's,
-  so what is left is the nested case and some wasted DOM writes during a drag.
+  inside a row-detail template, and pins them to the *outer* grid's offsets. **A second fault one level
+  down was found while writing the fix**: for the detail row that holds the nested grid, the per-row
+  `row.querySelectorAll('.rz-frozen-cell-left, ...')` reaches the inner grid's cells too, so scoping the
+  rows alone would not have been enough.
+
+  Measured in a browser against an outer grid with two frozen columns holding a nested grid with two of
+  its own: the inner grid's second frozen column was pinned at the outer's **129px** when its own first
+  column is 49px, 80px out of place. The outer grid's own cells are byte-identical either side, which is
+  what makes the fix a narrowing rather than a change.
+
+  **What the PR deliberately leaves**: `startColumnResize` computes `hasFrozenColumns` with an equally
+  unscoped `gridElement.querySelector('.rz-frozen-cell')`, so an outer grid with no frozen columns of
+  its own still calls the routine every drag frame when a nested grid has some. After the scoping fix
+  that is wasted work rather than wrong output, so it was offered rather than included.
+
+  None of this affects this branch's own grid, which composes its insets server-side as a `calc()` sum
+  of declared widths and calls that routine never.
 
 - ~~The `QueryableExtension` array-filter fix~~ - **sent up on its own** as radzenhq/radzen-blazor#2696,
   from a branch off `upstream/master` rather than from here. An array property is enumerable but not
