@@ -6819,3 +6819,203 @@ here or upstream on the strength of it.
 - **§28's third leftover is untouched.** `DOTNET_TC_CallCountingDelayMs` still demonstrates that promotion
   timing moves the row without establishing what delayed promotion on the machines that saw the high mode.
   That needs those machines.
+
+---
+
+## 31. Filtering by column menu, with pills - the design
+
+§10 has carried an open question since the column model: *"The built-in filter UI is a text box or a
+check-box list, and nothing else... whether any of them should be built in is open."* This answers it,
+and answers it larger than the bullet asked. The four richer UIs §10 listed - operator menu, date popup,
+numeric range, enum picker - are not four features. They are one, and building them separately is what
+would make each of them clunky.
+
+**Nothing here is built.** This section is the design, argued before the code, and it spans five pieces
+rather than one. The order is at the end and it matters.
+
+### What it is
+
+**A filter icon on every filterable column header, opening one context-aware menu; operators matched to
+the column's type and worded as sentences; applied filters shown as removable pills above the grid.**
+
+The bar it has to clear was set explicitly: *simpler than Excel is fine, at least as friendly is not
+optional*. Several decisions below are Excel's affordance without Excel's cost model, and each says so.
+
+### The surface
+
+`FilterUI { Row, Menu }`, grid-wide, **this grid's own enum**. Upstream's `FilterMode` keeps meaning
+*which editor* - text box or check-box list - and stays per-column overridable, which it already is
+through `FilterModeOf`.
+
+That separation is doing real work. `FilterMode` is `Radzen.Blazor`'s enum with four values, of which
+this grid implements two, and a fifth cannot be added without changing a file this branch does not
+touch. Reusing `SimpleWithMenu` or `Advanced` was rejected: both have documented upstream meanings -
+an inline row plus an operator menu, and a two-condition popup - and quietly redefining another
+component's public enum breaks the one promise that matters for a near-drop-in, that a reader can carry
+knowledge across. **Where the editor lives is ours; what the editor is stays upstream's vocabulary.**
+
+Pills are a separate parameter, default off, and work under either `FilterUI`. A pill bar explains
+*applied filters*; tying an explanation feature to an input feature would mean a team that prefers the
+row can never have one.
+
+Everything defaults to today's behaviour, as `AutoFitColumns` and `PopupFit` do.
+
+### The model, which is wider than the menu
+
+**Two conditions per column, each with its own operator, joined by a within-column AND/OR.** That is the
+shape `FilterDescriptor` already speaks, which is what keeps §10's `RadzenDataFilter` interop working,
+and it is what the settings format has to be able to hold.
+
+**The menu exposes less: single-condition operators, plus *between*.** A general two-condition editor in
+a header popup is the clunkiness this section exists to remove. The model being able to express more
+than the UI offers is normal, and `FilterTemplate` authors get the rest.
+
+The width was chosen because the settings format changes exactly once (below) and guessing narrow costs
+a break later. It stopped being speculative almost immediately: *"these three values or blank"* on a
+nullable column is `In [...] OR IsNull`, which a fixed range shape could not express.
+
+**Relative dates are stored as tokens and resolved at query time** - today, yesterday, last 7 and 30
+days, this month, this year, to begin with. Resolving a preset to absolute dates at the moment it is
+picked produces a saved filter that is *wrong by design* the next morning, which is a bug report rather
+than a limitation. Settings outlive sessions; a filter that says "last 7 days" has to still mean it.
+
+### Settings, and a hole that exists today
+
+**One deliberate, additive format change.** An old build reading a new blob loses the second condition
+and keeps everything else, because `System.Text.Json` ignores unknown members - which is the correct
+degradation and needs no version field to achieve. A version number buys nothing until there is a change
+that *cannot* degrade silently, and adding one pre-emptively makes every later change argue about it.
+What is worth writing down is the consequence, not the mechanism.
+
+**Restore prefers the stored value and falls back to re-parsing `FilterText` when the value will not
+convert.** This is not new work for the new feature; it fixes something already broken:
+
+`FastGridColumnSettings.FilterValue` is `object?`. A consumer persisting settings through
+`System.Text.Json` turns a `DateTime` into `"2026-09-06T00:00:00"` and gets a `JsonElement` back.
+`RadzenFastGrid.Data.cs` restores with `SetFilter(stored.FilterValue, ...)` and never looks at the text.
+`FilterExpression.Converted` anticipates the case in its own doc comment - *"a stored setting read back
+from JSON"* - but `Convert.ChangeType` cannot convert a `JsonElement`, so it reaches the catch and
+returns null: **the date filter silently disappears.** `FilterText` was stored all along and unused.
+
+Restoring by re-parsing the text *only* was rejected for the reason the text exists in the first place:
+a filter that never came from a box has no text, so lookup columns and programmatic filters would lose
+theirs.
+
+### The menu
+
+**One panel for the grid**, built lazily on first open, retargeted at whichever column's icon was
+clicked, its body `@key`ed so it never carries the last column's state. §29 established both the pattern
+and the reason - a popup that costs nothing while closed - and a panel per column multiplies that by the
+column count for a control of which exactly one can be open. It also gives the pills' click-to-reopen
+somewhere to go without a handle on a particular column's panel.
+
+**Operators, with defaults in bold:**
+
+| type | operators |
+| --- | --- |
+| string | **Contains**, DoesNotContain, StartsWith, EndsWith, Equals, NotEquals, IsEmpty, IsNotEmpty |
+| number | **Equals**, NotEquals, <, <=, >, >=, **Between** |
+| date | **Equals** (whole day), Before, After, **Between**, and the relative presets |
+| bool | **Equals** true/false |
+| enum, lookup, collection | **In**, NotIn - edited as a check-box list |
+
+Nullable columns of any type also get IsNull / IsNotNull.
+
+**`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`.** A check-box
+list is not a different kind of filtering, it is how a set is picked - and §14's lookup columns already
+filter by `In` over ids, so the operator is the thing that exists and the mode was the accident. The
+parameter is still accepted and maps onto the new model.
+
+**Checklist-first only where the values are already known** - lookup columns, whose map §14 already
+holds, and enums, whose values come from the type. Everywhere else the menu opens on operators and
+offers *"Filter by value..."* as an explicit action that runs the distinct scan **once, on demand**.
+This is the clearest place the Excel comparison had to give: Excel leads with the checklist on every
+column, and §10 measured what that costs here - one `SELECT DISTINCT` per check-box-list column *per
+parameter set*, three scans for one render and two parameter sets, and it took a fix to stop. A menu
+that opens instantly for every column, where the one action that can cost a query is one the user asked
+for, is friendlier than a menu that queries to open.
+
+**A `FilterTemplate` is the whole editor when present** - no operator picker beside it. The template's
+author sets value and operator themselves, so a picker would be a second control fighting the first over
+one piece of state.
+
+**It applies on Apply or Enter, never per keystroke.** A menu holding an operator and up to two values
+cannot filter as you type: a half-typed *between* bound filters to nothing on every keystroke. A
+debounce is a guess about typing speed dressed up as a feature.
+
+**Alt+Down opens it from the focused header cell**, which is Excel's own shortcut. The icon is a real
+`<button>` at `tabindex="-1"`: §12 settled that this grid is **one tab stop**, with the active cell named
+by `aria-activedescendant`, and eight icons in the tab order would undo that. Mouse-only was rejected
+against the friendliness bar; it would be the only mouse-only control on the grid.
+
+**The icon is always visible** on filterable columns, with a distinct state when that column is filtered.
+Hover-only is invisible on touch and unreachable by keyboard without inventing a second mechanism. It
+costs a few render frames per *column*: the header already binds an `onclick` per cell for sorting, so
+this joins a cost that exists rather than introducing a kind.
+
+### The pills
+
+Column title, then a plain-language phrase built from **the same strings as the operators**, so a pill
+reads *"Hired is between 1 Jan and 31 Mar"* rather than inventing a second vocabulary. Lookup ids resolve
+to names through §14's existing map - a pill reading `Status: In [3, 7, 12]` answers "why is data hidden"
+worse than showing nothing, and publishing storage keys to users is the exact fault §27's review caught
+in the column picker. Past a threshold it degrades to a count.
+
+`x` removes that filter; **the pill body reopens that column's menu with the filter loaded**, which
+matters because the column's header may be scrolled out of view, and that is precisely when someone wants
+to adjust rather than remove.
+
+**Above the scroll container, not below the headers.** This is the one place the design refuses what was
+asked for, and the reason is structural: the header is sticky *inside* `.rz-data-grid-data`, which is the
+horizontal scroller, so a bar placed under it slides out of view exactly when there are enough columns to
+need one. Making it sticky on both axes was the clever alternative and was rejected - §10 already spent a
+section on sticky positioning inside that container, and stacking a second sticky band over sticky
+headers works until a theme changes.
+
+**Clear is one operation at three scopes** - menu Clear, pill `x`, Clear all - each applying immediately
+and each costing exactly **one** reload. Clear all over six filtered columns must not be six queries, and
+the naive loop over columns calling the public clear is how it becomes six.
+
+### The gate
+
+**Per-row and per-cell allocation must be unchanged.** The feature may cost per column and per active
+filter; it may not cost per row. §3's rules 3 and 5 make allocation a design rule, and 1000 rows x 5
+columns is where this grid's argument lives - a header icon is 8 elements against 5,000.
+
+Bench rows, following the drop-down's *"never opened"* precedent, which is what makes this measurable
+rather than asserted: the header chrome with the icon on, the pills bar with filters applied, and a
+**closed menu costing nothing**. The per-row invariant is a gate that can fail a piece, not a number to
+report afterwards.
+
+### The order it lands in
+
+Five pieces, each its own section and its own review.
+
+1. **The restore fallback.** Small, independent, and currently broken - it should not wait behind a
+   feature that makes it easier to hit.
+2. **The value model.** Second condition, within-column logical operator, expression and OData, settings
+   format. Headless, fully tested, no pixels.
+3. **Relative date tokens.** Headless, on top of 2.
+4. **The menu.** Panel, operators, labels, checklist-on-demand, keyboard.
+5. **The pills.**
+
+Designing the menu first was rejected explicitly: a model shaped by the first UI that used it is how the
+width in *The model* would have been lost, and 2 and 3 are where this codebase's tests are strongest and
+where a settings-format mistake is cheapest to catch.
+
+### Where this could still be wrong
+
+- **"At least as friendly as Excel" is a bar nothing here measures.** Every other gate in this section
+  has a number; this one has a judgement, and the one place the design knowingly diverges - the
+  checklist behind an explicit action - is defended by a cost measurement rather than by a usability one.
+- **The pills bar's placement contradicts what was asked for**, on a structural argument about sticky
+  positioning that has not been demonstrated in this grid. It is inference from §10's frozen-column work,
+  not a measurement of a pill bar.
+- **`FilterUI` grid-wide against `FilterMode` per-column** is a separation that reads cleanly and has
+  never been used. The first author who wants a menu on one column and a row cell on another will find
+  out whether it holds.
+- **One reload for Clear all is stated and not designed.** The composition path is built to send one
+  query, but every public clear currently reloads, so this needs a way to change several columns and
+  compose once - which is the same shape as §23's owed-load problem and may want the same answer.
+- **Nothing here is measured.** No piece is built, so every performance claim above is a budget rather
+  than a result, including the one that is a gate.
