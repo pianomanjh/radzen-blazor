@@ -4880,6 +4880,246 @@ window.Radzen = {
     }
   },
   createEditor: function (ref, uploadUrl, paste, instance, shortcuts) {
+    var imageHandlePositions = ['nw', 'n', 'ne', 'w', 'e', 'sw', 's', 'se'];
+    var minImageSize = 24;
+
+    ref.getSelectedImage = function () {
+      return ref.querySelector('img.rz-state-selected');
+    };
+
+    ref.getEditorContainer = function () {
+      return ref.closest('.rz-html-editor') || ref.parentElement;
+    };
+
+    ref.removeImageHandles = function () {
+      if (ref.imageHandles) {
+        ref.imageHandles.remove();
+        ref.imageHandles = null;
+      }
+    };
+
+    ref.positionImageHandles = function () {
+      if (!ref.imageHandles) {
+        return;
+      }
+
+      var img = ref.getSelectedImage();
+      var container = ref.getEditorContainer();
+
+      if (!img || !container || ref.hidden) {
+        ref.removeImageHandles();
+        return;
+      }
+
+      var containerRect = container.getBoundingClientRect();
+      var imgRect = img.getBoundingClientRect();
+
+      ref.imageHandles.style.left = (imgRect.left - containerRect.left) + 'px';
+      ref.imageHandles.style.top = (imgRect.top - containerRect.top) + 'px';
+      ref.imageHandles.style.width = imgRect.width + 'px';
+      ref.imageHandles.style.height = imgRect.height + 'px';
+    };
+
+    ref.createImageHandles = function () {
+      ref.removeImageHandles();
+
+      var img = ref.getSelectedImage();
+      var container = ref.getEditorContainer();
+
+      if (!img || !container) {
+        return;
+      }
+
+      var handles = document.createElement('div');
+      handles.className = 'rz-html-editor-image-handles';
+      handles.setAttribute('contenteditable', 'false');
+
+      imageHandlePositions.forEach(function (position) {
+        var handle = document.createElement('div');
+        handle.className = 'rz-html-editor-image-handle rz-' + position;
+        handle.dataset.position = position;
+        handle.addEventListener('mousedown', ref.imageResizeStartListener);
+        handles.appendChild(handle);
+      });
+
+      var size = document.createElement('div');
+      size.className = 'rz-html-editor-image-size';
+      size.hidden = true;
+      handles.appendChild(size);
+
+      container.appendChild(handles);
+      ref.imageHandles = handles;
+      ref.positionImageHandles();
+    };
+
+    ref.showImageSizeLabel = function (visible) {
+      var label = ref.imageHandles && ref.imageHandles.querySelector('.rz-html-editor-image-size');
+
+      if (label) {
+        label.hidden = !visible;
+      }
+    };
+
+    ref.updateImageSizeLabel = function () {
+      var label = ref.imageHandles && ref.imageHandles.querySelector('.rz-html-editor-image-size');
+      var img = ref.getSelectedImage();
+      var container = ref.getEditorContainer();
+
+      if (!label || label.hidden || !img || !container) {
+        return;
+      }
+
+      label.textContent = Math.round(img.offsetWidth) + ' × ' + Math.round(img.offsetHeight);
+
+      // The overlay lives inside .rz-html-editor, which clips its overflow, so a
+      // badge below the image would be cut off near the bottom edge.
+      var containerRect = container.getBoundingClientRect();
+      var imgRect = img.getBoundingClientRect();
+
+      label.classList.toggle('rz-inside', imgRect.bottom + 28 > containerRect.bottom);
+    };
+
+    ref.imageResizeStartListener = function (e) {
+      var img = ref.getSelectedImage();
+
+      if (!img) {
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      ref.imageResize = {
+        img: img,
+        position: e.currentTarget.dataset.position,
+        startX: e.clientX,
+        startY: e.clientY,
+        startWidth: img.offsetWidth,
+        startHeight: img.offsetHeight,
+        startAttrWidth: img.getAttribute('width'),
+        startAttrHeight: img.getAttribute('height'),
+        ratio: img.offsetHeight ? img.offsetWidth / img.offsetHeight : 1
+      };
+
+      document.addEventListener('mousemove', ref.documentImageResizeMoveListener);
+      document.addEventListener('mouseup', ref.documentImageResizeEndListener);
+
+      ref.showImageSizeLabel(true);
+      ref.updateImageSizeLabel();
+    };
+
+    ref.stopImageResize = function () {
+      ref.showImageSizeLabel(false);
+      ref.imageResize = null;
+      document.removeEventListener('mousemove', ref.documentImageResizeMoveListener);
+      document.removeEventListener('mouseup', ref.documentImageResizeEndListener);
+    };
+
+    ref.restoreImageSize = function (state) {
+      if (state.startAttrWidth !== null) {
+        state.img.setAttribute('width', state.startAttrWidth);
+      } else {
+        state.img.removeAttribute('width');
+      }
+
+      if (state.startAttrHeight !== null) {
+        state.img.setAttribute('height', state.startAttrHeight);
+      } else {
+        state.img.removeAttribute('height');
+      }
+    };
+
+    ref.documentImageResizeKeyListener = function (e) {
+      if (e.key !== 'Escape') {
+        return;
+      }
+
+      // While a drag is running, cancel it and leave the editor value untouched.
+      if (ref.imageResize) {
+        e.preventDefault();
+        e.stopPropagation();
+        ref.restoreImageSize(ref.imageResize);
+        ref.stopImageResize();
+        ref.positionImageHandles();
+        return;
+      }
+
+      // Once a drag has finished, undo the last resize for as long as that same
+      // image is still selected.
+      var last = ref.lastImageResize;
+
+      if (last && last.img === ref.getSelectedImage()) {
+        e.preventDefault();
+        e.stopPropagation();
+        ref.restoreImageSize(last);
+        ref.lastImageResize = null;
+        ref.positionImageHandles();
+
+        try { instance.invokeMethodAsync('OnChange', ref.innerHTML); } catch { }
+      }
+    };
+
+    ref.documentImageResizeMoveListener = function (e) {
+      var state = ref.imageResize;
+
+      if (!state || !ref.isConnected) {
+        return;
+      }
+
+      e.preventDefault();
+
+      var position = state.position;
+      var horizontal = position.indexOf('w') !== -1 || position.indexOf('e') !== -1;
+      var vertical = position.indexOf('n') !== -1 || position.indexOf('s') !== -1;
+      var toLeft = position.indexOf('w') !== -1;
+      var toTop = position.indexOf('n') !== -1;
+      var deltaX = toLeft ? state.startX - e.clientX : e.clientX - state.startX;
+      var deltaY = toTop ? state.startY - e.clientY : e.clientY - state.startY;
+
+      var width = state.startWidth;
+      var height = state.startHeight;
+
+      if (horizontal && vertical) {
+        width = Math.max(Math.round(state.startWidth + deltaX), minImageSize);
+        height = e.shiftKey
+          ? Math.max(Math.round(state.startHeight + deltaY), minImageSize)
+          : Math.max(Math.round(width / state.ratio), minImageSize);
+      } else if (horizontal) {
+        width = Math.max(Math.round(state.startWidth + deltaX), minImageSize);
+      } else {
+        height = Math.max(Math.round(state.startHeight + deltaY), minImageSize);
+      }
+
+      state.img.setAttribute('width', width);
+      state.img.setAttribute('height', height);
+
+      ref.positionImageHandles();
+      ref.updateImageSizeLabel();
+    };
+
+    ref.documentImageResizeEndListener = function () {
+      if (!ref.imageResize) {
+        return;
+      }
+
+      ref.lastImageResize = ref.imageResize;
+      ref.stopImageResize();
+
+      try { instance.invokeMethodAsync('OnChange', ref.innerHTML); } catch { }
+    };
+
+    ref.imageHandlesScrollListener = function () {
+      ref.positionImageHandles();
+    };
+
+    ref.imageHandlesResizeListener = function () {
+      ref.positionImageHandles();
+    };
+
+    ref.imageHandlesObserver = new MutationObserver(function () {
+      ref.positionImageHandles();
+    });
+
     ref.inputListener = function () {
       try { suppressDisposed(instance.invokeMethodAsync('OnChange', ref.innerHTML)); } catch { }
     };
@@ -4988,12 +5228,16 @@ window.Radzen = {
           img.classList.remove('rz-state-selected');
         }
 
+        ref.removeImageHandles();
+        ref.lastImageResize = null;
+
         if (e.target.matches('img')) {
           e.target.classList.add('rz-state-selected');
           var range = document.createRange();
           range.selectNode(e.target);
           getSelection().removeAllRanges();
           getSelection().addRange(range);
+          ref.createImageHandles();
         } else {
           var clickedCell = e.target.closest && e.target.closest('td,th');
           if (clickedCell && ref.contains(clickedCell)) {
@@ -5190,6 +5434,10 @@ window.Radzen = {
     ref.addEventListener('contextmenu', ref.contextMenuListener);
     ref.addEventListener('mousemove', ref.mousemoveListener);
     ref.addEventListener('mousedown', ref.mousedownResizeListener);
+    ref.addEventListener('scroll', ref.imageHandlesScrollListener);
+    document.addEventListener('keydown', ref.documentImageResizeKeyListener);
+    window.addEventListener('resize', ref.imageHandlesResizeListener);
+    ref.imageHandlesObserver.observe(ref, { attributes: true, attributeFilter: ['hidden'], childList: true });
     document.addEventListener('selectionchange', ref.selectionChangeListener);
     document.execCommand('styleWithCSS', false, true);
     return {
@@ -5203,6 +5451,14 @@ window.Radzen = {
           ref.removeEventListener('contextmenu', ref.contextMenuListener);
           ref.removeEventListener('mousemove', ref.mousemoveListener);
           ref.removeEventListener('mousedown', ref.mousedownResizeListener);
+          ref.removeEventListener('scroll', ref.imageHandlesScrollListener);
+          window.removeEventListener('resize', ref.imageHandlesResizeListener);
+          ref.imageHandlesObserver.disconnect();
+          ref.imageResize = null;
+          document.removeEventListener('mousemove', ref.documentImageResizeMoveListener);
+          document.removeEventListener('mouseup', ref.documentImageResizeEndListener);
+          document.removeEventListener('keydown', ref.documentImageResizeKeyListener);
+          ref.removeImageHandles();
           ref.isResizingColumn = false;
           document.removeEventListener('mouseup', ref.mouseupResizeListener);
           document.removeEventListener('mousemove', ref.documentMouseMoveResizeListener);
