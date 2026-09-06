@@ -759,8 +759,9 @@ namespace Radzen.FastGrid
                     return declared;
                 }
 
-                // Reached only from the filter row and the filter callbacks, never per row or per cell,
-                // so it is resolved on demand rather than cached behind an invalidation rule.
+                // Reached from the filter row, the filter callbacks, and - since §32 - once per stored
+                // column per settings restore. Never per row or per cell, which is what keeps resolving
+                // it on demand cheaper than a cache behind an invalidation rule.
                 return FilterPropertyPath is { } path
                     ? PropertyPathResolver.TypeOf(typeof(TItem), path) ?? typeof(object)
                     : typeof(object);
@@ -886,9 +887,15 @@ namespace Radzen.FastGrid
                     ? Enum.Parse(type, text, ignoreCase: true)
                     : ConvertType.ChangeType(text, declared, CultureInfo.CurrentCulture);
             }
-            catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException
-                or ArgumentException)
+#pragma warning disable CA1031
+            catch (Exception)
+#pragma warning restore CA1031
             {
+                // Every exception, for the reason the sibling below gives at length: this is the same
+                // optional path, doing the same job of dropping what will not parse, over a string
+                // nobody here chose. It named four types until §32's review pointed out that a rule
+                // argued twenty lines away was not being applied to its own neighbour -
+                // ConvertType.ChangeType reaches a TypeConverter, which can raise anything.
                 return null;
             }
         }
@@ -932,29 +939,45 @@ namespace Radzen.FastGrid
         /// <param name="text">The stored box text, or null for a filter that never came from a box.</param>
         internal object? RestoredFilterValue(object? value, FilterOperator? filterOperator, string? text)
         {
-            if (value is not null)
+            // The operator decides the *shape* the answer has to have, and both halves below are checked
+            // against it. An In wants a sequence; everything else wants a single value. The review found
+            // this missing in both directions: an In whose value was a scalar fell through to the text,
+            // took a scalar from it and composed Constant(true) - §32's own "shows every row" row, back
+            // again - and a lookup column with a stored scalar operator took a *list* from its name
+            // matcher and handed it to Equals, which throws.
+            var wantsSequence = (filterOperator ?? DefaultFilterOperator)
+                is Radzen.FilterOperator.In or Radzen.FilterOperator.NotIn;
+
+            if (value is not null
+                && (wantsSequence ? RestoredSequence(value) : RestoredScalar(value)) is { } rebuilt)
             {
-                if ((filterOperator ?? DefaultFilterOperator) is Radzen.FilterOperator.In
-                    or Radzen.FilterOperator.NotIn)
-                {
-                    // Only whether it is a sequence, never what is in it: both predicate builders
-                    // convert the elements themselves, and drop the ones that will not. A JSON array is
-                    // not a sequence here - it arrives as one opaque value - so it is dropped whole, and
-                    // that is §32's stated hole. Newtonsoft's JArray is one, and its elements convert,
-                    // so it survives without this knowing its name.
-                    if (value is IEnumerable and not string)
-                    {
-                        return value;
-                    }
-                }
-                else if (RestoredScalar(value) is { } converted)
-                {
-                    return converted;
-                }
+                return rebuilt;
             }
 
-            return FilterValueFromText(text);
+            // Attempt 4, and the same shape test. FilterValueFromText answers for the column rather than
+            // for the operator - a lookup column's answer is always a list, whatever it was asked.
+            return FilterValueFromText(text) is { } fromText
+                && wantsSequence == fromText is IEnumerable and not string
+                    ? fromText
+                    : null;
         }
+
+        /// <summary>
+        /// The stored value of an <c>In</c> as a sequence this column can filter by, or null when it is
+        /// not one.
+        /// </summary>
+        /// <remarks>
+        /// A JSON array is not one - it arrives as a single opaque value - so it is dropped whole, and
+        /// that is §32's stated hole, waiting on the format change. Newtonsoft's <c>JArray</c> is a
+        /// sequence and its elements convert, so it survives without this knowing its name.
+        /// <para>
+        /// Only the shape is checked here, because the predicate builders convert the elements
+        /// themselves. That is true of <c>FilterExpression.Listed</c> and <em>not</em> of the lookup
+        /// columns, which is why they override this.
+        /// </para>
+        /// </remarks>
+        internal virtual object? RestoredSequence(object value) =>
+            value is IEnumerable and not string ? value : null;
 
         /// <summary>Attempts 1 to 3 of <see cref="RestoredFilterValue" />, for a single value.</summary>
         object? RestoredScalar(object value)
@@ -962,8 +985,18 @@ namespace Radzen.FastGrid
             var declared = EffectiveFilterType;
             var type = Nullable.GetUnderlyingType(declared) ?? declared;
 
-            // Attempt 1. Also the answer for a column whose filter type would not resolve, where
-            // EffectiveFilterType is object and there is nothing to convert towards.
+            // A column that cannot name the type it filters by cannot vouch for a value either, and
+            // attempt 1 below would say yes to anything at all - object.IsInstanceOfType is true of
+            // every value there is. Passing it on is what §32's gate calls the unsafe direction: the
+            // review measured a round-tripped filter on such a column matching *nothing*, so the grid
+            // hid every row and the stored blob looked intact. The text still gets its turn, and for a
+            // column of unknown type FilterValueFromText answers with the text itself.
+            if (type == typeof(object))
+            {
+                return null;
+            }
+
+            // Attempt 1.
             if (type.IsInstanceOfType(value))
             {
                 return value;
@@ -975,7 +1008,8 @@ namespace Radzen.FastGrid
             return Converted(value, type, declared) ?? Converted(value.ToString(), type, declared);
         }
 
-        static object? Converted(object? candidate, Type type, Type declared)
+        /// <summary>One value as <paramref name="type" />, or null when it will not convert.</summary>
+        private protected static object? Converted(object? candidate, Type type, Type declared)
         {
             if (candidate is null)
             {

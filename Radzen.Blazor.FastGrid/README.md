@@ -609,6 +609,24 @@ formats - and it is a fault rather than a shrug because the alternative is resto
 state onto the first, which hides the wrong column and is a wrong answer on screen rather than lost
 state.
 
+### Storing settings somewhere
+
+`FastGridColumnSettings.FilterValue` is `object?`, so a blob that goes through a serializer loses the
+type it was written with: `System.Text.Json` turns a `DateTime` into text and hands back a
+`JsonElement`. The grid expects that. A restored filter is rebuilt from the stored value where it can
+be - the value as it stands, converted to the column's type, or its string form converted invariantly -
+and from the stored `FilterText` where the value cannot be. **A filter that none of those rebuild is
+dropped, and the column restores unfiltered**, which shows every row rather than hiding some for a
+reason nothing on screen explains.
+
+One case is dropped today rather than rebuilt: **a check-box-list filter stored as a JSON array**. It
+comes back as one opaque value rather than a list, and there is nothing in it to rebuild a list from.
+A text box's filter on the same column survives, because the text is stored beside the value.
+
+The text is re-parsed in the **current culture**, since that is the culture it was typed in. A blob
+captured under one culture and restored under another falls back to the value, which is culture-free;
+where only the text can rebuild the filter, a different culture drops it rather than guessing.
+
 ## Row detail
 
 A `Template` gives each row an expandable detail row beneath it:

@@ -371,6 +371,73 @@ namespace Radzen.FastGrid
             return keys;
         }
 
+        /// <inheritdoc />
+        /// <remarks>
+        /// Overridden because the base's promise does not hold here. It checks the shape only, on the
+        /// grounds that the predicate builders convert the elements - which <c>FilterExpression.Listed</c>
+        /// does and <see cref="SelectedKeys" /> does not: it keeps what is already a
+        /// <typeparamref name="TKey" /> and drops the rest on the floor. So a stored id that came back
+        /// as anything else - a widened number from a serializer that reads every JSON integer as
+        /// <see cref="long" />, a <c>JValue</c>, a descriptor from a <c>RadzenDataFilter</c> - left this
+        /// column composing <c>Contains</c> over an empty list. That is a grid showing **no** rows while
+        /// reporting itself filtered, which is the direction §32's gate calls the unsafe one.
+        /// <para>
+        /// Converted once here rather than on every render inside <see cref="SelectedKeys" />, which is
+        /// on the composition path.
+        /// </para>
+        /// </remarks>
+        internal override object? RestoredSequence(object value)
+        {
+            if (value is not IEnumerable sequence || value is string)
+            {
+                return null;
+            }
+
+            var keys = new List<TKey?>();
+            var rebuilt = 0;
+            var lost = false;
+
+            foreach (var item in sequence)
+            {
+                if (item is TKey typed)
+                {
+                    keys.Add(typed);
+                }
+                else if (item is null)
+                {
+                    // A null cannot be carried in this list at all where TKey is a value type: TKey is
+                    // unconstrained, so List<TKey?> is List<int> for an int key and default(TKey) is
+                    // *zero*. Adding it ticked the entry whose id happens to be zero - the precise fault
+                    // SelectedKeys' own comment warns about, and a test caught it here. Nothing about
+                    // this list needs rebuilding for a null, so the stored one is handed back untouched
+                    // and SelectedKeys applies KeyCanBeNull on the composition path as it always has.
+                    return value;
+                }
+                else if (Converted(item, typeof(TKey), typeof(TKey)) is TKey converted)
+                {
+                    keys.Add(converted);
+                    rebuilt++;
+                }
+                else
+                {
+                    lost = true;
+                }
+            }
+
+            // Nothing was an id and nothing became one, so there is no filter here to rebuild. Dropping
+            // it shows every row, where passing it on leaves SelectedKeys composing Contains over an
+            // empty list and showing none.
+            if (lost && keys.Count == 0)
+            {
+                return null;
+            }
+
+            // Only stand in for the stored list where converting actually changed something. A list this
+            // column could already read is left as it is, so nothing downstream sees a new object for a
+            // filter that did not change.
+            return rebuilt > 0 ? keys : value;
+        }
+
         /// <summary>
         /// The ids a filter box's text means: the names are matched in memory and the ids they carry
         /// are emitted as an <c>In</c>. Matching the ids as text would be useless - nobody types 47

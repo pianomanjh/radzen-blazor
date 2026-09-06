@@ -208,6 +208,8 @@ namespace Radzen.FastGrid.Tests
         {
             // §32's stated hole, pinned as a hole. A JSON array comes back as one opaque value, so it is
             // not a sequence and nothing here can rebuild the list - that waits for ②'s format change.
+            // The blob deliberately carries no text: with one, the drop used to leak - see
+            // AnInWhoseValueIsGoneIsDroppedEvenWhenThereIsText.
             //
             // The rows alone cannot tell the two outcomes apart: a dropped filter and an In that matches
             // everything both show four names. What separates them is whether the grid believes it is
@@ -248,6 +250,173 @@ namespace Radzen.FastGrid.Tests
             });
 
             Assert.Equal(new[] { "Carol", "Alice" }, Names(cut));
+        }
+
+        [Fact]
+        public void AnInWhoseValueIsGoneIsDroppedEvenWhenThereIsText()
+        {
+            // The review found the In drop leaking through attempt 4. The value is not a sequence, so it
+            // is rejected; the text then parsed to a plain int on this column, SetFilter took it with an
+            // In, and FilterExpression.In saw a non-sequence and composed Constant(true) - which is
+            // §32's own "shows every row" row of the matrix, arriving by a new route.
+            //
+            // Both assertions are load-bearing: the rows alone cannot tell a dropped filter from an In
+            // that matches everything.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
+            {
+                UniqueID = "Id",
+                FilterValue = new List<int> { 3, 1 },
+                FilterOperator = FilterOperator.In,
+                FilterText = "1",
+            }));
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
+            Assert.Empty(cut.Instance.Filters);
+        }
+
+        [Fact]
+        public void AScalarOperatorOnALookupColumnDoesNotTakeAListFromItsNameMatcher()
+        {
+            // The mirror, and the crash the review drove out. A lookup column's text parser answers with
+            // ids whatever it is asked, so a stored scalar operator used to reach SetFilter holding a
+            // List<int> - and Equals over int against a list threw inside the render:
+            //
+            //   The binary operator Equal is not defined for the types
+            //   'System.Int32' and 'System.Collections.Generic.List`1[System.Int32]'.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
+                    uniqueId: "Category")),
+                new FastGridSettings
+                {
+                    Columns = new List<FastGridColumnSettings>
+                    {
+                        new()
+                        {
+                            UniqueID = "Category",
+                            FilterValue = new Company { Name = "not an id" },
+                            FilterOperator = FilterOperator.Equals,
+                            FilterText = "Toys",
+                        },
+                    },
+                });
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
+            Assert.Empty(cut.Instance.Filters);
+        }
+
+        [Fact]
+        public void ALookupColumnRebuildsIdsThatCameBackAsAWiderNumber()
+        {
+            // A lookup column composes through SelectedKeys, which keeps what is already a TKey and
+            // drops the rest - it does not convert, where FilterExpression.Listed does. So ids widened
+            // by a serializer that reads every JSON integer as long left this column filtering by an
+            // empty list: no rows at all, with the column reporting itself filtered. Hiding every row is
+            // the direction §32's gate calls unsafe, so the ids are converted at the restore instead.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
+                    uniqueId: "Category")),
+                new FastGridSettings
+                {
+                    Columns = new List<FastGridColumnSettings>
+                    {
+                        new()
+                        {
+                            UniqueID = "Category",
+                            FilterValue = new List<object> { 10L },
+                            FilterOperator = FilterOperator.In,
+                        },
+                    },
+                });
+
+            Assert.Equal(new[] { "Carol", "Dave" }, Names(cut));
+        }
+
+        [Fact]
+        public void ALookupListWhereNothingIsAnIdIsDroppedRatherThanLeftHidingEveryRow()
+        {
+            // The other end of the lookup rebuild, and it took a second mutation pass to pin: handing
+            // the stored list on instead of dropping it passed the whole suite. SelectedKeys keeps only
+            // what is already a TKey, so a list with no ids in it composes Contains over nothing and the
+            // grid shows no rows while reporting itself filtered. Dropping shows all of them.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
+                    uniqueId: "Category")),
+                new FastGridSettings
+                {
+                    Columns = new List<FastGridColumnSettings>
+                    {
+                        new()
+                        {
+                            UniqueID = "Category",
+                            FilterValue = new List<object> { new Company { Name = "not an id" } },
+                            FilterOperator = FilterOperator.In,
+                        },
+                    },
+                });
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
+            Assert.Empty(cut.Instance.Filters);
+        }
+
+        [Fact]
+        public void AColumnThatCannotNameItsFilterTypeDropsAValueItCannotVouchFor()
+        {
+            // Person.Mixed is declared object and holds values of more than one type, so
+            // EffectiveFilterType is object and attempt 1's IsInstanceOfType would say yes to anything -
+            // including a JsonElement. The review measured what that did: the raw wrapper became the
+            // live filter value, equality matched nothing, and the grid hid every row while the stored
+            // blob looked intact. Dropping shows all of them, which is the direction the gate asks for.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, object>(x => x.Mixed)),
+                Stored(new FastGridColumnSettings
+                {
+                    UniqueID = "Mixed", FilterValue = 3, FilterOperator = FilterOperator.Equals,
+                }));
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
+            Assert.Empty(cut.Instance.Filters);
+        }
+
+        [Fact]
+        public void AColumnThatCannotNameItsFilterTypeStillRestoresFromItsText()
+        {
+            // The other half, and why dropping the value costs less than it looks: a column of unknown
+            // type answers FilterValueFromText with the text itself, so anything that came from a box
+            // still reaches the column.
+            //
+            // Asserted on the filter rather than on the rows, and the first draft of this test got that
+            // wrong. An object-typed column compares with Expression.Equal over object, which is
+            // reference equality - two equal strings are two references - so it matches no rows however
+            // it is restored. That is a property of declaring a column object, not of restoring one, and
+            // it is why the README tells authors to give such a column a real type.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, object>(x => x.Mixed)),
+                Stored(new FastGridColumnSettings
+                {
+                    UniqueID = "Mixed",
+                    FilterValue = "n/a",
+                    FilterOperator = FilterOperator.Equals,
+                    FilterText = "n/a",
+                }));
+
+            Assert.Equal("n/a", Assert.Single(cut.Instance.Filters).FilterValue);
         }
 
         [Fact]

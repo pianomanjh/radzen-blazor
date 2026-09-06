@@ -1387,58 +1387,6 @@ that paints nothing.
 One commit each, which is what every other feature on this branch did, and the only reason resize,
 reorder and frozen columns have separate numbers at all.
 
-### What the build changed
-
-**`ConvertType.ChangeType` does not fail on a value it cannot convert.** Its last line is
-`value is IConvertible ? Convert.ChangeType(...) : value` - so handed a `JsonElement` it hands the
-`JsonElement` straight back. Attempt 2 therefore "succeeded" holding the value it was meant to reject,
-attempt 3 never ran, and the first build of this piece threw exactly as before it. The fix is one line -
-the conversion's result is checked against the target type rather than trusted - and it is load-bearing:
-removing it fails eleven of the twenty tests.
-
-**One test did not discriminate and one mutation survived**, both found by §9 layer 1 rather than by
-reading. `IsNotEmpty` over `People.Sample()` matches all four rows, so that row of its theory passed
-whether or not the filter had been restored; it now runs over data with one blank name. And swapping
-attempt 3 for the column's text parser passed the entire suite, because the argument this section had
-recorded for that decision was unreachable - see *The rule*, above, which now records the reachable one
-and how it was found.
-
-### What the browser pass found
-
-**The playground could not reach this fault at all**, and that is why it shipped: the page held the
-settings blob as a live object, so every value kept the type it was captured with, and the whole class of
-bug is what a serializer does to `object`. It now has a **Round-trip through JSON** button - §9's rule
-about a feature nobody can drive, applied to a bug nobody could drive.
-
-Through it, the two outcomes this section predicts both hold in a real circuit: a date filter survives the
-trip and still filters, and a check-box-list filter comes back with the column unfiltered and the log
-clean. Before §32 the first of those terminated the circuit.
-
-**And it found a crash that is not this piece's.** With a date typed into the Simple box, switching
-`FilterMode` to `CheckBoxList` terminates the circuit:
-
-```
-System.InvalidCastException: Unable to cast object of type 'System.DateTime'
-                             to type 'System.Collections.IEnumerable'.
-  at Radzen.ParameterViewExtensions.DidParameterChange[T](...)
-  at Radzen.DropDownBase`1.SetParametersAsync(ParameterView parameters)
-```
-
-The check-box list binds `FilterSelection`, which is `CurrentFilterValue`, and a scalar filter left over
-from the other editor is not a sequence. No settings, no serializer and no restore are involved -
-reproduced from a fresh page with nothing but a typed filter and one toggle - so it is outside this
-section's gate and is **recorded, not fixed**. It belongs to §31's piece ④, which is where
-`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`: the fault is exactly
-the mismatch that piece exists to remove, and fixing it here would be fixing it twice.
-
-### What it cost
-
-Nothing per row, measured rather than asserted. `alloc-types 1000 400`, interleaved base/mine/base/mine
-on one machine: base **13259.0** and **13284.0** KB per render, this change **13237.1** and **13243.6**.
-The 0.2% between the means is smaller than the spread between the two base runs. Nothing here is on the
-render path - the reconstruction runs once per stored column per restore - and the only render-path edit
-is `HasFilter` calling a static predicate instead of spelling its operator set inline.
-
 ### Where this could still be wrong
 
 - **The row/column asymmetry** of "focus follows the item, focus follows the position" will read as an
@@ -6947,7 +6895,7 @@ convert.** This is not new work for the new feature; it fixes something already 
 `RadzenFastGrid.Data.cs` restores with `SetFilter(stored.FilterValue, ...)` and never looks at the text.
 `FilterExpression.Converted` anticipates the case in its own doc comment - *"a stored setting read back
 from JSON"* - but `Convert.ChangeType` cannot convert a `JsonElement`, so it reaches the catch and
-returns null.
+returns null. `FilterText` was stored all along and unused.
 
 **The sentence that stood here said the date filter silently disappears. It does not - it throws, and
 §32 measured it.** The rest of this paragraph is right and the conclusion drawn from it was sized
@@ -7126,8 +7074,11 @@ size: the crash needs no text and this path never has any.
 
 ### The gate
 
-**No stored filter may crash the grid, and fidelity is best-effort.** The first half is absolute and is
-what makes this piece worth doing before the feature that makes it easier to hit. The second half is the
+**No stored filter may crash the grid, and fidelity is best-effort.** The first half was written as
+absolute and **the review proved it is not** - see *What the review found*, which measures two stored
+blobs that still take the circuit down. What this piece actually delivers is narrower and worth stating
+as what it is: **no stored filter _value_ crashes the grid.** The crashes left are caused by the stored
+*operator*, they predate this work, and closing them needs the change this section talked itself out of. The second half is the
 concession: a value the format cannot carry is dropped, the column restores unfiltered, and the rows the
 user sees are all of them - which is the safe direction to fail in, because nothing is hidden.
 
@@ -7152,8 +7103,18 @@ produces.** Four attempts, in this order:
 
 3 is the new one and it is what fixes the crash without any text: a `JsonElement` holding a date
 stringifies to `2019-05-04T00:00:00`, which converts. It also makes §31's headline fallback the *last*
-of four rather than the second of two - after `ConvertType`, 4 catches mostly a `Guid` and an enum
-stored by name.
+of four rather than the second of two.
+
+**What 4 is left holding was stated wrongly here and the review measured it.** This said 4 catches
+"mostly a `Guid` and an enum stored by name"; both are caught at 3. `ConvertType.ChangeType` has an
+explicit `Guid`-from-string branch, and the suite's own Guid test carries no text at all; an enum by name
+is `Enum.Parse` on the value's string form, in 3. What 4 actually catches is **culture-formatted text,
+the lookup name path, and values no conversion reaches** - which is a smaller and more specific job than
+§31 imagined for it, and it is still the only thing that can restore a lookup column's ids from a name.
+
+**`Convert.ChangeType` reaches none of `DateTimeOffset`, `TimeSpan`, `DateOnly` or `TimeOnly`**, so a
+stored filter on one of those columns fails 2, 3 and 4 and is dropped on every restore. No crash, so it
+is inside the gate - and outside the matrix, which never tried them.
 
 **3 is type-based and must not be the column's own text parser**, and *culture* is why. The string form
 attempt 3 reads came out of a serializer, so it is invariant; `FilterValueFromText` reads
@@ -7161,12 +7122,15 @@ attempt 3 reads came out of a serializer, so it is invariant; `FilterValueFromTe
 `250.5` restores under de-DE as two and a half thousand - a filter that is wrong rather than missing,
 which is the outcome every other decision in this section is arranged to avoid.
 
-The reason first written here was a different one and it was wrong: that a lookup column's parser matches
-*names*, so a stringified id would build an `In` over no ids - which §14 makes a real filter - and 4
-would never run. The hazard is real and unreachable. A lookup column's default operator is `In`, so its
-values never reach attempt 3 at all; they are handled as a sequence or dropped, three branches earlier.
-It was caught by the mutation loop, not by reading: swapping 3 for the text parser passed the whole suite
-until a test with a culture in it existed.
+A second reason was written here first, then deleted as unreachable, and **the deletion was wrong** -
+this paragraph has now been wrong in both directions and the history is the useful part. The reason is
+that a lookup column's parser matches *names*, so a stringified id would build an `In` over no ids -
+which §14 makes a real filter, so it would be applied and 4 would never run. That was deleted on the
+grounds that a lookup column's default operator is `In`, so its values never reach attempt 3. But the
+code reads `filterOperator ?? DefaultFilterOperator`: **the default only applies when the stored operator
+is null**, and a blob naming `Equals` on a lookup column goes straight to attempt 3. The review drove it
+and it restores correctly there. So both reasons hold, and the mutation survived the suite not because
+the path was unreachable but because no test stored a non-default operator on a lookup column.
 
 **4 before 3 was rejected**: text is the lossier record - one person's typing in one culture - and
 preferring it over a value that still converts throws away the better of the two.
@@ -7193,7 +7157,15 @@ it, beats a rule plus an exception.
 
 **Newtonsoft survives for free**, and that is a consequence of the rule rather than a favour: `JArray`
 *is* `IEnumerable` and `JValue` implements `IConvertible`, so its elements convert at step 2 without
-anything here knowing its name.
+anything here knowing its name. **This is reasoned, not run** - the package is not referenced here, so
+nothing measures it, and it is the one claim in this section with no test behind it.
+
+The review found a wrinkle in it that cuts the other way, and it is worth keeping precisely because it
+shows the rule is not as serializer-blind as the paragraph above sounds. A `JValue` is a `JToken` and so
+is *also* `IEnumerable<JToken>`, which means a Newtonsoft **scalar** stored against `In` passes the
+sequence test, enumerates empty, and yields an `In` over nothing - where the `System.Text.Json`
+equivalent is dropped. Same input, two serializers, opposite outcomes, and the Newtonsoft one is the
+hiding direction.
 
 The consequence to write down: **a lookup column filtered from a check-box list stores ids and no text,
 so it restores unfiltered.** §14 argues that "In over no ids" is a meaningful filter on a lookup column -
@@ -7212,6 +7184,130 @@ value, not that the reflective absorber learns to refuse one: `Reflective` exist
 decline for *structural* reasons - a collection element, a column declared as `object`, a filter aimed
 through a path - and teaching it to tell those apart from a value that would not convert is a bigger
 change for a case that no longer arrives.
+
+### What the build changed
+
+**`ConvertType.ChangeType` does not fail on a value it cannot convert.** Its last line is
+`value is IConvertible ? Convert.ChangeType(...) : value` - so handed a `JsonElement` it hands the
+`JsonElement` straight back. Attempt 2 therefore "succeeded" holding the value it was meant to reject,
+attempt 3 never ran, and the first build of this piece threw exactly as before it. The fix is one line -
+the conversion's result is checked against the target type rather than trusted - and it is load-bearing:
+removing it fails eleven of the twenty tests.
+
+**One test did not discriminate and one mutation survived**, both found by §9 layer 1 rather than by
+reading. `IsNotEmpty` over `People.Sample()` matches all four rows, so that row of its theory passed
+whether or not the filter had been restored; it now runs over data with one blank name. And swapping
+attempt 3 for the column's text parser passed the entire suite, because the argument this section had
+recorded for that decision was unreachable - see *The rule*, above, which now records the reachable one
+and how it was found.
+
+### What the browser pass found
+
+**The playground could not reach this fault at all**, and that is why it shipped: the page held the
+settings blob as a live object, so every value kept the type it was captured with, and the whole class of
+bug is what a serializer does to `object`. It now has a **Round-trip through JSON** button - §9's rule
+about a feature nobody can drive, applied to a bug nobody could drive.
+
+Through it, the two outcomes this section predicts both hold in a real circuit: a date filter survives the
+trip and still filters, and a check-box-list filter comes back with the column unfiltered and the log
+clean. Before §32 the first of those terminated the circuit.
+
+**And it found a crash that is not this piece's.** With a date typed into the Simple box, switching
+`FilterMode` to `CheckBoxList` terminates the circuit:
+
+```
+System.InvalidCastException: Unable to cast object of type 'System.DateTime'
+                             to type 'System.Collections.IEnumerable'.
+  at Radzen.ParameterViewExtensions.DidParameterChange[T](...)
+  at Radzen.DropDownBase`1.SetParametersAsync(ParameterView parameters)
+```
+
+The check-box list binds `FilterSelection`, which is `CurrentFilterValue`, and a scalar filter left over
+from the other editor is not a sequence. No settings, no serializer and no restore are involved -
+reproduced from a fresh page with nothing but a typed filter and one toggle - so it is outside this
+section's gate and is **recorded, not fixed**. It belongs to §31's piece ④, which is where
+`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`: the fault is exactly
+the mismatch that piece exists to remove, and fixing it here would be fixing it twice.
+
+### What it cost
+
+Nothing per row, measured rather than asserted. `alloc-types 1000 400`, interleaved base/mine/base/mine
+on one machine: base **13259.0** and **13284.0** KB per render, this change **13237.1** and **13243.6**.
+The 0.2% between the means is smaller than the spread between the two base runs. Nothing here is on the
+render path - the reconstruction runs once per stored column per restore - and the only render-path edit
+is `HasFilter` calling a static predicate instead of spelling its operator set inline.
+
+### What the review found that the build had not
+
+Two reviewers, in parallel, read-only. Both were right about things the build had argued its way past,
+and between them they refuted the gate.
+
+**The gate does not hold, and the cause is the operator rather than the value.** Two stored blobs still
+throw inside `BuildRenderTree`, both driven from `Settings` alone:
+
+| stored blob | what it raises |
+| --- | --- |
+| `GreaterThan` on a `string` column | `InvalidOperationException: The binary operator GreaterThan is not defined for the types 'System.String' and 'System.String'` |
+| `Contains` on a `decimal?` column | `ArgumentException`, from `QueryableExtension` via `Reflective` |
+
+Neither is new and neither is reachable through a value this piece rebuilds. The first is
+`FilterExpression.Ordered` building `Expression.GreaterThan` without asking whether the type has an
+ordering - the mirror of the case beside it, where `Comparison` *declines* `Contains` on a non-string
+because "building the wrong one silently is worse than declining". The second is a decline reaching the
+reflective absorber, which is this section's own mechanism arriving from the other cause: **a decline has
+two sources - an unusable value and an unusable operator/type pair - and only the first was fixed.** So
+*Where it goes* is wrong where it says `Reflective` need not tell them apart "for a case that no longer
+arrives". The case still arrives. Both are recorded rather than fixed: the first is a question about what
+`GreaterThan` on a string should *mean*, the second needs the change to `Composition` this section
+declined, and neither is about a serializer.
+
+**The rule was not checked against the operator's shape, in both directions.** Attempt 4 returned
+whatever the parser produced. An `In` whose value was a scalar fell through to the text, took a scalar
+from it, and composed `Constant(true)` - the "shows every row" row of the matrix above, arriving by a new
+route and past the test that pins it, which happened to store no text. And a lookup column with a stored
+scalar operator took a *list* from its name matcher and handed it to `Equals`, which throws. The operator
+now decides the shape both halves must have, and two tests hold each direction.
+
+**A column that cannot name its filter type was trusted, and failed in the hiding direction.** Attempt 1
+is `type.IsInstanceOfType(value)`, and `EffectiveFilterType` answers `object` for a column it cannot
+resolve - where that test is true of every value there is, so the raw wrapper became the live filter.
+Measured on a `PropertyColumn<Person, object>`: **zero rows, with the column reporting itself filtered**
+and the stored blob looking intact. That is the exact inversion of the gate's stated safe direction. Such
+a column now declines the value and takes the text, which for an unknown type is the text itself.
+
+There is a narrower crash behind the same line, from the other reviewer: `EffectiveFilterType` resolves
+its path through `PropertyAccess.GetPropertyType`, which is `Type.GetProperty` - public properties,
+exact case, **no fields** - while the Dynamic LINQ the reflective builder uses resolves fields too. So a
+column declared `object` over a public *field* answered `object`, passed the value through, and threw on
+a type only the other side could name. Declining the value closes that as well.
+
+**The lookup columns do not convert their own elements.** `RestoredSequence` checked only that the value
+was a sequence, on the stated grounds that "the predicate builders convert the elements themselves". True
+of `FilterExpression.Listed`; false of `LookupColumnBase.SelectedKeys`, which keeps what is already a
+`TKey` and drops the rest. So ids widened by a serializer that reads every JSON integer as `long`, or
+arriving from a `RadzenDataFilter`, left the column composing `Contains` over an empty list - **no rows,
+reported as filtered**, the hiding direction again. Lookup columns now rebuild their ids at the restore,
+once, rather than on the composition path.
+
+That override cost two attempts and an existing test caught both. Collapsing a stored `In` over a single
+null into an empty list turned "a filter matching nothing" into "no filter", losing §14's distinction;
+and `default(TKey)` for an unconstrained `TKey` over an `int` key is **zero**, not null - `List<TKey?>`
+is `List<int>` there - so the rebuild ticked the entry whose id happens to be zero, which is the fault
+`SelectedKeys`' own comment warns about. A null now makes the rebuild hand the stored list back
+untouched. **Rebuilding may change the elements' type and must never change how many there are.**
+
+**The catch this section argued for was not applied to its own neighbour.** §32 widened the new
+conversion's catch on §9's rule - an optional path whose job is to drop what will not convert should
+catch everything - and left `FilterValueFromText`, *attempt 4 of the same four*, still naming four
+exception types twenty lines away. Widened. It is defended by the rule rather than by a test, as its
+sibling is: nothing here can make a `TypeConverter` raise something exotic on demand.
+
+**One disagreement, recorded rather than acted on.** The Standards reviewer would fold the
+valueless-operator rule into `RestoredFilterValue`, since `RestoredFilterValue(null, IsNull, null)`
+answers "no filter" on its own and anyone reaching for it directly reintroduces the `IsNull` drop. The
+split stands: which operators need a value is a fact about operators, and it lives on `ColumnBase` as
+`NeedsNoValue` where `HasFilter` also reads it; how a value is rebuilt is a fact about values. Only the
+sequencing is in the grid, and there is one caller of each. The method's doc now says which half it is.
 
 ### Where this could still be wrong
 
