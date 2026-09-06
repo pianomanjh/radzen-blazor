@@ -47,11 +47,44 @@ namespace Radzen.FastGrid
         /// <summary>The column's place in the sort, or null when it is not sorted.</summary>
         public SortOrder? SortOrder { get; set; }
 
-        /// <summary>The column's filter value, or null when it is not filtered.</summary>
-        public object? FilterValue { get; set; }
+        /// <summary>
+        /// The values the column's first condition compares against, as canonical text, or null when it
+        /// is not filtered.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Text, and §33 argues why at length. This was <c>object?</c> and the whole of §32 was the
+        /// price: a serializer flattens an <c>object</c> into whatever it uses for "some value" - a
+        /// <c>JsonElement</c> for <c>System.Text.Json</c> - and four heuristic attempts then tried to
+        /// guess the type back, with a check-box list stored as a JSON array left unguessable. No
+        /// serializer can turn a string into anything but a string.
+        /// </para>
+        /// <para>
+        /// A list rather than one value because the operator decides how many it takes: none for
+        /// <c>IsNull</c>, one for <c>Equals</c>, two for <c>Between</c>, and one per ticked box for
+        /// <c>In</c>. That is the same rule the model uses, so nothing is reshaped on the way in or out.
+        /// </para>
+        /// </remarks>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227:Collection properties should be read only",
+            Justification = "The type is deserialized from storage, which needs the setter.")]
+        public IList<string?>? FilterValues { get; set; }
 
-        /// <summary>How the filter value is compared.</summary>
-        public FilterOperator? FilterOperator { get; set; }
+        /// <summary>How the first condition compares.</summary>
+        public FastGridFilterOperator? FilterOperator { get; set; }
+
+        /// <summary>The values the second condition compares against, or null where there is none.</summary>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227:Collection properties should be read only",
+            Justification = "The type is deserialized from storage, which needs the setter.")]
+        public IList<string?>? SecondFilterValues { get; set; }
+
+        /// <summary>How the second condition compares, or null where there is none.</summary>
+        public FastGridFilterOperator? SecondFilterOperator { get; set; }
+
+        /// <summary>
+        /// How the two conditions are joined, or null when nothing recorded a choice - which is every
+        /// column with one condition.
+        /// </summary>
+        public LogicalFilterOperator? LogicalFilterOperator { get; set; }
 
         /// <summary>
         /// What was typed into the filter box to produce the value, or null when the filter came from
@@ -64,6 +97,16 @@ namespace Radzen.FastGrid
         /// list with nothing ticked. Both are <c>In</c> over an empty list.
         /// </remarks>
         public string? FilterText { get; set; }
+
+        /// <summary>
+        /// The same for the second condition's box - a <c>Between</c>'s upper bound, usually.
+        /// </summary>
+        /// <remarks>
+        /// It exists because §33 drops a compound whole when any part of it cannot be rebuilt, so
+        /// without a text of its own the second half of a date range would be the likeliest thing to
+        /// take a whole filter down.
+        /// </remarks>
+        public string? SecondFilterText { get; set; }
 
         /// <summary>
         /// Whether the column is drawn, or null when nothing recorded a choice - which is the case for

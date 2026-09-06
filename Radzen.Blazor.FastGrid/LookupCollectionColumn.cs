@@ -97,8 +97,8 @@ namespace Radzen.FastGrid
         public override Expression<Func<TItem, bool>>? ApplyFilter(FilterCaseSensitivity caseSensitivity,
             bool inMemory)
         {
-            if (Property is not { } selector
-                || CurrentFilterOperator is not (Radzen.FilterOperator.In or Radzen.FilterOperator.NotIn))
+            if (Property is not { } selector || SoleCondition is not { } condition
+                || condition.Operator is not (FastGridFilterOperator.In or FastGridFilterOperator.NotIn))
             {
                 return null;
             }
@@ -116,7 +116,7 @@ namespace Radzen.FastGrid
                 any);
 
             return Expression.Lambda<Func<TItem, bool>>(
-                CurrentFilterOperator == Radzen.FilterOperator.NotIn ? Expression.Not(present) : present,
+                condition.Operator == FastGridFilterOperator.NotIn ? Expression.Not(present) : present,
                 selector.Parameters);
         }
 
@@ -130,8 +130,8 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         public override Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity)
         {
-            if (ids is not { } members
-                || CurrentFilterOperator is not (Radzen.FilterOperator.In or Radzen.FilterOperator.NotIn))
+            if (ids is not { } members || SoleCondition is not { } condition
+                || condition.Operator is not (FastGridFilterOperator.In or FastGridFilterOperator.NotIn))
             {
                 return null;
             }
@@ -142,7 +142,7 @@ namespace Radzen.FastGrid
             // carrying no ids at all is not one of the brands asked about, so NotIn keeps it. Written
             // the other way round the two routes answer differently for that row, which is how a
             // check-box-list filter over a List once disagreed with the same filter over a queryable.
-            return CurrentFilterOperator == Radzen.FilterOperator.NotIn
+            return condition.Operator == FastGridFilterOperator.NotIn
                 ? item => !(members(item) is { } carried && carried.Any(keys.Contains))
                 : item => members(item) is { } carried && carried.Any(keys.Contains);
         }

@@ -655,10 +655,43 @@ namespace Radzen.FastGrid
         [Parameter] public object? FilterValue { get; set; }
 
         /// <summary>
-        /// How <see cref="FilterValue" /> is compared. Defaults to <c>Contains</c> for a string column
-        /// and <c>Equals</c> for every other type.
+        /// How <see cref="FilterValue" /> is compared, in upstream's vocabulary. Defaults to
+        /// <c>Contains</c> for a string column and <c>Equals</c> for every other type.
         /// </summary>
+        /// <remarks>
+        /// Kept, and kept working, so a column migrating from <c>RadzenDataGrid</c> compiles and behaves
+        /// identically - every upstream value means exactly one of ours. Reach for
+        /// <see cref="FilterOperatorOf" /> to say <c>Between</c>, which upstream has no value for. Where
+        /// both are set the owned one wins, because it is the one that can say more.
+        /// </remarks>
         [Parameter] public FilterOperator? FilterOperator { get; set; }
+
+        /// <summary>
+        /// How <see cref="FilterValue" /> is compared, in this grid's own vocabulary - §33.
+        /// </summary>
+        [Parameter] public FastGridFilterOperator? FilterOperatorOf { get; set; }
+
+        /// <summary>
+        /// The upper bound of a <c>Between</c>, or the value of a second condition joined to the first.
+        /// </summary>
+        /// <remarks>
+        /// A <c>Between</c> takes two values and they are this and <see cref="FilterValue" />. Any other
+        /// operator paired with <see cref="SecondFilterOperator" /> makes a second condition, joined by
+        /// <see cref="LogicalFilterOperator" /> - which is how <c>In [...] OR IsNull</c> is authored.
+        /// </remarks>
+        [Parameter] public object? SecondFilterValue { get; set; }
+
+        /// <summary>
+        /// How <see cref="SecondFilterValue" /> is compared, when it is a condition of its own rather
+        /// than a <c>Between</c>'s upper bound.
+        /// </summary>
+        [Parameter] public FastGridFilterOperator? SecondFilterOperator { get; set; }
+
+        /// <summary>
+        /// How this column's two conditions are joined. Not the grid's property of the same name, which
+        /// joins whole columns - upstream draws the same distinction with the same two names.
+        /// </summary>
+        [Parameter] public LogicalFilterOperator LogicalFilterOperator { get; set; } = LogicalFilterOperator.And;
 
         /// <summary>
         /// The member of a collection's element that the filter compares, as a dotted path, or null when
@@ -714,13 +747,34 @@ namespace Radzen.FastGrid
         [Parameter] public RenderFragment<ColumnBase<TItem>>? FilterTemplate { get; set; }
 
         object? declaredFilterValue;
+        object? declaredSecondFilterValue;
         FilterOperator? declaredFilterOperator;
+        FastGridFilterOperator? declaredOwnedOperator;
+        FastGridFilterOperator? declaredSecondOperator;
+        LogicalFilterOperator declaredLogicalOperator = LogicalFilterOperator.And;
 
-        /// <summary>The value the column is filtering by right now.</summary>
-        public object? CurrentFilterValue { get; private set; }
+        /// <summary>
+        /// What this column is filtering by right now, or null when it is not.
+        /// </summary>
+        /// <remarks>
+        /// Replaced <c>CurrentFilterValue</c> and <c>CurrentFilterOperator</c> in §33. Neither could stay
+        /// honest once a column could carry two conditions or a <c>Between</c>: there is no single "the
+        /// value" to answer with, and keeping them as forwarding properties over the first condition
+        /// would have put two sources of truth in the model on day one - the shape §32's review spent a
+        /// finding on.
+        /// </remarks>
+        public FastGridFilter? CurrentFilter { get; private set; }
 
-        /// <summary>The operator the column is filtering with right now.</summary>
-        public FilterOperator CurrentFilterOperator { get; private set; }
+        /// <summary>
+        /// The condition that decides this column, or null when it is not filtered.
+        /// </summary>
+        /// <remarks>
+        /// A read for the editors and the columns that special-case their own operator, not a second
+        /// place the filter is *kept*: it derives from <see cref="CurrentFilter" /> and cannot disagree
+        /// with it. That distinction is what §33 refused to blur when it declined to keep
+        /// <c>CurrentFilterValue</c> as a settable forwarding property.
+        /// </remarks>
+        internal FastGridFilterCondition? FirstCondition => CurrentFilter?.First;
 
         /// <summary>
         /// The dotted path this column filters by. Defaults to <see cref="SortPath" />; a column with
@@ -775,82 +829,69 @@ namespace Radzen.FastGrid
         /// Whether the column's current filter would actually narrow anything. An empty value filters
         /// nothing, except for the operators that are about emptiness themselves.
         /// </summary>
-        public virtual bool HasFilter =>
-            CanFilter && (HasFilterValue || NeedsNoValue(CurrentFilterOperator));
+        public virtual bool HasFilter => CanFilter && CurrentFilter is { IsPresent: true };
 
         /// <summary>
-        /// Whether an operator is a filter on its own, with nothing to compare against.
-        /// </summary>
-        /// <remarks>
-        /// One rule in one place because the set is now read from two sides that must agree. Capture
-        /// stores such a filter - <see cref="HasFilter" /> counts it - and restore has to recognise it
-        /// from a stored value of null, which is what every other kind of filter having none means.
-        /// While the set was written out only here, restore read the null instead and dropped the
-        /// filter on every load. See §32.
-        /// </remarks>
-        internal static bool NeedsNoValue(FilterOperator filterOperator) =>
-            filterOperator is Radzen.FilterOperator.IsNull or Radzen.FilterOperator.IsNotNull
-                or Radzen.FilterOperator.IsEmpty or Radzen.FilterOperator.IsNotEmpty;
-
-        bool HasFilterValue => CurrentFilterValue switch
-        {
-            null => false,
-            string text => text.Length > 0,
-
-            // A check-box-list filter with nothing ticked is not a filter that matches nothing; it is no
-            // filter. Testing for null only would leave the grid empty as soon as the last box is
-            // cleared. A column where an empty selection can mean the other thing overrides HasFilter.
-            // The selection is a list in every path the grid itself builds, so the count answers without
-            // an enumerator; the general case still has to walk one, and has to dispose it.
-            ICollection collection => collection.Count > 0,
-            IEnumerable sequence => Any(sequence),
-            _ => true,
-        };
-
-        static bool Any(IEnumerable sequence)
-        {
-            var enumerator = sequence.GetEnumerator();
-
-            try
-            {
-                return enumerator.MoveNext();
-            }
-            finally
-            {
-                (enumerator as IDisposable)?.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// The text in the filter box that produced <see cref="CurrentFilterValue" />, or null when the
+        /// The text in the filter box that produced this column's first condition, or null when the
         /// filter came from anywhere else. The typed value cannot stand in for it: "3.0" and "3" are one
         /// value and two different things to have typed, and an unparseable "3-" filters by null the
         /// same as an empty box.
         /// </summary>
         internal string? AppliedFilterText { get; private set; }
 
+        /// <summary>The same, for the second condition - a <c>Between</c>'s upper bound, usually.</summary>
+        internal string? AppliedSecondFilterText { get; private set; }
+
         /// <summary>Sets the column's live filter. Called by the grid; does not reload on its own.</summary>
-        /// <param name="value">The value to filter by.</param>
-        /// <param name="filterOperator">How to compare it, or null for this column's default.</param>
+        /// <param name="filter">What to filter by, or null to clear.</param>
         /// <param name="text">
-        /// The box text the value came from, or null for a filter that came from anywhere else. A
-        /// parameter rather than a second assignment because the text belongs to the value: the two
-        /// call sites that have one used to put it back on the line after this one, each under a
-        /// comment explaining that this clears it, which is one rule written twice in the two places
-        /// most likely to be copied from. Required rather than defaulted, so that a caller who has a
-        /// text and forgets it is a build error rather than the same silent drop in a new place.
+        /// The box text the first condition's value came from, or null for a filter that came from
+        /// anywhere else. A parameter rather than a second assignment because the text belongs to the
+        /// value: the two call sites that have one used to put it back on the line after this one, each
+        /// under a comment explaining that this clears it, which is one rule written twice in the two
+        /// places most likely to be copied from. Required rather than defaulted, so that a caller who
+        /// has a text and forgets it is a build error rather than the same silent drop in a new place.
         /// </param>
-        internal void SetFilter(object? value, FilterOperator? filterOperator, string? text)
+        /// <param name="secondText">The same for the second value, and defaulted because most callers have none.</param>
+        internal void SetFilter(FastGridFilter? filter, string? text, string? secondText = null)
         {
-            CurrentFilterValue = value;
-            CurrentFilterOperator = filterOperator ?? DefaultFilterOperator;
+            CurrentFilter = filter;
             AppliedFilterText = text;
+            AppliedSecondFilterText = secondText;
         }
 
+        /// <summary>
+        /// Sets a filter of one condition over one value, which is what every editor this grid draws
+        /// today produces.
+        /// </summary>
+        internal void SetFilter(object? value, FastGridFilterOperator? filterOperator, string? text) =>
+            SetFilter(new FastGridFilter(Condition(filterOperator ?? DefaultFilterOperator, value)), text);
+
+        /// <summary>
+        /// One condition, with the value placed as the operator's arity says. An operator that takes no
+        /// values gets none rather than a null - the difference is what <c>IsPresent</c> reads.
+        /// </summary>
+        internal static FastGridFilterCondition Condition(FastGridFilterOperator filterOperator, object? value) =>
+            filterOperator.Arity() == FastGridFilterArity.None
+                ? new FastGridFilterCondition(filterOperator)
+                : new FastGridFilterCondition(filterOperator, value);
+
         /// <summary>How this column compares when nothing said otherwise.</summary>
-        internal virtual FilterOperator DefaultFilterOperator => EffectiveFilterType == typeof(string)
-            ? Radzen.FilterOperator.Contains
-            : Radzen.FilterOperator.Equals;
+        internal virtual FastGridFilterOperator DefaultFilterOperator =>
+            EffectiveFilterType == typeof(string)
+                ? FastGridFilterOperator.Contains
+                : FastGridFilterOperator.Equals;
+
+        /// <summary>
+        /// The operator this column's markup declares, in whichever vocabulary it was written.
+        /// </summary>
+        /// <remarks>
+        /// The owned one wins where both are set, because it is the one that can say <c>Between</c>. An
+        /// upstream <c>Custom</c> maps to nothing - this grid never implemented it - and answers null,
+        /// which leaves the column on its default.
+        /// </remarks>
+        internal FastGridFilterOperator? DeclaredFilterOperator =>
+            FilterOperatorOf ?? FilterOperator?.Owned();
 
         /// <summary>
         /// The value a filter box's text means for this column, or null when it means nothing - a
@@ -906,7 +947,7 @@ namespace Radzen.FastGrid
         /// </summary>
         /// <remarks>
         /// <para>
-        /// <see cref="FastGridColumnSettings.FilterValue" /> is <c>object?</c>, so a settings blob that
+        /// <c>FastGridColumnSettings.FilterValues</c> was <c>object?</c>, so a settings blob that
         /// went through a serializer comes back holding whatever that serializer uses for "some value"
         /// - a <c>JsonElement</c> for <c>System.Text.Json</c>. Handed on unexamined, that value made the
         /// typed builders decline, and a decline is routed to the reflective one, where
@@ -937,7 +978,8 @@ namespace Radzen.FastGrid
         /// <param name="value">The stored value, in whatever shape it came back in.</param>
         /// <param name="filterOperator">The stored operator, or null for this column's default.</param>
         /// <param name="text">The stored box text, or null for a filter that never came from a box.</param>
-        internal object? RestoredFilterValue(object? value, FilterOperator? filterOperator, string? text)
+        internal object? RestoredFilterValue(object? value, FastGridFilterOperator? filterOperator,
+            string? text)
         {
             // The operator decides the *shape* the answer has to have, and both halves below are checked
             // against it. An In wants a sequence; everything else wants a single value. The review found
@@ -946,7 +988,7 @@ namespace Radzen.FastGrid
             // again - and a lookup column with a stored scalar operator took a *list* from its name
             // matcher and handed it to Equals, which throws.
             var wantsSequence = (filterOperator ?? DefaultFilterOperator)
-                is Radzen.FilterOperator.In or Radzen.FilterOperator.NotIn;
+                is FastGridFilterOperator.In or FastGridFilterOperator.NotIn;
 
             if (value is not null
                 && (wantsSequence ? RestoredSequence(value) : RestoredScalar(value)) is { } rebuilt)
@@ -960,6 +1002,125 @@ namespace Radzen.FastGrid
                 && wantsSequence == fromText is IEnumerable and not string
                     ? fromText
                     : null;
+        }
+
+        /// <summary>
+        /// The values a stored condition compares against, parsed against this column's own type, or
+        /// null when they cannot be.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §33's replacement for §32's four attempts, and it is one parse rather than four guesses
+        /// because the stored form is canonical text: a serializer cannot have changed what a string is.
+        /// The arity rule decides the shape - <c>In</c> rebuilds the list its editor produced, so the
+        /// check-box-list hole §32 left open closes here.
+        /// </para>
+        /// <para>
+        /// The column's own type is load-bearing now in a way it was not, and that is the stated cost: a
+        /// column whose type changed since the blob was written parses nothing and drops, and a column
+        /// that cannot name its type at all - <c>EffectiveFilterType</c> answering <c>object</c> - keeps
+        /// the text, which is §32's rule for those unchanged.
+        /// </para>
+        /// </remarks>
+        internal IReadOnlyList<object?>? RestoredValues(FastGridFilterOperator filterOperator,
+            IList<string?>? texts)
+        {
+            if (texts is null || texts.Count == 0)
+            {
+                return null;
+            }
+
+            var declared = EffectiveFilterType;
+            var arity = filterOperator.Arity();
+
+            if (arity == FastGridFilterArity.Many)
+            {
+                var parsed = Parsed(texts, declared);
+
+                // Nothing parsed is nothing rebuilt, and saying so is what lets the text have its turn -
+                // which on a lookup column is the difference between the name someone picked and a
+                // filter over no ids at all, and those two show opposite halves of the data.
+                if (parsed.Count == 0)
+                {
+                    return null;
+                }
+
+                // Rebuilt as the list the editor produced rather than as one value per box, because that
+                // is the shape the predicate builders and the check-box list both read.
+                return new object?[] { RestoredSelection(parsed) };
+            }
+
+            var wanted = arity == FastGridFilterArity.Two ? 2 : 1;
+
+            if (texts.Count < wanted)
+            {
+                return null;
+            }
+
+            var values = new object?[wanted];
+
+            for (var i = 0; i < wanted; i++)
+            {
+                if (FilterValueText.To(texts[i], declared) is not { } value)
+                {
+                    return null;
+                }
+
+                values[i] = value;
+            }
+
+            return values;
+        }
+
+        /// <summary>
+        /// Parsed values as the list an <c>In</c> filters by.
+        /// </summary>
+        /// <remarks>
+        /// Not <see cref="FilterValueFromSelection" />, which converts what a *picker* offered: on a
+        /// lookup column that is entries carrying ids, and handing it the ids themselves produced an
+        /// empty list and a filter that matched nothing. These values are already what the column
+        /// filters by, so all this does is give them a typed list to live in.
+        /// </remarks>
+        internal virtual object RestoredSelection(IReadOnlyList<object?> values)
+        {
+            var declared = EffectiveFilterType;
+            var type = Nullable.GetUnderlyingType(declared) ?? declared;
+
+            // Typed, because the reflective builder puts this list straight into Contains<TElement> and
+            // a List<object> there is not an IEnumerable<TElement> - so a provider cannot translate it.
+            // Where closing List<> over a run-time type is unavailable the untyped list is enough, for
+            // the reason FilterValueFromSelection gives at length.
+            var list = DynamicCode.Supported
+                ? (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!
+                : new List<object?>();
+
+            for (var i = 0; i < values.Count; i++)
+            {
+                list.Add(values[i]);
+            }
+
+            return list;
+        }
+
+        /// <summary>The texts that parse, in order, dropping the ones that do not.</summary>
+        /// <remarks>
+        /// Dropped rather than failing the whole list, which is the same rule the predicate builders
+        /// apply to an <c>In</c>: one unreadable id should not throw away the others. An empty result is
+        /// no filter, which <c>IsPresent</c> already answers for.
+        /// </remarks>
+        static List<object?> Parsed(IList<string?> texts, Type declared)
+        {
+            var values = new List<object?>(texts.Count);
+
+            for (var i = 0; i < texts.Count; i++)
+            {
+                if (FilterValueText.To(texts[i], declared) is { } value)
+                {
+                    values.Add(value);
+                }
+            }
+
+            return values;
         }
 
         /// <summary>
@@ -1054,10 +1215,10 @@ namespace Radzen.FastGrid
         internal virtual IEnumerable? FilterValues => null;
 
         /// <summary>
-        /// What the check-box list is bound to, which is <see cref="CurrentFilterValue" /> unless the
-        /// list offers something other than the values the column filters by.
+        /// What the check-box list is bound to, which is the first condition's value unless the list
+        /// offers something other than the values the column filters by.
         /// </summary>
-        internal virtual object? FilterSelection => CurrentFilterValue;
+        internal virtual object? FilterSelection => CurrentFilter?.First.Value;
 
         /// <summary>
         /// The value a check-box-list selection means for this column. The inverse of
@@ -1156,9 +1317,12 @@ namespace Radzen.FastGrid
                 initialized = true;
                 declaredVisible = Visible;
                 declaredFilterValue = FilterValue;
+                declaredSecondFilterValue = SecondFilterValue;
                 declaredFilterOperator = FilterOperator;
-                CurrentFilterValue = FilterValue;
-                CurrentFilterOperator = FilterOperator ?? DefaultFilterOperator;
+                declaredOwnedOperator = FilterOperatorOf;
+                declaredSecondOperator = SecondFilterOperator;
+                declaredLogicalOperator = LogicalFilterOperator;
+                CurrentFilter = DeclaredFilter();
 
                 // Only here, and deliberately. A declared sort is the grid's starting state, not a live
                 // binding: honouring later changes would mean re-sorting - and, on the async path,
@@ -1190,18 +1354,60 @@ namespace Radzen.FastGrid
                 pickedVisible = null;
             }
 
-            if (!Equals(declaredFilterValue, FilterValue))
+            // One comparison over the whole declaration rather than one per part. The parts are read
+            // together to build a filter, so noticing them apart would rebuild it up to five times for
+            // one markup change - and would have to decide what a half-changed declaration means.
+            if (!Equals(declaredFilterValue, FilterValue)
+                || !Equals(declaredSecondFilterValue, SecondFilterValue)
+                || declaredFilterOperator != FilterOperator
+                || declaredOwnedOperator != FilterOperatorOf
+                || declaredSecondOperator != SecondFilterOperator
+                || declaredLogicalOperator != LogicalFilterOperator)
             {
                 declaredFilterValue = FilterValue;
-                CurrentFilterValue = FilterValue;
+                declaredSecondFilterValue = SecondFilterValue;
+                declaredFilterOperator = FilterOperator;
+                declaredOwnedOperator = FilterOperatorOf;
+                declaredSecondOperator = SecondFilterOperator;
+                declaredLogicalOperator = LogicalFilterOperator;
+
+                CurrentFilter = DeclaredFilter();
                 AppliedFilterText = null;
+                AppliedSecondFilterText = null;
+            }
+        }
+
+        /// <summary>
+        /// The filter this column's markup declares, or null when it declares none.
+        /// </summary>
+        /// <remarks>
+        /// A declared value with no operator takes the column's default, which is what it always did. A
+        /// second operator makes a second condition; a <c>Between</c> takes both values into one, which
+        /// is the whole reason it is an operator here rather than a pair.
+        /// </remarks>
+        FastGridFilter? DeclaredFilter()
+        {
+            // An upstream operator this vocabulary has no word for is Custom, and Custom means "I will
+            // filter this myself" - so it declares no filter rather than falling through to the default.
+            // Read as a default it became a Contains, which is a filter the author never asked for.
+            if (FilterOperatorOf is null && FilterOperator is { } upstream && upstream.Owned() is null)
+            {
+                return null;
             }
 
-            if (declaredFilterOperator != FilterOperator)
+            var filterOperator = DeclaredFilterOperator ?? DefaultFilterOperator;
+
+            if (filterOperator == FastGridFilterOperator.Between)
             {
-                declaredFilterOperator = FilterOperator;
-                CurrentFilterOperator = FilterOperator ?? DefaultFilterOperator;
+                return new FastGridFilter(
+                    new FastGridFilterCondition(filterOperator, new[] { FilterValue, SecondFilterValue }));
             }
+
+            var first = Condition(filterOperator, FilterValue);
+
+            return SecondFilterOperator is { } second
+                ? new FastGridFilter(first, Condition(second, SecondFilterValue), LogicalFilterOperator)
+                : new FastGridFilter(first);
         }
 
         /// <summary>

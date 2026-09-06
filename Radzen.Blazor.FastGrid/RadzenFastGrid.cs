@@ -1824,14 +1824,14 @@ namespace Radzen.FastGrid
             builder.AddAttribute(67, "class", "rz-textbox");
             builder.AddAttribute(68, "style", "width: 100%;");
             builder.AddAttribute(69, "aria-label",
-                column.HeaderText + FilterValueAriaLabel + column.CurrentFilterValue);
-            builder.AddAttribute(70, "value", column.CurrentFilterValue);
+                column.HeaderText + FilterValueAriaLabel + column.FirstCondition?.Value);
+            builder.AddAttribute(70, "value", column.FirstCondition?.Value);
 
             // onchange is bound whether or not the filter applies as you type, because it is what a
             // blur and an Enter raise. Typing adds oninput on top of it rather than replacing it, so
             // turning the feature on cannot cost the box the event that commits it.
             builder.AddAttribute(71, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
-                value => OnFilterCommitted(column, value), column.CurrentFilterValue?.ToString()));
+                value => OnFilterCommitted(column, value), column.FirstCondition?.Value?.ToString()));
 
             if (FilterAsYouType)
             {

@@ -349,7 +349,12 @@ namespace Radzen.FastGrid.Tests
             {
                 Columns = new List<FastGridColumnSettings>
                 {
-                    new() { UniqueID = "Grade", FilterValue = Grade.Junior, FilterOperator = FilterOperator.Equals },
+                    new()
+                    {
+                        UniqueID = "Grade",
+                        FilterValues = new string?[] { nameof(Grade.Junior) },
+                        FilterOperator = FastGridFilterOperator.Equals,
+                    },
                 },
                 PageSize = 1,
                 CurrentPage = 1,

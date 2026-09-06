@@ -617,7 +617,28 @@ namespace Radzen.FastGrid
         /// default - Contains for a string column, Equals otherwise.
         /// </summary>
         public Task Filter(ColumnBase<TItem> column, object? value, FilterOperator? filterOperator = null)
+            => Filter(column, value, filterOperator?.Owned(), text: null);
+
+        /// <summary>
+        /// The same, in this grid's own vocabulary - which is the one that can say <c>Between</c>.
+        /// </summary>
+        public Task Filter(ColumnBase<TItem> column, object? value, FastGridFilterOperator? filterOperator)
             => Filter(column, value, filterOperator, text: null);
+
+        /// <summary>Filters a column by a whole filter - one condition or two - and reloads.</summary>
+        public Task Filter(ColumnBase<TItem> column, FastGridFilter? filter)
+        {
+            if (column is null || !column.CanFilter)
+            {
+                return Task.CompletedTask;
+            }
+
+            column.SetFilter(filter, text: null);
+
+            skip = 0;
+
+            return RefreshAsync();
+        }
 
         /// <summary>
         /// The same, recording what was typed to produce the value - or null for a filter that came from
@@ -630,7 +651,8 @@ namespace Radzen.FastGrid
         /// ticked. Recorded after the announcement, the two are stored identically and the grid comes
         /// back showing every row.
         /// </remarks>
-        Task Filter(ColumnBase<TItem> column, object? value, FilterOperator? filterOperator, string? text)
+        Task Filter(ColumnBase<TItem> column, object? value, FastGridFilterOperator? filterOperator,
+            string? text)
         {
             if (column is null || !column.CanFilter)
             {
@@ -1146,7 +1168,7 @@ namespace Radzen.FastGrid
                 // because this path has never had any - a descriptor carries a value and an operator.
                 // That is most of why the reconstruction cannot be keyed on the text: the crash §32
                 // measured needs no text, and here there is none to be had.
-                RestoreFilter(column, filter.FilterValue, filter.FilterOperator, text: null);
+                RestoreFilter(column, filter);
             }
 
             skip = 0;
@@ -1272,7 +1294,7 @@ namespace Radzen.FastGrid
                 // The text goes with the value: it is what says the value came from the box, and on a
                 // lookup column it is the only thing that tells a name nothing answered to from a list
                 // with nothing ticked - both are In over no ids.
-                RestoreFilter(column, stored.FilterValue, stored.FilterOperator, stored.FilterText);
+                RestoreFilter(column, stored);
 
                 // Only when something recorded a choice. A null leaves the markup's Visible standing,
                 // which is what a grid with no picker stores for every column.
@@ -1328,12 +1350,14 @@ namespace Radzen.FastGrid
         /// stops describing the grid.
         /// </para>
         /// </remarks>
-        static void RestoreFilter(ColumnBase<TItem> column, object? value, FilterOperator? filterOperator,
-            string? text)
+        static void RestoreFilter(ColumnBase<TItem> column, object? value,
+            FastGridFilterOperator? filterOperator, string? text)
         {
-            if (filterOperator is { } only && ColumnBase<TItem>.NeedsNoValue(only))
+            var only = filterOperator ?? column.DefaultFilterOperator;
+
+            if (only.Arity() == FastGridFilterArity.None)
             {
-                column.SetFilter(null, only, null);
+                column.SetFilter(new FastGridFilter(new FastGridFilterCondition(only)), text: null);
 
                 return;
             }
@@ -1342,6 +1366,164 @@ namespace Radzen.FastGrid
             {
                 column.SetFilter(restored, filterOperator, text);
             }
+        }
+
+        /// <summary>Writes a column's filter into the settings it is stored as.</summary>
+        /// <remarks>
+        /// Canonical text rather than the values themselves - §33. Nothing is written for a column that
+        /// is not filtered, which is what keeps a settings blob describing choices rather than defaults.
+        /// </remarks>
+        static void StoreFilter(ColumnBase<TItem> column, FastGridColumnSettings settings)
+        {
+            if (!column.HasFilter || column.CurrentFilter is not { } filter)
+            {
+                return;
+            }
+
+            settings.FilterValues = FilterValueText.From(filter.First);
+            settings.FilterOperator = filter.First.Operator;
+            settings.FilterText = column.AppliedFilterText;
+            settings.SecondFilterText = column.AppliedSecondFilterText;
+
+            if (filter.EffectiveSecond is { } second)
+            {
+                settings.SecondFilterValues = FilterValueText.From(second);
+                settings.SecondFilterOperator = second.Operator;
+                settings.LogicalFilterOperator = filter.LogicalFilterOperator;
+            }
+        }
+
+        /// <summary>
+        /// Puts one stored filter back on its column, or leaves the column unfiltered when any part of
+        /// it cannot be rebuilt.
+        /// </summary>
+        /// <remarks>
+        /// <strong>Any condition that fails takes the whole filter with it</strong>, which §33 argues
+        /// against the kinder-looking alternative: <c>In [...] OR IsNull</c> that loses its list would
+        /// degrade to <c>IsNull</c> alone, so the grid would show only the blank rows - a narrower and
+        /// entirely different answer, presented as the user's. An <c>AND</c> pair losing a half widens
+        /// just as silently. §32 chose showing everything over hiding some for a reason nothing explains,
+        /// and this is that rule applied to a compound.
+        /// </remarks>
+        static void RestoreFilter(ColumnBase<TItem> column, FastGridColumnSettings stored)
+        {
+            if (stored.FilterOperator is not { } filterOperator)
+            {
+                return;
+            }
+
+            if (RestoredCondition(column, filterOperator, stored.FilterValues, stored.FilterText)
+                is not { } first)
+            {
+                return;
+            }
+
+            if (stored.SecondFilterOperator is not { } secondOperator)
+            {
+                column.SetFilter(new FastGridFilter(first), stored.FilterText, stored.SecondFilterText);
+
+                return;
+            }
+
+            if (RestoredCondition(column, secondOperator, stored.SecondFilterValues,
+                    stored.SecondFilterText) is not { } second)
+            {
+                return;
+            }
+
+            column.SetFilter(
+                new FastGridFilter(first, second,
+                    stored.LogicalFilterOperator ?? Radzen.LogicalFilterOperator.And),
+                stored.FilterText, stored.SecondFilterText);
+        }
+
+        /// <summary>One stored condition rebuilt against the column's type, or null when it cannot be.</summary>
+        /// <remarks>
+        /// The text is the fallback §32 argued for and it is still the last resort, not the first: the
+        /// stored values are canonical and culture-free, and the text is one person's typing. It reaches
+        /// past what a parse can do on exactly one kind of column - a lookup, where the values are ids
+        /// and the text is the name they were picked by.
+        /// </remarks>
+        static FastGridFilterCondition? RestoredCondition(ColumnBase<TItem> column,
+            FastGridFilterOperator filterOperator, IList<string?>? values, string? text)
+        {
+            var arity = filterOperator.Arity();
+
+            if (arity == FastGridFilterArity.None)
+            {
+                return new FastGridFilterCondition(filterOperator);
+            }
+
+            if (column.RestoredValues(filterOperator, values) is { } rebuilt)
+            {
+                return new FastGridFilterCondition(filterOperator, rebuilt);
+            }
+
+            return column.FilterValueFromText(text) is { } fromText
+                && (arity == FastGridFilterArity.Many) == (fromText is IEnumerable and not string)
+                    ? ColumnBase<TItem>.Condition(filterOperator, fromText)
+                    : null;
+        }
+
+        /// <summary>An incoming descriptor put back on its column, for the <c>Filters</c> path.</summary>
+        /// <remarks>
+        /// A descriptor with children is a compound this grid emitted, or one a <c>RadzenDataFilter</c>
+        /// built; either way the children are the conditions. A descriptor without them is one condition,
+        /// which is every descriptor written before §33.
+        /// </remarks>
+        static void RestoreFilter(ColumnBase<TItem> column, CompositeFilterDescriptor descriptor)
+        {
+            var children = descriptor.Filters?.ToList();
+
+            if (children is { Count: > 0 })
+            {
+                var conditions = children
+                    .Select(child => ConditionFrom(column, child))
+                    .Where(condition => condition is not null)
+                    .Take(2)
+                    .ToList();
+
+                if (conditions.Count > 0)
+                {
+                    column.SetFilter(
+                        new FastGridFilter(conditions[0]!,
+                            conditions.Count > 1 ? conditions[1] : null,
+                            descriptor.LogicalFilterOperator),
+                        text: null);
+                }
+
+                return;
+            }
+
+            if (ConditionFrom(column, descriptor) is { } single)
+            {
+                column.SetFilter(new FastGridFilter(single), text: null);
+            }
+        }
+
+        static FastGridFilterCondition? ConditionFrom(ColumnBase<TItem> column,
+            CompositeFilterDescriptor descriptor)
+        {
+            // Custom has no word here and means the caller filters it themselves, so the column takes no
+            // filter from such a descriptor. Read as the column's default it became a Contains - a
+            // filter nobody asked for, where before §33 it was correctly none.
+            if (descriptor.FilterOperator is { } named && named.Owned() is null)
+            {
+                return null;
+            }
+
+            var filterOperator = descriptor.FilterOperator?.Owned() ?? column.DefaultFilterOperator;
+
+            if (filterOperator.Arity() == FastGridFilterArity.None)
+            {
+                return new FastGridFilterCondition(filterOperator);
+            }
+
+            // Through §32's reconstruction, because a descriptor's value is object? and arrives from
+            // outside - a RadzenDataFilter, a remote store - so it is no more trustworthy than a blob.
+            return column.RestoredFilterValue(descriptor.FilterValue, filterOperator, text: null) is { } value
+                ? ColumnBase<TItem>.Condition(filterOperator, value)
+                : null;
         }
 
         // Null unless the grid actually has a picker and this column is in it. Recording visibility for
@@ -1389,17 +1571,17 @@ namespace Radzen.FastGrid
 
                 if (column.Identity.Name is { Length: > 0 } name)
                 {
-                    stored.Add(new FastGridColumnSettings
+                    var entry = new FastGridColumnSettings
                     {
                         UniqueID = name,
                         SortOrder = descending ? SortOrder.Descending : SortOrder.Ascending,
-                        FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
-                        FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
-                        FilterText = column.HasFilter ? column.AppliedFilterText : null,
                         Visible = RecordedVisibility(column),
                         Width = RecordedWidth(column),
                         OrderIndex = RecordedOrderIndex(column),
-                    });
+                    };
+
+                    StoreFilter(column, entry);
+                    stored.Add(entry);
                 }
             }
 
@@ -1418,16 +1600,16 @@ namespace Radzen.FastGrid
                     continue;
                 }
 
-                stored.Add(new FastGridColumnSettings
+                var entry = new FastGridColumnSettings
                 {
                     UniqueID = name,
-                    FilterValue = column.HasFilter ? column.CurrentFilterValue : null,
-                    FilterOperator = column.HasFilter ? column.CurrentFilterOperator : null,
-                    FilterText = column.HasFilter ? column.AppliedFilterText : null,
                     Visible = visibility,
                     Width = width,
                     OrderIndex = orderIndex,
-                });
+                };
+
+                StoreFilter(column, entry);
+                stored.Add(entry);
             }
 
             return new FastGridSettings

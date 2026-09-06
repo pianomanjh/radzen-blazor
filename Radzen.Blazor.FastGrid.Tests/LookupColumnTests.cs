@@ -656,8 +656,8 @@ namespace Radzen.FastGrid.Tests
 
             Pick(cut, 0, Named(cut, 0, "Toys"));
 
-            Assert.Equal(new[] { 10 },
-                ((System.Collections.IEnumerable)captured.Columns.Single().FilterValue).Cast<int>());
+            // Canonical text since §33, and one entry per ticked box rather than one list object.
+            Assert.Equal(new[] { "10" }, captured.Columns.Single().FilterValues);
 
             rows.Single(category => category.Id == 10).Name = "Playthings";
 

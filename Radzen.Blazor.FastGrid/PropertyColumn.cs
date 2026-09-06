@@ -348,8 +348,9 @@ namespace Radzen.FastGrid
                 return null;
             }
 
-            return FilterExpression<TItem, TProp>.For(selector, CurrentFilterOperator, CurrentFilterValue,
-                caseSensitivity, inMemory);
+            return CurrentFilter is { } filter
+                ? FilterExpression<TItem, TProp>.For(selector, filter, caseSensitivity, inMemory)
+                : null;
         }
 
         // Compiled on first use rather than in Derive: a grid over a queryable never needs either, and
@@ -367,8 +368,10 @@ namespace Radzen.FastGrid
                 return null;
             }
 
-            return FilterExpression<TItem, TProp>.PredicateFor(filterGetter ??= selector.Compile(),
-                CurrentFilterOperator, CurrentFilterValue, caseSensitivity);
+            return CurrentFilter is { } filter
+                ? FilterExpression<TItem, TProp>.PredicateFor(filterGetter ??= selector.Compile(), filter,
+                    caseSensitivity)
+                : null;
         }
 
         /// <inheritdoc />

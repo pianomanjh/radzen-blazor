@@ -98,6 +98,33 @@ namespace Radzen.FastGrid
             !typeof(TProp).IsValueType || Nullable.GetUnderlyingType(typeof(TProp)) is not null;
 
         /// <summary>
+        /// Whether this column's type has an ordering at all, asked once per closed generic type.
+        /// </summary>
+        /// <remarks>
+        /// <c>Expression.LessThan</c> throws for a type with no <c>&lt;</c> - a string, a Guid - and the
+        /// builder used to let it: §32's review drove a stored <c>GreaterThan</c> on a string column into
+        /// an <c>InvalidOperationException</c> inside the render. Declining is what the neighbouring case
+        /// already does, where <c>Comparison</c> refuses <c>Contains</c> on a non-string "because
+        /// building the wrong one silently is worse than declining". This is that rule, applied to the
+        /// mirror it had missed - and <c>Between</c> needs it, being ordered by definition.
+        /// </remarks>
+        static readonly bool Orderable = CanOrder();
+
+        static bool CanOrder()
+        {
+            try
+            {
+                Expression.LessThan(Expression.Default(typeof(TProp)), Expression.Default(typeof(TProp)));
+
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// The predicate for one column's filter, or null when the operator says nothing about this
         /// column's type - a <c>StartsWith</c> on an int, say, which is a filter that cannot be built
         /// rather than one that matches nothing.
@@ -111,44 +138,108 @@ namespace Radzen.FastGrid
         /// overloads; a queryable provider cannot translate them and gets <c>ToLower()</c> instead.
         /// </param>
         internal static Expression<Func<TItem, bool>>? For(Expression<Func<TItem, TProp>> selector,
-            FilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity,
+            FastGridFilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity,
             bool inMemory)
         {
-            var body = Body(selector.Body, filterOperator, value, caseSensitivity, inMemory);
+            var body = Body(selector.Body, filterOperator, value, second: null, caseSensitivity, inMemory);
 
             return body is null ? null : Expression.Lambda<Func<TItem, bool>>(body, selector.Parameters);
         }
 
-        static Expression? Body(Expression property, FilterOperator filterOperator, object? value,
-            FilterCaseSensitivity caseSensitivity, bool inMemory)
+        /// <summary>
+        /// The predicate for a whole filter - one condition, or two joined - or null where none of it
+        /// can be built.
+        /// </summary>
+        /// <remarks>
+        /// <strong>A filter of one condition produces exactly the tree it always did.</strong> §33 makes
+        /// that a gate rather than an intention: composing <c>c1 ⊕ c2</c> unconditionally, with a
+        /// constant-true second half, would make every filtered column pay for a feature almost nobody
+        /// switches on - on every row, forever. So the join only happens when there is something to join.
+        /// <para>
+        /// A second condition that cannot be built is dropped and the first stands, which is the
+        /// opposite of what a *restore* does with the same situation. The two are different questions:
+        /// restoring asks whether the user's filter can be reproduced, and a half-reproduced compound is
+        /// a filter nobody wrote; composing asks what this provider can be told, and one condition it
+        /// cannot express does not make the other meaningless.
+        /// </para>
+        /// </remarks>
+        internal static Expression<Func<TItem, bool>>? For(Expression<Func<TItem, TProp>> selector,
+            FastGridFilter filter, FilterCaseSensitivity caseSensitivity, bool inMemory)
+        {
+            var body = ConditionBody(selector.Body, filter.First, caseSensitivity, inMemory);
+
+            if (filter.EffectiveSecond is { } second
+                && ConditionBody(selector.Body, second, caseSensitivity, inMemory) is { } other)
+            {
+                body = body is null
+                    ? other
+                    : filter.LogicalFilterOperator == LogicalFilterOperator.Or
+                        ? Expression.OrElse(body, other)
+                        : Expression.AndAlso(body, other);
+            }
+
+            return body is null ? null : Expression.Lambda<Func<TItem, bool>>(body, selector.Parameters);
+        }
+
+        static Expression? ConditionBody(Expression property, FastGridFilterCondition condition,
+            FilterCaseSensitivity caseSensitivity, bool inMemory) =>
+            Body(property, condition.Operator, condition.Value, condition.SecondValue, caseSensitivity,
+                inMemory);
+
+        static Expression? Body(Expression property, FastGridFilterOperator filterOperator, object? value,
+            object? second, FilterCaseSensitivity caseSensitivity, bool inMemory)
         {
             // The raw property, before the null-coalescing below: asking whether something is null and
             // then reading it through a coalesce that replaced the null is asking nothing.
-            if (filterOperator is FilterOperator.IsNull or FilterOperator.IsNotNull)
+            if (filterOperator is FastGridFilterOperator.IsNull or FastGridFilterOperator.IsNotNull)
             {
                 return IsNullable
-                    ? Compare(filterOperator is FilterOperator.IsNull, property,
+                    ? Compare(filterOperator is FastGridFilterOperator.IsNull, property,
                         Expression.Constant(null, typeof(TProp)))
                     // A non-nullable column is never null, and saying so is more useful than throwing.
-                    : Expression.Constant(filterOperator is FilterOperator.IsNotNull);
+                    : Expression.Constant(filterOperator is FastGridFilterOperator.IsNotNull);
             }
 
-            if (filterOperator is FilterOperator.IsEmpty or FilterOperator.IsNotEmpty)
+            if (filterOperator is FastGridFilterOperator.IsEmpty or FastGridFilterOperator.IsNotEmpty)
             {
                 return typeof(TProp) == typeof(string)
-                    ? Compare(filterOperator is FilterOperator.IsEmpty, property,
+                    ? Compare(filterOperator is FastGridFilterOperator.IsEmpty, property,
                         Expression.Constant(string.Empty, typeof(TProp)))
                     : null;
             }
 
-            if (filterOperator is FilterOperator.In or FilterOperator.NotIn)
+            if (filterOperator is FastGridFilterOperator.Between)
             {
-                return In(property, value, filterOperator is FilterOperator.NotIn);
+                return BetweenBody(property, value, second);
+            }
+
+            if (filterOperator is FastGridFilterOperator.In or FastGridFilterOperator.NotIn)
+            {
+                return In(property, value, filterOperator is FastGridFilterOperator.NotIn);
             }
 
             return typeof(TProp) == typeof(string)
                 ? Text(property, filterOperator, value, caseSensitivity, inMemory)
                 : Comparison(property, filterOperator, value);
+        }
+
+        /// <summary>An inclusive range, or null when this column's type has no ordering to range over.</summary>
+        static BinaryExpression? BetweenBody(Expression property, object? from, object? to)
+        {
+            if (Coerce(from) is not { } lower || Coerce(to) is not { } upper)
+            {
+                return null;
+            }
+
+            var target = NotNull(property);
+
+            if (Ordered(target, FastGridFilterOperator.GreaterThanOrEquals, lower) is not { } atLeast
+                || Ordered(target, FastGridFilterOperator.LessThanOrEquals, upper) is not { } atMost)
+            {
+                return null;
+            }
+
+            return Expression.AndAlso(atLeast, atMost);
         }
 
         static BinaryExpression Compare(bool equal, Expression left, Expression right) =>
@@ -162,7 +253,7 @@ namespace Radzen.FastGrid
                 : property;
 
         [SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase", Justification = "Lowercase to match the ToLower() applied to the column, which is what QueryableExtension emits.")]
-        static Expression? Text(Expression property, FilterOperator filterOperator, object? value,
+        static Expression? Text(Expression property, FastGridFilterOperator filterOperator, object? value,
             FilterCaseSensitivity caseSensitivity, bool inMemory)
         {
             var text = value as string ?? value?.ToString();
@@ -179,14 +270,14 @@ namespace Radzen.FastGrid
 
                 return filterOperator switch
                 {
-                    FilterOperator.Equals => Expression.Call(target, OrdinalEquals, constant, ordinal),
-                    FilterOperator.NotEquals =>
+                    FastGridFilterOperator.Equals => Expression.Call(target, OrdinalEquals, constant, ordinal),
+                    FastGridFilterOperator.NotEquals =>
                         Expression.Not(Expression.Call(target, OrdinalEquals, constant, ordinal)),
-                    FilterOperator.Contains => Expression.Call(target, OrdinalContains, constant, ordinal),
-                    FilterOperator.DoesNotContain =>
+                    FastGridFilterOperator.Contains => Expression.Call(target, OrdinalContains, constant, ordinal),
+                    FastGridFilterOperator.DoesNotContain =>
                         Expression.Not(Expression.Call(target, OrdinalContains, constant, ordinal)),
-                    FilterOperator.StartsWith => Expression.Call(target, OrdinalStartsWith, constant, ordinal),
-                    FilterOperator.EndsWith => Expression.Call(target, OrdinalEndsWith, constant, ordinal),
+                    FastGridFilterOperator.StartsWith => Expression.Call(target, OrdinalStartsWith, constant, ordinal),
+                    FastGridFilterOperator.EndsWith => Expression.Call(target, OrdinalEndsWith, constant, ordinal),
                     _ => Ordered(target, filterOperator, Expression.Constant(text, typeof(string))),
                 };
             }
@@ -201,17 +292,17 @@ namespace Radzen.FastGrid
 
             return filterOperator switch
             {
-                FilterOperator.Equals => Expression.Equal(target, lowered),
-                FilterOperator.NotEquals => Expression.NotEqual(target, lowered),
-                FilterOperator.Contains => Expression.Call(target, StringContains, lowered),
-                FilterOperator.DoesNotContain => Expression.Not(Expression.Call(target, StringContains, lowered)),
-                FilterOperator.StartsWith => Expression.Call(target, StringStartsWith, lowered),
-                FilterOperator.EndsWith => Expression.Call(target, StringEndsWith, lowered),
+                FastGridFilterOperator.Equals => Expression.Equal(target, lowered),
+                FastGridFilterOperator.NotEquals => Expression.NotEqual(target, lowered),
+                FastGridFilterOperator.Contains => Expression.Call(target, StringContains, lowered),
+                FastGridFilterOperator.DoesNotContain => Expression.Not(Expression.Call(target, StringContains, lowered)),
+                FastGridFilterOperator.StartsWith => Expression.Call(target, StringStartsWith, lowered),
+                FastGridFilterOperator.EndsWith => Expression.Call(target, StringEndsWith, lowered),
                 _ => Ordered(target, filterOperator, lowered),
             };
         }
 
-        static BinaryExpression? Comparison(Expression property, FilterOperator filterOperator, object? value)
+        static BinaryExpression? Comparison(Expression property, FastGridFilterOperator filterOperator, object? value)
         {
             if (Coerce(value) is not { } constant)
             {
@@ -222,24 +313,24 @@ namespace Radzen.FastGrid
 
             return filterOperator switch
             {
-                FilterOperator.Equals => Expression.Equal(target, constant),
-                FilterOperator.NotEquals => Expression.NotEqual(target, constant),
+                FastGridFilterOperator.Equals => Expression.Equal(target, constant),
+                FastGridFilterOperator.NotEquals => Expression.NotEqual(target, constant),
 
                 // Contains and the rest are string operators; on anything else there is no predicate to
                 // build, and building the wrong one silently is worse than declining.
-                FilterOperator.Contains or FilterOperator.DoesNotContain
-                    or FilterOperator.StartsWith or FilterOperator.EndsWith => null,
+                FastGridFilterOperator.Contains or FastGridFilterOperator.DoesNotContain
+                    or FastGridFilterOperator.StartsWith or FastGridFilterOperator.EndsWith => null,
                 _ => Ordered(target, filterOperator, constant),
             };
         }
 
-        static BinaryExpression? Ordered(Expression target, FilterOperator filterOperator, Expression constant) =>
-            filterOperator switch
+        static BinaryExpression? Ordered(Expression target, FastGridFilterOperator filterOperator, Expression constant) =>
+            !Orderable ? null : filterOperator switch
             {
-                FilterOperator.LessThan => Expression.LessThan(target, constant),
-                FilterOperator.LessThanOrEquals => Expression.LessThanOrEqual(target, constant),
-                FilterOperator.GreaterThan => Expression.GreaterThan(target, constant),
-                FilterOperator.GreaterThanOrEquals => Expression.GreaterThanOrEqual(target, constant),
+                FastGridFilterOperator.LessThan => Expression.LessThan(target, constant),
+                FastGridFilterOperator.LessThanOrEquals => Expression.LessThanOrEqual(target, constant),
+                FastGridFilterOperator.GreaterThan => Expression.GreaterThan(target, constant),
+                FastGridFilterOperator.GreaterThanOrEquals => Expression.GreaterThanOrEqual(target, constant),
                 _ => null,
             };
 
@@ -282,7 +373,7 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
-        /// The same filter as <see cref="For" />, composed as a delegate over the column's compiled
+        /// The same filter as <see cref="For(System.Linq.Expressions.Expression{System.Func{TItem, TProp}}, FastGridFilter, FilterCaseSensitivity, bool)" />, composed as a delegate over the column's compiled
         /// getter rather than as an expression tree.
         /// </summary>
         /// <remarks>
@@ -306,18 +397,61 @@ namespace Radzen.FastGrid
         /// </para>
         /// </remarks>
         internal static Func<TItem, bool>? PredicateFor(Func<TItem, TProp> selector,
-            FilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity)
+            FastGridFilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity) =>
+            PredicateFor(selector, filterOperator, value, second: null, caseSensitivity);
+
+        /// <summary>
+        /// The delegate for a whole filter, with the same rule <see cref="For(System.Linq.Expressions.Expression{System.Func{TItem, TProp}}, FastGridFilter, FilterCaseSensitivity, bool)" /> follows: a filter of
+        /// one condition composes exactly the delegate it always did, and the join only happens when
+        /// there is something to join.
+        /// </summary>
+        internal static Func<TItem, bool>? PredicateFor(Func<TItem, TProp> selector, FastGridFilter filter,
+            FilterCaseSensitivity caseSensitivity)
         {
-            if (filterOperator is FilterOperator.IsNull or FilterOperator.IsNotNull)
+            var predicate = ConditionPredicate(selector, filter.First, caseSensitivity);
+
+            if (filter.EffectiveSecond is { } condition
+                && ConditionPredicate(selector, condition, caseSensitivity) is { } other)
+            {
+                if (predicate is null)
+                {
+                    return other;
+                }
+
+                var first = predicate;
+
+                predicate = filter.LogicalFilterOperator == LogicalFilterOperator.Or
+                    ? item => first(item) || other(item)
+                    : item => first(item) && other(item);
+            }
+
+            return predicate;
+        }
+
+        static Func<TItem, bool>? ConditionPredicate(Func<TItem, TProp> selector,
+            FastGridFilterCondition condition, FilterCaseSensitivity caseSensitivity) =>
+            PredicateFor(selector, condition.Operator, condition.Value, condition.SecondValue,
+                caseSensitivity);
+
+        static Func<TItem, bool>? PredicateFor(Func<TItem, TProp> selector,
+            FastGridFilterOperator filterOperator, object? value, object? second,
+            FilterCaseSensitivity caseSensitivity)
+        {
+            if (filterOperator is FastGridFilterOperator.Between)
+            {
+                return BetweenPredicate(selector, value, second);
+            }
+
+            if (filterOperator is FastGridFilterOperator.IsNull or FastGridFilterOperator.IsNotNull)
             {
                 if (!IsNullable)
                 {
-                    var constant = filterOperator is FilterOperator.IsNotNull;
+                    var constant = filterOperator is FastGridFilterOperator.IsNotNull;
 
                     return _ => constant;
                 }
 
-                return filterOperator is FilterOperator.IsNull
+                return filterOperator is FastGridFilterOperator.IsNull
                     ? item => selector(item) is null
                     : item => selector(item) is not null;
             }
@@ -328,41 +462,69 @@ namespace Radzen.FastGrid
                     caseSensitivity);
             }
 
-            if (filterOperator is FilterOperator.IsEmpty or FilterOperator.IsNotEmpty)
+            if (filterOperator is FastGridFilterOperator.IsEmpty or FastGridFilterOperator.IsNotEmpty)
             {
                 return null;
             }
 
-            if (filterOperator is FilterOperator.In or FilterOperator.NotIn)
+            if (filterOperator is FastGridFilterOperator.In or FastGridFilterOperator.NotIn)
             {
-                return InPredicate(selector, value, filterOperator is FilterOperator.NotIn);
+                return InPredicate(selector, value, filterOperator is FastGridFilterOperator.NotIn);
             }
 
             return ComparisonPredicate(selector, filterOperator, value);
         }
 
+        /// <summary>An inclusive range, matching what <see cref="BetweenBody" /> builds.</summary>
+        /// <remarks>
+        /// Both bounds through <see cref="Coerce" />, and the lifted-operator null handling
+        /// <see cref="OrderedPredicate" /> already spells out: over a nullable column a row with no value
+        /// is outside every range, where a comparer would sort it below everything.
+        /// </remarks>
+        static Func<TItem, bool>? BetweenPredicate(Func<TItem, TProp> selector, object? from, object? to)
+        {
+            if (!Orderable || Coerce(from) is not { } lower || Coerce(to) is not { } upper)
+            {
+                return null;
+            }
+
+            var least = (TProp?)lower.Value;
+            var most = (TProp?)upper.Value;
+
+            if (least is null || most is null)
+            {
+                return null;
+            }
+
+            var comparer = Comparer<TProp>.Default;
+
+            return item => selector(item) is { } v
+                && comparer.Compare(v, least) >= 0
+                && comparer.Compare(v, most) <= 0;
+        }
+
         static Func<TItem, bool>? TextPredicate(Func<TItem, string?> selector,
-            FilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity)
+            FastGridFilterOperator filterOperator, object? value, FilterCaseSensitivity caseSensitivity)
         {
             var text = value as string ?? value?.ToString();
 
             // Length rather than IsNullOrEmpty, and the difference is the point: the expression builder
             // compares the raw property to string.Empty, so a null is *not* empty. IsNullOrEmpty would
             // quietly disagree with it for exactly the rows this operator exists to sort out.
-            if (filterOperator is FilterOperator.IsEmpty)
+            if (filterOperator is FastGridFilterOperator.IsEmpty)
             {
                 return item => selector(item)?.Length == 0;
             }
 
-            if (filterOperator is FilterOperator.IsNotEmpty)
+            if (filterOperator is FastGridFilterOperator.IsNotEmpty)
             {
                 return item => selector(item)?.Length != 0;
             }
 
-            if (filterOperator is FilterOperator.In or FilterOperator.NotIn)
+            if (filterOperator is FastGridFilterOperator.In or FastGridFilterOperator.NotIn)
             {
                 return InPredicate((Func<TItem, TProp>)(object)selector, value,
-                    filterOperator is FilterOperator.NotIn);
+                    filterOperator is FastGridFilterOperator.NotIn);
             }
 
             // OrdinalIgnoreCase, matching what the expression builder emits for an in-memory source -
@@ -374,19 +536,19 @@ namespace Radzen.FastGrid
             // A null string is the empty string to every operator but IsNull, as it is over there.
             return filterOperator switch
             {
-                FilterOperator.Equals => item => (selector(item) ?? "").Equals(text, comparison),
-                FilterOperator.NotEquals => item => !(selector(item) ?? "").Equals(text, comparison),
-                FilterOperator.Contains => item => (selector(item) ?? "").Contains(text ?? "", comparison),
-                FilterOperator.DoesNotContain =>
+                FastGridFilterOperator.Equals => item => (selector(item) ?? "").Equals(text, comparison),
+                FastGridFilterOperator.NotEquals => item => !(selector(item) ?? "").Equals(text, comparison),
+                FastGridFilterOperator.Contains => item => (selector(item) ?? "").Contains(text ?? "", comparison),
+                FastGridFilterOperator.DoesNotContain =>
                     item => !(selector(item) ?? "").Contains(text ?? "", comparison),
-                FilterOperator.StartsWith => item => (selector(item) ?? "").StartsWith(text ?? "", comparison),
-                FilterOperator.EndsWith => item => (selector(item) ?? "").EndsWith(text ?? "", comparison),
+                FastGridFilterOperator.StartsWith => item => (selector(item) ?? "").StartsWith(text ?? "", comparison),
+                FastGridFilterOperator.EndsWith => item => (selector(item) ?? "").EndsWith(text ?? "", comparison),
                 _ => null,
             };
         }
 
         static Func<TItem, bool>? ComparisonPredicate(Func<TItem, TProp> selector,
-            FilterOperator filterOperator, object? value)
+            FastGridFilterOperator filterOperator, object? value)
         {
             if (Coerce(value) is not { } constant)
             {
@@ -397,11 +559,11 @@ namespace Radzen.FastGrid
 
             return filterOperator switch
             {
-                FilterOperator.Equals => item => EqualityComparer<TProp>.Default.Equals(selector(item), key!),
-                FilterOperator.NotEquals =>
+                FastGridFilterOperator.Equals => item => EqualityComparer<TProp>.Default.Equals(selector(item), key!),
+                FastGridFilterOperator.NotEquals =>
                     item => !EqualityComparer<TProp>.Default.Equals(selector(item), key!),
-                FilterOperator.Contains or FilterOperator.DoesNotContain
-                    or FilterOperator.StartsWith or FilterOperator.EndsWith => null,
+                FastGridFilterOperator.Contains or FastGridFilterOperator.DoesNotContain
+                    or FastGridFilterOperator.StartsWith or FastGridFilterOperator.EndsWith => null,
                 _ => OrderedPredicate(selector, filterOperator, key),
             };
         }
@@ -412,7 +574,7 @@ namespace Radzen.FastGrid
         /// whose value is missing, where the comparer would sort it below everything.
         /// </summary>
         static Func<TItem, bool>? OrderedPredicate(Func<TItem, TProp> selector,
-            FilterOperator filterOperator, TProp? key)
+            FastGridFilterOperator filterOperator, TProp? key)
         {
             if (key is null)
             {
@@ -423,13 +585,13 @@ namespace Radzen.FastGrid
 
             return filterOperator switch
             {
-                FilterOperator.LessThan =>
+                FastGridFilterOperator.LessThan =>
                     item => selector(item) is { } v && comparer.Compare(v, key) < 0,
-                FilterOperator.LessThanOrEquals =>
+                FastGridFilterOperator.LessThanOrEquals =>
                     item => selector(item) is { } v && comparer.Compare(v, key) <= 0,
-                FilterOperator.GreaterThan =>
+                FastGridFilterOperator.GreaterThan =>
                     item => selector(item) is { } v && comparer.Compare(v, key) > 0,
-                FilterOperator.GreaterThanOrEquals =>
+                FastGridFilterOperator.GreaterThanOrEquals =>
                     item => selector(item) is { } v && comparer.Compare(v, key) >= 0,
                 _ => null,
             };

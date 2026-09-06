@@ -439,15 +439,75 @@ namespace Radzen.FastGrid
             return descriptors;
         }
 
-        static CompositeFilterDescriptor DescriptorFor<TItem>(ColumnBase<TItem> column) => new()
+        /// <summary>
+        /// One column's filter as a descriptor the rest of Radzen can read.
+        /// </summary>
+        /// <remarks>
+        /// Nested where the owned filter says more than one condition can - a second condition, or a
+        /// <c>Between</c>, which is two comparisons with one name. That is what §33 bought by making
+        /// <see cref="CompositeFilterDescriptor" /> the currency: the parent carries the property and
+        /// the join, the children carry the comparisons, and both the reflective builder and the string
+        /// forms already walk it.
+        /// </remarks>
+        static CompositeFilterDescriptor DescriptorFor<TItem>(ColumnBase<TItem> column)
+        {
+            var filter = column.CurrentFilter!;
+            var first = filter.First;
+            var second = filter.EffectiveSecond;
+
+            // The simple shape, and the one almost every filtered column has: no children, and the
+            // descriptor reads exactly as it did before the model existed.
+            if (second is null && first.Operator != FastGridFilterOperator.Between)
+            {
+                return Descriptor(column, first.Operator, first.Value);
+            }
+
+            var parent = Descriptor(column, filterOperator: null, value: null);
+
+            parent.LogicalFilterOperator = second is null
+                // Between's two halves are always joined by And; the column's own operator joins its two
+                // conditions and says nothing about the bounds of a range.
+                ? LogicalFilterOperator.And
+                : filter.LogicalFilterOperator;
+
+            parent.Filters = second is null
+                ? BetweenChildren(column, first)
+                : new[] { Child(column, first), Child(column, second) }.SelectMany(x => x).ToList();
+
+            return parent;
+        }
+
+        /// <summary>A condition as the one or two descriptors it takes to say it.</summary>
+        static List<CompositeFilterDescriptor> Child<TItem>(ColumnBase<TItem> column,
+            FastGridFilterCondition condition) =>
+            condition.Operator == FastGridFilterOperator.Between
+                ? BetweenChildren(column, condition)
+                : new List<CompositeFilterDescriptor>
+                {
+                    Descriptor(column, condition.Operator, condition.Value),
+                };
+
+        /// <summary>
+        /// A range as the pair of comparisons upstream can read, since it has no operator for one.
+        /// </summary>
+        static List<CompositeFilterDescriptor> BetweenChildren<TItem>(ColumnBase<TItem> column,
+            FastGridFilterCondition condition) =>
+            new()
+            {
+                Descriptor(column, FastGridFilterOperator.GreaterThanOrEquals, condition.Value),
+                Descriptor(column, FastGridFilterOperator.LessThanOrEquals, condition.SecondValue),
+            };
+
+        static CompositeFilterDescriptor Descriptor<TItem>(ColumnBase<TItem> column,
+            FastGridFilterOperator? filterOperator, object? value) => new()
         {
             Property = column.FilterPropertyPath,
 
             // Names a member of the collection's element, so the predicate becomes
             // Customers.Any(c => c.Name ...) rather than a comparison against the collection.
             FilterProperty = column.FilterMemberPath,
-            FilterValue = column.CurrentFilterValue,
-            FilterOperator = column.CurrentFilterOperator,
+            FilterValue = value,
+            FilterOperator = filterOperator?.Upstream(),
             Type = column.FilterPropertyType,
         };
     }

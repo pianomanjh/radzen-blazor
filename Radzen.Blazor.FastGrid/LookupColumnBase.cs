@@ -66,7 +66,7 @@ namespace Radzen.FastGrid
         /// A lookup column always compares ids, and always as a set: the check-box list ticks them and
         /// simple mode matches text against the names and emits the ids it hits.
         /// </summary>
-        internal override FilterOperator DefaultFilterOperator => Radzen.FilterOperator.In;
+        internal override FastGridFilterOperator DefaultFilterOperator => FastGridFilterOperator.In;
 
         /// <inheritdoc />
         protected override void OnDerive()
@@ -303,7 +303,7 @@ namespace Radzen.FastGrid
         {
             get
             {
-                if (CurrentFilterValue is not IEnumerable selected || CurrentFilterValue is string
+                if (FirstCondition?.Value is not IEnumerable selected || FirstCondition.Value is string
                     || FilterValues is not List<object> offered)
                 {
                     return null;
@@ -370,6 +370,40 @@ namespace Radzen.FastGrid
 
             return keys;
         }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Typed at <typeparamref name="TKey" /> without closing a generic over a run-time type, and a
+        /// null key survives - the entry for the rows carrying no id is a real choice on this column,
+        /// which is what <c>SelectedKeys</c> reads it back as.
+        /// </remarks>
+        internal override object RestoredSelection(IReadOnlyList<object?> values)
+        {
+            var keys = new List<TKey?>();
+
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (values[i] is TKey typed)
+                {
+                    keys.Add(typed);
+                }
+            }
+
+            return keys;
+        }
+
+        /// <summary>
+        /// The single condition this column composes for itself, or null when it must decline.
+        /// </summary>
+        /// <remarks>
+        /// These columns know one operator - <c>In</c>, and its negation - and compose it out of a typed
+        /// list of ids. A compound is declined whole rather than half-composed: the reflective builder
+        /// takes nested composites since §33, so <c>In [...] OR IsNull</c> is answered correctly there,
+        /// and answering the first half here and losing the second would be the silent kind of wrong.
+        /// It costs that column the typed route, which it had already lost the moment it declined.
+        /// </remarks>
+        private protected FastGridFilterCondition? SoleCondition =>
+            CurrentFilter is { Second: null } filter ? filter.First : null;
 
         /// <inheritdoc />
         /// <remarks>
@@ -504,7 +538,7 @@ namespace Radzen.FastGrid
         {
             var keys = new List<TKey?>();
 
-            if (CurrentFilterValue is not IEnumerable selected || CurrentFilterValue is string)
+            if (FirstCondition?.Value is not IEnumerable selected || FirstCondition.Value is string)
             {
                 return keys;
             }

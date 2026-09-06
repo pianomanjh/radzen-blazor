@@ -80,17 +80,22 @@ namespace Radzen.FastGrid
                 return null;
             }
 
-            if (CurrentFilterOperator is not (Radzen.FilterOperator.In or Radzen.FilterOperator.NotIn))
+            if (SoleCondition is not { } condition)
             {
-                return FilterExpression<TItem, TKey>.For(selector, CurrentFilterOperator,
-                    CurrentFilterValue, caseSensitivity, inMemory);
+                return null;
+            }
+
+            if (condition.Operator is not (FastGridFilterOperator.In or FastGridFilterOperator.NotIn))
+            {
+                return FilterExpression<TItem, TKey>.For(selector, CurrentFilter!, caseSensitivity,
+                    inMemory);
             }
 
             var contains = (Expression)Expression.Call(
                 Expression.Constant(SelectedKeys(), typeof(List<TKey?>)), ListContains, selector.Body);
 
             return Expression.Lambda<Func<TItem, bool>>(
-                CurrentFilterOperator == Radzen.FilterOperator.NotIn ? Expression.Not(contains) : contains,
+                condition.Operator == FastGridFilterOperator.NotIn ? Expression.Not(contains) : contains,
                 selector.Parameters);
         }
 
@@ -102,16 +107,20 @@ namespace Radzen.FastGrid
                 return null;
             }
 
-            if (CurrentFilterOperator is not (Radzen.FilterOperator.In or Radzen.FilterOperator.NotIn))
+            if (SoleCondition is not { } condition)
             {
-                return FilterExpression<TItem, TKey>.PredicateFor(key, CurrentFilterOperator,
-                    CurrentFilterValue, caseSensitivity);
+                return null;
+            }
+
+            if (condition.Operator is not (FastGridFilterOperator.In or FastGridFilterOperator.NotIn))
+            {
+                return FilterExpression<TItem, TKey>.PredicateFor(key, CurrentFilter!, caseSensitivity);
             }
 
             var keys = SelectedKeys();
             var getter = key;
 
-            return CurrentFilterOperator == Radzen.FilterOperator.NotIn
+            return condition.Operator == FastGridFilterOperator.NotIn
                 ? item => !keys.Contains(getter(item))
                 : item => keys.Contains(getter(item));
         }

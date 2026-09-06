@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
-using System.Threading;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Radzen.Blazor;
@@ -12,26 +11,26 @@ using Xunit;
 namespace Radzen.FastGrid.Tests
 {
     /// <summary>
-    /// What comes back when a settings blob has been through a serializer. §32's subject.
+    /// What comes back when a settings blob has been through a serializer. §32's subject, answered
+    /// differently by §33.
     /// </summary>
     /// <remarks>
-    /// <c>FastGridColumnSettings.FilterValue</c> is <c>object?</c>, so every one of these went out as a
-    /// <c>DateTime</c> or an <c>int</c> and comes back as a <c>JsonElement</c>. Before §32 that made the
-    /// typed builders decline, and a decline is absorbed by the reflective one, where
-    /// <c>Expression.Constant(value, type)</c> throws <em>inside the render</em> - so the assertion these
-    /// tests would have failed on was not a wrong row count, it was an exception.
+    /// §32 stored values as <c>object?</c> and spent four heuristic attempts guessing the type back out
+    /// of whatever the serializer had left - and still could not rebuild a check-box list. §33 stores
+    /// canonical text instead, so the round trip is lossless by construction and the way back is one
+    /// parse against the column's own type. These tests were written for the first design and are kept
+    /// pointed at the same outcomes, because the outcomes are what a consumer sees; where §33 changed an
+    /// answer rather than a mechanism, the test says so.
     /// <para>
-    /// The round trip is a real <c>JsonSerializer</c> rather than a hand-built <c>JsonElement</c>,
-    /// deliberately: the fault is about what a serializer does to <c>object</c>, and a fixture that
-    /// constructs the wrapper itself is a test agreeing with the diagnosis rather than with the
-    /// consumer.
+    /// The round trip is a real <c>JsonSerializer</c> rather than a hand-built blob, deliberately: the
+    /// fault this guards against is about what a serializer does, and a fixture that constructs the
+    /// stored form itself is a test agreeing with the diagnosis rather than with the consumer.
     /// </para>
     /// </remarks>
     public class FastGridSettingsRestoreTests
     {
         static IRenderedComponent<RadzenFastGrid<Person>> Render(TestContext ctx, RenderFragment columns,
-            FastGridSettings? settings = null, IEnumerable<Person>? data = null,
-            Action<ComponentParameterCollectionBuilder<RadzenFastGrid<Person>>>? extra = null)
+            FastGridSettings? settings = null, IEnumerable<Person>? data = null)
         {
             ctx.JSInterop.Mode = JSRuntimeMode.Loose;
 
@@ -45,8 +44,6 @@ namespace Radzen.FastGrid.Tests
                 {
                     p.Add(g => g.Settings, settings);
                 }
-
-                extra?.Invoke(p);
             });
         }
 
@@ -56,10 +53,13 @@ namespace Radzen.FastGrid.Tests
                 .Select(row => row.QuerySelectorAll("td")[0].TextContent)
                 .ToArray();
 
-        /// <summary>Through a real serializer, which is what turns every value into a JsonElement.</summary>
+        /// <summary>Through a real serializer, which is the whole point of the format being text.</summary>
         static FastGridSettings Stored(params FastGridColumnSettings[] columns) =>
             JsonSerializer.Deserialize<FastGridSettings>(
                 JsonSerializer.Serialize(new FastGridSettings { Columns = columns.ToList() }))!;
+
+        static FastGridColumnSettings Filter(string id, FastGridFilterOperator op, params string?[] values) =>
+            new() { UniqueID = id, FilterOperator = op, FilterValues = values };
 
         static RenderFragment AllTypes() => Columns.Of(
             Columns.Property<Person, string>(x => x.First),
@@ -69,207 +69,129 @@ namespace Radzen.FastGrid.Tests
             Columns.Property<Person, Guid>(x => x.Reference),
             Columns.Property<Person, decimal?>(x => x.Bonus));
 
-        [Fact]
-        public void ARoundTrippedDateFilterStillFilters()
-        {
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Hired",
-                FilterValue = new DateTime(2019, 5, 4),
-                FilterOperator = FilterOperator.Equals,
-                FilterText = "2019-05-04",
-            }));
-
-            Assert.Equal(new[] { "Carol" }, Names(cut));
-        }
-
-        [Fact]
-        public void ARoundTrippedDateFilterWithNoTextStillFilters()
-        {
-            // The half §31's fallback could not have reached: there is nothing to re-parse, and this is
-            // the shape every programmatic filter and the whole Filters path arrives in.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Hired",
-                FilterValue = new DateTime(2019, 5, 4),
-                FilterOperator = FilterOperator.Equals,
-            }));
-
-            Assert.Equal(new[] { "Carol" }, Names(cut));
-        }
-
-        [Fact]
-        public void ARoundTrippedNumberFilterStillFilters()
-        {
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Id", FilterValue = 3, FilterOperator = FilterOperator.Equals,
-            }));
-
-            Assert.Equal(new[] { "Carol" }, Names(cut));
-        }
-
-        [Fact]
-        public void ARoundTrippedEnumFilterStillFilters()
-        {
-            // An enum converts through neither IConvertible nor ConvertType's nullable-enum branch, so
-            // this one reaches Enum.Parse over the value's string form - which is "1", the number
-            // System.Text.Json wrote.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Grade", FilterValue = Grade.Senior, FilterOperator = FilterOperator.Equals,
-            }));
-
-            Assert.Equal(new[] { "Carol", "Bob" }, Names(cut));
-        }
-
-        [Fact]
-        public void ARoundTrippedGuidFilterStillFilters()
-        {
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Reference",
-                FilterValue = People.Sample()[0].Reference,
-                FilterOperator = FilterOperator.Equals,
-            }));
-
-            Assert.Equal(new[] { "Carol" }, Names(cut));
-        }
-
-        [Fact]
-        public void ARoundTrippedStringFilterStillFilters()
-        {
-            // The one case that worked before §32, and by accident: FilterExpression.Text reads its
-            // value as `value as string ?? value?.ToString()`. Pinned so the accident cannot be lost
-            // while the deliberate path is being built beside it.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "First", FilterValue = "Car", FilterOperator = FilterOperator.Contains,
-            }));
-
-            Assert.Equal(new[] { "Carol" }, Names(cut));
-        }
+        static RenderFragment WithLookup() => Columns.Of(
+            Columns.Property<Person, string>(x => x.First),
+            Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
+                uniqueId: "Category"));
 
         [Theory]
-        [InlineData(FilterOperator.IsNull, new[] { "Alice" })]
-        [InlineData(FilterOperator.IsNotNull, new[] { "Carol", "Dave", "Bob" })]
-        public void AFilterThatNeedsNoValueIsRestored(FilterOperator filterOperator, string[] expected)
-        {
-            // Not a serializer fault at all: the guard on the restore read `FilterValue is not null` as
-            // "something was stored", and an IsNull's null is the value it means. Written on every
-            // capture, restored on none.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Bonus", FilterValue = null, FilterOperator = filterOperator,
-            }));
-
-            Assert.Equal(expected, Names(cut));
-        }
-
-        [Theory]
-        [InlineData(FilterOperator.IsEmpty, new[] { "" })]
-        [InlineData(FilterOperator.IsNotEmpty, new[] { "Carol", "Alice", "Dave" })]
-        public void TheOtherTwoValuelessOperatorsAreRestoredToo(FilterOperator filterOperator,
+        [InlineData("Hired", FastGridFilterOperator.Equals, "2019-05-04T00:00:00.0000000", new[] { "Carol" })]
+        [InlineData("Id", FastGridFilterOperator.Equals, "3", new[] { "Carol" })]
+        [InlineData("Grade", FastGridFilterOperator.Equals, "Senior", new[] { "Carol", "Bob" })]
+        [InlineData("First", FastGridFilterOperator.Contains, "Car", new[] { "Carol" })]
+        [InlineData("Bonus", FastGridFilterOperator.GreaterThan, "100", new[] { "Carol" })]
+        public void ARoundTrippedFilterStillFilters(string id, FastGridFilterOperator op, string value,
             string[] expected)
         {
-            // Over data with one blank name rather than the shared sample, and the mutation loop is why:
-            // against Sample() an IsNotEmpty matches all four rows, so that row of the theory passed
-            // whether or not the filter had been restored at all. A test that agrees with the data is
-            // not a test either.
+            // Every one of these terminated the circuit before §32 and needed a heuristic after it.
+            // Through text they are a parse.
             using var ctx = new TestContext();
 
-            var data = People.Sample();
-            data[3].First = "";
-
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "First", FilterValue = null, FilterOperator = filterOperator,
-            }), data);
-
-            Assert.Equal(expected, Names(cut));
+            Assert.Equal(expected, Names(Render(ctx, AllTypes(), Stored(Filter(id, op, value)))));
         }
 
         [Fact]
-        public void ARoundTrippedInFilterIsDroppedRatherThanLeftMatchingEveryRow()
+        public void AGuidFilterSurvivesTheRoundTrip()
         {
-            // §32's stated hole, pinned as a hole. A JSON array comes back as one opaque value, so it is
-            // not a sequence and nothing here can rebuild the list - that waits for ②'s format change.
-            // The blob deliberately carries no text: with one, the drop used to leak - see
-            // AnInWhoseValueIsGoneIsDroppedEvenWhenThereIsText.
-            //
-            // The rows alone cannot tell the two outcomes apart: a dropped filter and an In that matches
-            // everything both show four names. What separates them is whether the grid believes it is
-            // filtered, so the assertion is on Filters, not on the body. Before §32 the column was
-            // filtered and composing Constant(true).
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Id",
-                FilterValue = new List<int> { 3, 1 },
-                FilterOperator = FilterOperator.In,
-            }));
+            var cut = Render(ctx, AllTypes(), Stored(Filter("Reference", FastGridFilterOperator.Equals,
+                People.Sample()[0].Reference.ToString())));
 
-            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
-            Assert.Empty(cut.Instance.Filters);
+            Assert.Equal(new[] { "Carol" }, Names(cut));
         }
 
         [Fact]
-        public void AnInFilterThatCameBackAsASequenceIsRestored()
+        public void ACheckBoxListFilterSurvivesTheRoundTrip()
         {
-            // The other side of the same rule, and what makes the drop above a statement about JSON
-            // arrays rather than about In. A serializer whose arrays stay IEnumerable - Newtonsoft's
-            // JArray is one - lands here, and the elements are converted by the predicate builders.
+            // §32's stated hole, closed. Stored as object? an In list came back from System.Text.Json as
+            // one opaque JsonElement that nothing could rebuild, so the filter was dropped and the grid
+            // showed every row. One text per ticked box survives any serializer there is.
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, AllTypes(), new FastGridSettings
-            {
-                Columns = new List<FastGridColumnSettings>
-                {
-                    new()
-                    {
-                        UniqueID = "Id",
-                        FilterValue = new List<object> { "3", "1" },
-                        FilterOperator = FilterOperator.In,
-                    },
-                },
-            });
+            var cut = Render(ctx, AllTypes(),
+                Stored(Filter("Id", FastGridFilterOperator.In, "3", "1")));
 
             Assert.Equal(new[] { "Carol", "Alice" }, Names(cut));
         }
 
         [Fact]
-        public void AnInWhoseValueIsGoneIsDroppedEvenWhenThereIsText()
+        public void ABetweenSurvivesTheRoundTrip()
         {
-            // The review found the In drop leaking through attempt 4. The value is not a sequence, so it
-            // is rejected; the text then parsed to a plain int on this column, SetFilter took it with an
-            // In, and FilterExpression.In saw a non-sequence and composed Constant(true) - which is
-            // §32's own "shows every row" row of the matrix, arriving by a new route.
-            //
-            // Both assertions are load-bearing: the rows alone cannot tell a dropped filter from an In
-            // that matches everything.
+            // The operator §31 could not have, because upstream has no value for it - so a range had to
+            // be spent as the model's second condition. Here it is one condition of arity two.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(),
+                Stored(Filter("Id", FastGridFilterOperator.Between, "2", "3")));
+
+            Assert.Equal(new[] { "Carol", "Bob" }, Names(cut));
+        }
+
+        [Fact]
+        public void ACompoundSurvivesTheRoundTrip()
+        {
+            // §31's worked case, and the only reason the model is two conditions wide: "these values or
+            // blank" on a nullable column, which no single condition says.
             using var ctx = new TestContext();
 
             var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
             {
-                UniqueID = "Id",
-                FilterValue = new List<int> { 3, 1 },
-                FilterOperator = FilterOperator.In,
-                FilterText = "1",
+                UniqueID = "Bonus",
+                FilterOperator = FastGridFilterOperator.In,
+                FilterValues = new string?[] { "250.5" },
+                SecondFilterOperator = FastGridFilterOperator.IsNull,
+                SecondFilterValues = Array.Empty<string?>(),
+                LogicalFilterOperator = LogicalFilterOperator.Or,
+            }));
+
+            Assert.Equal(new[] { "Carol", "Alice" }, Names(cut));
+        }
+
+        [Theory]
+        [InlineData(FastGridFilterOperator.IsNull, new[] { "Alice" })]
+        [InlineData(FastGridFilterOperator.IsNotNull, new[] { "Carol", "Dave", "Bob" })]
+        public void AFilterThatNeedsNoValueIsRestored(FastGridFilterOperator op, string[] expected)
+        {
+            // §32's third fault: the restore was guarded on the value being non-null, and an IsNull's
+            // null is the value it means - so it was written on every capture and restored on none.
+            using var ctx = new TestContext();
+
+            Assert.Equal(expected, Names(Render(ctx, AllTypes(), Stored(Filter("Bonus", op)))));
+        }
+
+        [Theory]
+        [InlineData(FastGridFilterOperator.IsEmpty, new[] { "" })]
+        [InlineData(FastGridFilterOperator.IsNotEmpty, new[] { "Carol", "Alice", "Dave" })]
+        public void TheOtherTwoValuelessOperatorsAreRestoredToo(FastGridFilterOperator op, string[] expected)
+        {
+            // Over data with one blank name rather than the shared sample: against Sample() an
+            // IsNotEmpty matches all four rows, so that row of the theory passed whether or not the
+            // filter had been restored. A test that agrees with the data is not a test.
+            using var ctx = new TestContext();
+
+            var data = People.Sample();
+            data[3].First = "";
+
+            Assert.Equal(expected, Names(Render(ctx, AllTypes(), Stored(Filter("First", op)), data)));
+        }
+
+        [Fact]
+        public void ACompoundLosingOneConditionIsDroppedWhole()
+        {
+            // §33's rule, and the trap it avoids. Degrading to the surviving condition would leave
+            // "In [250.5] OR IsNull" showing only the blank rows once the In half is gone - a narrower
+            // and entirely different answer, presented as the user's. Dropping shows everything.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
+            {
+                UniqueID = "Bonus",
+                FilterOperator = FastGridFilterOperator.In,
+                FilterValues = new string?[] { "not a number" },
+                SecondFilterOperator = FastGridFilterOperator.IsNull,
+                SecondFilterValues = Array.Empty<string?>(),
+                LogicalFilterOperator = LogicalFilterOperator.Or,
             }));
 
             Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
@@ -277,182 +199,29 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void AScalarOperatorOnALookupColumnDoesNotTakeAListFromItsNameMatcher()
+        public void AStoredFilterThatCannotBeParsedLeavesTheColumnUnfiltered()
         {
-            // The mirror, and the crash the review drove out. A lookup column's text parser answers with
-            // ids whatever it is asked, so a stored scalar operator used to reach SetFilter holding a
-            // List<int> - and Equals over int against a list threw inside the render:
-            //
-            //   The binary operator Equal is not defined for the types
-            //   'System.Int32' and 'System.Collections.Generic.List`1[System.Int32]'.
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, Columns.Of(
-                Columns.Property<Person, string>(x => x.First),
-                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
-                    uniqueId: "Category")),
-                new FastGridSettings
-                {
-                    Columns = new List<FastGridColumnSettings>
-                    {
-                        new()
-                        {
-                            UniqueID = "Category",
-                            FilterValue = new Company { Name = "not an id" },
-                            FilterOperator = FilterOperator.Equals,
-                            FilterText = "Toys",
-                        },
-                    },
-                });
+            var cut = Render(ctx, AllTypes(),
+                Stored(Filter("Hired", FastGridFilterOperator.Equals, "not a date")));
 
             Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
             Assert.Empty(cut.Instance.Filters);
         }
 
         [Fact]
-        public void ALookupColumnRebuildsIdsThatCameBackAsAWiderNumber()
+        public void TheStoredValueIsPreferredToTheText()
         {
-            // A lookup column composes through SelectedKeys, which keeps what is already a TKey and
-            // drops the rest - it does not convert, where FilterExpression.Listed does. So ids widened
-            // by a serializer that reads every JSON integer as long left this column filtering by an
-            // empty list: no rows at all, with the column reporting itself filtered. Hiding every row is
-            // the direction §32's gate calls unsafe, so the ids are converted at the restore instead.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, Columns.Of(
-                Columns.Property<Person, string>(x => x.First),
-                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
-                    uniqueId: "Category")),
-                new FastGridSettings
-                {
-                    Columns = new List<FastGridColumnSettings>
-                    {
-                        new()
-                        {
-                            UniqueID = "Category",
-                            FilterValue = new List<object> { 10L },
-                            FilterOperator = FilterOperator.In,
-                        },
-                    },
-                });
-
-            Assert.Equal(new[] { "Carol", "Dave" }, Names(cut));
-        }
-
-        [Fact]
-        public void ALookupListWhereNothingIsAnIdIsDroppedRatherThanLeftHidingEveryRow()
-        {
-            // The other end of the lookup rebuild, and it took a second mutation pass to pin: handing
-            // the stored list on instead of dropping it passed the whole suite. SelectedKeys keeps only
-            // what is already a TKey, so a list with no ids in it composes Contains over nothing and the
-            // grid shows no rows while reporting itself filtered. Dropping shows all of them.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, Columns.Of(
-                Columns.Property<Person, string>(x => x.First),
-                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
-                    uniqueId: "Category")),
-                new FastGridSettings
-                {
-                    Columns = new List<FastGridColumnSettings>
-                    {
-                        new()
-                        {
-                            UniqueID = "Category",
-                            FilterValue = new List<object> { new Company { Name = "not an id" } },
-                            FilterOperator = FilterOperator.In,
-                        },
-                    },
-                });
-
-            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
-            Assert.Empty(cut.Instance.Filters);
-        }
-
-        [Fact]
-        public void AColumnThatCannotNameItsFilterTypeDropsAValueItCannotVouchFor()
-        {
-            // Person.Mixed is declared object and holds values of more than one type, so
-            // EffectiveFilterType is object and attempt 1's IsInstanceOfType would say yes to anything -
-            // including a JsonElement. The review measured what that did: the raw wrapper became the
-            // live filter value, equality matched nothing, and the grid hid every row while the stored
-            // blob looked intact. Dropping shows all of them, which is the direction the gate asks for.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, Columns.Of(
-                Columns.Property<Person, string>(x => x.First),
-                Columns.Property<Person, object>(x => x.Mixed)),
-                Stored(new FastGridColumnSettings
-                {
-                    UniqueID = "Mixed", FilterValue = 3, FilterOperator = FilterOperator.Equals,
-                }));
-
-            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
-            Assert.Empty(cut.Instance.Filters);
-        }
-
-        [Fact]
-        public void AColumnThatCannotNameItsFilterTypeStillRestoresFromItsText()
-        {
-            // The other half, and why dropping the value costs less than it looks: a column of unknown
-            // type answers FilterValueFromText with the text itself, so anything that came from a box
-            // still reaches the column.
-            //
-            // Asserted on the filter rather than on the rows, and the first draft of this test got that
-            // wrong. An object-typed column compares with Expression.Equal over object, which is
-            // reference equality - two equal strings are two references - so it matches no rows however
-            // it is restored. That is a property of declaring a column object, not of restoring one, and
-            // it is why the README tells authors to give such a column a real type.
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, Columns.Of(
-                Columns.Property<Person, string>(x => x.First),
-                Columns.Property<Person, object>(x => x.Mixed)),
-                Stored(new FastGridColumnSettings
-                {
-                    UniqueID = "Mixed",
-                    FilterValue = "n/a",
-                    FilterOperator = FilterOperator.Equals,
-                    FilterText = "n/a",
-                }));
-
-            Assert.Equal("n/a", Assert.Single(cut.Instance.Filters).FilterValue);
-        }
-
-        [Fact]
-        public void AStoredFilterThatCannotBeRebuiltAtAllLeavesTheColumnUnfiltered()
-        {
-            using var ctx = new TestContext();
-
-            var cut = Render(ctx, AllTypes(), new FastGridSettings
-            {
-                Columns = new List<FastGridColumnSettings>
-                {
-                    new()
-                    {
-                        UniqueID = "Hired",
-                        FilterValue = new Company { Name = "not a date" },
-                        FilterOperator = FilterOperator.Equals,
-                    },
-                },
-            });
-
-            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
-            Assert.Empty(cut.Instance.Filters);
-        }
-
-        [Fact]
-        public void TheValueIsPreferredToTheText()
-        {
-            // Order, asserted where the two disagree. The value is culture-free and the text is one
-            // person's typing, so a value that still converts wins.
+            // Order, asserted where the two disagree. The stored value is canonical and culture-free;
+            // the text is one person's typing.
             using var ctx = new TestContext();
 
             var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
             {
                 UniqueID = "Id",
-                FilterValue = 3,
-                FilterOperator = FilterOperator.Equals,
+                FilterOperator = FastGridFilterOperator.Equals,
+                FilterValues = new string?[] { "3" },
                 FilterText = "1",
             }));
 
@@ -460,61 +229,79 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void TheTextIsReachedOnlyWhenNoFormOfTheValueConverts()
+        public void TheTextIsReachedOnlyWhenTheStoredValueWillNotParse()
         {
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, AllTypes(), new FastGridSettings
+            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
             {
-                Columns = new List<FastGridColumnSettings>
-                {
-                    new()
-                    {
-                        UniqueID = "Id",
-                        FilterValue = new Company { Name = "not a number" },
-                        FilterOperator = FilterOperator.Equals,
-                        FilterText = "1",
-                    },
-                },
-            });
+                UniqueID = "Id",
+                FilterOperator = FastGridFilterOperator.Equals,
+                FilterValues = new string?[] { "not a number" },
+                FilterText = "1",
+            }));
 
             Assert.Equal(new[] { "Alice" }, Names(cut));
         }
 
         [Fact]
-        public void ALookupFilterWhoseIdsCannotBeRebuiltFallsBackToItsNames()
+        public void ALookupFilterWhoseIdsCannotBeParsedFallsBackToItsNames()
         {
-            // A lookup column stores ids and the name they were picked by. The ids came back as a JSON
-            // array, which is not a sequence and cannot be rebuilt, so the text is what restores it -
-            // and on this column alone the text means something the value never could.
+            // The one column where the text says something the value cannot: it stores ids and the text
+            // is the name they were picked by.
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, Columns.Of(
-                Columns.Property<Person, string>(x => x.First),
-                Columns.Lookup<Person, int>(x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()),
-                    uniqueId: "Category")),
-                Stored(new FastGridColumnSettings
-                {
-                    UniqueID = "Category",
-                    FilterValue = new List<int> { 10 },
-                    FilterOperator = FilterOperator.In,
-                    FilterText = "Toys",
-                }));
+            var cut = Render(ctx, WithLookup(), Stored(new FastGridColumnSettings
+            {
+                UniqueID = "Category",
+                FilterOperator = FastGridFilterOperator.In,
+                FilterValues = new string?[] { "not an id" },
+                FilterText = "Toys",
+            }));
 
             Assert.Equal(new[] { "Carol", "Dave" }, Names(cut));
         }
 
         [Fact]
-        public void TheValuesStringFormIsConvertedInvariantly()
+        public void ALookupFilterRoundTripsThroughItsIds()
         {
-            // Why attempt 3 is a conversion to a Type rather than a call to the column's own text
-            // parser: the string form it reads came out of a serializer, so it is invariant, while
-            // FilterValueFromText reads CurrentCulture because it reads what somebody typed. Under
-            // de-DE the parser takes "250.5" for two and a half thousand.
-            //
-            // This test exists because the mutation that swapped the two survived the suite. The
-            // argument recorded for it in §32 was the lookup name matcher, which turned out to be
-            // unreachable - a lookup column filters by In, so it never reaches this attempt at all.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, WithLookup(),
+                Stored(Filter("Category", FastGridFilterOperator.In, "10")));
+
+            Assert.Equal(new[] { "Carol", "Dave" }, Names(cut));
+        }
+
+        [Fact]
+        public void StoredValuesAreParsedInvariantlyWhateverTheCurrentCultureIs()
+        {
+            // The canonical form is invariant, so a blob written under one culture restores under any
+            // other. Under de-DE a culture-sensitive parse would read "250.5" as two and a half thousand.
+            var original = CultureInfo.CurrentCulture;
+
+            try
+            {
+                CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+
+                using var ctx = new TestContext();
+
+                var cut = Render(ctx, AllTypes(),
+                    Stored(Filter("Bonus", FastGridFilterOperator.Equals, "250.5")));
+
+                Assert.Equal(new[] { "Carol" }, Names(cut));
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = original;
+            }
+        }
+
+        [Fact]
+        public void TheTextFallbackIsStillReadInTheCurrentCulture()
+        {
+            // The other half of the same rule: the text is what somebody typed, so it is read the way
+            // they typed it. 250,5 is the de-DE spelling of Carol's bonus.
             var original = CultureInfo.CurrentCulture;
 
             try
@@ -525,7 +312,10 @@ namespace Radzen.FastGrid.Tests
 
                 var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
                 {
-                    UniqueID = "Bonus", FilterValue = 250.5m, FilterOperator = FilterOperator.Equals,
+                    UniqueID = "Bonus",
+                    FilterOperator = FastGridFilterOperator.Equals,
+                    FilterValues = new string?[] { "not a number" },
+                    FilterText = "250,5",
                 }));
 
                 Assert.Equal(new[] { "Carol" }, Names(cut));
@@ -537,64 +327,50 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void TheTextIsReParsedInTheCurrentCulture()
+        public void AColumnThatCannotNameItsFilterTypeKeepsTheTextItWasGiven()
         {
-            var original = CultureInfo.CurrentCulture;
+            // EffectiveFilterType answers object for a column it cannot resolve, so there is nothing to
+            // parse towards and the text stands. §32 measured what trusting a serializer's wrapper did
+            // here instead: the grid hid every row while the blob looked intact.
+            using var ctx = new TestContext();
 
-            try
-            {
-                CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Property<Person, object>(x => x.Mixed)),
+                Stored(Filter("Mixed", FastGridFilterOperator.Equals, "n/a")));
 
-                using var ctx = new TestContext();
-
-                // 250,5 is the de-DE spelling of Carol's bonus, and 2505 under any culture that reads
-                // the comma as a group separator.
-                var cut = Render(ctx, AllTypes(), new FastGridSettings
-                {
-                    Columns = new List<FastGridColumnSettings>
-                    {
-                        new()
-                        {
-                            UniqueID = "Bonus",
-                            FilterValue = new Company { Name = "not a number" },
-                            FilterOperator = FilterOperator.Equals,
-                            FilterText = "250,5",
-                        },
-                    },
-                });
-
-                Assert.Equal(new[] { "Carol" }, Names(cut));
-            }
-            finally
-            {
-                CultureInfo.CurrentCulture = original;
-            }
+            Assert.Equal("n/a", Assert.Single(cut.Instance.Filters).FilterValue);
         }
 
         [Fact]
-        public void TheFiltersSetterReconstructsTheSameWay()
+        public void TheFiltersSetterRoundTripsACompound()
         {
-            // The second restore path, and the one that has never had a text to fall back to. A
-            // RadzenDataFilter or a remote filter store hands descriptors straight in.
+            // The second restore path. §33 made composites the currency in both directions, so a
+            // compound this grid reports is one it can be handed back.
             using var ctx = new TestContext();
 
             var cut = Render(ctx, AllTypes());
 
-            var value = JsonSerializer.Deserialize<object>(
-                JsonSerializer.Serialize(new DateTime(2019, 5, 4)));
+            cut.InvokeAsync(() => cut.Instance.Filter(
+                cut.Instance.Filters is null ? null! : ColumnOf(cut, "Bonus"),
+                new FastGridFilter(
+                    new FastGridFilterCondition(FastGridFilterOperator.GreaterThan, 100m),
+                    new FastGridFilterCondition(FastGridFilterOperator.IsNull),
+                    LogicalFilterOperator.Or))).Wait();
 
-            cut.InvokeAsync(() => cut.Instance.ApplyFilters(new[]
-            {
-                new CompositeFilterDescriptor
-                {
-                    Property = "Hired",
-                    FilterValue = value,
-                    FilterOperator = FilterOperator.Equals,
-                },
-            })).Wait();
+            Assert.Equal(new[] { "Carol", "Alice" }, Names(cut));
 
-            Assert.Equal(new[] { "Carol" }, Names(cut));
+            var reported = cut.Instance.Filters;
+
+            cut.InvokeAsync(() => cut.Instance.ApplyFilters(reported)).Wait();
+
+            Assert.Equal(new[] { "Carol", "Alice" }, Names(cut));
         }
+
+        static ColumnBase<Person> ColumnOf(IRenderedComponent<RadzenFastGrid<Person>> cut, string id) =>
+            cut.FindComponents<PropertyColumn<Person, decimal?>>()
+                .Select(c => (ColumnBase<Person>)c.Instance)
+                .Single(c => c.Identity.Name == id);
 
         [Fact]
         public void ARestoredFilterIsCapturedBackAsSomethingThatRestoresAgain()
@@ -603,19 +379,40 @@ namespace Radzen.FastGrid.Tests
             // that saves after every change writes a blob that degrades a little each time.
             using var ctx = new TestContext();
 
-            var first = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
-            {
-                UniqueID = "Hired",
-                FilterValue = new DateTime(2019, 5, 4),
-                FilterOperator = FilterOperator.Equals,
-            }));
+            var first = Render(ctx, AllTypes(),
+                Stored(Filter("Hired", FastGridFilterOperator.Equals, "2019-05-04T00:00:00.0000000")));
 
             var captured = JsonSerializer.Deserialize<FastGridSettings>(
                 JsonSerializer.Serialize(first.Instance.CaptureSettings()))!;
 
-            var second = Render(ctx, AllTypes(), captured);
+            Assert.Equal(new[] { "Carol" }, Names(Render(ctx, AllTypes(), captured)));
+        }
 
-            Assert.Equal(new[] { "Carol" }, Names(second));
+        [Fact]
+        public void ABetweenIsCapturedBackAsSomethingThatRestoresAgain()
+        {
+            using var ctx = new TestContext();
+
+            var first = Render(ctx, AllTypes(),
+                Stored(Filter("Id", FastGridFilterOperator.Between, "2", "3")));
+
+            var captured = JsonSerializer.Deserialize<FastGridSettings>(
+                JsonSerializer.Serialize(first.Instance.CaptureSettings()))!;
+
+            Assert.Equal(new[] { "Carol", "Bob" }, Names(Render(ctx, AllTypes(), captured)));
+        }
+
+        [Fact]
+        public void ACheckBoxListIsCapturedBackAsSomethingThatRestoresAgain()
+        {
+            using var ctx = new TestContext();
+
+            var first = Render(ctx, AllTypes(), Stored(Filter("Id", FastGridFilterOperator.In, "3", "1")));
+
+            var captured = JsonSerializer.Deserialize<FastGridSettings>(
+                JsonSerializer.Serialize(first.Instance.CaptureSettings()))!;
+
+            Assert.Equal(new[] { "Carol", "Alice" }, Names(Render(ctx, AllTypes(), captured)));
         }
     }
 }

@@ -452,7 +452,7 @@
 
         settings = System.Text.Json.JsonSerializer.Deserialize<FastGridSettings>(json);
 
-        var filters = settings?.Columns?.Count(c => c.FilterValue is not null || c.FilterOperator is not null) ?? 0;
+        var filters = settings?.Columns?.Count(c => c.FilterOperator is not null) ?? 0;
 
         Log($"settings round-tripped through JSON: {json.Length} chars, {filters} filtered column(s) came back");
     }

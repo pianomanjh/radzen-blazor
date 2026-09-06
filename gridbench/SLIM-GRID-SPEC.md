@@ -7529,6 +7529,31 @@ Three commits, because a mechanical move and a model change in one diff is unrev
 2. **The model.** Vocabulary, arity, string values, the format, the column surface.
 3. **The review fix.**
 
+### What the model cost, and the control that reads it
+
+`FastGridFeatureBench.FilteringApplied`, `--job short`, swept over two row counts because the gate is
+about *per row* and a single row count cannot tell a per-row cost from a fixed one:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter that actually filters | 48.87 → **49.78** KB | 79.36 → **80.18** KB |
+| the same over a queryable | 55.60 → **56.24** KB | 86.16 → **86.80** KB |
+
+**The delta is flat across a tenfold change in rows** - +0.91 and +0.82 KB, +0.64 and +0.64 KB. A
+per-row cost would have grown by ten. So the model costs a fixed ~0.7-0.9 KB on a filtered render and
+nothing per row, which is exactly what the gate permits: a filter may cost per column and per active
+filter, and may not cost per row. **The sweep is the control**, and without it the 0.8 KB at one row
+count says nothing about which kind of cost it is.
+
+`alloc-types 1000 400`, interleaved, on the unfiltered path: base 13255.5 and 13294.7 KB, this change
+13250.4 and 13276.9 - a smaller gap than base's own spread, so an unfiltered grid is untouched.
+
+**The fixed cost is measured and not attributed**, which §9 says to write down rather than guess at: the
+obvious candidates - the model objects, the descriptor, the expression tree - are each allocated the same
+number of times as before, so the ~0.8 KB has no mechanism named yet. Times are quoted from a short job
+and are therefore noise by §9's own rule; the time half of §33's gate is **not measured to that
+standard** and remains owed.
+
 ### Where this could still be wrong
 
 - **Owning a model is a second vocabulary, and I argued against exactly that** when rejecting a

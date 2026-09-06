@@ -69,11 +69,23 @@ namespace Radzen.FastGrid.Tests
             return Ids(Source(inMemory).Where(filters, LogicalFilterOperator.And, sensitivity));
         }
 
+        /// <summary>
+        /// The upstream operator these cases are written in, as the one the typed builders take.
+        /// </summary>
+        /// <remarks>
+        /// The cases stay in upstream's vocabulary deliberately: this suite exists to prove the typed
+        /// builders agree with <c>QueryableExtension</c>, so the operator each side is asked about has to
+        /// be demonstrably the same one. §33's mapping is part of what is under test.
+        /// </remarks>
+        static FastGridFilterOperator Owned(FilterOperator op) =>
+            op.Owned() ?? throw new ArgumentOutOfRangeException(nameof(op));
+
         /// <summary>The rows the typed builder keeps.</summary>
         static int[] Typed<TProp>(Expression<Func<Person, TProp>> selector, FilterOperator op, object value,
             FilterCaseSensitivity sensitivity, bool inMemory)
         {
-            var predicate = FilterExpression<Person, TProp>.For(selector, op, value, sensitivity, inMemory);
+            var predicate = FilterExpression<Person, TProp>.For(selector, Owned(op), value, sensitivity,
+                inMemory);
 
             Assert.NotNull(predicate);
 
@@ -95,8 +107,8 @@ namespace Radzen.FastGrid.Tests
         static int[] Composed<TProp>(Expression<Func<Person, TProp>> selector, FilterOperator op,
             object value, FilterCaseSensitivity sensitivity)
         {
-            var predicate = FilterExpression<Person, TProp>.PredicateFor(selector.Compile(), op, value,
-                sensitivity);
+            var predicate = FilterExpression<Person, TProp>.PredicateFor(selector.Compile(), Owned(op),
+                value, sensitivity);
 
             Assert.NotNull(predicate);
 
