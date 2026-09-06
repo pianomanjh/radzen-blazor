@@ -886,9 +886,10 @@ namespace Radzen.FastGrid
         /// The operator this column's markup declares, in whichever vocabulary it was written.
         /// </summary>
         /// <remarks>
-        /// The owned one wins where both are set, because it is the one that can say <c>Between</c>. An
-        /// upstream <c>Custom</c> maps to nothing - this grid never implemented it - and answers null,
-        /// which leaves the column on its default.
+        /// The owned one wins where both are set, because it is the one that can say <c>Between</c>.
+        /// Every upstream value maps, <c>Custom</c> included - the review found three comments here
+        /// claiming otherwise and guarding code that could not run, left over from a build in which the
+        /// vocabulary really was short of it.
         /// </remarks>
         internal FastGridFilterOperator? DeclaredFilterOperator =>
             FilterOperatorOf ?? FilterOperator?.Owned();
@@ -1005,6 +1006,64 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
+        /// Whether this column's type can be compared with <paramref name="filterOperator" /> at all.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A filter that cannot be built is refused here rather than further down, and the reason is
+        /// §32's finding 1a arriving for the third time. The typed builder used to build
+        /// <c>Expression.GreaterThan</c> over two strings and throw inside the render; §33 made it
+        /// decline instead - and a decline is absorbed by the reflective builder, which threw the same
+        /// exception one frame later. Declining moved the crash rather than removing it. Nothing but
+        /// refusing the filter removes it.
+        /// </para>
+        /// <para>
+        /// Only where the type is <em>known</em>. A column whose filter type will not resolve answers
+        /// <c>object</c>, and the reflective builder may well resolve a real type this cannot see, so an
+        /// unknown type allows everything and is no worse off than before.
+        /// </para>
+        /// </remarks>
+        internal bool SupportsOperator(FastGridFilterOperator filterOperator)
+        {
+            var declared = EffectiveFilterType;
+            var type = Nullable.GetUnderlyingType(declared) ?? declared;
+
+            if (type == typeof(object))
+            {
+                return true;
+            }
+
+            var text = type == typeof(string);
+
+            return filterOperator switch
+            {
+                FastGridFilterOperator.Contains or FastGridFilterOperator.DoesNotContain
+                    or FastGridFilterOperator.StartsWith or FastGridFilterOperator.EndsWith
+                    or FastGridFilterOperator.IsEmpty or FastGridFilterOperator.IsNotEmpty => text,
+
+                FastGridFilterOperator.LessThan or FastGridFilterOperator.LessThanOrEquals
+                    or FastGridFilterOperator.GreaterThan or FastGridFilterOperator.GreaterThanOrEquals
+                    or FastGridFilterOperator.Between => Orderable(type),
+
+                _ => true,
+            };
+        }
+
+        static bool Orderable(Type type)
+        {
+            try
+            {
+                Expression.LessThan(Expression.Default(type), Expression.Default(type));
+
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// The values a stored condition compares against, parsed against this column's own type, or
         /// null when they cannot be.
         /// </summary>
@@ -1102,11 +1161,22 @@ namespace Radzen.FastGrid
             return list;
         }
 
-        /// <summary>The texts that parse, in order, dropping the ones that do not.</summary>
+        /// <summary>The texts as values, in order, dropping the ones that will not parse.</summary>
         /// <remarks>
-        /// Dropped rather than failing the whole list, which is the same rule the predicate builders
-        /// apply to an <c>In</c>: one unreadable id should not throw away the others. An empty result is
-        /// no filter, which <c>IsPresent</c> already answers for.
+        /// <para>
+        /// A stored <c>null</c> is a null <em>value</em> and is kept as one. That distinction is the
+        /// whole reason this reads the text rather than the parse result: a null entry and an entry that
+        /// failed to parse both come back from <see cref="FilterValueText.To" /> as null, and collapsing
+        /// them lost the blank entry on a lookup column - so a user who ticked "(none)" alongside two
+        /// categories got two back, and the rows with no category vanished without the tick that hid
+        /// them. <c>SelectedKeys</c> has always handled the null on the composition side; the review
+        /// found that restore did not.
+        /// </para>
+        /// <para>
+        /// Unparseable text is dropped rather than failing the whole list, which is the rule the
+        /// predicate builders apply to an <c>In</c>: one unreadable id should not throw away the others.
+        /// An empty result is no filter, which <c>IsPresent</c> answers for.
+        /// </para>
         /// </remarks>
         static List<object?> Parsed(IList<string?> texts, Type declared)
         {
@@ -1114,7 +1184,11 @@ namespace Radzen.FastGrid
 
             for (var i = 0; i < texts.Count; i++)
             {
-                if (FilterValueText.To(texts[i], declared) is { } value)
+                if (texts[i] is null)
+                {
+                    values.Add(null);
+                }
+                else if (FilterValueText.To(texts[i], declared) is { } value)
                 {
                     values.Add(value);
                 }
@@ -1387,10 +1461,13 @@ namespace Radzen.FastGrid
         /// </remarks>
         FastGridFilter? DeclaredFilter()
         {
-            // An upstream operator this vocabulary has no word for is Custom, and Custom means "I will
-            // filter this myself" - so it declares no filter rather than falling through to the default.
-            // Read as a default it became a Contains, which is a filter the author never asked for.
-            if (FilterOperatorOf is null && FilterOperator is { } upstream && upstream.Owned() is null)
+            // Nothing declared is nothing built, and §3's third rule is why this guard is not an
+            // optimisation: without it every column allocated a filter, a condition and a one-element
+            // array on its first parameter set - about 104 bytes each, on a grid that may not even allow
+            // filtering. That is what the review named the commit's unattributed ~0.8 KB as, five
+            // columns at a time, and it is the summary above finally being true.
+            if (FilterValue is null && SecondFilterValue is null && FilterOperator is null
+                && FilterOperatorOf is null && SecondFilterOperator is null)
             {
                 return null;
             }

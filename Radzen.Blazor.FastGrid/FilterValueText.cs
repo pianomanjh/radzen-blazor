@@ -104,6 +104,17 @@ namespace Radzen.FastGrid
                 // The types Convert.ChangeType cannot see, which is why a filter on any of them used to
                 // be dropped on every restore however it was stored. §33 recorded that as a gap and this
                 // is the gap closed: the format is being defined here, so the parse can be too.
+                // DateTime is the one Convert.ChangeType *can* see and reads wrongly. Its parse has no
+                // RoundtripKind, so a stored UTC instant came back shifted into local time and with the
+                // Kind lost - and the same blob restored to a different instant in every time zone,
+                // which is the exact thing storing invariant text was meant to prevent. The review
+                // measured 2019-05-04T00:00:00Z restoring as 2019-05-03 17:00 local.
+                if (type == typeof(DateTime))
+                {
+                    return DateTime.Parse(text, CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind);
+                }
+
                 if (type == typeof(DateOnly))
                 {
                     return DateOnly.Parse(text, CultureInfo.InvariantCulture);
@@ -116,7 +127,8 @@ namespace Radzen.FastGrid
 
                 if (type == typeof(DateTimeOffset))
                 {
-                    return DateTimeOffset.Parse(text, CultureInfo.InvariantCulture);
+                    return DateTimeOffset.Parse(text, CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind);
                 }
 
                 if (type == typeof(TimeSpan))

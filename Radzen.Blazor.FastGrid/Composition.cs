@@ -408,9 +408,19 @@ namespace Radzen.FastGrid
         /// and the half a handler usually reads - is built from the composites themselves and keeps
         /// whatever nesting they carry.
         /// <para>
-        /// Faithful while a column carries one condition, which is all there is to carry today. A
-        /// compound wider than a descriptor's two value slots is where this starts losing something, and
-        /// that is the model commit's problem rather than this one's.
+        /// A <c>FilterDescriptor</c> carries two comparisons - <c>FilterValue</c> and
+        /// <c>SecondFilterValue</c>, joined by its own <c>LogicalFilterOperator</c> - so a two-condition
+        /// column and a <c>Between</c> both fit exactly. Only a compound whose halves need more than two
+        /// comparisons between them overflows, and such a column is <strong>left out</strong> rather
+        /// than flattened.
+        /// </para>
+        /// <para>
+        /// Leaving it out is the lesser wrong and the review is why it is stated: flattening put the
+        /// parent's empty comparison through as <c>Property Equals null</c>, so a handler building a
+        /// query from this list returned no rows for a filter that was on screen and correct. A missing
+        /// descriptor is a handler filtering less than it was asked to; a wrong one is a blank page.
+        /// <c>LoadDataArgs.Filter</c> - the string, and the half most handlers read - keeps the whole
+        /// filter either way, because it is built from the composites and their nesting.
         /// </para>
         /// </remarks>
         internal static List<FilterDescriptor>? Descriptors(List<CompositeFilterDescriptor>? filters)
@@ -424,19 +434,51 @@ namespace Radzen.FastGrid
 
             for (var i = 0; i < filters.Count; i++)
             {
-                var filter = filters[i];
+                if (Descriptor(filters[i]) is { } descriptor)
+                {
+                    descriptors.Add(descriptor);
+                }
+            }
 
-                descriptors.Add(new FilterDescriptor
+            return descriptors;
+        }
+
+        /// <summary>One composite as a descriptor, or null when it says more than one can carry.</summary>
+        static FilterDescriptor? Descriptor(CompositeFilterDescriptor filter)
+        {
+            var children = filter.Filters?.ToList();
+
+            if (children is not { Count: > 0 })
+            {
+                return new FilterDescriptor
                 {
                     Property = filter.Property,
                     FilterProperty = filter.FilterProperty,
                     FilterValue = filter.FilterValue,
                     FilterOperator = filter.FilterOperator ?? Radzen.FilterOperator.Equals,
                     Type = filter.Type,
-                });
+                };
             }
 
-            return descriptors;
+            // Two comparisons is what the shape holds. A Between is two; a compound of two simple
+            // conditions is two; a compound with a Between in it is three, and there is nowhere to put
+            // the third.
+            if (children.Count != 2 || children.Any(child => child.Filters?.Any() == true))
+            {
+                return null;
+            }
+
+            return new FilterDescriptor
+            {
+                Property = filter.Property,
+                FilterProperty = filter.FilterProperty,
+                Type = filter.Type,
+                FilterValue = children[0].FilterValue,
+                FilterOperator = children[0].FilterOperator ?? Radzen.FilterOperator.Equals,
+                SecondFilterValue = children[1].FilterValue,
+                SecondFilterOperator = children[1].FilterOperator ?? Radzen.FilterOperator.Equals,
+                LogicalFilterOperator = filter.LogicalFilterOperator,
+            };
         }
 
         /// <summary>
@@ -472,20 +514,38 @@ namespace Radzen.FastGrid
 
             parent.Filters = second is null
                 ? BetweenChildren(column, first)
-                : new[] { Child(column, first), Child(column, second) }.SelectMany(x => x).ToList();
+                : new List<CompositeFilterDescriptor> { Child(column, first), Child(column, second) };
 
             return parent;
         }
 
-        /// <summary>A condition as the one or two descriptors it takes to say it.</summary>
-        static List<CompositeFilterDescriptor> Child<TItem>(ColumnBase<TItem> column,
-            FastGridFilterCondition condition) =>
-            condition.Operator == FastGridFilterOperator.Between
-                ? BetweenChildren(column, condition)
-                : new List<CompositeFilterDescriptor>
-                {
-                    Descriptor(column, condition.Operator, condition.Value),
-                };
+        /// <summary>
+        /// One condition as one child, nesting again where the condition itself is two comparisons.
+        /// </summary>
+        /// <remarks>
+        /// The second level is the whole point and it was missing: a <c>Between</c>'s two bounds were
+        /// flattened into the parent's child list beside the other condition, so
+        /// <c>Between(200,300) OR IsNull</c> became three siblings joined by <c>Or</c> and the
+        /// <c>And</c> that makes a range a range was gone. The typed routes were unaffected - they never
+        /// see a descriptor - so an in-memory grid showed two rows while the string sent to a server
+        /// asked for nearly the table. §33 bought the nesting for exactly this and then did not spend it.
+        /// </remarks>
+        static CompositeFilterDescriptor Child<TItem>(ColumnBase<TItem> column,
+            FastGridFilterCondition condition)
+        {
+            if (condition.Operator != FastGridFilterOperator.Between)
+            {
+                return Descriptor(column, condition.Operator, condition.Value);
+            }
+
+            var range = Descriptor(column, filterOperator: null, value: null);
+
+            // A range's bounds are joined by And whatever joins the column's own two conditions.
+            range.LogicalFilterOperator = LogicalFilterOperator.And;
+            range.Filters = BetweenChildren(column, condition);
+
+            return range;
+        }
 
         /// <summary>
         /// A range as the pair of comparisons upstream can read, since it has no operator for one.

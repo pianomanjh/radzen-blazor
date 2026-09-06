@@ -1418,7 +1418,15 @@ namespace Radzen.FastGrid
                 return;
             }
 
-            if (stored.SecondFilterOperator is not { } secondOperator)
+            // A second condition that stored no values at all is *absent*, not failed - the two look
+            // alike at the end of the rebuild and mean opposite things. Read as a failure it took the
+            // whole filter down, so a column carrying an empty second slot came back unfiltered.
+            var hasSecond = stored.SecondFilterOperator is { } declared
+                && (declared.Arity() == FastGridFilterArity.None
+                    || stored.SecondFilterValues is { Count: > 0 }
+                    || stored.SecondFilterText is { Length: > 0 });
+
+            if (!hasSecond || stored.SecondFilterOperator is not { } secondOperator)
             {
                 column.SetFilter(new FastGridFilter(first), stored.FilterText, stored.SecondFilterText);
 
@@ -1447,6 +1455,13 @@ namespace Radzen.FastGrid
         static FastGridFilterCondition? RestoredCondition(ColumnBase<TItem> column,
             FastGridFilterOperator filterOperator, IList<string?>? values, string? text)
         {
+            // A filter the column's type cannot be compared with is refused rather than declined: see
+            // SupportsOperator, where declining is shown to move the crash rather than remove it.
+            if (!column.SupportsOperator(filterOperator))
+            {
+                return null;
+            }
+
             var arity = filterOperator.Arity();
 
             if (arity == FastGridFilterArity.None)
@@ -1463,6 +1478,18 @@ namespace Radzen.FastGrid
                 && (arity == FastGridFilterArity.Many) == (fromText is IEnumerable and not string)
                     ? ColumnBase<TItem>.Condition(filterOperator, fromText)
                     : null;
+        }
+
+        /// <summary>A pair of bounds as the range they were emitted from, or null if either will not read.</summary>
+        static FastGridFilterCondition? RangeFrom(ColumnBase<TItem> column, object? from, object? to)
+        {
+            var lower = column.RestoredFilterValue(from, FastGridFilterOperator.GreaterThanOrEquals,
+                text: null);
+            var upper = column.RestoredFilterValue(to, FastGridFilterOperator.LessThanOrEquals, text: null);
+
+            return lower is null || upper is null
+                ? null
+                : new FastGridFilterCondition(FastGridFilterOperator.Between, new[] { lower, upper });
         }
 
         /// <summary>An incoming descriptor put back on its column, for the <c>Filters</c> path.</summary>
@@ -1504,12 +1531,17 @@ namespace Radzen.FastGrid
         static FastGridFilterCondition? ConditionFrom(ColumnBase<TItem> column,
             CompositeFilterDescriptor descriptor)
         {
-            // Custom has no word here and means the caller filters it themselves, so the column takes no
-            // filter from such a descriptor. Read as the column's default it became a Contains - a
-            // filter nobody asked for, where before §33 it was correctly none.
-            if (descriptor.FilterOperator is { } named && named.Owned() is null)
+            // A child with children of its own is a range: the pair of bounds this grid emits for a
+            // Between, joined by And. Read back as two conditions it consumed the compound's second slot
+            // and pushed the real second condition out, so Between OR IsNull came back as a bare range -
+            // and a capture after that stored GreaterThanOrEquals and LessThanOrEquals, which is the
+            // shape degrading a little on every public round trip.
+            if (descriptor.Filters?.ToList() is { Count: 2 } bounds
+                && descriptor.LogicalFilterOperator == Radzen.LogicalFilterOperator.And
+                && bounds[0].FilterOperator == Radzen.FilterOperator.GreaterThanOrEquals
+                && bounds[1].FilterOperator == Radzen.FilterOperator.LessThanOrEquals)
             {
-                return null;
+                return RangeFrom(column, bounds[0].FilterValue, bounds[1].FilterValue);
             }
 
             var filterOperator = descriptor.FilterOperator?.Owned() ?? column.DefaultFilterOperator;

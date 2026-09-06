@@ -387,6 +387,14 @@ namespace Radzen.FastGrid
                 {
                     keys.Add(typed);
                 }
+                else if (values[i] is null && KeyCanBeNull)
+                {
+                    // The entry for the rows carrying no id, and only where this column offers one - the
+                    // same guard SelectedKeys applies, for the same reason: read as default(TKey) on a
+                    // column whose key cannot be null, a stray null filters to the rows whose id happens
+                    // to be zero. Without this arm a ticked "(none)" was simply lost on the way back.
+                    keys.Add(default);
+                }
             }
 
             return keys;

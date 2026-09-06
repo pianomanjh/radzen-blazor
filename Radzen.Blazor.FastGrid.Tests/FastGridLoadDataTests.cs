@@ -310,6 +310,36 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ACompoundWiderThanADescriptorIsLeftOutRatherThanSentWrong()
+        {
+            // LoadDataArgs.Filters is upstream's type and carries two comparisons. A Between joined to
+            // a second condition is three, and flattening put the parent's empty comparison through as
+            // "Bonus equals null" - so a handler building a query from this list returned the null rows
+            // for a filter that was on screen and correct. A missing descriptor is a handler filtering
+            // less than asked; a wrong one is a blank page.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p => p.Add(h => h.AllowFiltering, true),
+                columns: Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Property<Person, decimal?>(x => x.Bonus, uniqueId: "Bonus")));
+
+            var column = cut.FindComponents<PropertyColumn<Person, decimal?>>().Single().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Grid!.Filter(column, new FastGridFilter(
+                new FastGridFilterCondition(FastGridFilterOperator.Between, new object?[] { 200m, 300m }),
+                new FastGridFilterCondition(FastGridFilterOperator.IsNull),
+                LogicalFilterOperator.Or))).Wait();
+
+            Assert.DoesNotContain(calls[^1].Filters ?? Enumerable.Empty<FilterDescriptor>(),
+                f => f.Property == "Bonus");
+
+            // The string keeps the whole filter, because it is built from the composites and their
+            // nesting rather than from this projection.
+            Assert.Contains("Bonus", calls[^1].Filter!, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void CarriesTheFilterAsAnODataStringForAnODataSource()
         {
             using var ctx = new TestContext();

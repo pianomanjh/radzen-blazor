@@ -343,6 +343,186 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ABetweenInsideACompoundReachesEveryRouteTheSameWay()
+        {
+            // The review's case, and the one the suite had carefully avoided: every compound it tested
+            // was two simple conditions, which is the shape that happened to work. A Between's two
+            // bounds were flattened into the parent's child list beside the other condition, so the
+            // And that makes a range a range was replaced by the compound's Or - and only the routes
+            // that never see a descriptor were right. An in-memory grid showed two rows while the
+            // string sent to a server asked for nearly the table.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
+            {
+                UniqueID = "Bonus",
+                FilterOperator = FastGridFilterOperator.Between,
+                FilterValues = new string?[] { "200", "300" },
+                SecondFilterOperator = FastGridFilterOperator.IsNull,
+                SecondFilterValues = Array.Empty<string?>(),
+                LogicalFilterOperator = LogicalFilterOperator.Or,
+            }));
+
+            // The typed route, which was always right.
+            Assert.Equal(new[] { "Carol", "Alice" }, Names(cut));
+
+            // The reflective route, over the descriptors the grid reports - which is what a declining
+            // column composes through, and what ApplyFilters is handed.
+            var reflective = People.Sample().AsQueryable()
+                .Where(cut.Instance.Filters, LogicalFilterOperator.And, FilterCaseSensitivity.Default)
+                .Select(p => p.First)
+                .ToArray();
+
+            Assert.Equal(new[] { "Carol", "Alice" }, reflective);
+        }
+
+        [Fact]
+        public void ABetweenSurvivesBeingHandedBackThroughApplyFilters()
+        {
+            // Shape, not just rows. Read back as two conditions a range consumed the compound's second
+            // slot, so the IsNull half was pushed out - and a capture after that stored the range as
+            // GreaterThanOrEquals plus LessThanOrEquals, which is a blob degrading on every round trip.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
+            {
+                UniqueID = "Bonus",
+                FilterOperator = FastGridFilterOperator.Between,
+                FilterValues = new string?[] { "200", "300" },
+                SecondFilterOperator = FastGridFilterOperator.IsNull,
+                SecondFilterValues = Array.Empty<string?>(),
+                LogicalFilterOperator = LogicalFilterOperator.Or,
+            }));
+
+            var reported = cut.Instance.Filters;
+
+            cut.InvokeAsync(() => cut.Instance.ApplyFilters(reported)).Wait();
+
+            Assert.Equal(new[] { "Carol", "Alice" }, Names(cut));
+
+            var captured = cut.Instance.CaptureSettings().Columns!.Single(c => c.UniqueID == "Bonus");
+
+            Assert.Equal(FastGridFilterOperator.Between, captured.FilterOperator);
+            Assert.Equal(FastGridFilterOperator.IsNull, captured.SecondFilterOperator);
+        }
+
+        [Fact]
+        public void AUtcDateSurvivesTheRoundTripAsTheSameInstant()
+        {
+            // Convert.ChangeType can see a DateTime and reads it wrongly: no RoundtripKind, so a stored
+            // UTC instant came back shifted into local time with its Kind lost, and the same blob
+            // restored differently in every time zone - the exact thing invariant text was meant to
+            // stop. Asserted on the value rather than on rows, because in one time zone the wrong
+            // answer is the right one.
+            using var ctx = new TestContext();
+
+            var utc = new DateTime(2019, 5, 4, 0, 0, 0, DateTimeKind.Utc);
+
+            var cut = Render(ctx, AllTypes(), Stored(Filter("Hired", FastGridFilterOperator.Equals,
+                utc.ToString("O", CultureInfo.InvariantCulture))));
+
+            var restored = Assert.IsType<DateTime>(Assert.Single(cut.Instance.Filters).FilterValue);
+
+            Assert.Equal(utc, restored);
+            Assert.Equal(DateTimeKind.Utc, restored.Kind);
+        }
+
+        [Fact]
+        public void ADateCarryingSubSecondPrecisionIsCapturedWithoutLosingIt()
+        {
+            // The capture side of the same rule, and the mutation that found it: every round-trip test
+            // wrote its own stored text, and the one test that captured used a date on a whole second -
+            // where the culture-sensitive ToString happens to round-trip.
+            using var ctx = new TestContext();
+
+            var precise = new DateTime(2019, 5, 4, 1, 2, 3, 456, DateTimeKind.Unspecified).AddTicks(789);
+            var data = People.Sample();
+
+            data[0].Hired = precise;
+
+            var cut = Render(ctx, AllTypes(),
+                Stored(Filter("Hired", FastGridFilterOperator.Equals,
+                    precise.ToString("O", CultureInfo.InvariantCulture))), data);
+
+            var captured = JsonSerializer.Deserialize<FastGridSettings>(
+                JsonSerializer.Serialize(cut.Instance.CaptureSettings()))!;
+
+            Assert.Equal(new[] { "Carol" }, Names(Render(ctx, AllTypes(), captured, data)));
+        }
+
+        [Fact]
+        public void AHalfSpecifiedBetweenFiltersNothingRatherThanSomething()
+        {
+            // Arity is the rule, so a range with one bound is not a range. Nothing had tested it, and
+            // reading Between's arity as one would have let a single bound through as a filter of its
+            // own - which is a different answer wearing the user's filter.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(),
+                Stored(Filter("Id", FastGridFilterOperator.Between, "2")));
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
+            Assert.Empty(cut.Instance.Filters);
+        }
+
+        [Fact]
+        public void ASecondConditionWithNoValueIsIgnoredRatherThanJoined()
+        {
+            // EffectiveSecond, not Second. A declared-but-empty second condition must not narrow
+            // anything - joined with And it would empty the grid, and nothing covered it.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(), Stored(new FastGridColumnSettings
+            {
+                UniqueID = "Id",
+                FilterOperator = FastGridFilterOperator.Equals,
+                FilterValues = new string?[] { "3" },
+                SecondFilterOperator = FastGridFilterOperator.Equals,
+                SecondFilterValues = Array.Empty<string?>(),
+                LogicalFilterOperator = LogicalFilterOperator.And,
+            }));
+
+            Assert.Equal(new[] { "Carol" }, Names(cut));
+        }
+
+        [Fact]
+        public void AnOrderedOperatorOnAStringColumnDeclinesRatherThanThrowing()
+        {
+            // §32's review finding 1a, which §33 closed on the typed path: Expression.GreaterThan has no
+            // overload for two strings, and building one threw inside the render.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, AllTypes(),
+                Stored(Filter("First", FastGridFilterOperator.GreaterThan, "B")));
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" }, Names(cut));
+        }
+
+        [Fact]
+        public void ALookupsBlankEntrySurvivesTheRoundTrip()
+        {
+            // A ticked "(none)" is a real choice on a lookup column - SelectedKeys has always said so -
+            // and restore dropped it twice over: a stored null read as unparseable text, and the rebuild
+            // kept only values that were already keys. The rows with no id came back unhidden and the
+            // list came back with one fewer tick than the user left.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First),
+                Columns.Lookup<Person, int?>(x => x.RegionId, FastGridLookup.Map(Lookups.Regions()),
+                    uniqueId: "Region")),
+                Stored(new FastGridColumnSettings
+                {
+                    UniqueID = "Region",
+                    FilterOperator = FastGridFilterOperator.In,
+                    FilterValues = new string?[] { null },
+                }));
+
+            // Alice is the row with no region.
+            Assert.Equal(new[] { "Alice" }, Names(cut));
+        }
+
+        [Fact]
         public void TheFiltersSetterRoundTripsACompound()
         {
             // The second restore path. §33 made composites the currency in both directions, so a
