@@ -1136,7 +1136,16 @@ namespace Radzen.FastGrid
             {
                 var column = ColumnByFilterPath(filter.Property);
 
-                column?.SetFilter(filter.FilterValue, filter.FilterOperator, null);
+                if (column is null)
+                {
+                    continue;
+                }
+
+                // Through the same reconstruction the settings restore uses, and with null for the text
+                // because this path has never had any - a descriptor carries a value and an operator.
+                // That is most of why the reconstruction cannot be keyed on the text: the crash §32
+                // measured needs no text, and here there is none to be had.
+                RestoreFilter(column, filter.FilterValue, filter.FilterOperator, text: null);
             }
 
             skip = 0;
@@ -1259,13 +1268,10 @@ namespace Radzen.FastGrid
                     sorts.Add((column, order == SortOrder.Descending));
                 }
 
-                if (stored.FilterValue is not null)
-                {
-                    // The text goes with the value: it is what says the value came from the box, and on
-                    // a lookup column it is the only thing that tells a name nothing answered to from a
-                    // list with nothing ticked - both are In over no ids.
-                    column.SetFilter(stored.FilterValue, stored.FilterOperator, stored.FilterText);
-                }
+                // The text goes with the value: it is what says the value came from the box, and on a
+                // lookup column it is the only thing that tells a name nothing answered to from a list
+                // with nothing ticked - both are In over no ids.
+                RestoreFilter(column, stored.FilterValue, stored.FilterOperator, stored.FilterText);
 
                 // Only when something recorded a choice. A null leaves the markup's Visible standing,
                 // which is what a grid with no picker stores for every column.
@@ -1295,6 +1301,46 @@ namespace Radzen.FastGrid
             // grid new settings, which applied them and scheduled another. One sort spun the circuit at
             // several thousand renders a second and never stopped.
             settingsNeedReload = LoadData.HasDelegate || AsyncOwnsData;
+        }
+
+        /// <summary>
+        /// Puts one stored filter back on its column, or leaves the column unfiltered when the stored
+        /// filter cannot be rebuilt.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Both restore paths come through here so that the rule is written once. Neither used to have
+        /// one: they handed the stored value straight to <c>SetFilter</c>, and a value that had been
+        /// through a serializer made the typed builders decline, which routed it to the reflective one
+        /// and threw inside the render. §32 has the matrix.
+        /// </para>
+        /// <para>
+        /// The operator is read before the value, because for four of them the value is not the filter.
+        /// An <c>IsNull</c> stores a null and means it, and the guard that used to stand here -
+        /// <c>stored.FilterValue is not null</c> - read that null as "no filter stored" and dropped it.
+        /// So an IsNull filter was written on every capture and restored on none.
+        /// </para>
+        /// <para>
+        /// Dropping is deliberate rather than defensive: this is a restore, and one that cannot read a
+        /// column has no business taking the page down with it. The cost is that the next capture writes
+        /// the unreadable filter away for good, which §32 argues is better than a settings blob that
+        /// stops describing the grid.
+        /// </para>
+        /// </remarks>
+        static void RestoreFilter(ColumnBase<TItem> column, object? value, FilterOperator? filterOperator,
+            string? text)
+        {
+            if (filterOperator is { } only && ColumnBase<TItem>.NeedsNoValue(only))
+            {
+                column.SetFilter(null, only, null);
+
+                return;
+            }
+
+            if (column.RestoredFilterValue(value, filterOperator, text) is { } restored)
+            {
+                column.SetFilter(restored, filterOperator, text);
+            }
         }
 
         // Null unless the grid actually has a picker and this column is in it. Recording visibility for

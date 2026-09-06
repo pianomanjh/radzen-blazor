@@ -356,3 +356,6 @@ RadzenBlazorDemos/wwwroot/demos
 llms.txt
 RadzenBlazorDemos.Host/wwwroot/sitemap.xml
 RadzenBlazorDemos.Host/wwwroot/robots.txt
+
+# Playwright MCP scratch snapshots
+.playwright-mcp/

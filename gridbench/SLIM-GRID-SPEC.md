@@ -1387,6 +1387,58 @@ that paints nothing.
 One commit each, which is what every other feature on this branch did, and the only reason resize,
 reorder and frozen columns have separate numbers at all.
 
+### What the build changed
+
+**`ConvertType.ChangeType` does not fail on a value it cannot convert.** Its last line is
+`value is IConvertible ? Convert.ChangeType(...) : value` - so handed a `JsonElement` it hands the
+`JsonElement` straight back. Attempt 2 therefore "succeeded" holding the value it was meant to reject,
+attempt 3 never ran, and the first build of this piece threw exactly as before it. The fix is one line -
+the conversion's result is checked against the target type rather than trusted - and it is load-bearing:
+removing it fails eleven of the twenty tests.
+
+**One test did not discriminate and one mutation survived**, both found by §9 layer 1 rather than by
+reading. `IsNotEmpty` over `People.Sample()` matches all four rows, so that row of its theory passed
+whether or not the filter had been restored; it now runs over data with one blank name. And swapping
+attempt 3 for the column's text parser passed the entire suite, because the argument this section had
+recorded for that decision was unreachable - see *The rule*, above, which now records the reachable one
+and how it was found.
+
+### What the browser pass found
+
+**The playground could not reach this fault at all**, and that is why it shipped: the page held the
+settings blob as a live object, so every value kept the type it was captured with, and the whole class of
+bug is what a serializer does to `object`. It now has a **Round-trip through JSON** button - §9's rule
+about a feature nobody can drive, applied to a bug nobody could drive.
+
+Through it, the two outcomes this section predicts both hold in a real circuit: a date filter survives the
+trip and still filters, and a check-box-list filter comes back with the column unfiltered and the log
+clean. Before §32 the first of those terminated the circuit.
+
+**And it found a crash that is not this piece's.** With a date typed into the Simple box, switching
+`FilterMode` to `CheckBoxList` terminates the circuit:
+
+```
+System.InvalidCastException: Unable to cast object of type 'System.DateTime'
+                             to type 'System.Collections.IEnumerable'.
+  at Radzen.ParameterViewExtensions.DidParameterChange[T](...)
+  at Radzen.DropDownBase`1.SetParametersAsync(ParameterView parameters)
+```
+
+The check-box list binds `FilterSelection`, which is `CurrentFilterValue`, and a scalar filter left over
+from the other editor is not a sequence. No settings, no serializer and no restore are involved -
+reproduced from a fresh page with nothing but a typed filter and one toggle - so it is outside this
+section's gate and is **recorded, not fixed**. It belongs to §31's piece ④, which is where
+`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`: the fault is exactly
+the mismatch that piece exists to remove, and fixing it here would be fixing it twice.
+
+### What it cost
+
+Nothing per row, measured rather than asserted. `alloc-types 1000 400`, interleaved base/mine/base/mine
+on one machine: base **13259.0** and **13284.0** KB per render, this change **13237.1** and **13243.6**.
+The 0.2% between the means is smaller than the spread between the two base runs. Nothing here is on the
+render path - the reconstruction runs once per stored column per restore - and the only render-path edit
+is `HasFilter` calling a static predicate instead of spelling its operator set inline.
+
 ### Where this could still be wrong
 
 - **The row/column asymmetry** of "focus follows the item, focus follows the position" will read as an
@@ -7103,11 +7155,18 @@ stringifies to `2019-05-04T00:00:00`, which converts. It also makes §31's headl
 of four rather than the second of two - after `ConvertType`, 4 catches mostly a `Guid` and an enum
 stored by name.
 
-**3 is type-based and must not be the column's own text parser**, and lookup columns are why. There the
-value is ids and the text is names, and `FilterValueFromText` matches *names*: hand it `"[3]"` and it
-matches nothing, which on a lookup column is not a failure that falls through - §14 made "In over no
-ids" a real filter - so a wrong filter gets built and 4 never runs. Type-based, `"[3]"` fails to become
-an `int` and the real text, `"Acme"`, gets its turn.
+**3 is type-based and must not be the column's own text parser**, and *culture* is why. The string form
+attempt 3 reads came out of a serializer, so it is invariant; `FilterValueFromText` reads
+`CurrentCulture`, because what it exists to read is what somebody typed. Route 3 through it and a stored
+`250.5` restores under de-DE as two and a half thousand - a filter that is wrong rather than missing,
+which is the outcome every other decision in this section is arranged to avoid.
+
+The reason first written here was a different one and it was wrong: that a lookup column's parser matches
+*names*, so a stringified id would build an `In` over no ids - which §14 makes a real filter - and 4
+would never run. The hazard is real and unreachable. A lookup column's default operator is `In`, so its
+values never reach attempt 3 at all; they are handled as a sequence or dropped, three branches earlier.
+It was caught by the mutation loop, not by reading: swapping 3 for the text parser passed the whole suite
+until a test with a culture in it existed.
 
 **4 before 3 was rejected**: text is the lossier record - one person's typing in one culture - and
 preferring it over a value that still converts throws away the better of the two.

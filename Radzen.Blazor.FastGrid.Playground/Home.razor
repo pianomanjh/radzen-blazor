@@ -112,6 +112,16 @@
         <button @onclick="Rebuild">Apply</button>
         <button @onclick="@(() => metrics.Reset())">Reset metrics</button>
     </fieldset>
+
+    @* §32. Nothing here could reach the settings fault before this: the page held the blob as a live
+       object, so every value kept the type it was captured with, and the whole class of bug is what a
+       serializer does to `object`. Sort, filter, resize, then press this - it is a page reload with a
+       real store behind it. *@
+    <fieldset>
+        <legend>Settings</legend>
+        <button @onclick="RoundTripSettings" disabled="@(settings is null)">Round-trip through JSON</button>
+        <button @onclick="@(() => { settings = null; Log("settings dropped"); })">Forget</button>
+    </fieldset>
 </div>
 
 <div class="metrics">
@@ -424,6 +434,27 @@
     {
         settings = value;
         settingsRaised++;
+    }
+
+    /// <summary>
+    /// What a consumer that actually persists settings does to them, done on demand. §32's subject: the
+    /// blob's FilterValue is `object?`, so a DateTime goes out as text and comes back a JsonElement, and
+    /// before §32 that took the circuit down on the next render rather than losing the filter.
+    /// </summary>
+    void RoundTripSettings()
+    {
+        if (settings is null)
+        {
+            return;
+        }
+
+        var json = System.Text.Json.JsonSerializer.Serialize(settings);
+
+        settings = System.Text.Json.JsonSerializer.Deserialize<FastGridSettings>(json);
+
+        var filters = settings?.Columns?.Count(c => c.FilterValue is not null || c.FilterOperator is not null) ?? 0;
+
+        Log($"settings round-tripped through JSON: {json.Length} chars, {filters} filtered column(s) came back");
     }
 
     void Log(string line) => readout = line;

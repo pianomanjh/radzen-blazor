@@ -775,10 +775,21 @@ namespace Radzen.FastGrid
         /// nothing, except for the operators that are about emptiness themselves.
         /// </summary>
         public virtual bool HasFilter =>
-            CanFilter &&
-            (HasFilterValue
-                || CurrentFilterOperator is Radzen.FilterOperator.IsNull or Radzen.FilterOperator.IsNotNull
-                    or Radzen.FilterOperator.IsEmpty or Radzen.FilterOperator.IsNotEmpty);
+            CanFilter && (HasFilterValue || NeedsNoValue(CurrentFilterOperator));
+
+        /// <summary>
+        /// Whether an operator is a filter on its own, with nothing to compare against.
+        /// </summary>
+        /// <remarks>
+        /// One rule in one place because the set is now read from two sides that must agree. Capture
+        /// stores such a filter - <see cref="HasFilter" /> counts it - and restore has to recognise it
+        /// from a stored value of null, which is what every other kind of filter having none means.
+        /// While the set was written out only here, restore read the null instead and dropped the
+        /// filter on every load. See §32.
+        /// </remarks>
+        internal static bool NeedsNoValue(FilterOperator filterOperator) =>
+            filterOperator is Radzen.FilterOperator.IsNull or Radzen.FilterOperator.IsNotNull
+                or Radzen.FilterOperator.IsEmpty or Radzen.FilterOperator.IsNotEmpty;
 
         bool HasFilterValue => CurrentFilterValue switch
         {
@@ -878,6 +889,126 @@ namespace Radzen.FastGrid
             catch (Exception e) when (e is FormatException or InvalidCastException or OverflowException
                 or ArgumentException)
             {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// A stored filter as something this column can actually filter by, or null when neither the
+        /// value nor the text produces one - in which case the column restores unfiltered.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="FastGridColumnSettings.FilterValue" /> is <c>object?</c>, so a settings blob that
+        /// went through a serializer comes back holding whatever that serializer uses for "some value"
+        /// - a <c>JsonElement</c> for <c>System.Text.Json</c>. Handed on unexamined, that value made the
+        /// typed builders decline, and a decline is routed to the reflective one, where
+        /// <c>Expression.Constant(value, type)</c> throws <em>inside the render</em>. §32 has the
+        /// measured matrix; the short version is that a round-tripped date, int or enum filter took the
+        /// circuit down and a check-box list quietly showed every row.
+        /// </para>
+        /// <para>
+        /// One rule: reconstruct from the value, then from the text, drop what neither produces. Four
+        /// attempts, and the order is argued rather than incidental:
+        /// <list type="number">
+        /// <item>the value is already the column's type;</item>
+        /// <item>the value converts to it, <em>invariantly</em>;</item>
+        /// <item>the value's string form converts to it, invariantly - which is what recovers a filter
+        /// that has no text at all, and there is a whole restore path that never has any;</item>
+        /// <item><paramref name="text" /> re-parsed by this column, in <see cref="CultureInfo.CurrentCulture" />.</item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// Text is last because it is the lossier record - one person's typing in one culture, where the
+        /// value is culture-free. And attempt 3 is a conversion to a <see cref="Type" /> rather than a
+        /// call to <see cref="FilterValueFromText" /> for the same reason read the other way round: the
+        /// string form it reads came out of a serializer and is invariant, while that method reads
+        /// <see cref="CultureInfo.CurrentCulture" /> because what it exists to read is typing. Route 3
+        /// through it and a stored <c>250.5</c> restores under de-DE as two and a half thousand.
+        /// </para>
+        /// </remarks>
+        /// <param name="value">The stored value, in whatever shape it came back in.</param>
+        /// <param name="filterOperator">The stored operator, or null for this column's default.</param>
+        /// <param name="text">The stored box text, or null for a filter that never came from a box.</param>
+        internal object? RestoredFilterValue(object? value, FilterOperator? filterOperator, string? text)
+        {
+            if (value is not null)
+            {
+                if ((filterOperator ?? DefaultFilterOperator) is Radzen.FilterOperator.In
+                    or Radzen.FilterOperator.NotIn)
+                {
+                    // Only whether it is a sequence, never what is in it: both predicate builders
+                    // convert the elements themselves, and drop the ones that will not. A JSON array is
+                    // not a sequence here - it arrives as one opaque value - so it is dropped whole, and
+                    // that is §32's stated hole. Newtonsoft's JArray is one, and its elements convert,
+                    // so it survives without this knowing its name.
+                    if (value is IEnumerable and not string)
+                    {
+                        return value;
+                    }
+                }
+                else if (RestoredScalar(value) is { } converted)
+                {
+                    return converted;
+                }
+            }
+
+            return FilterValueFromText(text);
+        }
+
+        /// <summary>Attempts 1 to 3 of <see cref="RestoredFilterValue" />, for a single value.</summary>
+        object? RestoredScalar(object value)
+        {
+            var declared = EffectiveFilterType;
+            var type = Nullable.GetUnderlyingType(declared) ?? declared;
+
+            // Attempt 1. Also the answer for a column whose filter type would not resolve, where
+            // EffectiveFilterType is object and there is nothing to convert towards.
+            if (type.IsInstanceOfType(value))
+            {
+                return value;
+            }
+
+            // Attempts 2 and 3. ToString() rather than a serializer's own unwrapping, because the string
+            // form is the one thing every "some value" wrapper agrees on: JsonElement stringifies a
+            // stored date to the ISO-8601 text it was written as, which converts.
+            return Converted(value, type, declared) ?? Converted(value.ToString(), type, declared);
+        }
+
+        static object? Converted(object? candidate, Type type, Type declared)
+        {
+            if (candidate is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                // The same two-way split FilterValueFromText makes, for the same reason: an enum
+                // converts through neither IConvertible nor ConvertType's own nullable-enum branch when
+                // the column's own type is not nullable. Parse takes "Senior" and "1" alike, which is
+                // both shapes a serializer writes an enum in.
+                var converted = type.IsEnum
+                    ? candidate is string name
+                        ? Enum.Parse(type, name, ignoreCase: true)
+                        : Enum.ToObject(type, candidate)
+                    : ConvertType.ChangeType(candidate, declared, CultureInfo.InvariantCulture);
+
+                // Checked rather than trusted, because ConvertType.ChangeType does not fail on a value
+                // it cannot convert - its last line hands back whatever it was given unless the value is
+                // IConvertible. A JsonElement is not, so attempt 2 "succeeded" with the JsonElement
+                // still in hand and attempt 3 never ran. Returning something is not converting it.
+                return type.IsInstanceOfType(converted) ? converted : null;
+            }
+#pragma warning disable CA1031
+            catch (Exception)
+#pragma warning restore CA1031
+            {
+                // Deliberately every exception, and §9's rule is why: this is an optional path whose
+                // whole job is to drop what will not convert, and it runs over a value of a type nobody
+                // here chose. Narrowing it to the four that were expected is how the fault this method
+                // exists to fix reached a render in the first place - it was an ArgumentException from
+                // Expression.Constant, three frames past the catch that was meant to be enough.
                 return null;
             }
         }
