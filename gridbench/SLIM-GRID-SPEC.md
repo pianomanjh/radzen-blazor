@@ -6010,10 +6010,16 @@ passes through: it is the rung you sit on when the big optimisation has landed a
 not, 13.78 is the rung when it is the other way round, and the second is roughly a one-in-seven event on
 this machine.
 
-**13.78 MB has never been reported by the benchmark.** Review's 190 fresh processes returned 12.86, 12.87
-and 12.91 only. That is consistent - BenchmarkDotNet warms up, so a measured window normally sits at D -
-but it is a prediction this section makes and has not confirmed: a process whose promotion is delayed the
-way `DOTNET_TC_CallCountingDelayMs` delays it should be able to report ~13.78 as well as ~13.83.
+**13.78 MB had never been reported by the benchmark when this was written.** Review's 190 fresh processes
+returned 12.86, 12.87 and 12.91 only. That is consistent - BenchmarkDotNet warms up, so a measured window
+normally sits at D - but it was a prediction this section made and had not confirmed.
+
+**§30 confirms the number and refutes the route.** Under `DOTNET_TieredPGO=0` the benchmark reports
+13.78 MB, so all four rungs are now values it has actually returned. But the mechanism guessed at here -
+"a process whose promotion is delayed the way `DOTNET_TC_CallCountingDelayMs` delays it should be able to
+report ~13.78 as well as ~13.83" - cannot work, and not by accident: a counting delay holds *everything*
+unoptimised, which is rung A. It reports 13.83. Rung B is optimised code without dynamic PGO, which is
+what `TieredPGO=0` says directly and what no amount of delay produces.
 
 ### Which switch owns which step
 
@@ -6076,11 +6082,12 @@ for applies to BenchmarkDotNet and there is no BenchmarkDotNet here.
 
 ### Where this is still incomplete
 
-- **The object is not named.** "Tier-0 allocates 48.5 bytes per row that optimised code does not" is a
-  mechanism, not an identification. Naming it wants an allocation profile of `RadzenDataGrid`'s row path
-  under MinOpts against FullOpts; boxing elimination is the obvious candidate, since it removes real heap
-  allocations, is a MinOpts-versus-FullOpts difference, and is governed by none of the switches above -
-  but that is a hypothesis with no measurement behind it and is written here as one.
+- ~~**The object is not named.**~~ - **named in §30**, and the hypothesis written here was right while
+  the reasoning under it was wrong. It is a boxed `ComponentFrameFlags`, two per row at 24 bytes, and the
+  mechanism is `Enum.HasFlag` - which boxes its receiver and its argument, and which the JIT expands into
+  a bit test in optimised codegen only. So optimised code does not *eliminate* the boxes; it never
+  creates them, which is exactly why `JitObjectStackAllocation=0` kept the step and left this bullet
+  looking unanswerable.
 - **This section and §26 disagree about the word "grid", and §26's sentence is the one to read
   carefully.** §26 says the 937.5 KB is "Not the pool, not the grid, not `RadzenDataGrid` - the JIT
   warming up underneath the harness", and that is right about the *mechanism*: the JIT is what changes,
@@ -6552,3 +6559,160 @@ none of whose columns can be fitted, and `MaxRows` bounding nothing without a fi
   does not change. That is true of the markup this component emits and is not enforced anywhere: a
   `CssClass` that makes one of those boxes narrower than its parent would make every growth answer wrong
   by the difference, silently.
+
+---
+
+## 30. §28's object, named - it is a box the JIT never creates
+
+§28 closed the mechanism and left the identification open, and said so plainly: *"Tier-0 allocates 48.5
+bytes per row that optimised code does not" is a mechanism, not an identification*, with boxing
+elimination written down as *"a hypothesis with no measurement behind it"*. It also left a prediction it
+had not confirmed - that the fourth rung, 13.78 MB, should be reportable by the benchmark though 190
+fresh processes had never returned it.
+
+Both are closed here. The hypothesis was right and the reasoning under it was wrong in a way that
+explains §28's own most puzzling negative result.
+
+### The object
+
+**A boxed `Microsoft.AspNetCore.Components.RenderTree.ComponentFrameFlags`**, 24 bytes, two per row.
+
+| | ticks at tier-0 | ticks optimised |
+| --- | ---: | ---: |
+| `ComponentFrameFlags` | **344** | **0** |
+
+800 renders either side, two runs each. Not "more at tier-0" - **absent** from optimised code entirely,
+which is the shape an identification wants and a correlation never has.
+
+### How it was asked
+
+The runtime raises `GCAllocationTick` about every 100 KB carrying the *type* that crossed the threshold,
+so a tick count per type is a sample of allocated bytes weighted by volume. `alloc-types` in `gridbench`
+listens for it over the same render `PoolProbe` and `FastGridFeatureBench.ReferenceDataGrid` use.
+
+**The comparison is one variable, and making it one took a correction.** Two pins hold the process at a
+rung and never leave it:
+
+| pin | rung | ctx KB/render |
+| --- | :---: | ---: |
+| `DOTNET_TieredCompilation=1 DOTNET_TC_CallCounting=0` | A | 14,157.4 |
+| `DOTNET_TieredCompilation=0` | B | 14,110.0 |
+
+Flat for 40 renders each, 47.4 KB apart, which is the step §28 measured at 47.3-47.8. **But those two
+pins differ in two things, not one**: the first compiles *Instrumented* Tier0 - the disassembly carries
+`CORINFO_HELP_CLASSPROFILE32` and `COUNTPROFILE32` - and the second instruments nothing. So the whole
+result could have been PGO's instrumentation rather than tier-0's codegen. Asked directly:
+`DOTNET_TieredPGO=0 DOTNET_TC_CallCounting=0`, uninstrumented and never promoted, sits at **14,157.4** -
+rung A, unmoved. The confound is dead and the remaining variable is codegen.
+
+### The mechanism, and why §28's negative result was not a contradiction
+
+`Enum.HasFlag(Enum)` boxes twice per call - the receiver, because the method is declared on `Enum`, and
+the argument, because the parameter is typed `Enum`. **The JIT expands it into a bit test, and that
+expansion runs in optimised codegen only.** At tier-0 the call is real and both boxes are allocated.
+
+Two boxes at 24 bytes is **48 bytes a row**, against a step measured at 48.5-48.8. The remaining 1-2%
+is not attributed.
+
+The call site, from the JIT's own compilation order in a default run:
+
+```
+2068: Renderer:InstantiateChildComponentOnFrame(...)      [Instrumented Tier0]
+2069: RenderTreeFrame:get_ComponentFrameFlags()           [Instrumented Tier0]
+2070: System.Enum:HasFlag(System.Enum)                    [Instrumented Tier1]
+```
+
+`Enum.HasFlag` being compiled **at all** is the evidence: a call the JIT had expanded would never be
+one. It reaches Tier1, so it is not merely called but called hot - once per child component
+instantiated, and a `RadzenDataGrid` row is a child component.
+
+**This is why `DOTNET_JitObjectStackAllocation=0` kept the step, which §28 recorded as its sharpest
+negative and could not explain.** Escape analysis was never the mechanism. Optimised code does not
+*eliminate* these boxes; it never *creates* them, because the call that would have created them is gone
+before any allocation exists to analyse. §28 read that result as "not escape analysis, and beyond that
+the matrix says only what it is not". It says more than that: it was pointing at the right answer from
+the wrong side.
+
+### Linearity, checked the way §28 checked the step
+
+If it is two boxes a row it must scale with rows, so it was asked at three sizes under the tier-0 pin,
+400 renders each:
+
+| rows | ticks/render | implied bytes/row |
+| ---: | ---: | ---: |
+| 500 | 0.208 | 44.0 |
+| 1000 | 0.458 | 47.4 |
+| 2000 | 0.888 | 45.9 |
+
+Doubling the rows doubles the count. The implied bytes/row run 6-9% under the 48 the box arithmetic
+predicts, which is the sampling error a 83-355 tick count carries (Poisson, ±5-11%) and is in the
+direction sampling error goes.
+
+### The fourth rung, observed
+
+§28 predicted 13.78 MB and had never seen it. The benchmark reports it:
+
+| pin | reports | rung |
+| --- | ---: | :---: |
+| default | 12.86 MB | D |
+| `DOTNET_TieredPGO=0` | **13.78 MB** | **B** |
+| `DOTNET_TC_CallCounting=0` | 13.83 MB | A |
+| `DOTNET_TC_CallCountingDelayMs=600000` | 13.83 MB | A |
+
+All four rungs are now values the benchmark has actually returned rather than values a probe inferred.
+
+**The prediction was right about the number and wrong about the route.** §28 guessed that *"a process
+whose promotion is delayed the way `DOTNET_TC_CallCountingDelayMs` delays it should be able to report
+~13.78 as well as ~13.83"*. It reports 13.83 and cannot report 13.78, and the reason is structural
+rather than incidental: delaying promotion holds *everything* unoptimised, which is rung A by
+definition. Rung B is optimised code without dynamic PGO - the small step landed, the big one not - and
+no amount of delay produces that. `TieredPGO=0` does, because it is the same thing said directly.
+
+### What did not survive
+
+**The first version of this measurement reported differences that were noise, and would have named the
+wrong object.** At 60 renders a side, the tick histograms differed by up to 1.4 ticks/render on the
+large types - `RenderFragment` "fell" by 1.37, `<>c__DisplayClass791_0` "rose" by 0.87 - while the whole
+step is **0.459 ticks/render**. Every one of those was larger than the thing being measured. The signal
+only separates at 400 renders a side, where the run-to-run spread of a type is printed beside its
+difference and `ComponentFrameFlags` is the one type whose difference exceeds its own noise by an order
+of magnitude. **A sampled instrument has a resolution, and 0.34% of a workload is below this one's**
+until the sample is large enough - which is §26's lesson about single observations in another form.
+
+**The type was also nearly misnamed by a print width.** The difference first read as
+`Microsoft.AspNetCore.Components.RenderTree.Component`, which does not exist - a throwaway script that
+differenced the two histograms truncated the column at 52 characters. `alloc-types` itself does not
+truncate and the full name was in its output all along, which is the only reason it was caught: the
+check was to go back and read the raw line rather than to trust the summary of it.
+
+### Verified
+
+- **The pins**: `pool-probe 1000 40` under each, reading the ladder directly. A = 14,157.4, B = 14,110.0,
+  flat. The confound run - `DOTNET_TieredPGO=0 DOTNET_TC_CallCounting=0` - is a third ladder.
+- **The histograms**: `alloc-types 1000 400`, twice per pin. Reported per render and per type with the
+  same-configuration spread printed beside the between-configuration difference, so a difference smaller
+  than its own noise is visible as such.
+- **The linearity**: `alloc-types <500|1000|2000> 400` under the tier-0 pin.
+- **The rungs**: `--job short --filter "*ReferenceDataGrid*"`, one run per pin, each confirmed with
+  `executed benchmarks: 2` before the number was read - §9's check, and the one §24 was caught by.
+- **No library or test code changed.** `gridbench` gains one mode. The library builds at 0 warnings and
+  the suites are unchanged either side, as they must be.
+
+### Where this could still be wrong
+
+- **1-2% of the step is unattributed.** Two boxes is 48 bytes a row and the step is 48.5-48.8. The
+  remainder is under the sampling resolution, so what it is has not been asked, only bounded.
+- **The call site is read off compilation order, not off a disassembly.** `InstantiateChildComponentOnFrame`
+  compiles, then the flags getter, then `HasFlag` - which is strong and is not the same as seeing the two
+  boxes emitted. The arm64 tier-0 disassembly shows boxes as `CORINFO_HELP_NEWSFAST` with no dedicated box
+  helper to grep for, and telling those apart from the method's other allocations was not attempted.
+- **One HasFlag call per row is inferred from the arithmetic**, not counted. Two boxes a row is what 48
+  bytes means; that it is one call rather than two half-calls of something else is the simplest reading
+  and not a measured one.
+- **§28's third leftover is untouched.** `DOTNET_TC_CallCountingDelayMs` still demonstrates that promotion
+  timing moves the row without establishing what delayed promotion on the machines that saw the high mode.
+  That needs those machines.
+- **Nothing here is actionable in this library**, and that is worth stating rather than leaving implied:
+  the boxes exist only in unoptimised code in a framework method, so they are transient by construction
+  and gone by the time any process is warm. This explains a benchmark artefact; it does not describe a
+  cost anyone pays in production.

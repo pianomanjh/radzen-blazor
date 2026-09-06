@@ -306,6 +306,17 @@ public class Program
             return;
         }
 
+        // §28's remaining question: the 48.6 bytes a row is a mechanism, not an identification. This
+        // histograms allocation by type off the runtime's own GCAllocationTick, so the two tier pins
+        // either side of the step can be differenced and the object named.
+        if (a.Length > 0 && a[0] == "alloc-types")
+        {
+            await AllocTypes.Run(
+                a.Length > 1 ? int.Parse(a[1], CultureInfo.InvariantCulture) : 1000,
+                a.Length > 2 ? int.Parse(a[2], CultureInfo.InvariantCulture) : 240);
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(a);
     }
 }
