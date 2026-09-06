@@ -6548,9 +6548,42 @@ none of whose columns can be fitted, and `MaxRows` bounding nothing without a fi
   not one: the single-select pane has `AllowPaging` off and carries no pager, and a second pane was added
   with paging on that does. The arithmetic subtracts the rendered rows from the whole box and keeps
   everything else, so a pager is chrome it never names and therefore never has to know about - and that
-  is now measured rather than argued. **A virtualizing popup is still unchecked**, and it is the shape
-  with an actual interaction rather than merely an untested one: its rows arrive *after* the measurement,
-  and `Virtualize` needs a bounded height to decide the window that `MaxRows` is about to rewrite.
+  is now measured rather than argued.
+
+### A virtualized popup's first open is fitted to a window that is about to change
+
+The remaining half of that bullet was checked in the playground, which is the only instrument that can:
+`Virtualize` needs a live runtime, and the browser fixture is static HTML. It found a real consequence,
+measured at 1000 rows with `PopupFit=Content`, `MaxRows=6` and a floor on every column:
+
+| open | panel | rendered rows | truncated cells |
+| --- | ---: | ---: | ---: |
+| **first**, window not yet settled | 829 px | 106 | **112 of 424** |
+| second and third, settled | 861 px | 106 | **0 of 424** |
+| the same popup paged instead | 821 px | 8 | 0 of 32 |
+
+**The first open sizes the panel from one window and fits the columns to another.** The measurement
+happens against the window `Virtualize` built for `PopupHeight`; `MaxRows` then rewrites that height,
+`Virtualize` re-renders, and the fit that follows is against rows whose content is wider than anything
+the growth saw. The columns are squeezed onto their floors and a quarter of the cells truncate - in a
+panel that grew specifically so they would not.
+
+**It is not fixed, and measuring it is what settled that it should not be.** Three fixes were considered
+and each fails for a reason worth recording:
+
+- *Measure once and use those numbers for both* - the split `autoFit` would allow - **does not help.**
+  The rows that truncate are ones that had not been rendered when any measurement ran, so one measurement
+  or two makes no difference to them.
+- *Re-fit once the window settles* is the continuous mode §13 rejected, and here it would resize the
+  panel under a pointer that is already inside it.
+- *Write the height before measuring* only moves which window is the wrong one, because `Virtualize`
+  re-renders on its own schedule and over-renders by a wide margin - 106 rows for a box eight rows tall.
+
+The root cause is §13's own documented semantics arriving somewhere they bite harder: *"what it measures
+is what is rendered"*. What is new is that the **panel's width** is now derived from that, so being wrong
+about the window is visible truncation rather than a column that is merely narrower than ideal. **It
+corrects itself on the next open**, which is what per-open fitting buys, and an author who cannot accept
+one badly-fitted first open should page the popup rather than virtualize it.
 - ~~**Multi-select is inferred, not checked.**~~ - **closed.** A second browser pane opens a `Multiple`
   drop-down and asserts what the single-select pane asserts: it sizes itself, it is placed, its chrome
   lands outside the width written on it - the `content-box` fact, which had been read off the theme for

@@ -1109,6 +1109,12 @@ in `PopupStyle`. Those are two floors and they compose; neither is ignored.
 again. Nothing re-fits while the popup is open: that would move the panel under the pointer, so
 `PopupWidth` is the way to pin a width rather than an imperative call.
 
+**A virtualized popup's first open is fitted to a window that is about to change.** `Virtualize` builds
+its window against `PopupHeight`, `MaxRows` then changes that height, and the rows that arrive afterwards
+were not measured - so the columns can be squeezed onto their floors and truncate on the *first* open of
+a `PopupFit="Content"` popup that also virtualizes. It corrects itself on the next open. Page the popup
+instead if that first open matters.
+
 **`MaxRows` is not `PageSize`.** `PageSize` is how many rows the query returns; `MaxRows` is how many are
 shown before the popup scrolls, and an author may fetch ten and show six. It supersedes `PopupHeight`.
 
