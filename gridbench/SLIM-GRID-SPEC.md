@@ -7576,51 +7576,76 @@ count says nothing about which kind of cost it is.
 obvious candidates - the model objects, the descriptor, the expression tree - are each allocated the same
 number of times as before, so the ~0.8 KB has no mechanism named yet.
 
-### The time half, paid
+### The time half, and what it could not settle
 
-Owed since this section landed, and left owed by §34 and §35 after it. §9's rule is that a time ratio comes
-from a full-length run or is not quoted, so this is the default job rather than `--job short`: six passes
-of the base against five of `HEAD`, the arms alternated, `Bare` in every one of them, and any block whose
-StdDev exceeded 3% of its mean discarded before a number was read off it. The arms are `b71844eca` -
-§32's review fix, the commit before the currency moved - and `HEAD`, so what is weighed is §33, §34 and
-§35 together rather than this section alone.
+Owed since this section landed, and left owed by §34 and §35 after it. §9's rule is that a time ratio
+comes from a full-length run or is not quoted, so this is the default job rather than `--job short`,
+swept over a hundred rows and a thousand: six passes of `b71844eca` - §32's review fix, the commit before
+the currency moved - against five of `HEAD`, which weighs §33, §34 and §35 together rather than this
+section alone.
 
-**`bare` is the control that says the comparison is allowed.** 438.9 us on the base against 438.9 on
-`HEAD` at a thousand rows, a permutation test on the medians returning p = 1.00: the two arms ran on an
-equally fast machine, which is the thing that makes the absolute microseconds below comparable at all.
-Worth saying plainly that the machine was **not** quiet while they ran - load average between 3 and 15 on
-ten cores - which is why the discarding rule exists and why every figure here is a median of passes
-rather than a reading.
+**Two rules used below are this section's own and not §9's**, which is worth saying because the first
+draft of this attributed them: a block whose StdDev exceeded 3% of its mean is discarded before a number
+is read off it, and every figure is a median over passes. §9 asks for the modal value of several runs and
+for a full-length job, and it also asks for **a quiet machine** - and that one was broken. Load average
+ran between 3 and 15 on ten cores. The discard rule is an attempt to cover a protocol violation, not a
+protocol.
+
+**The arms were not alternated, as the first write-up of this claimed they were.** A1 B1 A2 B2 alternated;
+B3 B4 B5 then ran as one block and A3 A4 A5 A6 as another, forty minutes later. Arm is therefore
+confounded with wall-clock window for eight of the eleven passes. `bare` is what says whether that
+mattered, and at a thousand rows it did not - 437.3, 439.5, 438.2, 437.3, 441.5, 441.3 on the base
+against 438.5, 440.4, 437.5, 439.3 on `HEAD`, with no drift between the windows. **At a hundred rows it
+is not excused.**
 
 | N=1000, over passes | base | `HEAD` | Δ median | Δ mean |
 | --- | --- | --- | --- | --- |
-| bare | 438.9 us | 438.9 us | +0.05 (p = 1.00) | -0.26 (p = 0.82) |
-| a filter row, filtering nothing | 440.0 us | 440.6 us | +0.60 (p = 0.75) | -4.75 (p = 0.87) |
-| a filter that actually filters | 191.2 us | 193.6 us | +2.40 (p = 0.11) | **+3.65 (p = 0.011)** |
-| the same over a queryable | 351.1 us | 352.7 us | +1.60 (p = 0.07) | **+3.93 (p = 0.006)** |
+| bare | 438.8 us (6) | 438.9 us (4) | +0.08 (p = 0.97) | -0.26 (p = 0.81) |
+| a filter row, filtering nothing | 440.0 us (6) | 440.6 us (4) | +0.59 (p = 0.75) | -4.74 (p = 0.87) |
+| a filter that actually filters | 191.2 us (6) | 193.6 us (5) | **+2.41 (p = 0.078)** | +3.63 (p = 0.011) |
+| the same over a queryable | 351.1 us (6) | 352.7 us (5) | **+1.61 (p = 0.013)** | +3.92 (p = 0.007) |
 
-p is a two-sided permutation test over the passes, exact rather than assumed - ten or eleven surviving
-passes a row admit few enough arrangements to enumerate every one of them. **Both statistics are quoted because they disagree about how
-much to believe, and the disagreement is the reading.** The median test has almost no power at six passes
-against five; the mean test is the one that can be dragged by a single slow pass, which is exactly what
-the filter row's negative mean delta is - one base pass at 473.8 us against its own median of 440.
-Neither is trustworthy alone.
+p is a two-sided permutation test over the per-pass means, enumerated rather than assumed. **The median
+is the number to read and the mean is not.** Dropping any single pass moves the median deltas only
+between +2.37 and +2.64, and between +1.60 and +1.62; dropping *one* pass, B5, halves both means - +3.63
+to +2.02 and +3.92 to +1.37. B5 is the slow pass in both rows, so the first write-up's "two rows agreeing
+against two controls" was partly one pass agreeing with itself, and its own caution about a single slow
+pass dragging a mean was applied only to the control that had moved the wrong way.
 
-**What survives both is the pattern.** The two controls sit between p = 0.75 and p = 1.00 whichever way
-they are read, and the two filtered rows are the only ones any test calls significant - p = 0.011 and
-p = 0.006, agreeing with each other. Two rows moving together against two that did not is worth more here
-than either p-value: **the rows that moved are the rows that compose a filter**, and a grid drawing a
-filter row it never applies is untouched.
+**A filtered render costs about 2.4 us more than it did; an unfiltered one costs nothing more.** That is
+the result. `bare` is flat at p = 0.97. The second control is not really one: the unfiltered filter row's
+base passes span 436 to 474 us, a 37 us spread against a 2.4 us effect, so it can neither detect this nor
+exclude it. *Two controls did not move* was one control that did not move and one that could not have
+said either way.
 
-**The gate holds where it can fail the piece, and not to its own letter.** What this gate was written
-against was `c1 ⊕ c2` composed unconditionally - *an extra delegate call per row, forever* - and that is
-the one thing the numbers rule out. The delta is **+2.75 us at a hundred rows against +2.41 us at a
-thousand**: flat across a tenfold change, where a per-row cost would have been ten times the larger. What
-is left is fixed, and the letter of the gate said *unchanged*.
+### What the clock could not settle, and what did
 
-**So the fixed cost has a second currency and still no mechanism.** ~0.8 KB and ~2.4 us on a filtered
-render, once rather than per row. Whether they are one event or two is not measured; that both are fixed
-and both appear on exactly the rows that build a filter is as far as this goes.
+**The gate's failure mode is the same size as the residual, so the benchmark cannot rule it out.** This
+gate was written against `c1 ⊕ c2` composed unconditionally - an extra delegate call per row. The
+benchmark filters `Name` by `Contains "5"` over every source row, so at a thousand rows that fear
+predicts a thousand extra delegate invocations: one to two microseconds. The measured residual is 2.4.
+**A measurement whose resolution is the size of the effect it must exclude has excluded nothing**, and
+the first write-up of this section said the numbers ruled it out. They do not.
+
+The row-count sweep does not rescue it. At a hundred rows the same delta reads +2.75 us at **p = 0.34**,
+on three surviving base passes against four, while `bare`'s own mean moves +4.35 and the unfiltered
+filter row moves +3.34 - further than the effect being claimed. The queryable row moves +5.99 at a
+hundred against +1.61 at a thousand, a delta that *shrinks* with rows, which is neither fixed nor per-row
+and is two hot passes. **Nothing at a hundred rows can carry this argument**, and reading +2.75 against
++2.41 as flatness across a tenfold change was taking two significant figures off a p = 0.34.
+
+**What settles it is the code, which is where the rule lives.** §33's own review standard - a test one
+layer above a rule is not a test of the rule - applies to a benchmark most of all. `FilterPredicate.For`
+builds the body of the first condition and joins a second only under `filter.EffectiveSecond is { }
+second`; `PredicateFor` puts the delegate route behind the same guard. **With one condition there is no
+join, no wrapper and no second call per row** - the tree and the delegate are the ones that were there
+before. The gate is met by construction, and it was always going to be met by construction rather than
+by a clock. What the clock was good for was finding the residual, which is a different question and one
+nobody had asked.
+
+**So the residual is real, small, and not the thing the gate feared.** ~0.8 KB and ~2.4 us on a filtered
+render, unattributed in both currencies - with one thing now known about it that the allocation half
+could not say: it is not the join, because there is no join.
 
 ### What the review found that the build had not
 
@@ -7696,10 +7721,13 @@ exists: **a test one layer above a rule is not a test of the rule.** All thirtee
   divergence from `QueryableExtension` that nothing measures.
 - **An `In` over OData renders the typed list's `ToString`.** Pre-existing, upstream's, and on the seam
   this section promised not to touch - but nothing in the suite covers it.
-- **The fixed cost is now measured in two currencies and attributed in neither.** ~0.8 KB and ~2.4 us, on
-  a filtered render, once rather than per row - see *The time half, paid*. The candidates that were
-  counted for the allocation half are each allocated the same number of times as before, and nothing has
-  been counted for the time half at all. It is small, it is not per row, and it is unexplained.
+- **The residual is measured in two currencies and attributed in neither.** ~0.8 KB and ~2.4 us on a
+  filtered render - see *The time half, and what it could not settle*. The candidates counted for the
+  allocation half are each allocated the same number of times as before, and nothing has been counted for
+  the time half at all. **Whether it is fixed or per row is also unsettled**: the allocation sweep says
+  fixed, a delegate call costs no allocation at all so that sweep cannot see one, and the time sweep at a
+  hundred rows is p = 0.34. What is known is that it is not the second condition's join, which does not
+  exist for a one-condition filter.
 
 ### Where this could still be wrong
 
@@ -7714,6 +7742,9 @@ exists: **a test one layer above a rule is not a test of the rule.** All thirtee
 - **"Parsed against the column's type" makes the type load-bearing at restore** in a way it was not. §32
   made `EffectiveFilterType` matter more than its own comment claimed; this makes it decisive.
 - **Nothing here is measured.** The gate is a budget until piece 2 of the order above has run.
+  *It has, in both currencies - see What the model cost and The time half. The allocation half
+  passes; the time half found a residual the gate never asked about and could not have settled the
+  half it did ask about, which the code settles instead.*
 
 ---
 
@@ -7973,10 +8004,15 @@ whatever the machine was doing it did to both arms seconds apart:
 | median of five passes | **1.000** | **1.001** |
 | spread | 0.991 - 1.007 | 0.995 - 1.006 |
 
-**A token costs no measurable time to read**, at either row count, with a spread under 1% - inside §9's
-3% bar by a factor of three, which is tighter than the allocation half managed. The other half of this
-section's gate, the token-free path unchanged, is cross-commit and is measured in §33's *The time half,
-paid*: `bare` and an unfiltered filter row do not move.
+**A token costs no measurable time to read**, at either row count, with a spread under 1%. That is the
+half of this gate a within-pass pair can answer, and it is the clean half: five passes, both arms of each
+comparison measured seconds apart in one process, so none of the machine weather that troubles §33's
+cross-commit table reaches it.
+
+The other half - the token-free path unchanged - is cross-commit and is measured in §33's *The time half,
+and what it could not settle*, with the caveats recorded there: `bare` does not move at p = 0.97, and the
+unfiltered filter row's own spread is fifteen times the effect it is being used to exclude, so it says
+nothing either way.
 
 ### What the review found that the build had not
 
@@ -8091,7 +8127,8 @@ sites covering for each other tested none of them.
   a date `Equals` at all, it writes the whole-day `Between`. The operator keeps its literal reading for
   the markup author, and there is one rule rather than two readings.*
 - **Nothing here is measured.** The gate is a budget until the build has run - *and it has: see What it
-  cost, where both halves now pass - the token costs no measurable time to read, at either row count.*
+  cost. The token's own cost is measured and is nothing, in both currencies. The token-free half rests on
+  §33's cross-commit table, where one control is flat and the other cannot resolve the effect.*
 
 ## 35. The filter menu, and the column writes its own editor - the design
 
@@ -8462,11 +8499,14 @@ The gate asked for *unchanged*, and it is unchanged in the direction that cannot
 | never opened, filtering | **0.973** (3 passes) | **0.997** (5 passes) |
 
 **A menu nobody has opened costs no measurable time against the row it replaces**, and nothing that grows
-with rows - the ratio is the same at a hundred as at a thousand. The counts differ because a block whose
-StdDev exceeded 3% of its mean was discarded rather than read, and the hundred-row blocks - where the
-whole render is a hundred microseconds - lost more of them; the thousand-row rows are the tight ones, and
-they are the ones that answer the per-row question. Time now says what allocation said, and for the same
-reason: nine header icons against nine `<input>`s, their binders and an extra `<tr>`.
+with rows: every one of the four figures is within 3% of parity, and the two that matter for the per-row
+question - the thousand-row rows, where the render is long enough to measure - are within 0.3%. The
+hundred-row pair is looser (0.973 is 2.7% under parity, not the "same" an earlier draft called it) and it
+is looser in the direction that cannot fail the gate. The counts differ because a block whose StdDev
+exceeded 3% of its mean was discarded rather than read, and the hundred-row blocks lost more of them -
+unfiltered, the discarded ones span 0.82 to 1.63, which is what noise looks like at that size. Time now
+says what allocation said, and for the same reason: nine header icons against nine `<input>`s, their
+binders and an extra `<tr>`.
 
 
 ### What the review found that the build had not
@@ -8612,8 +8652,8 @@ a decision without its constraint is how a limit that belongs to one design gets
   to. There is no third option that is both, and the tab stop wins because it is the older promise.
 - **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
   that can fail the piece. *It is built: see What it cost, where the allocation half passes in the
-  direction that cannot fail it and the time half is now paid at 1.00 against the filter row, at both row
-  counts.*
+  direction that cannot fail it and the time half is now paid: within 0.3% of the filter row at a
+  thousand rows, and no worse than 2.7% under it at a hundred.*
 - **The editors' argument survived for a different reason than the one given**, which is worth keeping
   separately from the correction above. The boxing this section objected to is real and small; what
   actually makes a column-written editor necessary is that `RadzenDatePicker` converts by asking its own
