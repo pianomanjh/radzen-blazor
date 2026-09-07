@@ -479,10 +479,13 @@ namespace Radzen.FastGrid
             set => thisYearFilterText = value;
         }
 
-        // §37's six, of which two are upstream's keys used verbatim and four have no upstream key.
-        // DataFilter_ClearFilterText is the interesting reuse: it is RadzenDataFilter's own name for
-        // the button that clears everything, it is already "Clear all" in five cultures, and it means
-        // exactly what the bar's button means.
+        // §37's seven, of which three are upstream's keys used verbatim and four have no upstream key.
+        // The first count of this comment said six and two, and the review caught both: the reuse it
+        // then singled out as "the interesting" one was not in its own tally.
+        //
+        // DataFilter_ClearFilterText is that reuse: it is RadzenDataFilter's own name for the button
+        // that clears everything, it is already "Clear all" in five cultures, and it means exactly what
+        // the bar's button means.
 
         string? andFilterText;
 

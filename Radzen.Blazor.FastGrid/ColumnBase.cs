@@ -1648,9 +1648,11 @@ namespace Radzen.FastGrid
         /// <para>
         /// §34's relative-date token falls to <c>ToString</c> and that is its designed answer: §34 named
         /// a pill as one of the two places a token "sits alone with no position to be judged by", and
-        /// <c>today-6d</c> is the canonical text it settled on. A token that is half of one of the six
-        /// presets never reaches here - <see cref="FastGridFilterPresets.Recognize" /> answers for the
-        /// whole filter before the values are read one at a time.
+        /// <c>today-6d</c> is the canonical text it settled on. A token belonging to one of the six
+        /// presets reaches here whenever the filter around it is not one -
+        /// <see cref="FastGridFilterPresets.Recognize" /> answers for a whole filter and declines any
+        /// that carries a second condition - and prints as those words. An earlier draft of this remark
+        /// said such a token "never reaches here", which was wrong and was found by the review.
         /// </para>
         /// </remarks>
         internal virtual string? FilterValueTextOf(object? value) => value switch

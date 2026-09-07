@@ -383,10 +383,25 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void APresetIsReadFromTheWholeFilterAndNeverFromHalfOfOne()
+        public void APresetIsAShapeOfTheWholeFilterAndNotOfHalfOfOne()
         {
-            // A preset is a shape of the whole filter. A second condition that happens to be a
-            // preset-shaped range must not swallow the first condition's word.
+            // Asked of Recognize, which is where the rule lives. FilterPill used to pass null for the
+            // second clause to enforce this, and the mutation loop showed that write unobservable -
+            // Recognize matches only a filter whose Second is null, so a two-condition filter is
+            // declined whichever clause asks. §33's finding: the guard was one layer below the rule.
+            var preset = FastGridFilterPreset.Last7Days.Filter();
+
+            Assert.Equal(FastGridFilterPreset.Last7Days, FastGridFilterPresets.Recognize(preset));
+
+            var paired = new FastGridFilter(preset.First,
+                new FastGridFilterCondition(FastGridFilterOperator.IsNull), LogicalFilterOperator.Or);
+
+            Assert.Null(FastGridFilterPresets.Recognize(paired));
+        }
+
+        [Fact]
+        public void ATwoConditionFilterSpellsBothHalvesOut()
+        {
             using var ctx = new TestContext();
 
             var cut = Render(ctx, Columns.Of(
@@ -395,13 +410,31 @@ namespace Radzen.FastGrid.Tests
             var column = cut.FindComponent<PropertyColumn<Person, DateTime>>().Instance;
             var preset = FastGridFilterPreset.Last7Days.Filter();
 
-            var filter = new FastGridFilter(
-                new FastGridFilterCondition(FastGridFilterOperator.IsNull),
-                preset.First,
-                LogicalFilterOperator.Or);
+            var filter = new FastGridFilter(preset.First,
+                new FastGridFilterCondition(FastGridFilterOperator.IsNull), LogicalFilterOperator.Or);
 
-            Assert.StartsWith("Hired Is null Or Between", Phrase(cut, column, filter),
-                StringComparison.Ordinal);
+            Assert.StartsWith("Hired Between today-6d and today@end Or Is null",
+                Phrase(cut, column, filter), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void AColumnWithNoHeaderTextIsItsClauseAlone()
+        {
+            // The header is prepended only when there is one, and no other test reached the branch.
+            // A PropertyColumn falls back to its property path, so an empty Title is what an unnamed
+            // column actually looks like - the fallback is the reason the branch is nearly dead rather
+            // than a reason it can go.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "")));
+
+            var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
+
+            Assert.Equal(string.Empty, column.HeaderText);
+
+            Assert.Equal("Contains an",
+                Phrase(cut, column, One(FastGridFilterOperator.Contains, "an")));
         }
 
         // ---- the bar, which only a render answers ----
@@ -626,6 +659,120 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Single(Pills(cut));
             Assert.Equal(0, executor.Scans);
+        }
+
+        // ---- what the mutation loop found unpinned ----
+
+        [Fact]
+        public void AColumnThatCannotBeFilteredGetsNoPillEvenHoldingAFilter()
+        {
+            // A declared FilterValue is written to CurrentFilter whether or not the column can be
+            // filtered, so HasFilter - not CurrentFilter - is what the bar has to ask. Without it the
+            // bar would draw an x that Filter refuses, which is the affordance the design rules out.
+            //
+            // **Two columns, and the first draft had one.** The band itself is drawn only when some
+            // column HasFilter, so with a single unfilterable column the band never opens and the
+            // per-column guard is unreachable - the mutation that dropped it stayed green. A second,
+            // genuinely filtered column is what opens the band so the guard has something to refuse.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "First",
+                    filterValue: "A", filterable: false),
+                Columns.Property<Person, string>(x => x.Last, title: "Last")));
+
+            var refused = cut.FindComponents<PropertyColumn<Person, string>>()
+                .Select(c => c.Instance).Single(c => c.Title == "First");
+
+            Assert.NotNull(refused.CurrentFilter);
+            Assert.False(refused.HasFilter);
+
+            Apply(cut, "Last", "B");
+
+            Assert.Equal(new[] { "Last Contains B" }, PillText(cut));
+        }
+
+        [Fact]
+        public void AnEditablePillIsAButtonAndATabStop()
+        {
+            // §12's one tab stop is a rule about the grid's cells; this band is chrome outside
+            // role="grid", so a filter only a mouse can remove would be the mouse-only control §31
+            // refused for the header icon.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "First")));
+
+            Apply(cut, "First", "A");
+
+            var pill = Pills(cut).Single();
+
+            Assert.Equal("button", pill.GetAttribute("role"));
+            Assert.Equal("0", pill.GetAttribute("tabindex"));
+        }
+
+        [Theory]
+        [InlineData("Enter")]
+        [InlineData(" ")]
+        public void TheKeysThatComeWithTheButtonRoleOpenThePill(string key)
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "First")), ui: FilterUI.Menu);
+
+            Apply(cut, "First", "A");
+
+            Assert.Empty(cut.FindAll(".rz-overlaypanel .rz-filter-menu-item"));
+
+            Pills(cut).Single().KeyDown(key);
+
+            Assert.NotEmpty(cut.FindAll(".rz-overlaypanel .rz-filter-menu-item"));
+        }
+
+        [Fact]
+        public void AKeyThatIsNotOneOfThoseTwoDoesNothing()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "First")), ui: FilterUI.Menu);
+
+            Apply(cut, "First", "A");
+
+            Pills(cut).Single().KeyDown("a");
+
+            Assert.Empty(cut.FindAll(".rz-overlaypanel .rz-filter-menu-item"));
+        }
+
+        [Fact]
+        public void UnderTheRowTheBodyPutsTheCursorInThatColumnsFilterCell()
+        {
+            // The other half of the two-destination rule. Asserted through the interop rather than
+            // through a rendered result, because focus and the scroll it causes both happen in a
+            // browser - which is where the behaviour itself was confirmed.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var module = ctx.JSInterop.SetupModule("./_content/Radzen.Blazor.FastGrid/fastgrid.js");
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, title: "First"),
+                Columns.Property<Person, string>(x => x.Last, title: "Last")));
+
+            Apply(cut, "Last", "B");
+
+            var cell = cut.FindAll("thead .rz-cell-filter")[1].GetAttribute("id");
+
+            Assert.NotNull(cell);
+
+            Pills(cut).Single().Click();
+
+            // The second column's cell, not the first: the id carries the drawn index, and a pill for
+            // a column that is not the leftmost is what catches this going by position instead.
+            Assert.Equal(cell,
+                Assert.Single(module.Invocations["focusFilter"].Single().Arguments));
         }
     }
 }

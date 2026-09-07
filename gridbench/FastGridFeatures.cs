@@ -263,6 +263,36 @@ public class FastGridFeatureBench
             FastGridFilterOperator.GreaterThanOrEquals);
     };
 
+    // §37, added by the review. One of the five filtered, keeping every row on the same rule as the
+    // three above - so the pair of arms below and the pair above differ by exactly two pills, and the
+    // per-pill cost stops being a division. §37's first draft reported "about 2.3 KB per pill" by
+    // dividing the three-pill delta by three, which folds the band, the chip list and the Clear all
+    // button - all of them fixed - into a rate. No arm isolated one pill, so no arm licensed the rate.
+    static readonly RenderFragment OneFilteredColumn = b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title, object filterValue)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+
+            if (filterValue is not null)
+            {
+                b.AddAttribute(s++, "FilterValue", filterValue);
+            }
+
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id", null);
+        Column<string>(x => x.Name, "Name", "Person");
+        Column<int>(x => x.Age, "Age", null);
+        Column<DateTime>(x => x.Hired, "Hired", null);
+        Column<decimal>(x => x.Salary, "Salary", null);
+    };
+
     // §34. The same five columns with a date range on Hired, written twice: once as two DateTimes and
     // once as two tokens. The pair is the measurement - the delta between them is what a relative date
     // costs, with the range itself held constant, and the sweep over N is what says whether that cost is
@@ -772,6 +802,24 @@ public class FastGridFeatureBench
         p["AllowFiltering"] = true;
         p["ShowFilterPills"] = true;
         p["ChildContent"] = ThreeFilteredColumns;
+    });
+
+    // The pair the review added, so the per-pill number is a difference between two measured points
+    // rather than a division. One filter against three is two pills; everything else about the two
+    // arms - the band, the chip list, the Clear all button, the columns, the rows kept - is identical.
+    [Benchmark(Description = "+ one filter, no pill bar (control)")]
+    public Task OneFilterNoPills() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ChildContent"] = OneFilteredColumn;
+    });
+
+    [Benchmark(Description = "+ a pill bar, one filter applied")]
+    public Task PillsOneFilter() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ShowFilterPills"] = true;
+        p["ChildContent"] = OneFilteredColumn;
     });
 
     // The one hook on this component that runs per cell rather than per row or per column, so the

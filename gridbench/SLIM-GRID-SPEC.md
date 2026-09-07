@@ -9268,9 +9268,13 @@ from those strings: upstream's vocabulary is `Equals`, `Greater than`, `In`, `Is
 disagreeing with the menu two inches above. The pill reads `Hired Between ...`, which is stiffer
 English than §31 promised, and the promise is the half that goes.
 
-Three new strings, and only three: the **and** that joins a range's bounds, **Clear all**, and the
-**or {0} more** that ends a degraded list. The operators, the presets and *Clear* are already localized
-by §35.
+~~Three new strings, and only three: the **and** that joins a range's bounds, **Clear all**, and the
+**or {0} more** that ends a degraded list.~~ **Wrong in both directions, and the build settled it at
+four.** *Clear all* is not new - it is upstream's own `DataFilter_ClearFilterText`, already those two
+words in five cultures. The four with no upstream key are the **and** joining a range's bounds, the
+**or {0} more** ending a degraded list, and two this paragraph never budgeted for: the remove button's
+name and the bar's own, both of which §12 requires and neither of which a design counting *wording*
+strings thought to count. The operators and the presets are already localized by §35.
 
 **Past three named values a list becomes a count.** A pill is a label, not a list - four values is
 something a reader parses rather than recognises, and the bar has as many pills as there are filtered
@@ -9283,8 +9287,12 @@ bar §31 set, and a knob added before anyone has asked is a knob every later sec
 itself off to defend *queries per open*, and a bar that resolves ids by scanning would spend that gate
 on the render after the filter rather than on the open.
 
-The hook is one new virtual, `ColumnBase.FilterValueTextOf`. The base names a value through `Entries`
-when one matches it, which covers the blank and the enum member; `PropertyColumn` applies its `Format`,
+The hook is one new virtual, `ColumnBase.FilterValueTextOf`. ~~The base names a value through
+`Entries` when one matches it, which covers the blank and the enum member;~~ **the build did the
+opposite and the design paragraph was wrong.** `Entries` exists only once a check-box list has been
+drawn, so naming through it would make one filter read one way before the menu was opened and another
+after. The base spells the blank and the enum member directly instead - the same word the list draws,
+reached by rule rather than by whatever list happens to be cached. `PropertyColumn` applies its `Format`,
 which lives there and not on the base, so `Salary Greater than $50,000` and `Hired Between 01/01/2026`
 read as their cells do; `LookupColumnBase` resolves a `TKey` through §14's map, which §14 resolved once
 at startup. A declared check-box-list column whose menu has never been opened has run no scan, so its
@@ -9358,11 +9366,18 @@ also called, which is why it is measured rather than asserted:
 
 | row | what it holds |
 | --- | --- |
-| pills off | today, and the baseline the other two are read against |
+| pills off | today, and the baseline the others are read against |
 | pills on, nothing filtered | the band that is not drawn |
-| pills on, three columns filtered | three pills, and the whole cost of the feature |
+| pills on, one column filtered | the band, and one pill |
+| pills on, three columns filtered | the band, and three |
 
 §35's allocation rows are re-run beside them rather than assumed.
+
+**The one-filter pair is the review's, and the design did not have it.** Without it the per-pill number
+is the three-pill delta divided by three, which folds the band, the chip list and the *Clear all*
+button - every one of them fixed - into a rate no arm isolates. Two measured points on the pill axis is
+what makes it a difference instead of a division, and it is the same objection this section makes to a
+single row count on the row axis, one axis over.
 
 The second gate is Clear all's single query, above. It is a gate because it can fail: a loop calling
 the public clear per column reads six, and the mutation that writes that loop is the one that proves
@@ -9471,3 +9486,62 @@ row's text has its own rule and its own tests. Recorded in *Also open*.
   whose column they cannot see. It is an asymmetry the design did not intend and did not specify;
   closing it means a scroll on §35's open sequence, which is where the last two circuit-terminating
   bugs came from, so it is recorded rather than added at the end of a build.
+
+### What the review found that the build had not
+
+**The gate's number was right and its rate was not earned.** The build reported *"about 2.3 KB per
+pill"* by dividing the three-pill delta by three, which folds the band, the chip list and the *Clear
+all* button - all fixed - into a per-pill rate that no arm isolated. It is the objection this section
+already makes about a single row count, one axis over, and the table had no second point on the pill
+axis. A one-filter pair now supplies one:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| one filter, no pill bar (control) | 57.59 KB | 164.80 KB |
+| a pill bar, one filter applied | 59.70 KB | 167.18 KB |
+| three filters, no pill bar (control) | 67.15 KB | 174.41 KB |
+| a pill bar, three filters applied | 74.08 KB | 181.29 KB |
+
+**The bar costs +2.11 KB for one pill and +6.93 KB for three at a hundred rows; +2.38 and +6.88 at a
+thousand.** Two points, so the per-pill cost is a difference rather than a division: **2.41 KB and
+2.25 KB per pill**, and the band's own fixed cost - the `rz-datatable-header`, the chip list, the
+*Clear all* button - falls out at **-0.30 KB and +0.13 KB**, which is zero within the measurement. The
+whole of the feature's cost is its pills. The naive division happened to land on the same number, which
+is luck and is not the reason to keep it.
+
+The allocation figures are read on a machine at load average 5, which changes the time column and
+cannot change these: an allocation count is deterministic. The time column from that run is not quoted
+anywhere, and its standard deviations - up to 2,093 us on one row - are why.
+
+**Five rules the tests named and could not have failed.** Found by mutation, all now pinned: the
+`Enter` and `Space` the pill's `role="button"` promises, its `tabindex="0"`, the `FilterUI.Row` half of
+the two-destination rule, a column with no header text, and the per-column `HasFilter` guard. The last
+of those is §36's lesson arriving again - **the first test written for it had one column**, so the
+band's own `AnyColumnFiltered` guard was what refused the pill and the per-column guard was never
+reached; the mutation stayed green and the test's name was the only thing that said otherwise.
+
+**Two sites the mutation loop showed redundant, both removed.**
+
+- `CanEditFilterOf` asked `AllowFiltering && (menu || column.CanFilter || column.FilterTemplate is not
+  null)`, and the last two can never be false where it is called: a pill is drawn only for a column
+  whose `HasFilter` is true, and that already reads `CanFilter &&`. It is `AllowFiltering`. **The
+  consequence corrects this section's prose**: a `FilterTemplate` column with no filter path does not
+  get an inert pill, it gets *no pill*, and `AllowFiltering` off is the only route to an inert body.
+- `FilterPill.Clause` took the whole filter for the first condition and `null` for the second, to stop
+  a preset-shaped half being read as a preset. `Recognize` already matches only a filter whose `Second`
+  is null, so the guard sat one layer below a rule that already held - §33's finding from the other
+  end. The parameter is gone and the test that named the rule now asks `Recognize` directly.
+
+**The `x`'s `stopPropagation` is verified in a browser, and the verification was made to fail.** bUnit
+does not bubble, so no test in the suite can see it - the same hole §35's header icon has carried since
+it was written, and which has never been closed by anything but an assertion. Under the menu UI, with
+the attribute on, clicking `x` removes the filter and leaves zero panels in the document; with it
+mutated off and the app rebuilt, the same click removes the filter **and builds a panel of ten menu
+items**. A browser check that has only been run in the passing direction is the same non-gate as a test
+that nothing can make fail.
+
+Three smaller corrections, made in place: a doc comment claiming a token belonging to one of the six
+presets *"never reaches"* `FilterValueTextOf` (it does, whenever the filter around it carries a second
+condition), a localization comment that counted six new strings and two reused where there are seven
+and three, and a remark claiming *"every class here is upstream's"* beside `rz-filter-pills`, which is
+this grid's own name for the band and carries no rule anywhere.

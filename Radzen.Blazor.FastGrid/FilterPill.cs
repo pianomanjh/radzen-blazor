@@ -60,7 +60,7 @@ namespace Radzen.FastGrid
                 builder.Append(' ');
             }
 
-            Clause(builder, grid, column, filter.First, filter);
+            Clause(builder, grid, column, filter, filter.First);
 
             // The second condition, joined by the word the model joined it with. One pill either way:
             // the x clears a column, and there is no operation that removes half a filter.
@@ -72,7 +72,7 @@ namespace Radzen.FastGrid
                         : grid.AndFilterText)
                     .Append(' ');
 
-                Clause(builder, grid, column, second, filter: null);
+                Clause(builder, grid, column, filter, second);
             }
 
             return builder.ToString();
@@ -82,13 +82,19 @@ namespace Radzen.FastGrid
         /// <param name="builder">Where the clause is written.</param>
         /// <param name="grid">The string table.</param>
         /// <param name="column">The column whose values are being named.</param>
+        /// <param name="filter">The whole filter, which is the only thing a preset can be a shape of.</param>
         /// <param name="condition">The condition to say.</param>
-        /// <param name="filter">
-        /// The whole filter when this is its first condition, so a preset can be recognised - and null
-        /// for the second, because a preset is a shape of the whole filter and never of half of one.
-        /// </param>
+        /// <remarks>
+        /// The first draft passed <c>null</c> here for the second condition, to stop a preset-shaped
+        /// half being read as a preset - and the mutation loop showed that write unobservable, because
+        /// the rule is already enforced where it belongs:
+        /// <see cref="FastGridFilterPresets.Recognize" /> matches only a filter whose
+        /// <see cref="FastGridFilter.Second" /> is null, so a filter with two conditions is declined
+        /// whichever clause asks. §33's finding, from the other end - the guard was written one layer
+        /// below the rule that already held.
+        /// </remarks>
         static void Clause<TItem>(StringBuilder builder, RadzenFastGrid<TItem> grid,
-            ColumnBase<TItem> column, FastGridFilterCondition condition, FastGridFilter? filter)
+            ColumnBase<TItem> column, FastGridFilter filter, FastGridFilterCondition condition)
         {
             // Before the operator and not beside it: a preset replaces the whole clause. "Last 7 days"
             // is what the reader picked, and "Between today-6d and today@end" is the same range spelled
@@ -99,7 +105,7 @@ namespace Radzen.FastGrid
             // that day. They are not: this chooses a word. The x clears the column whichever word was
             // chosen, and the body reopens the menu, which reseeds from CurrentFilter and cannot see
             // what was printed here.
-            if (filter is not null && FastGridFilterPresets.Recognize(filter) is { } preset)
+            if (FastGridFilterPresets.Recognize(filter) is { } preset)
             {
                 builder.Append(grid.PresetText(preset));
 

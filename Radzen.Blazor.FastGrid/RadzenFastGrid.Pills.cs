@@ -83,9 +83,13 @@ namespace Radzen.FastGrid
         /// component whose argument is what it does not draw.
         /// </para>
         /// <para>
-        /// Every class here is upstream's and already styled in every shipped theme.
+        /// Every class that <em>paints</em> is upstream's and already styled in every shipped theme.
         /// <c>rz-datatable-header</c> is the interesting one: the themes dress it as a toolbar band with
         /// the grid's own header padding and a bottom border, and no upstream component renders it.
+        /// <c>rz-filter-pills</c> is this grid's own and carries no rule anywhere - it is a name for the
+        /// band, which a consumer needs to restyle it and the tests need to find it. A sentence here
+        /// claimed every class was upstream's; the review found this one and it is corrected rather
+        /// than removed, because a nameless band is worse than an honest comment.
         /// </para>
         /// </remarks>
         void RenderFilterPills(RenderTreeBuilder builder)
@@ -138,7 +142,7 @@ namespace Radzen.FastGrid
         void RenderFilterPill(RenderTreeBuilder builder, ColumnBase<TItem> column,
             FastGridFilter filter, int index)
         {
-            var editable = CanEditFilterOf(column);
+            var editable = CanEditFilterOf();
 
             builder.OpenElement(30, "div");
             builder.AddAttribute(31, "class", "rz-chip-list-item");
@@ -198,9 +202,20 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>Whether this column's filter has an editor the bar can send a reader to.</summary>
-        bool CanEditFilterOf(ColumnBase<TItem> column) =>
-            AllowFiltering && (FilterUI == FilterUI.Menu || column.CanFilter
-                || column.FilterTemplate is not null);
+        /// <remarks>
+        /// <strong>Just <see cref="AllowFiltering" />, and the mutation loop is what shortened it.</strong>
+        /// The first draft also asked whether the column could be filtered or carried a
+        /// <c>FilterTemplate</c>, and both were dead: a pill is drawn only for a column whose
+        /// <see cref="ColumnBase{TItem}.HasFilter" /> is true, and that already reads
+        /// <c>CanFilter &amp;&amp;</c> a present filter. Deleting either changed no test because neither
+        /// could ever be false here.
+        /// <para>
+        /// The consequence is worth stating, because §37's prose was wider than this: a
+        /// <c>FilterTemplate</c> column with no filter path does not get an inert pill, it gets
+        /// <em>no pill</em>. <c>AllowFiltering</c> off is the only way to reach the inert body.
+        /// </para>
+        /// </remarks>
+        bool CanEditFilterOf() => AllowFiltering;
 
         void RenderClearAllFilters(RenderTreeBuilder builder)
         {
