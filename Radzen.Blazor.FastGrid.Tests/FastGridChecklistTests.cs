@@ -330,17 +330,27 @@ namespace Radzen.FastGrid.Tests
             Assert.DoesNotContain(Lists(cut).Single().Data.Cast<object>(), v => v is FastGridFilterEntry);
         }
 
-        [Fact]
-        public void ACollectionColumnIsNotOfferedABlankEither()
+        [Theory]
+        [InlineData("property")]
+        [InlineData("collection")]
+        public void ACollectionOfAnyKindIsNotOfferedABlank(string kind)
         {
             // LookupCollectionColumn has refused one since §14, and the reason is about meaning rather
             // than mechanism: "has no regions at all" is a different question from "has a region that is
             // null", and In over the elements does not ask it. §36 asked FilterNullable, which reads the
             // element type, and handed a collection of strings a blank no element could ever be.
+            //
+            // Both kinds, because they refuse it in different places and a test of one is not a test of
+            // the other: a PropertyColumn over a List<string> refuses through ComposesItsOwnFilter's
+            // !IsCollection, and CollectionColumn - which derives from ColumnBase, not from
+            // PropertyColumn - has to say so itself. The first version of this test named "collection"
+            // and rendered the first, so the second's override was never executed.
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, Columns.Of(
-                Columns.Property<Person, List<string>>(x => x.Regions,
+            var cut = Render(ctx, Columns.Of(kind == "property"
+                ? Columns.Property<Person, List<string>>(x => x.Regions,
+                    filterMode: FilterMode.CheckBoxList)
+                : Columns.Collection<Person, string>(x => x.Regions,
                     filterMode: FilterMode.CheckBoxList)));
 
             OpenMenu(cut, 0);

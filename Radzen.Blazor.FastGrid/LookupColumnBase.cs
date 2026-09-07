@@ -251,8 +251,17 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         /// <remarks>
         /// Only where a key can be null: "which products have no category" is a question, and <c>In</c>
-        /// over a nullable key answers it. The key type rather than the base's <c>FilterNullable</c>,
-        /// which reads this column's <em>declared</em> filter type and would answer for the wrong one.
+        /// over a nullable key answers it.
+        /// <para>
+        /// <strong>The base agrees today and this stays anyway.</strong> §36's mutation loop found that
+        /// deleting this override changes nothing: <see cref="FilterElementType" /> is
+        /// <typeparamref name="TKey" />, so the base's <c>FilterNullable</c> reduces to exactly
+        /// <see cref="KeyCanBeNull" />. An earlier draft of this remark claimed the base "would answer
+        /// for the wrong one", which was a guess and is false. It is kept because it says the thing
+        /// directly - a lookup's blank is about its key - where the base reaches the same answer through
+        /// <c>EffectiveFilterType</c>, and a column whose key is <c>object</c> would send that through
+        /// the filter path instead.
+        /// </para>
         /// </remarks>
         private protected override bool OffersBlank => KeyCanBeNull;
 

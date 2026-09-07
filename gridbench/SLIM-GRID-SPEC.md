@@ -9106,6 +9106,8 @@ filtered, and the same shape as §35's unobservable draft clear.
 
 ### What the mutation loop found
 
+Two loops: sixteen mutations on the build, and five more on the rules the review fix added.
+
 **Thirteen of sixteen caught**, one that ends the test host rather than failing a test, and one site
 that survives.
 
@@ -9127,3 +9129,20 @@ that survives.
   is the shape §10 *measured* failing - two declared columns, one open, one scan - which the mutation
   that warms every column's list fails at once. **A gate that cannot fail is not a gate**, and this one
   could not until it was asked the question §10 had actually answered wrongly.
+
+**The second loop: three of five, and both survivors were worth more than the three.**
+
+- **A test named for a collection column was rendering a `PropertyColumn`.** `Columns.Property<Person,
+  List<string>>` is a `PropertyColumn` whose `IsCollection` is true; `CollectionColumn<TItem, TElement>`
+  derives from `ColumnBase` and is a different class refusing the blank in a different place. So the
+  test exercised one override twice and the other never, and mutating `CollectionColumn.OffersBlank`
+  changed nothing. It is a `[Theory]` over both kinds now. **The mutation did not find a missing test;
+  it found a test that named the wrong thing** - which no reading of the test would have shown, because
+  the name and the assertion both said "collection".
+- **`LookupColumnBase.OffersBlank` is redundant and stays.** Deleting it changes nothing: a lookup's
+  `FilterElementType` is `TKey`, so the base's `FilterNullable` reduces to exactly `KeyCanBeNull`. The
+  remark written on it during the review fix claimed the base *"would answer for the wrong one"*, which
+  was a guess and is false; that is corrected in place. It is kept because it says directly what the
+  base infers, and the inference runs through `EffectiveFilterType`, which a key typed `object` would
+  send elsewhere. §35's precedent deleted a site that could not be *reached*; this one is reached and
+  agrees, which is a different thing.
