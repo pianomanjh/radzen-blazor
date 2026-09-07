@@ -879,6 +879,9 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
   two rounds of review; all six are marked there. The playground draws both cardinalities, all three
   provenances and both filter modes, which is the fastest way to see what the section describes.
 - **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
+- **Settings storage, a grid menu, and Excel export.** Read off a production consumer's wrapper rather
+  than designed from here - §38 is the survey, §39 the first two and §40 the third. None is on the
+  render path; §39's menu needs §37b's band question settled and §40 wants its own package.
 
 **Measurement debt:**
 
@@ -9646,3 +9649,502 @@ toolbars, about 128px of chrome before the first row.
 That is fine for today and is a constraint on whoever adds a header later: the two want to be one band,
 or the pill bar wants to stop borrowing the toolbar's clothes. Recorded rather than solved, because
 designing an integration for a component that does not exist is how a rule gets written against a guess.
+
+---
+
+## 38. The consuming application's grid is four features, and one of them is already built - the survey
+
+§15 asked what shape this component should be from the inside. This one asks it from the outside: a
+production application has wrapped `RadzenDataGrid` for three years, and the wrapper is a list - written
+by someone who had to have the feature rather than argued for it - of what the grid did not do. That is
+a different instrument from a design review, and it reads a different set of gaps.
+
+The application is 91 grids, 511 column declarations and 27 drop-down grids over one domain. Its grid is
+`JakksRadzenDataGrid<T> : RadzenDataGrid<T>`, 231 lines, plus a small library of column subclasses. Read
+as a specification of what a grid is missing, it names four things:
+
+| # | What the wrapper built | Here |
+| --- | --- | --- |
+| 1 | A lookup column: id in the row, name in the cell, checklist off the dictionary | **built**, §14 |
+| 2 | Settings persisted to `localStorage` under a key | not built - §39 |
+| 3 | A control to put the layout back | not built - §39 |
+| 4 | Excel export, with a per-column override | not built - §40 |
+
+**The first one is the finding, and it is a negative result about this section's own usefulness.** The
+wrapper's `RadzenDataGridLookupColumn<TItem>` takes an `IReadOnlyDictionary<int, string>` and assembles
+five things in `OnInitialized`: a `Template` that shows the name or `(unknown)`, three
+`FilterLookup*` parameters to point the check-box list at the dictionary, a `SortComparer` that orders
+by name, and a `FilterMode` default. §14 is that feature, designed - `FastGridLookup.Map` takes the same
+dictionary, and the four questions the wrapper answers by assembly are the four §14 argues: the
+checklist *is* the lookup rather than a distinct scan, sorting is by name, a null key and a missing key
+are different failures, and a cell has something to draw before the names arrive.
+
+So the wrapper independently reached §14's shape, badly, which is weak evidence that §14 is the shape.
+It is weak because the wrapper had `RadzenDataGrid`'s parameters to hand and its own domain to serve,
+and one convergence is not a proof of anything. It is recorded because the *disagreement* is where the
+value is: the wrapper collapses a null key and a missing key into one `(unknown)`, and §14 refuses to,
+which is a thing the application will notice on migration and should.
+
+**The second finding is a bug the survey found by reading rather than by running, and it is the
+wrapper's.** Its subclass `RadzenDataGridDropDownLookupColumn : RadzenDataGridLookupColumn<dynamic>`
+exists only because `RadzenDropDownDataGrid` renders `RadzenDropDownDataGridColumn` over `dynamic`; its
+own comment records that an actual type makes the column not render at all, and that `typeof(TItem)` on
+`dynamic` then answers null, so the constructor forces `Type ??= typeof(int)`. Neither workaround has
+anything to work around here: `RadzenFastDropDownDataGrid` is typed `<TValue, TItem>` and takes ordinary
+`ColumnBase<TItem>` children. The class and its four call sites are deletions, not ports.
+
+**What the survey did not find is as much of the result as what it did.** No `EditTemplate` anywhere in
+511 columns - every edit path is a dialog or a row-detail template. §1's central exclusion is not a
+compromise for this consumer, it is free. Grouping is one grid out of 91. The three features the
+wrapper actually wants are chrome, storage and export: none of them is on the render path, and none of
+them is refused by §3.
+
+### What this section does not do
+
+It does not price the migration. The column model is expressions and the application's is 511 string
+property names, and whether that is a codemod or a rewrite is a question about the application, not
+about this component. Nothing below depends on the answer.
+
+It does not treat the wrapper as a requirements document. A wrapper is a record of what one team needed
+under one grid's constraints, and two of its four features exist partly to work around
+`RadzenDataGrid`'s own behaviour - §39 has the clearest case. Read for the gap, not for the solution.
+
+---
+
+## 39. The settings can be stored, and the band that has no owner - the design
+
+**Nothing here is built when this section lands.**
+
+Two features that arrive together because the second exists to undo the first: a grid that remembers
+what its user changed needs somewhere to put it, and a user who cannot put it back is worse off than
+one who was never remembered. §38's ② and ③.
+
+### The storage half is plumbing, and the design is already done
+
+The expensive half of persistence is the shape of what is stored, and *Storing settings somewhere* in
+the README settled it: a stored filter value is an invariant-culture string, `FilterText` is kept beside
+it in the culture it was typed in, a value the column's type can no longer parse takes the whole filter
+with it rather than restoring a narrower answer as the user's own, and a compound is all-or-nothing for
+the same reason. `FastGridSettings` round-trips through `System.Text.Json` today because it was designed
+to.
+
+What is missing is a `StorageKey`, a read on first render and a write on `SettingsChanged`. §18's
+`Browser<TItem>` is where the two calls go - two more exports beside the ten, named once on this side,
+which is the whole point of that struct. It costs nothing on a grid that sets no key, which is §3's
+third rule and the only one this feature can plausibly break.
+
+**The key is required, and has no default.** The wrapper defaults its `StorageKey` to `typeof(T).Name`
+and composes `$"{nameof(JakksRadzenDataGrid<>)}-{StorageKey}"`, so two different grids over one entity -
+a list page and a picker over the same `Order` - share a blob and restore each other's columns. That is
+a live fault in the application rather than a hypothetical, and it is the kind a default causes: nobody
+chose it, so nobody checked it. A key that must be written is a key someone read.
+
+**Storage is a seam, not a dependency.** `localStorage` is the case everyone wants and the wrong thing
+to hard-code: the same application would want `sessionStorage` for a dialog's grid and a server round
+trip for settings that follow a user between machines. The parameter is a key; where the bytes go is a
+service the application can replace, defaulting to the browser. §14's `FastGridLookup` is the precedent
+for the shape - a closed set of provenances behind one parameter - though here two cases and an escape
+hatch is likely all there is.
+
+**What is *not* adopted from the wrapper is its reset path**, and the reason is now measured rather than
+suspected. `ClearSavedSettingsAsync` removes the key, sets `Settings = null`, and then re-sorts
+`ColumnsCollection` by `OrderIndex` by hand, because - its own comment says so - `RadzenDataGrid`'s
+setter rebuilds columns from `allColumns` without honouring `OrderIndex`.
+
+**The defect is real, it is upstream's, and it is unfixed.** The setter on `upstream/master` at
+`635307f0b` is byte-identical to the one this branch carries. `Settings = null` calls `Reset(true)`,
+which clears every column's runtime order override with `SetOrderIndex(null)` and sets `columns` to
+`allColumns.Where(c => c.Parent == null)` - declaration order - and then the setter repeats that same
+assignment and calls `Reload`. Nothing on that path calls `UpdateColumnsOrder`, which is the only method
+that sorts by `GetOrderIndex()`, and `GetOrderIndex()` is `orderIndex ?? OrderIndex` - so the *declared*
+parameter is sitting there, correct, unread. Its five callers are `AddColumn`, `RemoveColumn`, the
+reorder path, `LoadSettingsInternal` and the column's own `OrderIndex`-changed path; a reset is none of
+them. **The fix is one call**, and the setter's duplicate `columns = ...` line can go with it. Offered
+upstream on its own branch, per the precedent of #2696 and #2702.
+
+**This grid does not have the fault, because it does not hold the thing that has it.** `Settings = null`
+here does nothing at all - the parameter is read as `settingsPending = Settings is not null`, and there
+is no reset path yet for the fault to live in. More to the point, there is no ordered column list to
+rebuild: the layout pass walks `columns` in declaration order and derives placement from
+`EffectiveOrderIndex`, which is `reorderedIndex ?? OrderIndex`, on **every** pass. Clearing the drag's
+index restores the declared one by construction rather than by a second step someone has to remember.
+
+So the accommodation is not needed, and the rule it leaves behind is the one worth writing down: **a
+reset clears the overrides and nothing else.** It must not touch `columns`, and it must not compute an
+order - the moment it does either, this section has reintroduced the defect it declined to port.
+
+### An old `DataGridSettings` blob is not ours, and it is not inert either
+
+The migration question this raises is whether a grid that swaps `RadzenDataGrid` for this one under the
+same storage key can read what is already there. **It can, partially, and that is worse than not being
+able to.**
+
+The two shapes overlap by name and by JSON type at seven points - `Columns`, `CurrentPage`, `PageSize`,
+and per column `UniqueID`, `Visible`, `Width` and `OrderIndex` - and the overlap is not a coincidence
+that stops at the names. `RadzenDataGridColumn` **derives** `UniqueID` when none is declared:
+`UniqueID = !string.IsNullOrEmpty(Property) ? Property : FilterProperty`. So a column declared
+`Property="Customer.Name"` stores under `"Customer.Name"`, which is exactly the identity §27 gives the
+same column here. An old blob does not fail to match. It matches.
+
+What it then does is wrong in three ways, in descending order of how quietly:
+
+- **`FilterOperator` is one property name over two different enums.** `System.Text.Json` writes an enum
+  as a number by default, and the two enums agree only up to 6. `Radzen.FilterOperator` runs
+  `StartsWith, EndsWith, DoesNotContain` at 7-9 where `FastGridFilterOperator` runs
+  `DoesNotContain, StartsWith, EndsWith`; at 13-14 upstream has `IsEmpty, IsNotNull` and this has
+  `IsNotNull, IsEmpty`; 16 is `Custom` there and `Between` here. Most of that is saved by accident:
+  those operators take values, the values are under `FilterValue` - a name this side does not read - and
+  there is no `FilterText` in an old blob either, so `RestoredCondition` finds nothing to rebuild and
+  drops the filter. **The exception is the arity-`None` pair.** `IsEmpty` and `IsNotNull` need no
+  values, so `RestoredCondition` returns a live condition from the operator alone, and 13 and 14 are
+  precisely where the two enums swap them. A stored "is empty" comes back as "is not null": a filter the
+  user never wrote, narrowing to a different set, presented as theirs. That is the failure §33 exists to
+  prevent, reached by a route §33 did not consider.
+- **Multi-column sort precedence is lost silently.** Upstream stores it as `SortIndex` per column;
+  this grid stores it as the *order of the entries*, which is why `ApplySettings` walks
+  `settings.Columns` rather than `columns`. `SortIndex` is an unknown member here and is dropped, and
+  upstream's array is in column order, not sort order - so a two-column sort restores with its
+  precedence set by where the columns sit.
+- **Every column arrives claiming a choice nobody made.** The rule here is that `Visible`, `Width` and
+  `OrderIndex` are null until a user records something, so a grid whose user cannot change one stores
+  nothing for it and the markup stands. Upstream writes all three for every column unconditionally, and
+  `UpdateColumnsOrder` fills in an `OrderIndex` for every column that lacks one - so an old blob pins
+  the visibility and the position of every column against markup that may have moved since. `Width`
+  escapes only because upstream's default is `""` and `ApplySettings` guards on `{ Length: > 0 }`.
+
+**So the answer is that the settings are deliberately not compatible, and the code does not say so.**
+Two ways out, and this section takes the first:
+
+1. **Make the incompatibility explicit.** The stored shape carries a version, and a blob that does not
+   carry the current one is discarded rather than read. A user loses their layout once, on the release
+   that migrates them, and knows it happened because the grid is in its declared state.
+2. Write a converter. It is not hard - the operator table is a switch, `SortIndex` becomes an ordering,
+   and `Visible`/`OrderIndex` would have to be dropped rather than honoured to keep this side's rule -
+   but it is a second serialization format to keep correct forever, in a package whose consumer can
+   instead change a key once.
+
+**Whichever is chosen, the key is where this is actually settled.** A migrating application should write
+under a new key and leave the old one to expire, which costs nothing and cannot half-apply. The version
+stamp is for the case that is not a migration: an application that ships this grid, changes its columns,
+and meets its own older blob.
+
+### What the build changed
+
+Four things this section did not anticipate, three of them found by a test rather than by reading.
+
+- **A reset must not announce.** `ClearSettings` removed the key and then called `RefreshAsync`, which
+  raises and therefore stores - so the reset wrote the key straight back, with the markup's declared
+  sort in it, now recorded as a choice the user had made. `announce: false`, which is the idiom the
+  first page already uses for the same reason: the grid's declared state is not a setting anyone chose.
+- **A declared sort does not come back on its own, and width, visibility and position do.** The other
+  three are read as `override ?? declared` on every render, so clearing the override is the whole
+  restore. A declared `SortOrder` is seeded once, at the column's first parameter set, and its own
+  comment says why - *"a declared sort is the grid's starting state, not a live binding"*. Clearing
+  the sort list and stopping there leaves a grid whose markup declares a sort unsorted. `ClearSettings`
+  re-seeds it through `ApplyDeclaredSort`, in declaration order, which is the only order markup
+  expresses. **The test that caught this first did not**: it declared a descending sort whose leading
+  row was also the leading row of the unsorted data, so it could not tell the declared sort coming back
+  from nothing sorting at all. It declares an ascending one now.
+- **Storing must not be gated on `SettingsChanged`.** The capture was already conditional on a handler
+  being wired, which was right when a handler was the only consumer. A grid with a `StorageKey` and no
+  handler is the ordinary way to use this feature, and it would have stored nothing.
+- **Enums are stored by name.** `System.Text.Json` writes an enum as a number by default, which is a
+  position in a list a later edit can move - and this section's own forward-compatibility finding is
+  what that fault looks like when it happens. `UseStringEnumConverter` on the generated context makes
+  a stored blob say `"Ascending"`, and it makes a foreign blob's numeric operator fail to parse rather
+  than parse into the wrong one: a second guard behind the version stamp, arrived at from the other
+  side of the same argument.
+
+**What the two-axis review found, and one thing it got wrong.**
+
+- **A restore announced, and therefore stored.** On a grid the handler loads, `ApplySettings` owes a
+  reload, and that reload raised `SettingsChanged` - which since this section also *writes the key*. So
+  such a grid read its settings and immediately wrote them straight back, having done nothing. It is
+  `RefreshAsync(announce: false)` now, which is the argument *A reset must not announce* already made
+  and which the `loadOwed` branch two lines below had always made for itself.
+- **The seam shipped as an interface, not a closed type**, and *Where this could still be wrong*
+  predicted exactly that: *"if it ships as `localStorage` and a delegate, that is probably the honest
+  version, and the closed type is the thing to refuse."* Recorded here because the body of this section
+  still proposes the closed shape.
+- **A claim about the picker override did not survive being checked.** The review held that
+  `SetPicked(column.Visible)` in the reset pins the override and shadows a later markup edit. It does
+  not: `ColumnBase` clears `pickedVisible` itself whenever `declaredVisible != Visible`, on the rule
+  that *"markup that says `Visible="false"` is not asking to be overruled by what someone ticked
+  before"*. The two forms are equivalent. `SetPicked(null)` is kept because it says what a reset means
+  and matches `SetResizedWidth(null)` beside it - **not** because it fixes anything.
+
+  **The test written for it was deleted rather than kept.** It passed with the supposed fault
+  reinstated, which §9's first rule says makes it worse than no test. The mutation that survived was
+  surviving because the code was redundant, not because the suite had a hole - and that distinction is
+  only visible if a surviving mutation is investigated rather than patched over with a test that
+  cannot fail.
+
+**`ConfigureAwait(false)` on the read made the whole feature throw, and fourteen tests said it worked.**
+This is the section's largest finding and no test could have made it.
+
+The restore awaits the store, then writes component state and calls `StateHasChanged`. With
+`ConfigureAwait(false)` on that await the continuation resumes off the renderer's dispatcher, and
+`StateHasChanged` asserts: *"the current thread is not associated with the Dispatcher."* It is raised
+inside `OnAfterRenderAsync`, so the circuit logs it and nothing reaches the screen - the only symptom
+is a grid that quietly ignores what it has just read. Every test passed, including one written to drive
+the whole browser path, **because a module double answers synchronously**: the await never suspends, so
+the context is never lost.
+
+The playground is what found it, and the diagnostic that settled it was four `Console.Error` lines: the
+read logged, the line after `StateHasChanged` did not. Before that it had been mistaken twice - for a
+stale build, and for the `Settings` parameter clobbering the restore - and both were ruled out by
+experiment rather than by reading.
+
+`ConfigureAwait(false)` is gone from the two methods that touch component state after awaiting, and
+stays on the three browser helpers, which touch none. **And the gap is now closed by a test**:
+`ARestoreThatSuspendsStillReachesTheGrid` leaves the module's result unset until after the first
+render, which is the only way to make a doubled read actually suspend. Reinstating
+`ConfigureAwait(false)` fails that test **and no other** - fourteen still pass - which is the measured
+version of what this finding claims.
+
+**The serializer is source-generated, and it is affordable only because of what §32 and §33 made the
+stored shape.** Reflection-based `System.Text.Json` would take the *Trimming and Native AOT* claim with
+it - `TrimTest` publishes with warnings as errors. A generated context has no such problem over strings,
+enums and nullable primitives; it could not have been written at all over the `object? FilterValue` this
+type used to carry.
+
+### The band half is not plumbing, and §37b already recorded why
+
+§37b was asked for a toolbar and answered by demonstration: `RadzenFastGrid` has no `HeaderTemplate` and
+no toolbar, §37's pill bar is the only thing in this solution that renders `rz-datatable-header`, and a
+second band injected above it stacks - two siblings inside `.rz-data-grid`, each dressed by the theme as
+its own band with its own background, 16px padding and 1px bottom border, about 128px of chrome before
+the first row. Its verdict was *"the two want to be one band, or the pill bar wants to stop borrowing
+the toolbar's clothes"*, recorded rather than solved, with the note that designing an integration for a
+component that does not exist is how a rule gets written against a guess.
+
+The component now exists, so the rule can be written.
+
+**The control is a menu in the pill bar's band, not a toolbar above it.** Three reasons, in the order
+they decide it:
+
+- **It is the answer that does not create the two-band problem.** An icon-sized control inside the band
+  that already draws is one band; anything above it is two. §37b measured the failure and this is the
+  shape that avoids it rather than the shape that manages it.
+- **The band is already conditional and already correct about when.** §37 draws it only when something
+  is filtered, on the argument that a permanently empty band costs a row of chrome forever to avoid one
+  layout shift. A menu changes that: the band must now draw when there is a menu *or* a filter, and the
+  argument survives the change - a grid with a menu has a reason for the band on every render, which is
+  the case §37's rule was distinguishing itself from.
+- **It has somewhere to grow.** Reset layout is one item. Auto-fit is a second, export (§40) a third,
+  and each of them is a verb about the whole grid rather than about a column. A `HeaderTemplate` would
+  make each of those the application's problem to place; a menu makes them entries.
+
+**What goes in it is the grid's own verbs, and nothing else.** Not an extension point in this section.
+An application that wants its own actions in the band is asking for a `HeaderTemplate`, and that is the
+two-band question again with a different sponsor - it should be argued when someone needs it, against a
+band that by then has a menu in it and something to be measured against.
+
+**The trigger is upstream's control, checked rather than asserted.** §37b's correction is fresh and its
+lesson is the operative one here: §35 claimed *"upstream's own class list, so a theme styles it
+unchanged"* in a comment and drew a `rz-button-md` box where upstream draws a bare `<button>` with
+`notranslate rzi rz-grid-filter-icon`, sized by every theme through a variable made for the job. It
+rendered nearly a header row tall. So this control's classes come from whatever upstream component
+actually draws an overflow menu, read out of the rendered markup, and the check is part of the piece
+rather than a follow-up. §7's rule is only worth something if the thing named is the thing upstream
+renders.
+
+### Deliberately not proposed
+
+- **A `HeaderTemplate`.** Above.
+- **Persisting anything the user did not change.** The README's rule stands and this section does not
+  touch it: each of visibility, width and order is null until something records a choice, so a grid
+  whose user cannot change one stores nothing for it and the markup's value stands on the way back in.
+  A storage key does not make that safe to relax; it makes it easier to get wrong at more sites.
+- **Reset as a parameter rather than a menu item.** `ClearSettings()` is a method the application can
+  call, and it is needed anyway - the menu item is one caller of it. What is refused is a
+  `ShowResetButton` parameter, which is the toolbar question wearing a boolean.
+
+### How it is verified
+
+The storage half is bUnit's, and the module double reaches it the way §18 says it reaches everything
+else. Three tests carry the weight: a grid restores what a previous instance wrote under the same key;
+a grid under a *different* key restores nothing from it, which is the fault the required key exists to
+prevent; and a stored blob whose column types have moved restores unfiltered rather than throwing,
+which is the README's rule and is already tested at the settings level - here it must survive the trip
+through storage.
+
+The band half is not bUnit's. §37b's finding came out of the running playground with a ruler on it, and
+the two-band measurement is the reason this section chooses a menu; the menu's own chrome has to be
+measured the same way, against the same stage, or this section has replaced one guess with another.
+**A test asserting the menu renders is not a test that it looks like one control.**
+
+### Where this could still be wrong
+
+- **The band's conditional draw may not survive contact.** A menu makes the band unconditional in
+  practice, and if the menu is the only reason it draws on most grids, §37's argument for drawing it
+  conditionally has been quietly inverted rather than extended. That is a thing to look at once both are
+  on, not a thing to decide here.
+- **Nothing here is measured.** The claim that a menu in the existing band is one band and a toolbar is
+  two is §37b's measurement, taken for a different control. An icon-sized menu trigger inside
+  `rz-datatable-header` beside a chip list is a layout nobody has rendered.
+- **The storage seam may be one case too many.** Two cases and an escape hatch is a guess at what a
+  second consumer wants, made from one consumer. If it ships as `localStorage` and a delegate, that is
+  probably the honest version, and the closed type is the thing to refuse.
+
+---
+
+## 40. The workbook was already in the box - the design
+
+**Nothing here is built when this section lands.**
+
+§38's ④. The application exports a grid to `.xlsx` through a 463-line package over ClosedXML. The
+survey's finding is not that the feature is wanted - it obviously is - but that **the writer for it is
+already inside this component's own dependency.**
+
+### What is already there
+
+`Radzen.Documents.Spreadsheet` ships in `Radzen.Blazor`, which this package project-references. It is a
+headless workbook model: `Workbook` is public with `SaveToStream(Stream)`, and `XlsxWriter` under it is
+`System.IO.Compression` and `System.Xml.Linq` and nothing else - no Blazor, no JS interop, no component.
+
+Read against what the application's builder actually does, every feature is present:
+
+| ClosedXML, in the application | `Radzen.Documents.Spreadsheet` |
+| --- | --- |
+| bold header row | `Format.Bold` |
+| number format per column | `Format.NumberFormat` |
+| typed values, so Excel sorts and sums | `Cell.Value` with its inferred `ValueType` |
+| `FreezeRows(1)` | `Axis.Frozen` |
+| `SetAutoFilter()` | `Worksheet.AddTable(..., hasHeaders: true)` |
+| `AdjustToContents(...)` | `Axis.IsAutoFit`, and the writer measures the widths itself |
+
+So the argument for building this is not "we could write an exporter". It is that the exporter is
+written, the application is carrying a second one, and the seam between a grid and a workbook is about
+six methods wide.
+
+### The surface
+
+An extension method over the grid, in its own package:
+
+```csharp
+Workbook workbook = grid.ToWorkbook();          // or ToWorkbook(new FastGridExportOptions { ... })
+```
+
+**It answers a `Workbook`, not a stream and not a download.** Handing back the model is what makes the
+feature composable: an application that wants two grids in one file, a title row above the data, or its
+own sheet name gets them by writing to the object it was given, and one that wants a file calls
+`SaveToStream`. A method that wrote bytes would be a method that had already decided all three.
+
+**A column controls its own export through one interface**, which is the application's own shape and is
+better than the alternative this section considered:
+
+```csharp
+public interface IFastGridExportColumn<TItem>
+{
+    Func<TItem, object?>? ExportValue { get; }
+    string? ExportTitle { get; }
+    string? ExportFormat { get; }
+    bool ExportIgnore { get; }
+}
+```
+
+That is `IExcelExportColumn<TItem>` from the application, unchanged but for its name. It is adopted
+rather than redesigned because the survey found it doing exactly one job well: a lookup column exports
+its label instead of its raw id by implementing it, which is the case that motivates the interface and
+the case a `Func<TItem, object?>` parameter on the grid could not express.
+
+### What changes, and why it is a narrowing rather than a port
+
+The application's `ExcelColumnResolver` falls back to `PropertyAccess.GetValue(item, property)` - a
+string path, reflected once per cell - and **skips any column with neither a string `Property` nor an
+`ExportValue`**, so a template column silently exports as nothing.
+
+Neither is true here. §4's column already holds a compiled `Func<TItem, string>` for its cell text and
+already knows its own typed value without boxing it (§3's fifth rule), so:
+
+- **the fallback is not reflection**, it is the accessor the cell uses - `CellTextOf` is already public
+  and every bound column overrides it, so a lookup column exports its name and a collection column its
+  joined list without the application implementing anything;
+- **the resolver's `FormatDisplay` mostly goes**, with its enum `[Display]` handling and its
+  `string.Format` branch - the column formats already, and §3's fifth rule is why that is cheaper here
+  than there.
+
+**A template column is still unexportable without an `ExportValue`, and an earlier draft of this
+section said otherwise.** It claimed the grid could offer a template column's rendered text where the
+application's resolver had nothing to offer. It cannot: `TemplateColumn` does not override
+`CellTextOf` - it draws a `RenderFragment`, and the only way to text is to render that fragment to a
+string, which is a renderer pass per cell outside the one Blazor is running. So the improvement over
+the application's resolver is narrower than claimed: it removes the reflection and it covers the bound
+columns properly, and a template column needs the same `ExportValue` it needed before. Found while
+building the accessors, not while writing this.
+
+The one thing that does not simplify is ordering and visibility. The resolver reads `GetOrderIndex()`
+and `GetVisible()` to export what the user is looking at, in the order they arranged it, and that is
+right; it needs the grid's columns in view order, which is the accessor below.
+
+### What it exports, and the question that has to be settled first
+
+**`View`, not the page** - filtered and sorted, every matching row. That is what the application does and
+what a user means, and it is also the half of this feature that is not free.
+
+`View()` is private (`RadzenFastGrid.Data.cs`), the column list is a private field, and both have to
+become readable for this to exist at all. That is a small change and it is not only this section's:
+§39's menu needs the columns too. **But on a `LoadData` or async-executor grid, the view is one page**,
+and "export everything the filter matches" is then a query the grid has not run.
+
+Three answers, and this section takes the first:
+
+1. **Export what the grid holds**, and say so. On an in-memory grid that is everything; on a paged
+   server grid it is the page. Honest, cheap, and wrong-looking exactly where the application's own
+   version is wrong-looking today without anyone noticing.
+2. Ask the source for everything, by re-composing the query with no paging. One more round trip, and a
+   `LoadData` handler that cannot express "no page" makes it undefined.
+3. Refuse to export a server-paged grid. Defensible and unhelpful.
+
+The application's grids that export are in-memory, so ① is not a compromise for the consumer that
+prompted this. It is a compromise for the next one, and §11 is where that gets revisited.
+
+### Its own package
+
+`Radzen.Blazor.FastGrid.Export`, on §8's precedent (`Radzen.Blazor.EntityFrameworkAdapter`).
+
+Not tidiness. Rooting `XlsxWriter` pulls `System.IO.Compression` and `System.Xml.Linq` into the trim
+graph of **every** consumer of the grid, whether or not it exports - and §"Trimming and Native AOT" is a
+section here because that is a property this component claims. A separate package keeps the claim true
+and makes the payload opt-in. It also keeps a feature that has nothing to do with drawing rows out of
+the assembly whose argument is what it does not draw.
+
+### Deliberately not proposed
+
+- **A download.** Bytes to a browser is `IJSRuntime` and a data URL or a stream reference, it differs
+  between Server and WebAssembly, and it is the application's to own. `ToWorkbook` stops at the model.
+- **A button.** §39's menu is where an export entry would live, and it should be argued there, once
+  there is a menu to put it in.
+- **CSV.** `Workbook.SaveAsCsv` exists and costs nothing to reach through the same `Workbook`. There is
+  no separate feature to design.
+- **Styling the sheet to match the grid.** Colours, borders and conditional formats are all in `Format`,
+  and none of them is what an export is for. An application that wants them has the `Workbook`.
+
+### How it is verified
+
+Round trip, not markup. `Workbook.LoadFromStream` is public and reads back what `SaveToStream` wrote -
+`XlsxReader` itself is internal, so that method is the seam - and a test writes a grid with a filter, a
+sort, a hidden column, a reordered column, a formatted decimal, a date and a lookup, saves it, loads it,
+and asserts the cells. That is an assertion about the file rather than about the code that made it.
+
+**The discriminating cases are the ones the application's version gets wrong**, and each needs a test
+that fails without the feature: a template column exports its text rather than a blank; a lookup column
+exports its name rather than its id; a hidden column is absent; a reordered column is in the user's
+order and not declaration order; a filtered grid exports the filtered rows.
+
+### Where this could still be wrong
+
+- **Nothing here is measured, and one thing should be.** `Workbook.AddSheet(name, rows, columns)` sizes
+  a sheet up front and `CellStore` is indexed per cell; whether building a 50,000-row workbook allocates
+  like the grid or like ClosedXML is unknown, and it is the only number that could change the shape of
+  this section. §3 does not bind an export - it is off the render path - but a feature that hangs the
+  circuit for six seconds is a feature nobody uses twice.
+- **`AddTable` may not be `SetAutoFilter`.** They are the same to a user and they are not the same in
+  the file: a table carries a name, a style and a structured range. If the application's consumers open
+  these in something other than Excel, that difference is theirs to find, and it should be checked
+  against one before this is called parity.
+- **`ValueType` inference is the writer's, not the grid's.** The application's builder is explicit about
+  keeping numbers, dates and bools typed so that Excel sorts and sums them, and it hand-maps `DateOnly`
+  through `DateTime` to get there. Whether `Cell.Value` infers the same set - and what it does with a
+  `DateOnly`, a `TimeSpan` or a nullable enum - is read from one file here and not tested.

@@ -1317,3 +1317,35 @@ function sizeToRows(wrapper, table, maxRows) {
     wrapper.style.height = height + 'px';
   }
 }
+
+// --- settings storage ---------------------------------------------------------------------------
+//
+// Every one of these swallows what localStorage throws, and the reason is not tidiness. A private
+// window, a browser configured to block site data, and a full quota all throw from the accessor
+// itself rather than answering empty - so a grid that let it propagate would fail to render for a
+// user whose only fault is their browser settings. There are no settings is the right answer to all
+// three, and it is the answer the markup's own declarations are already the fallback for.
+
+export function readSetting(key) {
+    try {
+        return window.localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+export function writeSetting(key, value) {
+    try {
+        window.localStorage.setItem(key, value);
+    } catch {
+        // Nothing to do and nothing to say: the grid goes on working, unremembered.
+    }
+}
+
+export function removeSetting(key) {
+    try {
+        window.localStorage.removeItem(key);
+    } catch {
+        // As above.
+    }
+}

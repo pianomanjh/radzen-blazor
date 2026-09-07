@@ -114,6 +114,23 @@ namespace Radzen.FastGrid
             module.InvokeAsync<string?[]?>("autoFit", ask);
 
         /// <summary>
+        /// What is stored under a key, or null for a key holding nothing - which includes a browser
+        /// that refuses <c>localStorage</c> outright, as a private window or a blocked site does.
+        /// The script answers null rather than throwing for both, because to this side they are the
+        /// same answer: there are no settings.
+        /// </summary>
+        internal ValueTask<string?> ReadSettingAsync(string key) =>
+            module.InvokeAsync<string?>("readSetting", key);
+
+        /// <summary>Stores a value under a key. Silent where the browser refuses.</summary>
+        internal ValueTask WriteSettingAsync(string key, string value) =>
+            module.InvokeVoidAsync("writeSetting", key, value);
+
+        /// <summary>Forgets a key. Silent for one holding nothing, and where the browser refuses.</summary>
+        internal ValueTask RemoveSettingAsync(string key) =>
+            module.InvokeVoidAsync("removeSetting", key);
+
+        /// <summary>
         /// Sizes the drop-down's panel and then the columns inside it, answering whether the panel was
         /// sized as well as what the columns became.
         /// </summary>

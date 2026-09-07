@@ -1172,6 +1172,19 @@ namespace Radzen.FastGrid
             // allowed to compose from the column list because this one has run.
             drawn = true;
 
+            // §39, and before the two branches below rather than after them: what it reads sets
+            // settingsPending, and the render that answers StateHasChanged is what applies it. Landing
+            // after the reload branches would compose the owed load off the pre-restore state and then
+            // need a second one to correct it.
+            //
+            // The first render only. A key that arrives later is a case this does not serve - see
+            // §39's *Where this could still be wrong*, which records what the playground found when
+            // it tried: the read happens, and the restored state does not reach the composed view.
+            if (firstRender)
+            {
+                await RestoreStoredSettingsAsync();
+            }
+
             // A grid composing over a queryable in memory has already drawn the restored state - the
             // render that applied it composed from it. One that loads its data has not: the load that
             // produced what is on screen ran before the settings existed.
@@ -1183,7 +1196,11 @@ namespace Radzen.FastGrid
                 // reload serves both, and running them in turn would send the second for nothing.
                 loadOwed = false;
 
-                await RefreshAsync();
+                // Not announced. Restored state is state the grid was handed, not a change its user
+                // made - the same argument ClearSettings makes, and §39 gave it teeth: raising here
+                // also *stores*, so a grid on LoadData read its key and then immediately wrote it back
+                // having done nothing. The loadOwed branch below has always said this for its own case.
+                await RefreshAsync(announce: false);
             }
             else if (loadOwed)
             {
@@ -1881,7 +1898,10 @@ namespace Radzen.FastGrid
             // Every state change a user can make funnels through here, so this is the one place the
             // grid has to say so - and it is not the render path, which is what keeps a grid nobody is
             // persisting from ever building the object.
-            if (announce && SettingsChanged.HasDelegate)
+            // Either reason to build the object, and §39 added the second: a grid with a StorageKey
+            // and no SettingsChanged handler is the ordinary way to use the storage, and gating the
+            // capture on the callback alone would have stored nothing for it.
+            if (announce && (SettingsChanged.HasDelegate || StorageKey is { Length: > 0 }))
             {
                 // Remembered so the settings the grid hands out are not then read back as an instruction.
                 // An application that stores what it is given and passes it back - which is the whole
@@ -1889,7 +1909,16 @@ namespace Radzen.FastGrid
                 // a grid that reloads on a settings change would reload, raise, and be handed it again.
                 raisedSettings = CaptureSettings();
 
-                _ = SettingsChanged.InvokeAsync(raisedSettings);
+                if (SettingsChanged.HasDelegate)
+                {
+                    _ = SettingsChanged.InvokeAsync(raisedSettings);
+                }
+
+                // The same object, so what is stored and what the application was handed cannot
+                // disagree. Not awaited, for the same reason the callback above is not: this method is
+                // on the path of every sort, filter and page, and a store that goes to a server would
+                // otherwise make each of them wait for a round trip.
+                _ = StoreSettingsAsync(raisedSettings);
             }
 
             // Every branch below either starts a load that supersedes the one in flight or starts none
@@ -2247,8 +2276,24 @@ namespace Radzen.FastGrid
             return isOData;
         }
 
-        IEnumerable<TItem> View()
+        /// <summary>
+        /// Every row the filters and the sort produce, unpaged - what a reader means by "all of it"
+        /// rather than "this page". <see cref="FilteredRows" /> is this; <see cref="View" /> is this
+        /// paged.
+        /// </summary>
+        /// <param name="composed">
+        /// Whether the grid is the one that composed them, which is the same question as whether they
+        /// are unpaged. Where it is false the rows are one page and there is no more to have.
+        /// </param>
+        /// <remarks>
+        /// The three cases where the grid does not compose are answered here rather than twice: two
+        /// callers reading the same three branches is two chances for them to drift, and the ordering
+        /// between the first two is load-bearing (below).
+        /// </remarks>
+        IEnumerable<TItem> Composed(out bool composed)
         {
+            composed = false;
+
             if (loaded is not null)
             {
                 return loaded;
@@ -2276,10 +2321,46 @@ namespace Radzen.FastGrid
                 return Array.Empty<TItem>();
             }
 
-            data = Compose(data);
+            composed = true;
 
-            return Paging ? Page(data, skip, pageSize) : data;
+            return Compose(data);
         }
+
+        IEnumerable<TItem> View()
+        {
+            var data = Composed(out var composed);
+
+            return composed && Paging ? Page(data, skip, pageSize) : data;
+        }
+
+        /// <summary>
+        /// The rows the grid is drawing - one page of them when it is paging, and every row it holds
+        /// when it is not.
+        /// </summary>
+        /// <remarks>
+        /// Valid while the grid is between renders and no longer: it composes onto the bound source
+        /// rather than holding a copy, so enumerating it after a filter, a sort or a page has moved
+        /// answers the new question. Enumerate it, do not keep it.
+        /// </remarks>
+        public IEnumerable<TItem> DrawnRows => View();
+
+        /// <summary>
+        /// Every row the filters and the sort produce, unpaged.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The same rows as <see cref="DrawnRows" /> wherever the grid did not compose them: a
+        /// <c>LoadData</c> handler has already sorted and paged, and the asynchronous executor owns
+        /// its query, so in both cases one page is all the grid holds. Asking for more would mean
+        /// running a query neither of them ran, and §40 records taking the page as the answer rather
+        /// than as a limitation to work around.
+        /// </para>
+        /// <para>
+        /// The same lifetime rule as <see cref="DrawnRows" />, and it matters more here: over a
+        /// queryable this is an unpaged database query that runs when something enumerates it.
+        /// </para>
+        /// </remarks>
+        public IEnumerable<TItem> FilteredRows => Composed(out _);
 
         /// <summary>
         /// One page of a sequence. Composed onto the provider when the source is a queryable, so a

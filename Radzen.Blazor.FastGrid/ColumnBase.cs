@@ -117,8 +117,16 @@ namespace Radzen.FastGrid
         /// <summary>Whether the column is drawn right now - the picker's answer if it has one.</summary>
         internal bool IsVisible => pickedVisible ?? Visible;
 
-        /// <summary>Records what the picker chose. Called by the grid; does not redraw on its own.</summary>
-        internal void SetPicked(bool visible) => pickedVisible = visible;
+        /// <summary>
+        /// Records what the picker chose, or null to forget it - which is what a reset does, so the
+        /// declaration underneath is what answers again.
+        /// </summary>
+        /// <remarks>
+        /// Nullable for the reset's sake and not for the picker's. Writing today's declared value
+        /// instead would leave the override set, so a later edit to <c>Visible</c> in the markup would
+        /// be shadowed by a choice the user made once and then undid.
+        /// </remarks>
+        internal void SetPicked(bool? visible) => pickedVisible = visible;
 
         /// <summary>
         /// Where the column sits among the others, overriding the order it was declared in. Columns

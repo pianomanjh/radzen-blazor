@@ -142,6 +142,15 @@
         <legend>Settings</legend>
         <button @onclick="RoundTripSettings" disabled="@(settings is null)">Round-trip through JSON</button>
         <button @onclick="@(() => { settings = null; Log("settings dropped"); })">Forget</button>
+
+        @* §39, and the reason this is here rather than only in a test: localStorage is a browser and
+           bUnit is not one. A private window, a browser told to block site data and a full quota all
+           throw from the accessor itself, and the only way to see that the grid goes on working
+           unremembered is to open one and try it. Tick it, sort and resize, then reload the page. *@
+        <label title="Keeps sort, filters, widths, order and the page in this browser under the key below">
+            <input type="checkbox" checked="@persist" @onchange="TogglePersist" /> Remember in localStorage
+        </label>
+        <button @onclick="ClearStoredSettings" disabled="@(!persist)">Reset layout</button>
     </fieldset>
 </div>
 
@@ -216,6 +225,7 @@
                     CellClick="@(a => Log($"cell click: {a.Data.Name} / {a.Column.Title}"))"
                     CellContextMenu="@(a => Log($"cell menu: {a.Data.Name} / {a.Column.Title}"))"
                     Settings="@settings"
+                    StorageKey="@(persist ? "playground-grid" : null)"
                     SettingsChanged="@OnSettingsChanged">
         <ChildContent>
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="@Wide("80px")"
@@ -386,6 +396,14 @@
     ICollection<Row>? selection;
     FastGridSettings? settings;
 
+    /// <summary>
+    /// §39. On, because a key that arrives after the grid has drawn is not a case the grid serves -
+    /// it reads it and the restored state does not reach the composed view, which the playground is
+    /// what found. Declared from the start is how an application sets it and is the path that works.
+    /// Untick it to stop storing; "Reset layout" is how to get back to the markup's own state.
+    /// </summary>
+    bool persist = true;
+
     // Held so the relative-date button has a column to filter; nothing else needs one.
     PropertyColumn<Row, DateTime>? hiredColumn;
     int settingsRaised;
@@ -507,6 +525,31 @@
             })));
 
         Log("Hired filtered to today-29d .. today@end - round-trip the settings and it stays relative");
+    }
+
+    void TogglePersist(ChangeEventArgs args)
+    {
+        persist = args.Value is true;
+
+        Log(persist
+            ? "persisting to localStorage under \"playground-grid\" - sort, resize, then reload the page"
+            : "no longer persisting; what is already stored is left where it is");
+    }
+
+    async Task ClearStoredSettings()
+    {
+        if (grid is null)
+        {
+            return;
+        }
+
+        await grid.ClearSettings();
+
+        // The page's own copy too: it holds the last blob the grid raised, and leaving it would hand
+        // the grid its own pre-reset state back as a parameter on the very next render.
+        settings = null;
+
+        Log("layout reset and the key forgotten");
     }
 
     /// <summary>

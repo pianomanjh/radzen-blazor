@@ -609,6 +609,51 @@ formats - and it is a fault rather than a shrug because the alternative is resto
 state onto the first, which hides the wrong column and is a wrong answer on screen rather than lost
 state.
 
+### Storing them, with a key
+
+`StorageKey` is the whole of it. A grid given one keeps its settings in the viewer's browser, reads
+them back on its first render, and needs no handler wired:
+
+```razor
+<RadzenFastGrid Data="@orders" StorageKey="orders-list" AllowColumnResize="true" />
+```
+
+**There is no default key, deliberately.** Two grids over one entity - a list page and a picker over
+the same `Order` - is the ordinary case, and a key defaulted from the type name would give them one
+blob to fight over. A key that has to be written is a key someone read.
+
+`SettingsStore` moves the bytes somewhere else - `sessionStorage` for a grid in a dialog, or a round
+trip for settings that follow a user between machines. It is asked once on the first render and again
+on each change, never per row or per render, so it is free to be as slow as a network call:
+
+```csharp
+public interface IFastGridSettingsStore
+{
+    ValueTask<FastGridSettings?> ReadAsync(string key);
+    ValueTask WriteAsync(string key, FastGridSettings settings);
+    ValueTask RemoveAsync(string key);
+}
+```
+
+`ClearSettings()` forgets the key and puts the grid back to what its markup declares - the width,
+visibility and position a user changed, the filters, the sort and the page. It clears the overrides
+and nothing else: the declared values come back because each of the three is read as "what a drag
+said, or what the markup did" on every render. A declared `SortOrder` is the exception and is re-seeded
+explicitly, because it is a starting state rather than a live binding.
+
+**A stored blob carries a `Version`, and one that does not carry the current one is discarded rather
+than read.** That is not defensive habit. `RadzenDataGrid`'s `DataGridSettings` overlaps this shape by
+name and by JSON type at seven points, and upstream derives a column's `UniqueID` from its `Property`,
+which is exactly this grid's column identity - so an old blob left under the same key *matches* columns
+rather than failing to. It would then restore a filter nobody wrote: `FilterOperator` is one property
+name over two enums whose numbering parts company from 7, and two of the values that disagree -
+`IsEmpty` and `IsNotNull` - need no filter value, so they rebuild into a live condition from the
+operator alone. Migrating from `RadzenDataGrid`, write under a new key and let the old one expire; the
+version stamp is for the case that is not a migration.
+
+Enums are stored by name (`"Ascending"`, not `0`) for the same family of reasons: a number is a
+position in a list a later edit can move.
+
 ### Storing settings somewhere
 
 **A stored filter value is an invariant-culture string.** `FastGridColumnSettings.FilterValues` is a

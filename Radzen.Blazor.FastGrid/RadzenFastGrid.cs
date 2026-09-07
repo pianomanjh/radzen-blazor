@@ -47,6 +47,18 @@ namespace Radzen.FastGrid
         // reads it once per cell.
         readonly List<ColumnBase<TItem>> visibleColumns = new();
 
+        /// <summary>
+        /// The columns being drawn, in the order they are drawn - what a column picker left visible,
+        /// arranged by what a drag or a declared <c>OrderIndex</c> asked for.
+        /// </summary>
+        /// <remarks>
+        /// The grid's own list, handed out read-only rather than copied, because §3's third rule does
+        /// not allow a copy per caller for a question asked once per export. It is rebuilt in place on
+        /// every render pass, so a caller that keeps it holds whatever the grid draws next: read it,
+        /// do not store it.
+        /// </remarks>
+        public IReadOnlyList<ColumnBase<TItem>> VisibleColumns => visibleColumns;
+
         // Scratch for the ordering pass, reused so a grid that declares an OrderIndex does not allocate
         // a list per render to apply it.
         readonly List<ColumnBase<TItem>?> placed = new();

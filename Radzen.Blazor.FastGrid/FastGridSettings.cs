@@ -15,6 +15,25 @@ namespace Radzen.FastGrid
     /// </remarks>
     public class FastGridSettings
     {
+        /// <summary>
+        /// The shape this blob was written in. Anything else is discarded rather than read.
+        /// </summary>
+        /// <remarks>
+        /// Only the storage path reads it: settings handed straight to the <c>Settings</c> parameter
+        /// are the application's own object and are trusted as given. What it is for is a stored blob
+        /// that is not ours - §39 has the case, and it is not hypothetical. <c>DataGridSettings</c>
+        /// overlaps this type by name and by JSON type at seven points, and upstream derives a
+        /// column's <c>UniqueID</c> from its <c>Property</c>, which is this grid's column identity -
+        /// so an old blob under the same key matches columns rather than failing to. It then restores
+        /// a filter nobody wrote, because <c>FilterOperator</c> is one property name over two enums
+        /// whose numbering parts company at 7, and two of the values that disagree need no filter
+        /// value to rebuild into a live condition.
+        /// </remarks>
+        public int? Version { get; set; }
+
+        /// <summary>The shape this version of the grid writes.</summary>
+        public const int CurrentVersion = 1;
+
         /// <summary>Per-column state, keyed by the column's identity.</summary>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227:Collection properties should be read only",
             Justification = "The type is deserialized from storage, which needs the setter.")]
