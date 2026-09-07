@@ -279,6 +279,22 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void APresetNeedsBothOfItsEndsToMatch()
+        {
+            // Between today today is midnight to midnight, which is not "today" - it is one instant.
+            // Matching a preset on its lower bound alone would call it one.
+            var midnightToMidnight = new FastGridFilter(new FastGridFilterCondition(
+                FastGridFilterOperator.Between,
+                new object?[]
+                {
+                    new FastGridRelativeDate(FastGridRelativeDateAnchor.Today),
+                    new FastGridRelativeDate(FastGridRelativeDateAnchor.Today),
+                }));
+
+            Assert.Null(FastGridFilterPresets.Recognize(midnightToMidnight));
+        }
+
+        [Fact]
         public void ARangeOfAbsoluteDatesIsNotAPreset()
         {
             // The recognition is on the tokens, not on what they resolve to. Two dates that happen to

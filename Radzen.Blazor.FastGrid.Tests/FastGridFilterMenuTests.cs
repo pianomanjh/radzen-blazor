@@ -562,5 +562,140 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(new[] { "In", "Not in", "Is null", "Is not null" }, MenuLabels(cut));
         }
 
+
+        [Fact]
+        public void ClickingTheIconDoesNotAlsoSortTheColumn()
+        {
+            // The icon sits inside the header's click target, which is what sorts. The same rule the
+            // resize and drag handles already follow.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, extra: p => p.Add(g => g.AllowSorting, true));
+
+            Assert.Empty(cut.Instance.Sorts);
+
+            OpenMenu(cut, 0);
+
+            Assert.Empty(cut.Instance.Sorts);
+        }
+
+        [Fact]
+        public void TheIconSaysItIsOpenWhileItIs()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+
+            Assert.Equal("false", cut.FindAll("thead button.rz-filter-button")[0].GetAttribute("aria-expanded"));
+
+            OpenMenu(cut, 0);
+
+            Assert.Equal("true", cut.FindAll("thead button.rz-filter-button")[0].GetAttribute("aria-expanded"));
+            Assert.Equal("false", cut.FindAll("thead button.rz-filter-button")[1].GetAttribute("aria-expanded"));
+        }
+
+        [Fact]
+        public void AStringColumnOffersTheAbsenceOperators()
+        {
+            // A reference type is nullable in the sense that matters - a string column has rows with no
+            // string - and the annotation that would say otherwise is erased by the time a Type is all
+            // there is. FilterNullable is what says so.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+
+            OpenMenu(cut, 0);
+
+            Assert.Contains("Is null", MenuLabels(cut));
+            Assert.Contains("Is not null", MenuLabels(cut));
+        }
+
+        [Fact]
+        public void ARangeKeepsItsUpperBoundAcrossADetourThroughAnotherOperator()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, int>(x => x.Id)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "Between");
+
+            var editors = cut.FindComponents<RadzenNumeric<decimal?>>();
+
+            cut.InvokeAsync(() => editors[0].Instance.Change.InvokeAsync(2m));
+            cut.InvokeAsync(() => editors[1].Instance.Change.InvokeAsync(3m));
+
+            // Away and back. The upper bound is what only Between can hold, so it is the one that says
+            // whether the draft keeps values an intervening operator has no use for.
+            PickItem(cut, "Equals");
+            PickItem(cut, "Between");
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            var column = cut.FindComponent<PropertyColumn<Person, int>>().Instance;
+
+            Assert.Equal(2, column.CurrentFilter!.First.Value);
+            Assert.Equal(3, column.CurrentFilter.First.SecondValue);
+        }
+
+        [Fact]
+        public void ReopeningAFilteredColumnShowsTheValueInTheEditor()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, int>(x => x.Id)));
+            var column = cut.FindComponent<PropertyColumn<Person, int>>().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Filter(column, 3, Radzen.FilterOperator.Equals));
+
+            OpenMenu(cut, 0);
+
+            Assert.Equal(3m, cut.FindComponents<RadzenNumeric<decimal?>>().Single().Instance.Value);
+        }
+
+        [Fact]
+        public void TickingALookupEntryCommitsItsIdRatherThanTheEntry()
+        {
+            // The list offers names carrying ids and the column filters by ids. Passing what was ticked
+            // straight through would put the entry objects into the filter.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int?>(x => x.RegionId,
+                FastGridLookup.Map(Lookups.Regions()))));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            var list = cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[0];
+            var offered = list.Instance.Data.Cast<object>().ToArray();
+
+            cut.InvokeAsync(() => list.Instance.Change.InvokeAsync(
+                new List<object> { offered.Last() }));
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            var column = cut.FindComponent<LookupColumn<Person, int?>>().Instance;
+            var values = ((System.Collections.IEnumerable)column.CurrentFilter!.First.Value!)
+                .Cast<object>().ToArray();
+
+            Assert.All(values, value => Assert.IsType<int>(value));
+        }
+
+        [Fact]
+        public void AScalarFilterIsNeverOfferedToASetEditor()
+        {
+            // The rule at the layer it lives at. The transition screening clears the case that found it,
+            // which is exactly why this needs asking of the column directly: with only the screening
+            // tested, the guard could go and nothing would notice until a route that does not transition
+            // reached it.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, decimal>(x => x.Salary)));
+            var column = cut.FindComponent<PropertyColumn<Person, decimal>>().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Filter(column, 100m, Radzen.FilterOperator.Equals));
+
+            Assert.True(column.HasFilter);
+            Assert.Null(column.FilterSelection);
+        }
+
     }
 }

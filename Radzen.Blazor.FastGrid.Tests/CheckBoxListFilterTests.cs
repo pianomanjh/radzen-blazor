@@ -363,5 +363,37 @@ namespace Radzen.FastGrid.Tests
             Assert.False(column.HasFilter);
         }
 
+
+        [Fact]
+        public void AFilterDeclaredBeforeFilteringWasOnSurvivesItBeingTurnedOn()
+        {
+            // The first-sight arm of the editor screening, and the one sequence that reaches it: nothing
+            // records an editor while filtering is off, so the parameter set that turns it on is the one
+            // where a column has a filter and no editor history. Clearing there would throw away a
+            // filter the markup declared, which is the silent disappearance §32 refuses.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent,
+                    Columns.Of(Columns.Property<Person, decimal>(x => x.Salary)));
+                p.Add(g => g.AllowFiltering, false);
+                p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
+            });
+
+            var column = cut.FindComponent<PropertyColumn<Person, decimal>>().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Filter(column, 100m, Radzen.FilterOperator.Equals));
+
+            Assert.True(column.HasFilter);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.AllowFiltering, true));
+
+            Assert.True(column.HasFilter);
+        }
+
     }
 }

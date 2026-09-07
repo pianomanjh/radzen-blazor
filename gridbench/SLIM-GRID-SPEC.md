@@ -8477,6 +8477,37 @@ table `Recognize` reads; the filter icon's sequence numbers descended against th
 in a region of their own; and the screening and recording passes walked the columns whether or not the
 grid filters at all.
 
+### The mutation loop
+
+**Twenty-five of twenty-seven**, and one deletion.
+
+The two that survive are both worth naming rather than fixing:
+
+- **The icon's `stopPropagation` cannot be reached by a test.** Removing it leaves every test passing,
+  because bUnit dispatches an event to the element it names and does not simulate bubbling - so the
+  header's own click handler is never a candidate to be stopped. Verified in a browser instead: clicking
+  the icon opens the menu and leaves the sort glyph where it was, and clicking the title still sorts.
+  §34's `ProvideRows` stamp is the same shape, one layer out.
+- **Clearing the draft on commit is unobservable**, which is what the review write-up above already
+  says: reopening reseeds from `CurrentFilter`, so nothing stale is ever shown whether or not the fields
+  are nulled. It stays because a draft that outlives its panel holds a reference to a value for the
+  life of the grid, and that is a claim about the object graph rather than about the screen.
+
+**And one site was deleted rather than covered.** `PickFilterOperator` cleared the second value when
+leaving `Between` and both values when arriving at an operator that takes none, and no mutation of
+either could be caught. They genuinely cannot be: `Compose` reads only as many values as the operator
+takes, and the draft is discarded on commit, so a value the current operator ignores can neither be
+committed nor survive the panel. Deleting them left the tests green and the behaviour better - a detour
+through `Equals` and back now leaves a range's upper bound where the user typed it. §34's review found
+four `StampFilterClock` calls covering for each other; this is the same lesson arriving before the
+redundancy had a chance to hide a real fault.
+
+What the loop caught that the reviewers had not: recognising a preset by its lower bound alone would
+have called `Between today today` *today*; a lookup entry passed to the filter instead of its id; the
+`@end` tick arithmetic; `FilterNullable`'s reference-type arm, which is the whole reason a string column
+offers *Is null*; and the editor screening's first-sight arm, whose one reachable sequence is a grid that
+turns filtering on after a filter has been declared.
+
 ### The numeric editor, which this section argued itself out of
 
 §35 said the editors were a text input plus two typed controls, and gave the reason: a typed control

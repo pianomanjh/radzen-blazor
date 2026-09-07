@@ -240,6 +240,13 @@ namespace Radzen.FastGrid
             // second column's menu while the first is open would close it and stop there.
             await popup.CloseAsync(iconElements[index]);
             await popup.ToggleAsync(iconElements[index]);
+
+            // The icon's aria-expanded is written from C#, and opening the panel changes nothing the
+            // grid has rendered - so without this the attribute stays "false" for as long as the menu is
+            // open. Upstream's setPopupAriaExpanded writes the DOM directly, which is why only a test
+            // sees the difference and a browser does not: two writers agreeing by luck is still one of
+            // them being wrong.
+            StateHasChanged();
         }
 
         /// <summary>The panel, rendered once the first open has asked for one.</summary>
@@ -539,22 +546,20 @@ namespace Radzen.FastGrid
         Task OnFilterMenuKeyAsync(ColumnBase<TItem> column, KeyboardEventArgs args) =>
             args.Key == "Enter" ? ApplyFilterMenuAsync(column) : Task.CompletedTask;
 
-        void PickFilterOperator(FastGridFilterOperator picked)
-        {
-            menuOperator = picked;
-
-            // The values are kept across a change of operator where the new one can hold them, so
-            // switching Equals to Between keeps what was typed and asks only for the other bound.
-            if (picked.Arity() != FastGridFilterArity.Two)
-            {
-                menuSecondValue = null;
-            }
-
-            if (picked.Arity() == FastGridFilterArity.None)
-            {
-                menuValue = null;
-            }
-        }
+        /// <summary>
+        /// Points the draft at another operator, keeping whatever values are already in it.
+        /// </summary>
+        /// <remarks>
+        /// The first draft cleared the values an operator could not hold - the second when leaving
+        /// <c>Between</c>, both when arriving at one that takes none - and the mutation loop showed
+        /// every one of those writes to be unobservable, which they are:
+        /// <see cref="FilterMenu.Compose" /> reads only as many values as the operator takes, and the
+        /// draft is discarded on commit, so a value the current operator ignores can neither be
+        /// committed nor survive the panel. What deleting them buys is the better behaviour anyway -
+        /// a detour through <c>Equals</c> and back leaves the range's upper bound where the user
+        /// typed it.
+        /// </remarks>
+        void PickFilterOperator(FastGridFilterOperator picked) => menuOperator = picked;
 
         /// <summary>The preset the draft currently is, or null where it is not one of the six.</summary>
         FastGridFilterPreset? DraftPreset() =>
@@ -618,8 +623,14 @@ namespace Radzen.FastGrid
         /// because a menu closed.
         /// </para>
         /// </remarks>
-        Task OnFilterMenuClosedAsync() =>
-            AllowKeyboardNavigation && hasFocus ? ShowFocusAsync() : Task.CompletedTask;
+        Task OnFilterMenuClosedAsync()
+        {
+            // Same reason as the open: the icon says whether its menu is open, and closing is a thing
+            // that happens to the popup rather than to the grid.
+            StateHasChanged();
+
+            return AllowKeyboardNavigation && hasFocus ? ShowFocusAsync() : Task.CompletedTask;
+        }
 
         async Task CloseFilterMenuAsync()
         {
