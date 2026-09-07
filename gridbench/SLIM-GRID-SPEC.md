@@ -7574,9 +7574,53 @@ count says nothing about which kind of cost it is.
 
 **The fixed cost is measured and not attributed**, which §9 says to write down rather than guess at: the
 obvious candidates - the model objects, the descriptor, the expression tree - are each allocated the same
-number of times as before, so the ~0.8 KB has no mechanism named yet. Times are quoted from a short job
-and are therefore noise by §9's own rule; the time half of §33's gate is **not measured to that
-standard** and remains owed.
+number of times as before, so the ~0.8 KB has no mechanism named yet.
+
+### The time half, paid
+
+Owed since this section landed, and left owed by §34 and §35 after it. §9's rule is that a time ratio comes
+from a full-length run or is not quoted, so this is the default job rather than `--job short`: six passes
+of the base against five of `HEAD`, the arms alternated, `Bare` in every one of them, and any block whose
+StdDev exceeded 3% of its mean discarded before a number was read off it. The arms are `b71844eca` -
+§32's review fix, the commit before the currency moved - and `HEAD`, so what is weighed is §33, §34 and
+§35 together rather than this section alone.
+
+**`bare` is the control that says the comparison is allowed.** 438.9 us on the base against 438.9 on
+`HEAD` at a thousand rows, a permutation test on the medians returning p = 1.00: the two arms ran on an
+equally fast machine, which is the thing that makes the absolute microseconds below comparable at all.
+Worth saying plainly that the machine was **not** quiet while they ran - load average between 3 and 15 on
+ten cores - which is why the discarding rule exists and why every figure here is a median of passes
+rather than a reading.
+
+| N=1000, over passes | base | `HEAD` | Δ median | Δ mean |
+| --- | --- | --- | --- | --- |
+| bare | 438.9 us | 438.9 us | +0.05 (p = 1.00) | -0.26 (p = 0.82) |
+| a filter row, filtering nothing | 440.0 us | 440.6 us | +0.60 (p = 0.75) | -4.75 (p = 0.87) |
+| a filter that actually filters | 191.2 us | 193.6 us | +2.40 (p = 0.11) | **+3.65 (p = 0.011)** |
+| the same over a queryable | 351.1 us | 352.7 us | +1.60 (p = 0.07) | **+3.93 (p = 0.006)** |
+
+p is a two-sided permutation test over the passes, exact rather than assumed - ten or eleven surviving
+passes a row admit few enough arrangements to enumerate every one of them. **Both statistics are quoted because they disagree about how
+much to believe, and the disagreement is the reading.** The median test has almost no power at six passes
+against five; the mean test is the one that can be dragged by a single slow pass, which is exactly what
+the filter row's negative mean delta is - one base pass at 473.8 us against its own median of 440.
+Neither is trustworthy alone.
+
+**What survives both is the pattern.** The two controls sit between p = 0.75 and p = 1.00 whichever way
+they are read, and the two filtered rows are the only ones any test calls significant - p = 0.011 and
+p = 0.006, agreeing with each other. Two rows moving together against two that did not is worth more here
+than either p-value: **the rows that moved are the rows that compose a filter**, and a grid drawing a
+filter row it never applies is untouched.
+
+**The gate holds where it can fail the piece, and not to its own letter.** What this gate was written
+against was `c1 ⊕ c2` composed unconditionally - *an extra delegate call per row, forever* - and that is
+the one thing the numbers rule out. The delta is **+2.75 us at a hundred rows against +2.41 us at a
+thousand**: flat across a tenfold change, where a per-row cost would have been ten times the larger. What
+is left is fixed, and the letter of the gate said *unchanged*.
+
+**So the fixed cost has a second currency and still no mechanism.** ~0.8 KB and ~2.4 us on a filtered
+render, once rather than per row. Whether they are one event or two is not measured; that both are fixed
+and both appear on exactly the rows that build a filter is as far as this goes.
 
 ### What the review found that the build had not
 
@@ -7652,6 +7696,10 @@ exists: **a test one layer above a rule is not a test of the rule.** All thirtee
   divergence from `QueryableExtension` that nothing measures.
 - **An `In` over OData renders the typed list's `ToString`.** Pre-existing, upstream's, and on the seam
   this section promised not to touch - but nothing in the suite covers it.
+- **The fixed cost is now measured in two currencies and attributed in neither.** ~0.8 KB and ~2.4 us, on
+  a filtered render, once rather than per row - see *The time half, paid*. The candidates that were
+  counted for the allocation half are each allocated the same number of times as before, and nothing has
+  been counted for the time half at all. It is small, it is not per row, and it is unexplained.
 
 ### Where this could still be wrong
 
@@ -7917,8 +7965,18 @@ is per column and per active filter, and that is what it is.
 13282.7 and 13270.2 - a gap smaller than either arm's own spread, so the clock read that every draw pass
 now makes costs nothing measurable.
 
-Times are quoted from a short job and are noise by §9's own rule; the time half of the gate is **not
-measured to that standard** and remains owed, as it did in §33.
+**The time half, at full length.** Five passes of the default job, the pair read *within* each pass, so
+whatever the machine was doing it did to both arms seconds apart:
+
+| relative ÷ absolute | N=100 | N=1000 |
+| --- | --- | --- |
+| median of five passes | **1.000** | **1.001** |
+| spread | 0.991 - 1.007 | 0.995 - 1.006 |
+
+**A token costs no measurable time to read**, at either row count, with a spread under 1% - inside §9's
+3% bar by a factor of three, which is tighter than the allocation half managed. The other half of this
+section's gate, the token-free path unchanged, is cross-commit and is measured in §33's *The time half,
+paid*: `bare` and an unfiltered filter row do not move.
 
 ### What the review found that the build had not
 
@@ -8033,7 +8091,7 @@ sites covering for each other tested none of them.
   a date `Equals` at all, it writes the whole-day `Between`. The operator keeps its literal reading for
   the markup author, and there is one rule rather than two readings.*
 - **Nothing here is measured.** The gate is a budget until the build has run - *and it has: see What it
-  cost, where the allocation half passes and the time half is still owed.*
+  cost, where both halves now pass - the token costs no measurable time to read, at either row count.*
 
 ## 35. The filter menu, and the column writes its own editor - the design
 
@@ -8396,8 +8454,19 @@ have grown by ten, and the sweep is measuring rows - the filtering control itsel
 
 The gate asked for *unchanged*, and it is unchanged in the direction that cannot fail it.
 
-Times are quoted from a short job and are noise by §9's own rule; the time half of the gate is **not**
-measured to that standard and remains owed, as it did in §33 and §34.
+**The time half, at full length.** The same five passes, the pair again read within each pass:
+
+| menu ÷ row | N=100 | N=1000 |
+| --- | --- | --- |
+| never opened | **1.001** (3 passes) | **1.002** (4 passes) |
+| never opened, filtering | **0.973** (3 passes) | **0.997** (5 passes) |
+
+**A menu nobody has opened costs no measurable time against the row it replaces**, and nothing that grows
+with rows - the ratio is the same at a hundred as at a thousand. The counts differ because a block whose
+StdDev exceeded 3% of its mean was discarded rather than read, and the hundred-row blocks - where the
+whole render is a hundred microseconds - lost more of them; the thousand-row rows are the tight ones, and
+they are the ones that answer the per-row question. Time now says what allocation said, and for the same
+reason: nine header icons against nine `<input>`s, their binders and an extra `<tr>`.
 
 
 ### What the review found that the build had not
@@ -8543,7 +8612,8 @@ a decision without its constraint is how a limit that belongs to one design gets
   to. There is no third option that is both, and the tab stop wins because it is the older promise.
 - **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
   that can fail the piece. *It is built: see What it cost, where the allocation half passes in the
-  direction that cannot fail it and the time half is still owed.*
+  direction that cannot fail it and the time half is now paid at 1.00 against the filter row, at both row
+  counts.*
 - **The editors' argument survived for a different reason than the one given**, which is worth keeping
   separately from the correction above. The boxing this section objected to is real and small; what
   actually makes a column-written editor necessary is that `RadzenDatePicker` converts by asking its own
