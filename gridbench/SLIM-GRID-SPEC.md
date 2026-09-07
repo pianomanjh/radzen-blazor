@@ -6992,6 +6992,11 @@ to names through §14's existing map - a pill reading `Status: In [3, 7, 12]` an
 worse than showing nothing, and publishing storage keys to users is the exact fault §27's review caught
 in the column picker. Past a threshold it degrades to a count.
 
+**§37 keeps every rule here and drops one example.** Upstream's operator vocabulary has no *"is"* in
+it, so *"Hired is between..."* and *"the same strings as the operators"* were never both available; the
+rule is the half that survives and a pill reads *"Hired Between 1 Jan and 31 Mar"*. The threshold is
+three.
+
 `x` removes that filter; **the pill body reopens that column's menu with the filter loaded**, which
 matters because the column's header may be scrolled out of view, and that is precisely when someone wants
 to adjust rather than remove.
@@ -7002,6 +7007,12 @@ horizontal scroller, so a bar placed under it slides out of view exactly when th
 need one. Making it sticky on both axes was the clever alternative and was rejected - §10 already spent a
 section on sticky positioning inside that container, and stacking a second sticky band over sticky
 headers works until a theme changes.
+
+**§37 demonstrates all of this and corrects the last clause.** Injected into the running grid, a bar
+below the headers is gone after 960px of horizontal scroll on eleven columns, and the sticky-on-both-
+axes alternative is gone with it - not *until a theme changes* but under the theme that ships, because
+`.rz-grid-table thead th` carries the `overflow: hidden` that gives a header cell its ellipsis, and a
+clipping ancestor is what a sticky child resolves `left` against.
 
 **Clear is one operation at three scopes** - menu Clear, pill `x`, Clear all - each applying immediately
 and each costing exactly **one** reload. Clear all over six filtered columns must not be six queries, and
@@ -7045,13 +7056,16 @@ where a settings-format mistake is cheapest to catch.
   checklist behind an explicit action - is defended by a cost measurement rather than by a usability one.
 - **The pills bar's placement contradicts what was asked for**, on a structural argument about sticky
   positioning that has not been demonstrated in this grid. It is inference from §10's frozen-column work,
-  not a measurement of a pill bar.
+  not a measurement of a pill bar. *§37 measured it: the inference was right, and the alternative it
+  rejected as fragile turns out to be already broken.*
 - **`FilterUI` grid-wide against `FilterMode` per-column** is a separation that reads cleanly and has
   never been used. The first author who wants a menu on one column and a row cell on another will find
   out whether it holds.
 - **One reload for Clear all is stated and not designed.** The composition path is built to send one
   query, but every public clear currently reloads, so this needs a way to change several columns and
   compose once - which is the same shape as §23's owed-load problem and may want the same answer.
+  *§37 closes this by pointing at `ClearFilters`, which was never the loop the bullet feared: it calls
+  `SetFilter` per column and reloads once. It gets a gate rather than a sentence.*
 - **Nothing here is measured.** No piece is built, so every performance claim above is a budget rather
   than a result, including the one that is a gate.
 
@@ -8654,7 +8668,9 @@ a decision without its constraint is how a limit that belongs to one design gets
   apply-on-Apply. Every one of those is defended by an argument and none by a measurement.
 - **Recognising a preset by shape reads a hand-authored range as a preset.** Argued above as harmless.
   It stops being harmless the day something *writes* differently depending on which it thinks it is,
-  and ⑤'s pills are the first thing that will want to.
+  and ⑤'s pills are the first thing that will want to. *They do not: §37's pills read the recognition
+  to choose a word and write nothing that depends on it. The day arrives with a pill that edits its
+  preset in place, which ⑤ does not offer.*
 - **Escape returning focus to the grid rather than the icon** is right for §12's one-tab-stop model and
   wrong for what a screen reader user is told: the thing they opened is not the thing they are returned
   to. There is no third option that is both, and the tab stop wins because it is the older promise.
@@ -9146,3 +9162,243 @@ that survives.
   base infers, and the inference runs through `EffectiveFilterType`, which a key typed `object` would
   send elsewhere. §35's precedent deleted a site that could not be *reached*; this one is reached and
   agrees, which is a different thing.
+
+## 37. The pills, and the placement argument demonstrated at last - the design
+
+§31's ⑤, and the last of the six pieces. **Nothing here is built when this section lands.**
+
+§31 left the pills four things by name: the placement, the plain-language phrase, the lookup ids
+resolving to names, and Clear all costing one reload. One of the four was an inference the section
+itself flagged, one was already true in code, and one turns out to promise English its own rule cannot
+produce. That is what this section is mostly about.
+
+### What the demonstration settled
+
+§31 placed the bar above the scroll container, called it *"the one place the design refuses what was
+asked for"*, and listed in *Where this could still be wrong*: **"inference from §10's frozen-column
+work, not a measurement of a pill bar."** It is a measurement now.
+
+Both candidates were injected into the running playground's own DOM - eleven columns, a 1910px table
+in a 950px scroller - and the grid was scrolled 960px to the right:
+
+| candidate | at rest | scrolled right |
+| --- | --- | --- |
+| above the scroller, in an `rz-datatable-header` band | visible | **visible, unmoved** |
+| below the headers, as a `thead` row | visible | **gone; an empty band remains** |
+| below the headers with `position: sticky; left: 0` | visible | **also gone** |
+
+The first two rows confirm §31. **The third is what §31 did not have.** §31 rejected sticky-on-both-axes
+as a clever alternative that "works until a theme changes"; it does not work under the theme that
+ships. `.rz-grid-table thead th` carries `overflow: hidden` - which is what gives a header cell its
+ellipsis - and an ancestor with `overflow: hidden` is a clipping container, which is what a
+`position: sticky` child resolves `left` against. Setting that one cell to `overflow: visible` pins the
+bar correctly: the chip list's left edge moves from off-screen to 17px against the scroller's 25px,
+which is the cell's own padding. That rule is `Radzen.Blazor`'s, this branch does not patch it, and the
+rule is right about the thing it is for.
+
+So the placement stands and its defence changes shape: not *this might break when a theme changes*, but
+*this is already broken by the theme we ship against, for a reason that theme is correct about*.
+
+### The surface
+
+`ShowFilterPills`, a grid parameter defaulting to off. `Show`, not `Allow`, because it displays a thing
+rather than permitting one - the family `ShowHeader`, `ShowPagingSummary` and `ShowLoadingIndicator`
+are already in. Independent of `FilterUI`, which is §31's rule and its reason: a pill bar explains
+*applied filters*, and tying an explanation to an input feature would mean a team that prefers the row
+can never have one.
+
+**The band is drawn only when something is filtered.** A permanently empty band on every grid that
+turns pills on costs a row of chrome forever to avoid one layout shift on the first filter, which is
+the wrong trade in a component whose whole argument is what it does not draw.
+
+**No new CSS, and that is a finding rather than a preference.** `rz-datatable-header` for the band,
+`rz-chip-list`, `rz-chip-list-item`, `rz-chip`, `rz-chip-text` for the pills, and `.rz-chip .rz-button`
+- which the themes already size at 1.25rem *because it is inside a chip* - for the `x`. Every one is
+styled in every shipped theme. `rz-datatable-header` is the interesting one: it is themed with a
+toolbar background, the grid's own header padding and a bottom border, and **no upstream component
+renders it**. It is the band this bar wants, already dressed.
+
+Written as a render tree rather than as `RadzenChipList`. That component is a `FormComponent<TValue>`
+carrying selection, focus and keyboard semantics for a list of chips a user picks from, which is not
+what this is; and it would cost a `RadzenChipList`, a `RadzenChip` and a `RadzenButton` per active
+filter where §3's third rule wants none. `RenderFilterIcon` made the same choice against `RadzenButton`
+and for the same reason.
+
+**The pills are real tab stops**, and this is the one place the grid's chrome disagrees with §35's
+icon. §12's *one tab stop* is a rule about the grid's **cells** - reached by `aria-activedescendant`,
+which is why the header icon sits at `tabindex="-1"`. This band is outside `role="grid"`, a sibling of
+the pager, and the pager's buttons have always been in the tab order. A removable filter that only a
+mouse can remove would be the mouse-only control §31 refused for the icon.
+
+### Which columns get one
+
+`HasFilter`, and nothing new. It already reads `CanFilter && CurrentFilter is { IsPresent: true }`,
+which is exactly the question - *is this column narrowing anything, and can that be undone* - and the
+second half is what stops a pill drawing an `x` that `Filter` would silently refuse.
+
+`CanFilter` does not consult `AllowFiltering`, so **a grid with the filter UI switched off still
+explains itself**. That is the case where an explanation is worth most: a filter applied by
+`ApplyFilters` or by a `RadzenDataFilter` is one the reader never authored and has no control to look
+at. The `x` works there too, because `Filter` gates on the column and not on the grid.
+
+### What a pill says
+
+`{HeaderText} {operator} {values}`, built from `CurrentFilter` - what the user **authored** - and never
+from `ActiveFilter`. §34 built that split for this: a pill rendering a relative filter as two resolved
+dates would be the staleness §34 exists to prevent, wearing the reader's own handwriting.
+
+- `Hired Last 7 days`, through `FastGridFilterPresets.Recognize`
+- `Hired Between 01/01/2026 and 31/03/2026`
+- `Department In Sales, Ops`
+- `Rating Is null`
+- `Tags In Remote, Contract, On call or 4 more`
+
+**§31's rule survives and §31's example does not.** The rule is *"a plain-language phrase built from the
+same strings as the operators, so a pill reads as one vocabulary rather than two"*, and it is right.
+The example it illustrated the rule with - *"Hired is between 1 Jan and 31 Mar"* - is not reachable
+from those strings: upstream's vocabulary is `Equals`, `Greater than`, `In`, `Is null`, and there is no
+*"is"* anywhere in it. Producing that sentence means a second set of operator words, untranslated,
+disagreeing with the menu two inches above. The pill reads `Hired Between ...`, which is stiffer
+English than §31 promised, and the promise is the half that goes.
+
+Three new strings, and only three: the **and** that joins a range's bounds, **Clear all**, and the
+**or {0} more** that ends a degraded list. The operators, the presets and *Clear* are already localized
+by §35.
+
+**Past three named values a list becomes a count.** A pill is a label, not a list - four values is
+something a reader parses rather than recognises, and the bar has as many pills as there are filtered
+columns. Three is a judgement, stated as one, with no parameter behind it: configurability is not the
+bar §31 set, and a knob added before anyone has asked is a knob every later section argues with.
+
+### Naming a value costs no query
+
+**A pill names values through a map the column already holds, and never through a scan.** §36 split
+itself off to defend *queries per open*, and a bar that resolves ids by scanning would spend that gate
+on the render after the filter rather than on the open.
+
+The hook is one new virtual, `ColumnBase.FilterValueTextOf`. The base names a value through `Entries`
+when one matches it, which covers the blank and the enum member; `PropertyColumn` applies its `Format`,
+which lives there and not on the base, so `Salary Greater than $50,000` and `Hired Between 01/01/2026`
+read as their cells do; `LookupColumnBase` resolves a `TKey` through §14's map, which §14 resolved once
+at startup. A declared check-box-list column whose menu has never been opened has run no scan, so its
+pill shows the raw values - and on a plain column the raw values **are** the names. The gate holds by
+construction, and this time by construction means *the only route to a name is a map that is already
+in memory*.
+
+It is a sixth internal virtual on `ColumnBase`, which §20 counted as a closing door and §36's
+`OffersBlank` widened to five. The difference is which way a missing override fails: a column that does
+not override this gets `ToString`, which is a worse pill; a column that does not override `OffersBlank`
+gets a filter that narrows to nothing.
+
+### The pill's two clicks
+
+**`x` clears that column** - one reload, through the `Filter(column, null)` that already exists.
+
+**The body goes to where the filter can be adjusted**, which is §31's reason for it: *"the column's
+header may be scrolled out of view, and that is precisely when someone wants to adjust rather than
+remove."* §31 wrote that as *reopens that column's menu*, and under `FilterUI.Row` there is no menu to
+reopen - a gap §31 did not see because the same paragraph had just made pills independent of
+`FilterUI`. So the rule is the intent rather than the mechanism:
+
+- under `FilterUI.Menu`, it opens that column's menu seeded from `CurrentFilter`, which is
+  `OpenFilterMenu` unchanged;
+- under `FilterUI.Row`, it puts the cursor in that column's filter box, and focusing an off-screen
+  control scrolls it into view for nothing;
+- **where there is neither** - `AllowFiltering` off, a filter that came from `ApplyFilters` - the body
+  is text and only the `x` is interactive. A control that looks clickable and does nothing is the
+  affordance fault §27's review caught in the column picker, and refusing to draw it is cheaper than
+  inventing a third destination.
+
+The second of those needs an id on the filter row's editor and one export in `fastgrid.js`. Both are
+this branch's own files.
+
+### Clear all was already one reload
+
+§31 left it open - *"stated and not designed... every public clear currently reloads, so this needs a
+way to change several columns and compose once, which is the same shape as §23's owed-load problem"* -
+and the worry was about **the naive loop over columns calling the public clear**. `ClearFilters` was
+never that loop. It walks the columns calling `SetFilter` directly, which touches no query, and then
+reloads once. The bullet closes by pointing at code that was already right.
+
+It closes with a gate rather than with that sentence, because the sentence is exactly the shape §36
+named: *a query counter that reads zero looks identical whether the query was avoided or never
+attempted*. **One query for a Clear all over six filtered columns**, through §36's
+`WalkCountingProvider`, and mutated to confirm it can fail.
+
+### §35's warning does not land here
+
+§35 argued that recognising a preset by its shape is harmless, and named what would end that:
+
+> It stops being harmless the day something *writes* differently depending on which it thinks it is,
+> and ⑤'s pills are the first thing that will want to.
+
+**They are not that day.** A pill reads `Recognize` to choose a word. The `x` writes null whichever word
+was chosen. The body reopens the menu, which reseeds from `CurrentFilter` and cannot see what the pill
+printed. There is no write on ⑤ whose result depends on the recognition, so a hand-authored
+`Between today-6d today@end` displaying as *Last 7 days* remains what §35 said it was: the same range,
+resolved at the same instant by the same rule, spelled twice.
+
+What *would* be that day is a pill that edits its preset in place - a control on the bar that turns
+*last 7 days* into *last 30* without opening the menu - because that reads a shape, decides it is a
+name, and writes the name's other value back. ⑤ does not offer one, and the day is still coming.
+
+### The gate
+
+**§31's, unchanged: per-row and per-cell allocation must not move.** The bar may cost per active filter;
+it may not cost per row, and 1000 rows x 5 columns is where this grid's argument lives. The bar is
+outside the table, so nothing here draws in a row - and *"by construction"* is what §33's residual was
+also called, which is why it is measured rather than asserted:
+
+| row | what it holds |
+| --- | --- |
+| pills off | today, and the baseline the other two are read against |
+| pills on, nothing filtered | the band that is not drawn |
+| pills on, three columns filtered | three pills, and the whole cost of the feature |
+
+§35's allocation rows are re-run beside them rather than assumed.
+
+The second gate is Clear all's single query, above. It is a gate because it can fail: a loop calling
+the public clear per column reads six, and the mutation that writes that loop is the one that proves
+the instrument works.
+
+### What this section does not do
+
+- **A pill per condition.** A two-condition filter - §31's `In [...] OR IsNull` - is one column's
+  filter and gets one pill, because the `x` clears a column and there is no operation that removes half
+  a filter.
+- **Editing from the bar.** The body is a door to the editor, not a second one.
+- **Reordering, grouping or sorting the pills.** They are in column order, which is the order the
+  reader's eye already has.
+- **A pill for a sort.** Filters hide rows and sorts do not, so *"why is data missing"* is the question
+  this bar answers and a sort is not part of it.
+
+### How it is verified
+
+- **The phrase as a pure rule**, in its own file and with no render tree - §33's finding that a test one
+  layer above a rule is not a test of the rule. *What does an `In` over four lookup ids read as* needs
+  a column and a filter, not a panel.
+- **The naming rule against a column whose scan has never run**, which is the queries-per-open gate
+  restated where this section could break it.
+- **The Clear all gate through `WalkCountingProvider`**, mutated to confirm it can fail.
+- **bUnit** for what only a render answers: the band absent when nothing is filtered, one pill per
+  filtered column, the `x` clearing that column alone, and the body inert where there is nowhere for
+  it to go.
+- **The playground**, §9's layer 6 and not optional: a *Show filter pills* toggle beside §35's
+  `FilterUI` one, on §36's data, with a lookup column and a preset both filtered so the two naming
+  rules are visible at once.
+- **The mutation loop**, on §35's and §36's precedent.
+
+### Where this could still be wrong
+
+- **Three values before the count is a judgement with no measurement**, which is §31's *"at least as
+  friendly as Excel"* bullet arriving one level down. It is the third section in a row where the
+  friendliness bar is defended by an argument.
+- **A sixth internal virtual**, argued above as failing safely, which is a claim about today's five
+  column kinds and not about the next one.
+- **`Hired Between ...` is stiffer than the design promised.** Keeping one vocabulary and keeping
+  §31's sentence were not both available, and the one that reads worse was kept.
+- **Pills draw from `CurrentFilter` and the bar is rendered by the grid**, so a `FilterTemplate` column
+  gets a pill describing a filter its author composed and worded themselves. The phrase will be right
+  about the model and may be wrong about what their editor called it.
+- **The demonstration was one browser at one width.** Sticky positioning and clipping containers are
+  specified behaviour rather than a rendering detail, but the measurement is Chromium's.
