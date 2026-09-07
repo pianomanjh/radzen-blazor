@@ -8767,6 +8767,13 @@ for the life of the grid, which is where `FilterValues` already puts §14's entr
 strings: the wording is upstream's and an application that has already translated it gets it here for
 nothing.
 
+*The build got this free and then lost it on one path.* `DropDownBase` calls that helper itself for any
+item that **is** an `Enum`, so a non-nullable enum column had it and nothing here had to ask; a nullable
+one wraps its values in an entry, which upstream no longer recognises as an enum, so the same column
+read *Senior* or *Senior engineer* depending on whether its type had a `?` on it. One rule with two
+spellings, which is the fault §34's and §35's reviews each found once. It is spelled once now, in
+`ColumnBase.Text`, and the claim in this paragraph was a comment before it was code.
+
 ### The control
 
 **`RadzenListBox`, `Multiple`, replacing the `RadzenDropDown` §35 left behind.**

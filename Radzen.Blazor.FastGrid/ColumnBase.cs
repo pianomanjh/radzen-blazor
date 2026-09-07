@@ -1469,11 +1469,7 @@ namespace Radzen.FastGrid
 
         List<object>? enumMembers;
 
-        /// <summary>
-        /// The enum's members, boxed once. Text is upstream's <c>GetDisplayDescription</c>, so
-        /// <c>[Display]</c> is honoured and the wording is the one <c>RadzenDataGrid</c>'s own check-box
-        /// list draws - §35's argument about the operator strings, applied to the values.
-        /// </summary>
+        /// <summary>The enum's members, boxed once.</summary>
         List<object> EnumMembers()
         {
             if (enumMembers is not null)
@@ -1574,13 +1570,26 @@ namespace Radzen.FastGrid
                     continue;
                 }
 
-                // What the raw value drew in the list before it was wrapped, which is what the filter
-                // row has always shown: a check-box list has no TextProperty and renders the item.
-                built.Add(new FastGridFilterEntry(value, value.ToString() ?? string.Empty));
+                built.Add(new FastGridFilterEntry(value, Text(value)));
             }
 
             return built;
         }
+
+        /// <summary>What a value draws in a check-box list.</summary>
+        /// <remarks>
+        /// What the raw value drew before §36 wrapped it, which is what the filter row has always
+        /// shown: a check-box list has no <c>TextProperty</c>, so upstream renders the item itself -
+        /// and for an <see cref="Enum" /> that means <c>GetDisplayDescription</c>, which honours
+        /// <c>[Display]</c> and is the wording <c>RadzenDataGrid</c>'s own list draws. Spelled here
+        /// because a wrapped entry is no longer an <c>Enum</c> for upstream to recognise, and an enum
+        /// column that reads one way when it is nullable and another when it is not would be one rule
+        /// with two spellings - which is the fault §34's and §35's reviews each found once.
+        /// </remarks>
+        static string Text(object value) =>
+            value is Enum member
+                ? Blazor.EnumExtensions.GetDisplayDescription(member)
+                : value.ToString() ?? string.Empty;
 
         /// <summary>
         /// The entries this column is offering, or null where it wraps nothing - which is every column

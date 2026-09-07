@@ -158,6 +158,37 @@ namespace Radzen.FastGrid.Tests
                 Lists(cut).Single().Data.Cast<object>());
         }
 
+        [Fact]
+        public void AWrappedEnumDrawsTheSameWordAnUnwrappedOneDoes()
+        {
+            // A nullable enum is wrapped in an entry and a non-nullable one is not, so upstream stops
+            // recognising it as an Enum on one of the two paths - and GetDisplayDescription is what it
+            // does when it does recognise one. An enum that reads one way when the column is nullable
+            // and another when it is not would be one rule with two spellings.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, Grade?>(x => x.Rank),
+                Columns.Property<Person, Grade>(x => x.Grade)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            var nullable = Lists(cut).Single().Data.Cast<object>()
+                .OfType<FastGridFilterEntry>().Where(e => e.Value is not null)
+                .Select(e => e.ToString()).ToArray();
+
+            cut.Find("div.rz-filter-menu-buttons button.rz-light").Click();
+
+            OpenMenu(cut, 1);
+            PickItem(cut, "In");
+
+            var plain = Lists(cut).Single().Data.Cast<object>()
+                .Select(v => Radzen.Blazor.EnumExtensions.GetDisplayDescription((Enum)v)).ToArray();
+
+            Assert.Equal(plain, nullable);
+        }
+
         // ---- the blank ----
 
         [Fact]

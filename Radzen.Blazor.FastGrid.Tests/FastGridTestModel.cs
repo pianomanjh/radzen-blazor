@@ -37,6 +37,12 @@ namespace Radzen.FastGrid.Tests
         /// <summary>An enum, which does not convert from a string through IConvertible.</summary>
         public Grade Grade { get; set; }
 
+        /// <summary>
+        /// The same, nullable - so §36's blank wraps an enum column's entries, which is the one place a
+        /// value stops being an <c>Enum</c> for upstream's own text lookup to recognise.
+        /// </summary>
+        public Grade? Rank { get; set; }
+
         /// <summary>A bool, so the filter menu's true/false editor has a column to bind to.</summary>
         public bool Remote { get; set; }
 
@@ -62,6 +68,13 @@ namespace Radzen.FastGrid.Tests
     public enum Grade
     {
         Junior,
+
+        /// <summary>
+        /// Named, so §36's enum text is testable at all: <c>GetDisplayDescription</c> falls back to the
+        /// member name, and a member with no attribute would agree with <c>ToString</c> whether or not
+        /// anything called it.
+        /// </summary>
+        [System.ComponentModel.DataAnnotations.Display(Name = "Senior engineer")]
         Senior,
     }
 
