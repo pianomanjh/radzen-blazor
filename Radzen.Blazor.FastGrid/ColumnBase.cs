@@ -880,6 +880,23 @@ namespace Radzen.FastGrid
             }
         }
 
+        /// <summary>Whether this column can hold no value at all, which is what offers IsNull.</summary>
+        /// <remarks>
+        /// A reference type is nullable in the sense that matters here - a string column has rows with
+        /// no string - and the C# annotation that would say otherwise is erased by the time a
+        /// <see cref="Type" /> is all there is. §31 says nullable columns of any type also get IsNull
+        /// and IsNotNull, and this is which columns those are.
+        /// </remarks>
+        internal bool FilterNullable
+        {
+            get
+            {
+                var declared = EffectiveFilterType;
+
+                return !declared.IsValueType || Nullable.GetUnderlyingType(declared) is not null;
+            }
+        }
+
         /// <summary>Whether this column can be filtered.</summary>
         public virtual bool CanFilter => Filterable && FilterPropertyPath is not null;
 
@@ -939,7 +956,44 @@ namespace Radzen.FastGrid
                 ? new FastGridFilterCondition(filterOperator)
                 : new FastGridFilterCondition(filterOperator, value);
 
+        /// <summary>
+        /// Whether this column's filter is edited as a check-box list rather than as a box.
+        /// </summary>
+        /// <remarks>
+        /// §31: <c>FilterMode.CheckBoxList</c> stops being a mode and becomes the editor for
+        /// <c>In</c>/<c>NotIn</c>. A check-box list is not a different kind of filtering, it is how a set
+        /// is picked - so what the parameter really said all along was which operator the column uses,
+        /// and <see cref="LookupColumnBase{TItem, TKey}" /> has answered <c>In</c> unconditionally since
+        /// §14 for exactly that reason. This is that rule for the columns that get the mode from the
+        /// grid instead of from their own type.
+        /// </remarks>
+        internal bool EditedAsSet => Grid?.FilterModeOf(this) == Radzen.FilterMode.CheckBoxList;
+
+        /// <summary>
+        /// The editor this column last <em>drew</em>, so a change of editor can be told from a filter
+        /// arriving under the editor it already had. Null until the column has been drawn once.
+        /// </summary>
+        /// <remarks>
+        /// The distinction is the whole of §35's screening rule and the build is what found it needed
+        /// one. A caller asking for <c>Equals 3</c> on a column that is already a check-box list has said
+        /// what they want and gets it - the list shows nothing ticked, which is what
+        /// <see cref="LookupColumnBase{TItem, TKey}" /> has done since §14. A filter that was authored in
+        /// a box and then had the box taken away is the other thing: nothing on the screen can explain
+        /// it and nothing can remove it.
+        /// </remarks>
+        internal Radzen.FilterMode? LastEditorMode { get; set; }
+
         /// <summary>How this column compares when nothing said otherwise.</summary>
+        /// <remarks>
+        /// <strong>Not <c>In</c> for a check-box-list column</strong>, though §31's "the mode maps onto
+        /// the new model" reads as though it should be, and the build tried it. This answers for a
+        /// <em>value</em> arriving without an operator - a descriptor with none set, a typed box, a
+        /// declared <c>FilterValue</c> - and those values are scalars whatever the editor is; answering
+        /// <c>In</c> turned <c>ApplyFilters</c>'s <c>Id = 3</c> into a <c>Contains</c> over a bare 3.
+        /// <see cref="LookupColumnBase{TItem, TKey}" /> can answer <c>In</c> unconditionally because its
+        /// values really are sets of ids. The mapping lives where the list actually edits - the list
+        /// passes <c>In</c> itself - and not here.
+        /// </remarks>
         internal virtual FastGridFilterOperator DefaultFilterOperator =>
             EffectiveFilterType == typeof(string)
                 ? FastGridFilterOperator.Contains
@@ -1362,10 +1416,79 @@ namespace Radzen.FastGrid
         internal virtual IEnumerable? FilterValues => null;
 
         /// <summary>
+        /// Draws one slot of §35's filter menu editor.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// On the column because only the column knows what it filters by, which is the same reason
+        /// <see cref="FilterValueFromText" /> is here. The default is the text input the filter row
+        /// already draws, and it covers every type the grid can filter by: the conversion is that
+        /// method's, so an enum, a <see cref="Guid" /> and §34's relative-date tokens all read here
+        /// exactly as they read in the row.
+        /// </para>
+        /// <para>
+        /// <strong>§3 rule 1 does not reach this.</strong> That rule is about rows and cells, and its
+        /// reason is the per-row multiplier; a menu is one panel, opened by hand, with one or two of
+        /// these in it. What the rule does still forbid is reaching a typed control by widening -
+        /// <c>RadzenDatePicker&lt;object&gt;</c> is what upstream's own filter UI uses and it is what
+        /// loses a <see cref="DateOnly" /> column its type.
+        /// </para>
+        /// </remarks>
+        internal virtual void RenderFilterEditor(RenderTreeBuilder builder, int sequence,
+            FilterEditor editor)
+        {
+            builder.OpenElement(sequence, "input");
+            builder.AddAttribute(sequence + 1, "type", "text");
+            builder.AddAttribute(sequence + 2, "autocomplete", "off");
+            builder.AddAttribute(sequence + 3, "class", "rz-textbox");
+            builder.AddAttribute(sequence + 4, "style", "width:100%;");
+            builder.AddAttribute(sequence + 5, "aria-label", editor.AriaLabel);
+            builder.AddAttribute(sequence + 6, "value", FilterEditorText(editor.Value));
+
+            // onchange rather than oninput, and it is §31's rule rather than a saving: a menu holding an
+            // operator and up to two values cannot filter as you type, because a half-typed lower bound
+            // filters to nothing on every keystroke. The panel commits on Apply or Enter; this only
+            // carries what was typed into the draft.
+            builder.AddAttribute(sequence + 7, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                this, args => editor.Set(FilterValueFromText(args.Value as string))));
+
+            builder.CloseElement();
+        }
+
+        /// <summary>
+        /// A drafted value as the text an editor shows for it, which is invariant for a token and
+        /// <see cref="CultureInfo.CurrentCulture" /> for everything else.
+        /// </summary>
+        /// <remarks>
+        /// The two halves are <see cref="FilterValueFromText" /> read backwards, and they have to be:
+        /// §32 settled that stored values are invariant and typed text is the current culture, and a
+        /// token has exactly one spelling by §34's rule. Showing a token through the current culture
+        /// would produce text the box beside it could not read back.
+        /// </remarks>
+        private protected static string? FilterEditorText(object? value) => value switch
+        {
+            null => null,
+            FastGridRelativeDate relative => relative.ToString(),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.CurrentCulture),
+            _ => value.ToString(),
+        };
+
+        /// <summary>
         /// What the check-box list is bound to, which is the first condition's value unless the list
         /// offers something other than the values the column filters by.
         /// </summary>
-        internal virtual object? FilterSelection => CurrentFilter?.First.Value;
+        /// <remarks>
+        /// <strong>Only a set operator answers.</strong> §32's browser pass recorded a circuit
+        /// terminating when <c>FilterMode</c> was switched to <c>CheckBoxList</c> with a scalar filter
+        /// applied: the value went to <c>RadzenDropDown</c> in <c>Multiple</c> mode, which casts it to a
+        /// sequence, and a decimal is not one. The cast is upstream's and correct; what was wrong was
+        /// handing a set editor a filter that is not a set.
+        /// <see cref="LookupColumnBase{TItem, TKey}" /> has guarded this since §14 and the base did not.
+        /// </remarks>
+        internal virtual object? FilterSelection =>
+            CurrentFilter?.First is { } first && first.Operator.Arity() == FastGridFilterArity.Many
+                ? first.Value
+                : null;
 
         /// <summary>
         /// The value a check-box-list selection means for this column. The inverse of

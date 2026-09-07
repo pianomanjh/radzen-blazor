@@ -329,5 +329,39 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Offered(cut, 0));
             Assert.Equal(1, executor.DistinctCalls);
         }
+
+        [Fact]
+        public void AScalarFilterDoesNotSurviveIntoACheckBoxList()
+        {
+            // §32's browser pass: with a scalar filter applied, switching FilterMode to CheckBoxList
+            // terminated the circuit. The list's Value is cast to a sequence and a decimal is not one.
+            // §35's answer is that the mode is an operator - a column edited as a check-box list filters
+            // by In, so a filter that is not a sequence filter is dropped rather than handed over.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent,
+                    Columns.Of(Columns.Property<Person, decimal>(x => x.Salary)));
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterMode, FilterMode.Simple);
+            });
+
+            var column = cut.FindComponent<PropertyColumn<Person, decimal>>().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Filter(column, 100m, Radzen.FilterOperator.Equals));
+
+            Assert.True(column.HasFilter);
+
+            cut.SetParametersAndRender(p => p.Add(g => g.FilterMode, FilterMode.CheckBoxList));
+
+            // Nothing threw, and the scalar is gone rather than sitting in a control that cannot hold it.
+            Assert.Null(Picker(cut, 0).Value);
+            Assert.False(column.HasFilter);
+        }
+
     }
 }

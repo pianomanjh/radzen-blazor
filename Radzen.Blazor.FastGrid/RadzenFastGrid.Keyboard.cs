@@ -272,6 +272,16 @@ namespace Radzen.FastGrid
             var row = focusRow == HeaderRow ? HeaderRow : Math.Min(focusRow, Math.Max(rows - 1, 0));
             var cell = Math.Min(focusCell, cells - 1);
 
+            // Excel's own shortcut, and §31 chose it for that reason. Before the switch because it is
+            // the one gesture whose meaning is decided by a modifier rather than by the key: Alt+Down on
+            // a header opens its filter, and Down on a header still moves into the rows.
+            if (args.AltKey && args.Key == "ArrowDown" && row == HeaderRow && FilterMenuEnabled)
+            {
+                OpenFilterMenuFor(cell);
+
+                return;
+            }
+
             switch (args.Key)
             {
                 case "ArrowDown":

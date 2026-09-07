@@ -635,6 +635,26 @@ public class FastGridFeatureBench
         p["ChildContent"] = RelativeRangeColumns;
     });
 
+    // §35's pair, and the half of its gate that can fail the piece. The filter row is the control: both
+    // draw a filterable grid over the same columns, so what separates them is the header icon and a
+    // panel that has never been opened. The icon is per column and the panel is one; at a thousand rows
+    // neither may show up, and swept over two row counts because §33's review is the reason that sweep
+    // exists - a fixed cost and a per-row cost look identical at one row count.
+    [Benchmark(Description = "+ a filter menu, never opened")]
+    public Task FilterMenuClosed() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["FilterUI"] = FilterUI.Menu;
+    });
+
+    [Benchmark(Description = "+ a filter menu, never opened, with a filter applied")]
+    public Task FilterMenuClosedApplied() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["FilterUI"] = FilterUI.Menu;
+        p["ChildContent"] = FilteredColumns;
+    });
+
     // The one hook on this component that runs per cell rather than per row or per column, so the
     // question these two answer together is what the seam itself costs before a handler does anything:
     // the no-op measures the arguments object and the null check, the writing one adds the dictionary

@@ -50,9 +50,18 @@
         <legend>Rows</legend>
         <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
         <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
+        @* §35. Both UIs over the same data and the same columns, which is the only way to compare
+           them - and switching between them with a filter applied is how §32's browser pass found the
+           CheckBoxList circuit crash in the first place. *@
+        <label>Filter in
+            <select @bind="filterUI" disabled="@(!allowFiltering)">
+                <option value="@FilterUI.Row">a row</option>
+                <option value="@FilterUI.Menu">a menu</option>
+            </select>
+        </label>
         <label title="A lookup column's list is the lookup itself; every other column scans the data"
                >Filter with
-            <select @bind="filterMode" disabled="@(!allowFiltering)">
+            <select @bind="filterMode" disabled="@(!allowFiltering || filterUI == FilterUI.Menu)">
                 <option value="@FilterMode.Simple">a box</option>
                 <option value="@FilterMode.CheckBoxList">check boxes</option>
             </select>
@@ -179,6 +188,7 @@
                     AllowSorting="@allowSorting"
                     AllowFiltering="@allowFiltering"
                     FilterMode="@filterMode"
+                    FilterUI="@filterUI"
                     AllowPaging="@allowPaging"
                     AllowVirtualization="@virtualize"
                     AllowColumnPicking="@allowPicking"
@@ -275,6 +285,8 @@
     RadzenFastGrid<Row>? grid;
 
     FilterMode filterMode = FilterMode.Simple;
+
+    FilterUI filterUI = FilterUI.Row;
 
     /// <summary>Where a lookup's names come from. Only a query is fetched.</summary>
     enum Provenance { Map, Items, Query }

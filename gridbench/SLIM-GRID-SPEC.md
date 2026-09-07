@@ -634,9 +634,12 @@ Each layer below caught real faults the previous one missed. Use all of them.
   this bullet did not anticipate at all: `Radzen.openPopup` measures the panel once and decides the flip
   above the control and the shift left from that single rect, so the panel has to carry its final width
   before it is opened, and `syncWidth` goes off because the width is then ours.
-- The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no date
-  popup, no numeric range, no enum picker. `RadzenDataGrid` has all four and they are most of its filter
-  code. `FilterTemplate` is the escape hatch; whether any of them should be built in is open.
+- ~~The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no
+  date popup, no numeric range, no enum picker.~~ - **answered by §31 and built from §35.** All four
+  are one feature rather than four, which is what building them separately would have made clunky:
+  `FilterUI.Menu` is the operator menu, the date popup is its relative presets and typed picker, the
+  numeric range is `Between`, and the enum picker is `In` edited as a list. `FilterTemplate` remains
+  the escape hatch for what the menu deliberately does not offer.
 
 - ~~**A check-box list's distinct scan is dropped on every parameter set, not on every data change.**~~ -
   **found, measured and fixed.** `lookups` was cleared on `!ReferenceEquals(lastData, Data)`, which for
@@ -926,8 +929,10 @@ Nothing here is committed to; this is the list as it stood, so it can be picked 
 **Still open from before, unchanged:**
 
 - Package and namespace name.
-- Whether any of `RadzenDataGrid`'s four richer filter UIs - operator menu, date popup, numeric range,
-  enum picker - should be built in, or whether `FilterTemplate` stays the whole answer.
+- ~~Whether any of `RadzenDataGrid`'s four richer filter UIs - operator menu, date popup, numeric range,
+  enum picker - should be built in, or whether `FilterTemplate` stays the whole answer.~~ - **answered
+  in §31 and built in §35**: they are one feature, `FilterUI.Menu`, and `FilterTemplate` is still the
+  answer for everything the menu does not offer. §36 is the checklist half.
 
 ---
 
@@ -8314,6 +8319,86 @@ open and is not measured against a budget, because it is a control a user asked 
   the existing settings controls, so the two UIs can be compared on the same data, and Alt+Down tried
   against a real browser's own handling of it.
 
+
+### What the build changed
+
+Four of this section's decisions did not survive, one rule turned out to be three-quarters missing, and
+the bug that mattered most was invisible to every test in the suite.
+
+**"Cleared when the mode changes" was two rules wearing one sentence.** The broad reading - clear
+whenever a filter and a set editor disagree - was built first and broke a contract this grid already
+has. A caller asking `ApplyFilters` or `Filter(column, value)` for `Equals 3` on a column that was
+*already* a check-box list has said what they want, and §14's lookup columns have answered by applying
+it and ticking nothing since they were built; dropping it is the silent disappearance §32 exists to
+refuse. Only a **transition** clears now, and telling one from the other needs the editor a column last
+*drew* rather than the one it is about to - recorded as the table draws, null until it has drawn once,
+so markup declaring both a `FilterValue` and `CheckBoxList` keeps what it declared.
+
+**`DefaultFilterOperator` is not `In` for a check-box-list column.** §31's *"the parameter maps onto
+the new model"* reads as though it should be, and it was built that way. That property answers for a
+*value* arriving with no operator - a descriptor with none set, a typed box, a declared `FilterValue` -
+and those are scalars whatever the editor is, so answering `In` turned `ApplyFilters`'s `Id = 3` into a
+`Contains` over a bare 3 and an existing test caught it. `LookupColumnBase` can answer `In`
+unconditionally because its values really are sets of ids. The mapping lives where the list actually
+edits, and the list already passed `In` itself; what the crash needed was the *guard*, not the mapping.
+
+**The editors are two controls, not a control per type.** This section argued the column-written editor
+against `RadzenNumeric<object>` and the boxing that widening costs. The reason it survives is a
+different one: a typed numeric control **cannot show empty for a non-nullable `TProp`** - it shows a
+zero - so a menu opening pre-filled on an unfiltered column would offer Apply on a value nobody chose.
+Upstream's own filter UI draws a `RadzenTextBox` for numbers for exactly this reason. So the base draws
+the text input the filter row already draws, converting through `FilterValueFromText` - which is the
+column's, and already reads enums, `Guid`s and §34's tokens - and `PropertyColumn` overrides for two
+types only. **The date picker is the whole argument**: `RadzenDatePicker` converts what was picked by
+asking its own `TValue`, so drawing it over `object`, as upstream does, is what hands a `DateOnly`
+column a `DateTime`. The empty-state problem is solved by flow rather than by generics: no operator
+picked, no editor.
+
+**The whole-day rule is four operators, not one.** This section argued it for `Equals` and the build
+found the other three by testing them. `After 5 March` at midnight keeps 5 March's afternoon; a range
+ending at `31 March` at midnight drops 31 March; and `Before 5 March 14:00`, read literally, keeps that
+morning. Every one is the failure §34 built `@end` to prevent, in the same direction, one layer up. All
+four operators on a date column name a day and mean a boundary, and the menu writes the boundary -
+which is one rule where leaving three of four literal would have been a rule applied where it was
+written down rather than where it is true.
+
+**And `ConfigureAwait(false)` on the commit path terminated the circuit.** Closing the panel is a
+JavaScript call, so that await genuinely suspends; discarding the synchronization context there resumed
+the reload on a thread-pool thread, and `RefreshAsync` reached `StateHasChanged` off the renderer's
+dispatcher. Picking *last 7 days* took the circuit down every time. **All 1,039 tests passed** - bUnit's
+renderer does not enforce the dispatcher the way a real one does - and the playground found it on the
+first click, which is what §9's sixth layer is for and why it is not optional for behavioural change.
+
+**Smaller, and all real:** `FilterNullable` had to exist, because "nullable" for a `Type` is
+`IsValueType` and `Nullable.GetUnderlyingType` rather than an annotation the runtime kept; the operator
+list needed an arm for a type that says nothing at all, since `PropertyColumn<T, object>` would
+otherwise have been offered a `Contains`; and the panel is written at sequence 300, after the bottom
+pager's 200, because it is the last of the grid's children and a run's numbers have to ascend.
+
+### What it cost
+
+`FastGridFeatureBench`, `--job short`, swept over two row counts. The control is the filter row,
+because both draw a filterable grid over the same columns and what separates them is the icon and a
+panel nobody has opened:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row | 52.30 KB | 159.57 KB |
+| a filter menu, never opened | **51.99** KB | **159.24** KB |
+| a filter row, filtering | 49.67 KB | 80.28 KB |
+| a filter menu, never opened, filtering | **49.16** KB | **79.65** KB |
+
+**All four deltas are negative** - between 0.31 and 0.63 KB - and flat across a tenfold change in rows.
+The menu is *cheaper* than the row it replaces, which on inspection is not a surprise: nine header
+icons against nine `<input>`s, their `onchange` binders and a whole extra `<tr>`. A per-row cost would
+have grown by ten, and the sweep is measuring rows - the filtering control itself goes from 49.67 to
+80.28 KB across the same change.
+
+The gate asked for *unchanged*, and it is unchanged in the direction that cannot fail it.
+
+Times are quoted from a short job and are noise by §9's own rule; the time half of the gate is **not**
+measured to that standard and remains owed, as it did in §33 and §34.
+
 ### Where this could still be wrong
 
 - **`FilterUI` grid-wide against `FilterMode` per-column** is §31's separation and it has still never
@@ -8334,4 +8419,10 @@ open and is not measured against a budget, because it is a control a user asked 
   wrong for what a screen reader user is told: the thing they opened is not the thing they are returned
   to. There is no third option that is both, and the tab stop wins because it is the older promise.
 - **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
-  that can fail the piece.
+  that can fail the piece. *It is built: see What it cost, where the allocation half passes in the
+  direction that cannot fail it and the time half is still owed.*
+- **The editors' argument survived for a different reason than the one given**, which is worth keeping
+  separately from the correction above. The boxing this section objected to is real and small; what
+  actually makes a column-written editor necessary is that `RadzenDatePicker` converts by asking its own
+  `TValue`. An argument that reaches the right answer by the wrong route is one that stops working when
+  the route changes.

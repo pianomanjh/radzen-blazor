@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,6 +41,32 @@ namespace Radzen.FastGrid
         /// application's own <c>RadzenStrings</c> resources, then the ones shipped with Radzen.Blazor.
         /// </summary>
         public string Localize(string key) => Strings.Get(key, UICulture);
+
+        /// <summary>
+        /// The same, for a key <c>Radzen.Blazor</c> does not ship - falling back to English rather than
+        /// to the key itself.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §35 needs seven strings that have no upstream key: <c>Between</c> and the six relative-date
+        /// presets. <see cref="StringResolver" /> ends its chain by returning the key, which on screen
+        /// reads <c>DataGrid_BetweenText</c> - worse than not localizing at all.
+        /// </para>
+        /// <para>
+        /// The consequence is the good one, and it is why this is a fallback rather than a
+        /// <c>.resx</c> of the component's own: the chain still looks in the consuming application's
+        /// <c>Radzen.Blazor.RadzenStrings</c> first, so an application can translate all seven today by
+        /// adding the keys - and if Radzen ever ships them, this grid picks them up with no change.
+        /// A second resource file beside upstream's would be a second vocabulary in the one place a
+        /// reader most wants there to be one, which is what §31 refused for <c>FilterMode</c>.
+        /// </para>
+        /// </remarks>
+        public string Localize(string key, string fallback)
+        {
+            var resolved = Localize(key);
+
+            return string.Equals(resolved, key, StringComparison.Ordinal) ? fallback : resolved;
+        }
 
         // Every string below is "what the markup said, else what the resources say", which a component
         // parameter cannot express as an auto-property; BL0007 objects to the shape. Radzen.Blazor
@@ -137,6 +164,284 @@ namespace Radzen.FastGrid
         {
             get => blankFilterText ?? Localize(nameof(Blazor.RadzenStrings.Spreadsheet_Blank));
             set => blankFilterText = value;
+        }
+
+        // The sixteen operator names, every one of them upstream's own key. §31's promise about
+        // carrying knowledge across is what these are: an application that reworded one of them for
+        // RadzenDataGrid gets the same wording here, and none of them needed translating again.
+
+        string? equalsText;
+
+        /// <summary>The filter menu's name for the operator matching equal to the value.</summary>
+        [Parameter]
+        public string EqualsText
+        {
+            get => equalsText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_EqualsText));
+            set => equalsText = value;
+        }
+
+        string? notEqualsText;
+
+        /// <summary>The filter menu's name for the operator matching not equal to the value.</summary>
+        [Parameter]
+        public string NotEqualsText
+        {
+            get => notEqualsText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_NotEqualsText));
+            set => notEqualsText = value;
+        }
+
+        string? lessThanText;
+
+        /// <summary>The filter menu's name for the operator matching ordered strictly below the value.</summary>
+        [Parameter]
+        public string LessThanText
+        {
+            get => lessThanText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_LessThanText));
+            set => lessThanText = value;
+        }
+
+        string? lessThanOrEqualsText;
+
+        /// <summary>The filter menu's name for the operator matching ordered at or below the value.</summary>
+        [Parameter]
+        public string LessThanOrEqualsText
+        {
+            get => lessThanOrEqualsText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_LessThanOrEqualsText));
+            set => lessThanOrEqualsText = value;
+        }
+
+        string? greaterThanText;
+
+        /// <summary>The filter menu's name for the operator matching ordered strictly above the value.</summary>
+        [Parameter]
+        public string GreaterThanText
+        {
+            get => greaterThanText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_GreaterThanText));
+            set => greaterThanText = value;
+        }
+
+        string? greaterThanOrEqualsText;
+
+        /// <summary>The filter menu's name for the operator matching ordered at or above the value.</summary>
+        [Parameter]
+        public string GreaterThanOrEqualsText
+        {
+            get => greaterThanOrEqualsText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_GreaterThanOrEqualsText));
+            set => greaterThanOrEqualsText = value;
+        }
+
+        string? containsText;
+
+        /// <summary>The filter menu's name for the operator matching containing the value.</summary>
+        [Parameter]
+        public string ContainsText
+        {
+            get => containsText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_ContainsText));
+            set => containsText = value;
+        }
+
+        string? doesNotContainText;
+
+        /// <summary>The filter menu's name for the operator matching not containing the value.</summary>
+        [Parameter]
+        public string DoesNotContainText
+        {
+            get => doesNotContainText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_DoesNotContainText));
+            set => doesNotContainText = value;
+        }
+
+        string? startsWithText;
+
+        /// <summary>The filter menu's name for the operator matching beginning with the value.</summary>
+        [Parameter]
+        public string StartsWithText
+        {
+            get => startsWithText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_StartsWithText));
+            set => startsWithText = value;
+        }
+
+        string? endsWithText;
+
+        /// <summary>The filter menu's name for the operator matching ending with the value.</summary>
+        [Parameter]
+        public string EndsWithText
+        {
+            get => endsWithText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_EndsWithText));
+            set => endsWithText = value;
+        }
+
+        string? inText;
+
+        /// <summary>The filter menu's name for the operator matching one of the values.</summary>
+        [Parameter]
+        public string InText
+        {
+            get => inText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_InText));
+            set => inText = value;
+        }
+
+        string? notInText;
+
+        /// <summary>The filter menu's name for the operator matching none of the values.</summary>
+        [Parameter]
+        public string NotInText
+        {
+            get => notInText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_NotInText));
+            set => notInText = value;
+        }
+
+        string? isNullText;
+
+        /// <summary>The filter menu's name for the operator matching missing.</summary>
+        [Parameter]
+        public string IsNullText
+        {
+            get => isNullText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_IsNullText));
+            set => isNullText = value;
+        }
+
+        string? isNotNullText;
+
+        /// <summary>The filter menu's name for the operator matching present.</summary>
+        [Parameter]
+        public string IsNotNullText
+        {
+            get => isNotNullText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_IsNotNullText));
+            set => isNotNullText = value;
+        }
+
+        string? isEmptyText;
+
+        /// <summary>The filter menu's name for the operator matching the empty string.</summary>
+        [Parameter]
+        public string IsEmptyText
+        {
+            get => isEmptyText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_IsEmptyText));
+            set => isEmptyText = value;
+        }
+
+        string? isNotEmptyText;
+
+        /// <summary>The filter menu's name for the operator matching anything but the empty string.</summary>
+        [Parameter]
+        public string IsNotEmptyText
+        {
+            get => isNotEmptyText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_IsNotEmptyText));
+            set => isNotEmptyText = value;
+        }
+
+        string? secondFilterValueAriaLabel;
+
+        /// <summary>The same, for a range's upper bound.</summary>
+        [Parameter]
+        public string SecondFilterValueAriaLabel
+        {
+            get => secondFilterValueAriaLabel
+                ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_SecondFilterValueAriaLabel));
+            set => secondFilterValueAriaLabel = value;
+        }
+
+        string? filterText;
+
+        /// <summary>The filter menu panel's accessible name.</summary>
+        [Parameter]
+        public string FilterText
+        {
+            get => filterText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_FilterText));
+            set => filterText = value;
+        }
+
+        string? applyFilterText;
+
+        /// <summary>The filter menu's Apply button.</summary>
+        [Parameter]
+        public string ApplyFilterText
+        {
+            get => applyFilterText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_ApplyFilterText));
+            set => applyFilterText = value;
+        }
+
+        string? filterToggleAriaLabel;
+
+        /// <summary>The header filter icon's accessible name.</summary>
+        [Parameter]
+        public string FilterToggleAriaLabel
+        {
+            get => filterToggleAriaLabel
+                ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_FilterToggleAriaLabel));
+            set => filterToggleAriaLabel = value;
+        }
+
+        // The seven §35 needs and upstream has no key for. Each is the key an application would add to
+        // its own RadzenStrings to translate it, with the English the resolver falls back to.
+        string? betweenText;
+
+        /// <summary>The filter menu's name for an inclusive range.</summary>
+        [Parameter]
+        public string BetweenText
+        {
+            get => betweenText ?? Localize("DataGrid_BetweenText", "Between");
+            set => betweenText = value;
+        }
+
+        string? todayFilterText;
+
+        /// <summary>The relative-date preset for the current day.</summary>
+        [Parameter]
+        public string TodayFilterText
+        {
+            get => todayFilterText ?? Localize("DataGrid_TodayText", "Today");
+            set => todayFilterText = value;
+        }
+
+        string? yesterdayFilterText;
+
+        /// <summary>The relative-date preset for the day before.</summary>
+        [Parameter]
+        public string YesterdayFilterText
+        {
+            get => yesterdayFilterText ?? Localize("DataGrid_YesterdayText", "Yesterday");
+            set => yesterdayFilterText = value;
+        }
+
+        string? last7DaysFilterText;
+
+        /// <summary>The relative-date preset for the last seven days, today included.</summary>
+        [Parameter]
+        public string Last7DaysFilterText
+        {
+            get => last7DaysFilterText ?? Localize("DataGrid_Last7DaysText", "Last 7 days");
+            set => last7DaysFilterText = value;
+        }
+
+        string? last30DaysFilterText;
+
+        /// <summary>The relative-date preset for the last thirty days, today included.</summary>
+        [Parameter]
+        public string Last30DaysFilterText
+        {
+            get => last30DaysFilterText ?? Localize("DataGrid_Last30DaysText", "Last 30 days");
+            set => last30DaysFilterText = value;
+        }
+
+        string? thisMonthFilterText;
+
+        /// <summary>The relative-date preset running from the first of the month.</summary>
+        [Parameter]
+        public string ThisMonthFilterText
+        {
+            get => thisMonthFilterText ?? Localize("DataGrid_ThisMonthText", "This month");
+            set => thisMonthFilterText = value;
+        }
+
+        string? thisYearFilterText;
+
+        /// <summary>The relative-date preset running from the first of the year.</summary>
+        [Parameter]
+        public string ThisYearFilterText
+        {
+            get => thisYearFilterText ?? Localize("DataGrid_ThisYearText", "This year");
+            set => thisYearFilterText = value;
         }
 
         string? selectVisibleColumnsAriaLabel;

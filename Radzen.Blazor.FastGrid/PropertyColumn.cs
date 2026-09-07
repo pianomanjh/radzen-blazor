@@ -8,6 +8,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
+using Radzen.Blazor;
 
 namespace Radzen.FastGrid
 {
@@ -93,6 +94,95 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         public override Type FilterElementType => ElementType ?? typeof(TProp);
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// <para>
+        /// Two types get a control of their own and everything else keeps the base's text input, which
+        /// is not a shortcut: upstream's own filter UI draws a <c>RadzenTextBox</c> for numbers too, and
+        /// the reason is that a typed numeric control cannot show <em>empty</em> for a non-nullable
+        /// <typeparamref name="TProp" /> - it shows a zero, and a menu that opens pre-filled with a value
+        /// nobody chose is worse than a box. The base's conversion is the column's own, so an enum, a
+        /// <see cref="Guid" /> and §34's tokens all read there.
+        /// </para>
+        /// <para>
+        /// <strong>The date picker is closed over <typeparamref name="TProp" /> and that is the whole
+        /// argument for this being on the column.</strong> <c>RadzenDatePicker</c> converts what was
+        /// picked by asking its own <c>TValue</c> - a <see cref="DateOnly" /> column gets a
+        /// <see cref="DateOnly" /> - so drawing it over <c>object</c>, as upstream does, is what hands a
+        /// <see cref="DateOnly" /> column a <see cref="DateTime" /> the predicate builder then has to
+        /// guess about.
+        /// </para>
+        /// </remarks>
+        internal override void RenderFilterEditor(RenderTreeBuilder builder, int sequence,
+            FilterEditor editor)
+        {
+            var underlying = Nullable.GetUnderlyingType(typeof(TProp)) ?? typeof(TProp);
+
+            if (FastGridRelativeDate.AppliesTo(underlying))
+            {
+                RenderDateEditor(builder, sequence, editor);
+
+                return;
+            }
+
+            if (underlying == typeof(bool))
+            {
+                RenderBooleanEditor(builder, sequence, editor);
+
+                return;
+            }
+
+            base.RenderFilterEditor(builder, sequence, editor);
+        }
+
+        void RenderDateEditor(RenderTreeBuilder builder, int sequence, FilterEditor editor)
+        {
+            // A token in the slot is text the picker cannot hold - it is not a date, it is a rule for
+            // finding one - so the box is what draws it. §34's two vocabularies meet here and the
+            // control that can only speak one of them steps aside.
+            if (editor.Value is FastGridRelativeDate)
+            {
+                base.RenderFilterEditor(builder, sequence, editor);
+
+                return;
+            }
+
+            builder.OpenComponent<RadzenDatePicker<TProp>>(sequence);
+            builder.AddAttribute(sequence + 1, nameof(RadzenDatePicker<TProp>.Value),
+                editor.Value is TProp typed ? typed : default);
+            builder.AddAttribute(sequence + 2, nameof(RadzenDatePicker<TProp>.Style), "width:100%");
+            builder.AddAttribute(sequence + 3, nameof(RadzenDatePicker<TProp>.AllowClear), true);
+            builder.AddAttribute(sequence + 4, nameof(RadzenDatePicker<TProp>.InputAttributes),
+                new Dictionary<string, object> { ["aria-label"] = editor.AriaLabel });
+            // ValueChanged rather than Change, and the difference is not cosmetic: Change carries a
+            // DateTime? whatever TProp is, and ValueChanged carries what the picker converted it to -
+            // which is the DateOnly this whole override exists to keep. It also makes the picker
+            // consider itself bound, which is what makes AllowClear hand back a default rather than
+            // nothing at all.
+            builder.AddAttribute(sequence + 5, nameof(RadzenDatePicker<TProp>.ValueChanged),
+                EventCallback.Factory.Create<TProp>(this, value => editor.Set(value)));
+            builder.CloseComponent();
+        }
+
+        void RenderBooleanEditor(RenderTreeBuilder builder, int sequence, FilterEditor editor)
+        {
+            // §31's table: a bool offers Equals true/false, so the editor is the choice between them
+            // rather than a text box that can be typed wrong.
+            builder.OpenComponent<RadzenDropDown<TProp>>(sequence);
+            builder.AddAttribute(sequence + 1, nameof(RadzenDropDown<TProp>.Data), BooleanChoices);
+            builder.AddAttribute(sequence + 2, nameof(RadzenDropDown<TProp>.Style), "width:100%");
+            builder.AddAttribute(sequence + 3, nameof(RadzenDropDown<TProp>.Value),
+                editor.Value is TProp typed ? typed : default);
+            builder.AddAttribute(sequence + 4, nameof(RadzenDropDown<TProp>.InputAttributes),
+                new Dictionary<string, object> { ["aria-label"] = editor.AriaLabel });
+            builder.AddAttribute(sequence + 5, nameof(RadzenDropDown<TProp>.Change),
+                EventCallback.Factory.Create<object>(this, value => editor.Set(value)));
+            builder.CloseComponent();
+        }
+
+        // Built once for the type rather than per open: the two values a bool has do not move.
+        static readonly object[] BooleanChoices = { true, false };
 
         /// <inheritdoc />
         protected override void OnDerive()

@@ -713,7 +713,15 @@ LINQ or OData form depending on the source) and `Filters` (as descriptors), and 
 
 ## Filtering
 
-`AllowFiltering` adds a filter row. `FilterMode` chooses the control, on the grid or per column:
+`AllowFiltering` switches filtering on. `FilterUI` chooses where it is authored, grid-wide:
+
+- `Row` (default) - a second header row of filter controls, which is what the grid has always drawn.
+- `Menu` - a filter icon on every filterable header, opening one context-aware menu.
+
+There is **no filter row under `Menu`** - not a hidden one and not an empty one. Two places to author
+one filter would be two places that have to agree.
+
+`FilterMode` chooses the control in the row, on the grid or per column:
 
 - `Simple` (default) - a text box per column.
 - `CheckBoxList` - a multi-select of the column's distinct values, filtering with `In`. The values come
@@ -731,9 +739,52 @@ non-rendering receiver, so a keystroke that is about to be superseded does not r
 to show what is already on screen. Measured at three keystrokes: three full renders bound the ordinary
 way, zero bound this way.
 
-`FilterTemplate` replaces the control for a column that needs more. There is deliberately no operator
-menu, date popup, numeric range or enum picker - those are most of `RadzenDataGrid`'s filter code and
-none of its filter engine.
+`FilterTemplate` replaces the control for a column that needs more, in the row and in the menu alike -
+and in the menu it is the whole panel, with no operator list beside it, because the template's author
+sets value and operator themselves.
+
+### The filter menu
+
+`FilterUI="Menu"` puts a `filter_alt` button on each filterable header (`FilterIcon` changes it) that
+opens one panel for the whole grid. The operators offered come from the column's type:
+
+| type | operators |
+| --- | --- |
+| string | Contains, Does not contain, Starts with, Ends with, Equals, Not equals, Is empty, Is not empty |
+| number, `TimeSpan`, `TimeOnly` | Equals, Not equals, Less than, Less than or equals, Greater than, Greater than or equals, Between |
+| date | Equals, Less than, Greater than, Between, then the six relative presets |
+| bool | Equals, against a true/false pick |
+| enum | In, Not in |
+
+A column that can hold no value also offers Is null and Is not null, at the end. A column whose type
+says nothing - `PropertyColumn<T, object>`, or a template column whose path does not resolve - offers
+Equals and Not equals only, because a `Contains` on an unknown type is a substring match on whatever
+the rows turn out to hold.
+
+**One condition per column.** Is null is an operator to pick rather than a tail ored onto another one;
+the two-condition model is still there and `FilterTemplate` and markup still reach it.
+
+**The menu never filters as you type.** A menu holding an operator and up to two values cannot: a
+half-typed lower bound would filter to nothing on every keystroke. It commits on Apply or Enter, clears
+on Clear, and closes on Escape without committing. Each of Apply and Clear costs exactly one reload.
+
+**Dates are written as whole days.** Every operator in the date row names a day and means a boundary,
+so the menu writes the boundary: `Equals` becomes an inclusive range over that day, `Greater than`
+compares against the day's last instant and `Less than` against its first, and a `Between` runs from the
+first instant of its lower day to the last of its upper. Picking a date and getting a filter that
+excludes most of it is the failure this prevents - and the operators themselves keep their literal
+readings for a filter written in markup.
+
+The six relative presets - today, yesterday, last 7 days, last 30 days, this month, this year - apply
+on pick, because they need no value. Each writes a `Between` over the tokens below, so a saved one still
+means what it says tomorrow, and reopening the menu shows it as the preset rather than as two dates.
+
+**Keyboard.** `Alt`+`Down` opens the menu for the header cell the cursor is on, which is Excel's own
+shortcut. The icon is a real button at `tabindex="-1"`: this grid is one tab stop by design, and eight
+icons in the tab order would undo that.
+
+The panel is built on the first open and costs nothing before it. It is anchored to the icon and moved
+to `document.body` while open, which is what stops the horizontally scrolling header clipping it.
 
 The grid exposes `Filters` as `CompositeFilterDescriptor`s and accepts them back through `ApplyFilters`,
 which is what `RadzenDataFilter` speaks. A range and a two-condition column arrive nested: the parent

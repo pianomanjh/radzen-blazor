@@ -185,6 +185,139 @@ namespace Radzen.FastGrid
                 FilterOperator.Custom => FastGridFilterOperator.Custom,
                 _ => null,
             };
+        /// <summary>
+        /// The operators §35's menu offers for a column of this type, in the order it lists them.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §31's table, as a rule about a type rather than a rule inside a render tree. §33's review
+        /// finding is why it is shaped this way and tested here: a test one layer above a rule is not a
+        /// test of the rule, and "which operators does a nullable date offer" is a question about a
+        /// <see cref="Type" />.
+        /// </para>
+        /// <para>
+        /// <strong>One condition per column.</strong> <c>IsNull</c> and <c>IsNotNull</c> are operators
+        /// to pick, not a tail ored onto another one - which is what keeps a menu-authored filter clear
+        /// of §33's hole, where a compound with a <c>Between</c> half is three comparisons and
+        /// <c>LoadDataArgs.Filters</c> has room for two.
+        /// </para>
+        /// <para>
+        /// <strong>A date offers what §31's table promises and writes something else.</strong> Date
+        /// <c>Equals</c> means the whole day there, and §34 made a token resolve to one instant - so the
+        /// menu offers the operator and commits a <c>Between</c> over that day. The operator keeps its
+        /// literal reading for the markup author §34 documented it for; what is listed here is what the
+        /// menu offers, and <c>FilterMenu.Commit</c> is what it writes.
+        /// </para>
+        /// </remarks>
+        /// <param name="type">The column's effective filter type - already unwrapped or not, either works.</param>
+        /// <param name="nullable">Whether the column can hold no value at all.</param>
+        internal static FastGridFilterOperator[] Menu(Type type, bool nullable)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+
+            var underlying = Nullable.GetUnderlyingType(type) ?? type;
+            var offered = Offered(underlying);
+
+            if (!nullable && Nullable.GetUnderlyingType(type) is null)
+            {
+                return offered;
+            }
+
+            // Appended rather than woven in: they are about the absence of a value and everything above
+            // them is about one, and a menu that mixes the two reads worse than one that does not.
+            var withNull = new FastGridFilterOperator[offered.Length + 2];
+
+            Array.Copy(offered, withNull, offered.Length);
+            withNull[offered.Length] = FastGridFilterOperator.IsNull;
+            withNull[offered.Length + 1] = FastGridFilterOperator.IsNotNull;
+
+            return withNull;
+        }
+
+        static readonly FastGridFilterOperator[] TextOperators =
+        {
+            FastGridFilterOperator.Contains,
+            FastGridFilterOperator.DoesNotContain,
+            FastGridFilterOperator.StartsWith,
+            FastGridFilterOperator.EndsWith,
+            FastGridFilterOperator.Equals,
+            FastGridFilterOperator.NotEquals,
+            FastGridFilterOperator.IsEmpty,
+            FastGridFilterOperator.IsNotEmpty,
+        };
+
+        static readonly FastGridFilterOperator[] NumberOperators =
+        {
+            FastGridFilterOperator.Equals,
+            FastGridFilterOperator.NotEquals,
+            FastGridFilterOperator.LessThan,
+            FastGridFilterOperator.LessThanOrEquals,
+            FastGridFilterOperator.GreaterThan,
+            FastGridFilterOperator.GreaterThanOrEquals,
+            FastGridFilterOperator.Between,
+        };
+
+        static readonly FastGridFilterOperator[] DateOperators =
+        {
+            FastGridFilterOperator.Equals,
+            FastGridFilterOperator.LessThan,
+            FastGridFilterOperator.GreaterThan,
+            FastGridFilterOperator.Between,
+        };
+
+        static readonly FastGridFilterOperator[] BooleanOperators =
+        {
+            FastGridFilterOperator.Equals,
+        };
+
+        static readonly FastGridFilterOperator[] SetOperators =
+        {
+            FastGridFilterOperator.In,
+            FastGridFilterOperator.NotIn,
+        };
+
+        // A column whose type says nothing - PropertyColumn<T, object>, or a template column whose path
+        // does not resolve - gets the two comparisons that mean something for anything at all. Offering
+        // it the text operators would put a Contains on an int.
+        static readonly FastGridFilterOperator[] UnknownOperators =
+        {
+            FastGridFilterOperator.Equals,
+            FastGridFilterOperator.NotEquals,
+        };
+
+        static FastGridFilterOperator[] Offered(Type underlying)
+        {
+            if (underlying == typeof(string))
+            {
+                return TextOperators;
+            }
+
+            if (underlying == typeof(bool))
+            {
+                return BooleanOperators;
+            }
+
+            if (FastGridRelativeDate.AppliesTo(underlying))
+            {
+                return DateOperators;
+            }
+
+            if (underlying.IsEnum)
+            {
+                return SetOperators;
+            }
+
+            return IsOrdered(underlying) ? NumberOperators : UnknownOperators;
+        }
+
+        // The numeric set, and Guid and TimeSpan with it: what makes NumberOperators right for a type is
+        // that its values are ordered and that a range over them is a sentence, which is true of a
+        // TimeSpan and false of an object.
+        static bool IsOrdered(Type underlying) =>
+            Type.GetTypeCode(underlying) is >= TypeCode.SByte and <= TypeCode.Decimal
+                || underlying == typeof(TimeSpan)
+                || underlying == typeof(TimeOnly);
+
     }
 
     /// <summary>How many values an operator compares against.</summary>

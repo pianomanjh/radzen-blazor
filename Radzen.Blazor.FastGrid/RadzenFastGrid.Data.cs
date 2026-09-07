@@ -332,9 +332,72 @@ namespace Radzen.FastGrid
         static bool AsyncQueryExecutionDisabled =>
             AppContext.TryGetSwitch("Radzen.Blazor.DisableAsyncQueryExecution", out var disabled) && disabled;
 
+        /// <summary>
+        /// Drops a filter that has just had its editor taken away, and says whether it dropped one.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §35, and §32's policy applied to a second way in: a filter that outlives a change of
+        /// <c>FilterMode</c> is a filter arriving somewhere it cannot be read, and being unreadable is
+        /// what §32 said a filter must not silently be. Guarding
+        /// <see cref="ColumnBase{TItem}.FilterSelection" /> stops the crash and leaves the old scalar
+        /// filtering rows that no control on the screen explains, with the box that could have cleared
+        /// it gone.
+        /// </para>
+        /// <para>
+        /// <strong>Only a transition clears.</strong> §35 said "cleared when the mode changes" and the
+        /// build found that the broad reading of it - clearing whenever a filter and a set editor
+        /// disagree - is a different rule that breaks a contract this grid already has: a caller asking
+        /// <c>ApplyFilters</c> or <c>Filter(column, value)</c> for <c>Equals 3</c> on a column that was
+        /// already a check-box list has said what they want, and §14's lookup columns have answered by
+        /// applying it and ticking nothing since they were built. Dropping that would be the silent
+        /// disappearance §32 exists to refuse.
+        /// </para>
+        /// <para>
+        /// One pass with one reload after it, rather than a clear per column - §31's rule about
+        /// <em>Clear all</em>, which is the same shape and the same trap.
+        /// </para>
+        /// </remarks>
+        bool ScreenFilterEditors()
+        {
+            var dropped = false;
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+                var mode = FilterModeOf(column);
+
+                // Against what was last drawn, not against what was last asked: the editor the filter
+                // has to survive is the one the user was actually looking at. Recorded by RecordEditors
+                // as the table draws, and null until a column has been drawn once - so markup that
+                // declares both a FilterValue and CheckBoxList keeps the filter it declared.
+                if (column.LastEditorMode is not { } previous || previous == mode)
+                {
+                    continue;
+                }
+
+                // The set editor is the only one that is picky: a box renders any single value, and a
+                // column with no filter has nothing to screen.
+                if (mode != Radzen.FilterMode.CheckBoxList || column.CurrentFilter is not { } filter
+                    || filter.First.Operator.Arity() == FastGridFilterArity.Many)
+                {
+                    continue;
+                }
+
+                column.SetFilter(null, null, null);
+                dropped = true;
+            }
+
+            return dropped;
+        }
+
         /// <inheritdoc />
         protected override Task OnParametersSetAsync()
         {
+            // Before every branch below, because most of them return early and a filter the editor
+            // cannot hold has to go whichever one is taken. See ScreenFilterEditors.
+            var screened = ScreenFilterEditors();
+
             // Noted here and applied as the table draws: sorts and filters name columns, and no column
             // has registered yet on the parameter set that precedes the first render.
             // Not the settings this grid just produced: that is its own state coming back, and applying
@@ -345,7 +408,14 @@ namespace Radzen.FastGrid
                 settingsPending = Settings is not null;
             }
 
-            var pagingChanged = false;
+            // A dropped filter is a narrower grid, whatever else this parameter set did, so it joins the
+            // one thing here that already means "recompose and refetch".
+            var pagingChanged = screened;
+
+            if (screened)
+            {
+                skip = 0;
+            }
 
             if (!initialized)
             {
@@ -1121,6 +1191,15 @@ namespace Radzen.FastGrid
 
             await SyncNavigationAsync();
 
+            // §29's order, arrived at from the other direction: the click set the target column and
+            // rendered, and only now does the panel have a body for the browser to measure. Opening
+            // from the click itself hands Radzen.openPopup an empty div and positions it for a size it
+            // does not have.
+            if (menuPending >= 0)
+            {
+                await OpenPendingFilterMenuAsync();
+            }
+
             // Before the focus is put back, because a fit changes how wide every column is and
             // bringing the cursor's cell into view is measured against exactly that.
             //
@@ -1290,8 +1369,26 @@ namespace Radzen.FastGrid
         /// </summary>
         List<CompositeFilterDescriptor>? ActiveFilters() => Composition.ActiveFilters(columns, Options, in pass);
 
+        /// <summary>
+        /// Notes the editor each column is being drawn with, for <see cref="ScreenFilterEditors" />.
+        /// </summary>
+        /// <remarks>
+        /// Here rather than in the screening pass itself, because the pass runs before the first render
+        /// - when no column has registered - and would therefore never see the editor a filter was
+        /// authored in. One enum write per column per draw, which is the cost of the field it writes.
+        /// </remarks>
+        void RecordEditors()
+        {
+            for (var i = 0; i < columns.Count; i++)
+            {
+                columns[i].LastEditorMode = FilterModeOf(columns[i]);
+            }
+        }
+
         void BeginDrawing()
         {
+            RecordEditors();
+
             // The draw pass is a composition of its own - the descriptors it opens with are what the
             // in-memory route then filters by - so it gets its own stamp. See StampFilterClock.
             StampFilterClock();

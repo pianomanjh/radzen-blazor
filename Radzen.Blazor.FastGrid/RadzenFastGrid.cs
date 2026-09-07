@@ -1052,6 +1052,12 @@ namespace Radzen.FastGrid
                 RenderLoading(builder);
             }
 
+            // §35's panel, and it writes nothing until the first open has asked for one. Inside the
+            // grid's own element rather than beside it, because that is where the component's subtree
+            // is - Radzen.openPopup reparents it to document.body the moment it opens, which is what
+            // stops the scroll container clipping it.
+            RenderFilterMenu(builder);
+
             builder.CloseElement();
         }
 
@@ -1456,6 +1462,15 @@ namespace Radzen.FastGrid
 
         void RenderHead(RenderTreeBuilder builder)
         {
+            // Read once for the whole head: it is two parameter reads and an enum compare, and the
+            // header loop and the filter row below both ask.
+            var menuEnabled = FilterMenuEnabled;
+
+            if (menuEnabled)
+            {
+                RefreshIconCaptures(visibleColumns.Count);
+            }
+
             builder.OpenElement(30, "thead");
             builder.AddAttribute(31, "role", "rowgroup");
             builder.OpenElement(32, "tr");
@@ -1663,6 +1678,14 @@ namespace Radzen.FastGrid
 
                 builder.CloseElement();
 
+                // §35's filter icon, a sibling of the title span. Nothing is written for a grid whose
+                // filters live in the row, which is §3's third rule: the element, the class strings and
+                // the click callback are all inside the branch.
+                if (menuEnabled && (column.CanFilter || column.FilterTemplate is not null))
+                {
+                    RenderFilterIcon(builder, column, i);
+                }
+
                 // The drag handle, a sibling of the title span inside the header's padding div - which is
                 // where RadzenDataGrid puts it, and the level the theme's positioning assumes.
                 //
@@ -1706,7 +1729,9 @@ namespace Radzen.FastGrid
 
             builder.CloseElement();
 
-            if (AllowFiltering)
+            // §35: under FilterUI.Menu there is no filter row at all - not a hidden one and not an
+            // empty one. Two places to author one filter would be two places that have to agree.
+            if (AllowFiltering && !menuEnabled)
             {
                 RenderFilterRow(builder);
             }
