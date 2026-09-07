@@ -6959,6 +6959,13 @@ parameter set*, three scans for one render and two parameter sets, and it took a
 that opens instantly for every column, where the one action that can cost a query is one the user asked
 for, is friendlier than a menu that queries to open.
 
+**§36 keeps the first sentence and refutes the second.** *Checklist-first only where the values are
+already known* stands, and the list of ways to know them was one short: the author saying so, through
+the `FilterMode.CheckBoxList` this paragraph's own predecessor is about. The *"Filter by value..."*
+action does not survive - the grid cannot tell a twelve-value column from a four-hundred-thousand-value
+one without running the scan, so an action offered on every column has a price it cannot know until it
+has been paid.
+
 **A `FilterTemplate` is the whole editor when present** - no operator picker beside it. The template's
 author sets value and operator themselves, so a picker would be a second control fighting the first over
 one piece of state.
@@ -8374,7 +8381,8 @@ because the row is where the crash was found and the row is the default.
 - **The checklist.** `In` and `NotIn` are offered by the operator table but §35's panel edits them with
   the multiselect the filter row already uses. §36 replaces it with the real check-box list, the
   checklist-first rule for lookups and enums, and the *"Filter by value..."* on-demand distinct scan
-  that §10 measured the cost of leading with.
+  that §10 measured the cost of leading with. *§36 refuses that last one and adds a third way for the
+  values to be known - the author declaring them - which is what makes the scan bounded.*
 - **The pills.** §31's ⑤.
 - **The row's one-value box.** Recorded above.
 - **§33's `Between`-in-a-compound hole.** Not reached, and now known not to be reached from here.
@@ -8659,3 +8667,243 @@ a decision without its constraint is how a limit that belongs to one design gets
   actually makes a column-written editor necessary is that `RadzenDatePicker` converts by asking its own
   `TValue`. An argument that reaches the right answer by the wrong route is one that stops working when
   the route changes.
+
+## 36. The checklist is offered where something knows the values - the design
+
+§31's ④, second half, and the last of the six pieces before ⑤. **Nothing here is built when this
+section lands.**
+
+§35 took the panel, the operators, the editors, the dates and the keyboard, and left this one four
+things by name: the real check-box list, the checklist-first rule, the *"Filter by value..."* scan, and
+the blank entry a non-lookup nullable column has no equivalent for. Three of the four survive. The
+third does not, and refuting it is what makes this section small.
+
+### What does not survive of §31
+
+§31, and §35 repeating it:
+
+> Everywhere else the menu opens on operators and offers *"Filter by value..."* as an explicit action
+> that runs the distinct scan **once, on demand**.
+
+**Refuted.** The argument against it is the one §31 used to justify it, followed one step further.
+
+§31 leads with the cost: Excel offers the checklist on every column, and §10 measured what that costs
+here - one `SELECT DISTINCT` per check-box-list column per parameter set. §31's answer was to keep the
+offer everywhere and make the user ask for it. But **the grid cannot tell a `Status` column from a
+`Description` column without running the scan.** Cardinality is the scan's answer, not an input to it,
+so an action offered on every column is an action whose price is unknowable until it has been paid -
+on a source this grid exists to assume is remote and large. "Once, on demand" bounds how *often* the
+query runs and says nothing about what it costs when it does.
+
+**And §31 listed two ways a column's values can be known when there are three.** A lookup holds a map;
+an enum's type holds its members; and **the author knows.** `FilterMode.CheckBoxList` is that third
+knowing, already written down: it is upstream's own enum value, it is per-column through `FilterModeOf`,
+`EditedAsSet` already reads it, and §35's screening rule already honours it. `RadzenDataGrid` requires
+exactly that attribute to draw exactly this list.
+
+So the promise §31 made about carrying knowledge across is kept *better* by requiring the declaration
+than by inventing an action upstream has no equivalent for. A reader who knows how to get a check-box
+list out of `RadzenDataGrid` gets one here by doing the same thing.
+
+**The rule, in one sentence: the checklist is offered where something already knows the values, and the
+author counts as something.**
+
+**What this costs, stated rather than hidden.** A `PropertyColumn<Employee, string>` over `Country`,
+with twelve distinct values, is the commonest checklist there is and it does not get one until someone
+writes `FilterMode="FilterMode.CheckBoxList"` on it. That is one attribute in a vocabulary the reader
+already has, placed where the only party who knows the cardinality can put it. The alternative was a
+menu item that reads the same on twelve values and on four hundred thousand.
+
+### Where the checklist appears
+
+One rule, replacing a type-directed table with a knowledge-directed one:
+
+```
+EditedAsSet, or a lookup, or an enum  ->  In, NotIn   (+ IsNull / IsNotNull where nullable)
+otherwise                             ->  the type's own list, unchanged
+```
+
+Two of the three arms already answer:
+
+- **A lookup column** overrides `MenuOperators` to the set pair, and has since §35's review found it
+  being offered *"Less than"* over its ids.
+- **An enum column** reaches `SetOperators` through `Offered`'s `IsEnum` arm.
+
+**The declared arm is new.** `ColumnBase.MenuOperators` consults `EditedAsSet` before it consults the
+type, so a string or numeric column whose author asked for a check-box list is offered the operators
+that list can actually write. Without this the declaration is inert under `FilterUI.Menu`: the column
+would be handed `Contains` and `StartsWith` and no way to reach a set at all.
+
+The nullable append - `IsNull` and `IsNotNull` after whatever came before - is **factored out of
+`FastGridFilterOperators.Menu` rather than written a second time beside it.** §35's review found that
+exact shape twice in one section (`EditedAsSet` documented as the mapping and never called, and
+`Menu`'s own nullability guard deciding one thing in two places), and a set arm with its own copy of
+the append would be the third.
+
+### Where the values come from
+
+`FilterLookup`'s chain, which already reads `FilterValues`, then `FilterLookupData`, then the cache,
+then the scan. One new arm at the top of it:
+
+| kind | values | queries per open |
+| --- | --- | --- |
+| lookup | `FilterValues` - §14's map, complete and stable | 0 |
+| **enum** | **`FilterValues` - the type's members, built once** | **0** |
+| declared, with `FilterLookupData` | the author's | 0 |
+| declared | `DistinctValues`, through `LoadLookupsAsync` | 1, once |
+
+**The enum arm is the new one and it belongs on `ColumnBase.FilterValues`**, which returns null today
+and is already documented as *"the values this column's check-box list offers of its own accord"*. An
+enum column offering only the members present in the data is the same defect §14 rejected for lookups
+by name - a filter control whose options move as the data does moves under the reader - and it costs a
+query to be wrong in that direction.
+
+Built once and cached, not per render. §35's `FastGridFilterPresets` comment objects to
+`Enum.GetValues` for the presets and the objection is about a call *per render*; this one is per column
+for the life of the grid, which is where `FilterValues` already puts §14's entries.
+
+**Text through upstream's `EnumExtensions.GetDisplayDescription`**, which honours `[Display]` and
+`[Description]` and is what `RadzenDataGrid`'s own check-box list draws. Same reason as §35's operator
+strings: the wording is upstream's and an application that has already translated it gets it here for
+nothing.
+
+### The control
+
+**`RadzenListBox`, `Multiple`, replacing the `RadzenDropDown` §35 left behind.**
+
+That drop-down was §35 saying so at the time - *"the check-box list proper is §36's"* - and the control
+this section wants is the one `RadzenDataGridHeaderCell` already draws for `FilterMode.CheckBoxList`:
+a scrolling list of check boxes with a search box over it. `AllowFiltering`, which is Excel's search
+within the list; `AllowSelectAll`; `AllowClear`; `AllowVirtualization`; a fixed height. §7's table is
+the argument, for the fourth time on this branch: it is public, it is upstream's, and writing it again
+to own it buys nothing a theme change would not take away.
+
+**Bound to the draft, and that is §35's work not this section's.** `SelectionOf` in, `DraftSelection`
+out, Apply and Enter commit. §35's review is what built that seam - the panel was reusing the row's
+control, which applies on every tick and reads the committed filter, so ticking a box filtered at once
+and Apply then wrote the old selection back over the new one. Nothing here revisits it; this section
+changes which component sits in the seam.
+
+**The filter row keeps its drop-down.** A three-hundred-pixel scrolling list does not go in a header
+row, and the panel has room the row does not. The two controls stay two, and the mapping that feeds
+both - `SelectionOf`, `FilterValueFromSelection` - stays one.
+
+### The blank
+
+§14's shape, generalised to a column that has no map.
+
+`FilterLookup` currently ends its materialization with `.Where(v => v != null)`. The strip is not
+arbitrary - a raw null in a list control draws as an empty row that means nothing - but it is also the
+reason a nullable non-lookup column cannot ask for the rows that have nothing in them, which is a
+question §31 named as the one a fixed range shape could not express.
+
+**A sentinel value, drawing `BlankFilterText`, first in the list, offered only where the column is
+nullable.** Rebuilt when a culture change changes the word, which is §14's own rule and its own reason:
+every other string this grid draws is read per render, and one baked into a list built once would
+otherwise stay on screen for good.
+
+**The null rides in the `In` list.** `SelectionOf` maps a null among the filter's values to the
+sentinel; `FilterValueFromSelection` maps the sentinel back to a null. That is exactly what
+`SelectedKeys` has done for a nullable lookup key since §14, composed through `List<TKey?>.Contains`,
+which Entity Framework translates as `x IN (...) OR x IS NULL`. One shape for both column kinds rather
+than a second mechanism for the case §14 already solved.
+
+**The alternative was a second condition** - `In [...] OR IsNull`, which §33 kept the model wide for
+and named as the reason. It is refused here, and the reason is that §35 wrote *"one condition per
+column"* for the menu and meant it: making the blank the menu's first compound would re-open a rule
+one section old to solve a problem the operator itself already solves. `In [1, 2, null]` and
+`In [1, 2] OR IsNull` select the same rows; one of them needs the model's second condition and one of
+them does not.
+
+**The named risk, because it is the part most likely to be wrong.**
+`ColumnBase.FilterValueFromSelection` builds its list over `Nullable.GetUnderlyingType(declared) ??
+declared` - it *strips* the nullability - so as written a null cannot go into it at all. That has to
+become the declared type where the column is nullable, and `FilterExpression`'s `Contains` has to bind
+against a `List<int?>`. It gets a test that fails first.
+
+**This reaches `FilterUI.Row`.** A nullable column declared as a check-box list gains a blank entry in
+the row as well as in the menu, because the mapping is the column's and the row draws through it.
+Fixing it only in the menu would be the rule applied where it was found rather than where it is true -
+which is the correction §35's whole-day rule already had to make once.
+
+### The gate
+
+**Queries per open.** §31 split this section off from §35 for this: the per-row allocation gate is
+§35's and this one is a different number, of the kind §10 already measured going wrong.
+
+**The failure mode is N queries where one is right**, and §10 measured it at three for one render. A
+counter tells one from three exactly, so this gate has what §33's clock did not: an instrument that
+out-resolves the failure it is watching for. That is the rule §33's review left in memory, applied
+before the measurement rather than after it.
+
+**The instrument exists.** `WalkCountingProvider` counts in the *provider* rather than on the query, so
+a composed `Select().Distinct()` is visible where a counter on the source object is not - which is the
+whole finding of the diagnosis section that built it - and it excludes the executor's own walk by an
+`AsyncLocal` that flows into its continuations rather than by which thread the walk arrived on.
+
+Asserted, per open of the panel:
+
+| column | first open | second open | after `Reload()` |
+| --- | --- | --- | --- |
+| lookup | 0 | 0 | 0 |
+| enum | 0 | 0 | 0 |
+| declared | 1 | 0 | 1 |
+| none of the three | 0, and no list drawn | 0 | 0 |
+
+A lookup's zero is zero *per open*: §14 resolves a `Query` lookup once at startup and that is not this
+gate's business.
+
+**No ceiling and no paging.** `AllowVirtualization` bounds what is rendered and the query stays one and
+whole. Paging the distinct query as the user scrolls - which is what upstream's `LoadData` does - would
+buy every value's reachability at the cost of making "queries per open" stop bounding anything, and the
+gate is the thing this section was split off to defend. A declared column whose values are enormous is
+a declaration its author made, and `FilterLookupData` is the lever they already have.
+
+What is measured rather than budgeted: **a bench row for what a wide open costs**, so that the sentence
+above becomes a result rather than a claim. §35's allocation rows are re-run rather than assumed -
+nothing here draws in a row, so per-row cost is unchanged by construction, and "by construction" is
+what §33's residual was also called.
+
+### What this section does not do
+
+- **`"Filter by value..."`** - refuted above, and struck where §31 and §35 wrote it.
+- **Narrowing the list by the other columns' filters.** Upstream's `AlwaysShowAllCheckBoxListData`
+  defaults to narrowing and Excel does too. §14 chose the opposite and gave the reason - *"a filter
+  control whose options move as the data does moves under the reader, and that is worth more than a
+  shorter list"* - and the same reason holds here, with a second one behind it: the cache key would
+  become every other column's filter state, so a scan would re-run whenever any of them changed, which
+  is the gate.
+- **The pills.** §31's ⑤, and the last piece.
+- **The row's drop-down**, apart from the blank it inherits.
+
+### How it is verified
+
+- **The operator rule as a pure rule.** Which operators a lookup, an enum, a declared and a plain
+  column each offer, asked of the rule and not of a rendered panel. §33's review finding is why: a test
+  one layer above a rule is not a test of the rule.
+- **The blank round-trip as a pure rule**, both directions and with a null in the list, plus the
+  non-nullable column that must not offer one.
+- **The gate through `WalkCountingProvider`**, the four rows of the table above, each mutated to
+  confirm it can fail - because a query counter that reads zero looks identical whether the scan was
+  avoided or never attempted.
+- **bUnit** for what only a render answers: the listbox drawn under a set operator, no list on a plain
+  column, a tick reaching the draft and not the filter, Apply committing it.
+- **The playground**, §9's layer 6 and not optional for behavioural change: a declared check-box-list
+  column and a nullable one, beside §35's `FilterUI` toggle, on the same data.
+- **The mutation loop**, on §35's precedent - and with §35's expectation, that what it finds is a
+  redundancy rather than a hole.
+
+### Where this could still be wrong
+
+- **Requiring the declaration is a friendliness cost with no measurement**, which is §31's own open
+  bullet arriving where the trade is actually made. A column with twelve values and no attribute on it
+  is a worse menu than Excel's, and the defence is a cost argument again rather than a usability one.
+- **`EditedAsSet` now decides two things** - which editor draws, and which operators are offered. It
+  was one thing when §35 wrote it. A column that declares `CheckBoxList` and then has its filter set
+  programmatically to `Contains` is a case the screening rule handles and the operator list now also
+  has an opinion about, and the two have never been exercised together.
+- **The blank's translation is `List<int?>` reaching a provider**, which is asserted here from §14's
+  precedent over `TKey` and not from a run against a real database on a non-lookup column. §14's is
+  exercised; this one's first real test is the playground's Entity Framework switch.
+- **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
+  that can fail the piece.
