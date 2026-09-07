@@ -302,18 +302,24 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         /// <remarks>
+        /// <para>
         /// The column's own <see cref="Format" />, so a pill reads what the cells read - <c>$50,000</c>
         /// rather than <c>50000</c>, and a date in the column's own pattern. <see cref="Format" /> lives
         /// here and not on the base, which is why the base cannot apply it and this override exists.
+        /// </para>
         /// <para>
-        /// An <see cref="Enum" /> is handed back to the base rather than formatted. Enum format
-        /// specifiers are <c>G</c>, <c>D</c>, <c>X</c> and <c>F</c> and nothing else, so a column that
-        /// declares <c>Format="C"</c> beside an enum property - which is a mistake, but a reachable one
-        /// - would throw out of a render on the pill and not on the cell.
+        /// <strong>An <see cref="Enum" /> is formatted too, and the first draft excepted it.</strong>
+        /// The exception was written against a column declaring <c>Format="C"</c> beside an enum
+        /// property, on the reasoning that <c>C</c> is not one of the four specifiers an enum takes and
+        /// would therefore throw out of the pill. It does throw - **on the cell**, several thousand
+        /// renders earlier, so no pill on that grid is ever drawn and the guard defended nothing. What
+        /// it did do was break this method's own purpose for the specifiers that <em>are</em> valid: a
+        /// column declaring <c>Format="D"</c> drew <c>1</c> in every cell and <c>Senior engineer</c> in
+        /// its pill. The mutation loop found the guard unobservable and the probe found it wrong.
         /// </para>
         /// </remarks>
         internal override string? FilterValueTextOf(object? value) =>
-            value is null or Enum || Format is not { Length: > 0 } format
+            value is null || Format is not { Length: > 0 } format
                 ? base.FilterValueTextOf(value)
                 : CellText.Of(value, format);
 

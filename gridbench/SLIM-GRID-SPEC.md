@@ -9545,3 +9545,28 @@ presets *"never reaches"* `FilterValueTextOf` (it does, whenever the filter arou
 condition), a localization comment that counted six new strings and two reused where there are seven
 and three, and a remark claiming *"every class here is upstream's"* beside `rz-filter-pills`, which is
 this grid's own name for the band and carries no rule anywhere.
+
+### What the mutation loop found
+
+Eight mutations over the phrase rules and the bar. Five were caught by the tests the review had just
+added or fixed. Three are worth the space.
+
+**The range word and the conjunction are genuinely two strings.** Replacing `RangeFilterText` with
+`AndFilterText` turns three tests red, so the distinction §37 argued for on linguistic grounds is one
+the suite can also see. Likewise the guard that stops a string being walked one character at a time
+under a set operator, and the enum's `GetDisplayDescription`.
+
+**`PropertyColumn.FilterValueTextOf` excepted enums from the format, and the exception was both
+unobservable and wrong.** It was written against a column declaring `Format="C"` beside an enum
+property, on the reasoning that `C` is not one of the four specifiers an enum takes and would throw out
+of the pill. Deleting it changed no test, so a probe asked what actually happens: **the grid throws on
+the cell**, in `PropertyColumn.CellTextOf`, from `RenderCell` - thousands of renders before any pill
+exists. The guard defended a case it could never reach.
+
+What it *did* reach was the specifiers that are valid. A column declaring `Format="D"` drew `1` in
+every cell and `Senior engineer` in its pill - the exact disagreement this override exists to prevent,
+introduced by the line whose comment cited preventing a crash. The exception is gone, a test pins the
+cell and the pill to the same string, and putting the exception back turns it red.
+
+This is §36's rule with a second half: **a surviving mutation may mean redundant code - and redundant
+code may also be wrong.** The mutation said the line could go; only the probe said it should.

@@ -774,5 +774,27 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(cell,
                 Assert.Single(module.Invocations["focusFilter"].Single().Arguments));
         }
+
+        [Fact]
+        public void AFormattedEnumReadsAsItsCellsDoRatherThanAsItsName()
+        {
+            // The pill's whole promise is that it reads what the cells read. An earlier draft excepted
+            // enums from the format, and a column declaring Format="D" then drew 1 in every cell and
+            // "Senior engineer" in its pill. The mutation loop found the exception unobservable; this
+            // is the assertion that says which way it should have gone.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, Grade>(x => x.Grade, title: "Grade", format: "D")));
+
+            var column = cut.FindComponent<PropertyColumn<Person, Grade>>().Instance;
+
+            var cell = column.CellTextOf(People.Sample().First(p => p.Grade == Grade.Senior));
+
+            Assert.Equal("1", cell);
+            Assert.Equal("Grade Equals " + cell,
+                Phrase(cut, column, One(FastGridFilterOperator.Equals, Grade.Senior)));
+        }
+
     }
 }
