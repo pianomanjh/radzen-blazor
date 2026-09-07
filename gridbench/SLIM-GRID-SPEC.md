@@ -7018,6 +7018,10 @@ Five pieces, each its own section and its own review.
 4. **The menu.** Panel, operators, labels, checklist-on-demand, keyboard.
 5. **The pills.**
 
+**§35 splits ④ in two**, where its gates split: §35 is the panel, the operators, the editors, the dates
+and the keyboard, whose gate is §31's per-row one; §36 is the checklist and its distinct scan, whose
+gate is queries per open. Five pieces became six.
+
 Designing the menu first was rejected explicitly: a model shaped by the first UI that used it is how the
 width in *The model* would have been lost, and 2 and 3 are where this codebase's tests are strongest and
 where a settings-format mistake is cheapest to catch.
@@ -7983,11 +7987,15 @@ sites covering for each other tested none of them.
   stamp cannot be moved anywhere a test can reach.
 - **The box shows one value of a compound.** §33's, now named: a `Between` and a two-condition column both
   render their first value into a control that holds one. Committing it no longer destroys anything, and
-  the box still misrepresents what it shows. ④ is where a control that can hold a range lives.
+  the box still misrepresents what it shows. ④ is where a control that can hold a range lives. *§35
+  answers it for the menu - `Between` renders two editors - and declines it for the row, on the grounds
+  that a box holding two values is the row ceasing to be a row.*
 - **A compound with a `Between` half reaches `LoadDataArgs.Filters` as nothing.** Three comparisons
   overflow a `FilterDescriptor`, so §33 leaves the column out rather than flattening it - and a handler
-  reading only the structured half returns every row. §33's hole, and §34's menu will write exactly that
-  shape.
+  reading only the structured half returns every row. §33's hole. *This section added "and §34's menu
+  will write exactly that shape", and §35 refuses to: the menu authors one condition per column, so
+  `IsNull` is an operator to pick rather than an `OR`'d tail, and no menu-authored filter reaches the
+  hole. It stays open and stays owed - reachable only from markup and from a `FilterTemplate`.*
 - **The OData string truncates `today@end` to the second.** `QueryableExtension` formats a `DateTime` with
   `.fff`, so 23:59:59.9999999 goes out as 23:59:59.000 and the last second of the day is lost on the wire.
   Upstream's formatter, on the seam this section promised not to touch - and the same boundary loss
@@ -8008,12 +8016,322 @@ sites covering for each other tested none of them.
 - **The preset is not in the model**, so a stored `Between today-6d today@end` cannot be told from a
   hand-authored one, and ④ has to recognise presets by their shape to show them as presets. That is a
   cost deliberately pushed into the menu, and it may turn out to want a token that names the preset
-  after all - which would be this section refuted rather than extended.
+  after all - which would be this section refuted rather than extended. *§35 paid the cost and did not
+  refute it: recognition is a table of six token pairs and the equality this section already shipped.
+  A hand-authored pair reading as the preset is two spellings of one filter agreeing.*
 - **"Local" is the app's problem to correct and most apps will not know they have one.** The default is
   right for Blazor WebAssembly and for a server in its users' zone, and quietly wrong otherwise, in a
   direction that shows plausible rows.
 - **`Equals` with a token means midnight** and §31's table says the whole day. Two readings of one
   operator, reconciled by a rule about which one the menu writes, and a rule like that is exactly what
-  §33 called two sources of truth when it found one.
+  §33 called two sources of truth when it found one. *§35 narrows it to one place: the menu never writes
+  a date `Equals` at all, it writes the whole-day `Between`. The operator keeps its literal reading for
+  the markup author, and there is one rule rather than two readings.*
 - **Nothing here is measured.** The gate is a budget until the build has run - *and it has: see What it
   cost, where the allocation half passes and the time half is still owed.*
+
+## 35. The filter menu, and the column writes its own editor - the design
+
+§31's ④, and the first of two sections it splits into. **Nothing here is built when this section
+lands.**
+
+§31 named ④ as *"the menu. Panel, operators, labels, checklist-on-demand, keyboard"* and then §34
+handed it four more things by name. That is one section only in the sense that one bullet holds it.
+It splits where the gates split: **the panel and its operators have a per-row allocation gate**, which
+is §31's own and the shape every section on this branch has cleared; **the checklist has a
+queries-per-open gate**, which is a different kind of number and the one §10 already measured going
+wrong. Two gates that cannot fail each other are two sections, and process rule 10 wants a piece a
+reviewer can hold.
+
+So: this section is the panel, the operators, the editors, the dates and the keyboard. §36 is the
+checklist and the distinct scan it needs.
+
+### What §34 left ④, answered
+
+Four things, and the answers are the design rather than a preamble to it.
+
+**The box shows one value of a compound.** Resolved for the menu and not for the row. `Between`
+renders two editors of the column's own type, so the range is visible and editable as a range - which
+is what §34 meant by *"④ is where a control that can hold a range lives"*. Under `FilterUI.Row`
+nothing changes: a box holds one value, and a row user who wants a range uses the menu. That is
+recorded as the answer rather than left owed, because "make the row's single box hold two values" is
+not a thing to build, it is the row stopping being a row.
+
+**A preset is not in the model.** Recognised by shape. The menu holds §34's six token pairs and
+compares a filter's two values against them; a match shows the preset selected, and no match shows
+`Between` with whatever is in it. §34 offered the alternative - *"a token that names the preset after
+all, which would be this section refuted"* - and it is refused here. A single token cannot supply two
+bounds; that was §34's entire argument against §33's example. So naming the preset would mean a third
+field on `FastGridFilter` beside its two conditions, which the descriptors, the expression routes, the
+OData string and the settings format would all then have to carry and ignore - and §33 settled that
+the format is not extended. **Recognition costs a table of six pairs and an equality that
+`FastGridRelativeDate` already implements.**
+
+The one oddity is stated rather than hidden: a hand-authored `Between today-6d today@end` displays as
+*last 7 days*. It **is** that range, exactly, resolved at the same instant by the same rule. A
+false positive here is not a wrong answer, it is two spellings of one filter agreeing.
+
+**`Equals today` means midnight, and §31's table says whole day.** The menu writes the `Between`, as
+§31 said its table's job was. `Equals` picked on a date column with a token produces
+`Between today today@end`; `Equals` picked with a date the user typed produces the same shape over
+that day. **The menu never writes a date `Equals`.** That is one rule in one place rather than two
+readings of an operator - and the operator itself keeps the literal reading it has, for the
+markup author §34 documented it for.
+
+**The `FilterMode`/`CheckBoxList` circuit crash.** Below, under its own heading, because the fix is an
+operator rule and not a menu one.
+
+### The surface
+
+```
+FilterUI { Row, Menu }
+```
+
+Grid-wide, default `Row`, this grid's own enum - §31 argued that separation and nothing here revisits
+it. `FilterMode` stays upstream's vocabulary and stays per-column overridable through `FilterModeOf`.
+
+**Under `Menu` there is no filter row.** Not a hidden one, not an empty one: `AllowFiltering` under
+`Menu` renders the header's icons and no second header row at all. The alternative - a row *and* a
+menu, as upstream's `SimpleWithMenu` has - was rejected because it is two places to author one filter
+and the two would have to agree; §10b's recurring finding is a rule read from two places that can
+disagree, and this would be a rule *written* from two.
+
+**The icon is a real `<button tabindex="-1">` in the header cell**, always visible on a filterable
+column, carrying upstream's own classes so a theme styles it unchanged:
+`rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base rz-shade-default`,
+plus `rz-grid-filter-active` when the column is filtered. `aria-haspopup="menu"`, `aria-controls` the
+panel, `aria-expanded` tracking it. §12 settled that this grid is one tab stop with the active cell
+named by `aria-activedescendant`, so `tabindex="-1"` is not a compromise - it is what keeps that true
+with eight icons on the screen.
+
+**It stops propagation.** The header cell's click sorts; the icon's click must not. One
+`stopPropagation` on the button, and the header keeps the gesture it has.
+
+`FilterIcon` joins the grid's parameters with upstream's default of `filter_alt`, because a consumer
+who has restyled `RadzenDataGrid`'s icon expects the same lever here.
+
+### The panel, and why there is one
+
+**One `RadzenPopup` for the grid**, `Lazy`, its body `@key`ed on the target column.
+
+Reused rather than written, and §7's table is the argument: `RadzenPopup` is public, derives from
+`RadzenComponent`, and carries outside-click closing, escape, first-element focus, a `[JSInvokable]`
+close callback and `Radzen.destroyPopup` on dispose. Writing that again to own it would be about a
+hundred and fifty lines of somebody else's solved problem.
+
+**A panel per column was rejected for the reason §29 gives**: exactly one can be open, so a panel per
+column multiplies a cost by the column count for a control that is singular by construction. It also
+gives §31's ⑤ somewhere to send a pill's click-to-reopen without holding a handle on a particular
+column's panel.
+
+**`Radzen.openPopup` moves the panel to `document.body`.** That is worth writing down because two
+things fall out of it and both are load-bearing:
+
+- **The sticky header cannot clip it.** The header is sticky inside `.rz-data-grid-data`, which is the
+  horizontal scroller, and §10 spent a section on what that container does to things positioned inside
+  it. A panel that has left the container is not subject to it. Nothing here needs a second sticky
+  band or a `z-index` argument.
+- **The panel is outside the grid's keydown handler while open.** §12's arrow space is bound on
+  `.rz-data-grid-data`; a panel on `document.body` is not a descendant of it, so an arrow key inside a
+  date picker in the panel is not also a grid navigation. The filter row needed
+  `stopPropagation` for exactly this and the panel needs nothing.
+
+**What it costs is one rule: once built, the panel is never removed from the render tree.** Blazor's
+diff tolerates attribute and child updates on a node that JavaScript has reparented - which is what
+every upstream drop-down relies on - but a *removal* is resolved against the logical parent the
+renderer recorded. `Lazy` gives §31's "costs nothing while closed"; what it must not do is come and
+go.
+
+**Opening is armed on click and positioned after the render.** `ToggleAsync` calls into JS before the
+lazy body has rendered, so a panel opened straight from the click handler is measured empty and
+positioned for a size it does not have. The click sets the target column and renders; the open runs in
+`OnAfterRenderAsync`. That is §29's order - size before position, one placement, no jump - arrived at
+from the other direction.
+
+### The operators, and where their words come from
+
+§31's table, unchanged, minus the checklist half that §36 owns:
+
+| type | operators the menu offers |
+| --- | --- |
+| string | **Contains**, DoesNotContain, StartsWith, EndsWith, Equals, NotEquals, IsEmpty, IsNotEmpty |
+| number | **Equals**, NotEquals, <, <=, >, >=, **Between** |
+| date | **Equals** (written as a whole-day `Between`), Before, After, **Between**, then the six presets |
+| bool | **Equals** true/false |
+| enum, lookup, collection | **In**, NotIn - §36 |
+
+Nullable columns of any type also get IsNull / IsNotNull. **One condition per column.** §31 said the
+menu exposes single-condition operators plus *between* and that is taken literally: `IsNull` is an
+operator to choose, not an `OR`'d tail on another one. §34 predicted that *"§34's menu will write
+exactly that shape"* - the compound-with-a-`Between`-half that vanishes from `LoadDataArgs.Filters` -
+and **it does not**. That claim is corrected where it was made. §33's hole stays open and stays owed,
+and no menu-authored filter reaches it.
+
+**Every label is already translated.** `DataGrid_ContainsText`, `DataGrid_EqualsText`,
+`DataGrid_ApplyFilterText` and the rest of the operator vocabulary are upstream's keys, shipped in the
+five cultures Radzen translates, and `StringResolver` already looks in the consuming application's own
+`RadzenStrings` first - so an app
+that has reworded one of them for `RadzenDataGrid` gets the same wording here for nothing. §31's menu
+inherits `RadzenDataGrid`'s vocabulary rather than inventing a second one, which is also the promise
+§31 made about carrying knowledge across.
+
+**Seven strings have no upstream key**: `Between`, and the six presets. `StringResolver.Get` falls back
+to *the key itself*, so a new key resolves to `"DataGrid_BetweenText"` on the screen, which is worse
+than not localizing at all. `Localize` gains a fallback overload - resolve, and where the resolver
+answered with the key, use the English default. The consequence is the good one: an application can
+translate the seven today by adding the keys to its own `RadzenStrings`, and if Radzen ever ships them
+this grid picks them up with no change. A `.resx` of our own was rejected for the same reason §31
+rejected redefining `FilterMode` - a second vocabulary beside upstream's, in the one file where a
+reader most wants there to be one.
+
+### The editors, and why the column writes them
+
+**A new `internal virtual` on `ColumnBase<TItem>`, overridden in `PropertyColumn<TItem, TProp>`.**
+
+The grid cannot write these. A grid-side switch on `FilterPropertyType` can only open
+`RadzenNumeric<object>` and `RadzenDatePicker<object>`, and §3 rule 5 is exactly that: a generic value
+widened to reach an interface boxes every value it touches. The column already knows `TProp`. It is
+the only thing that does.
+
+**§3 rule 1 does not forbid this.** That rule is about rows and cells - no component per row, no
+`RenderFragment` per cell - and its reason is the per-row multiplier. A panel is one, opened by hand,
+and its editors are one or two. This is the same trade `RadzenPager` already gets.
+
+The virtual takes what an editor needs and no more: **the value in the slot, a callback to set it, and
+the slot's aria label.** One shape for both of `Between`'s bounds, because a range's upper editor is
+its lower editor with a different value in it, and giving them two entry points is how they drift.
+The callback is created by the column, so the one box is at the seam, once per commit rather than per
+row - which is where §3 rule 5 says a box is allowed to be.
+
+**It stays `internal`.** §20 counted eight internal virtuals and read them correctly as one closed
+door: an out-of-assembly column can render, sort and compose a filter predicate, and cannot take part
+in the filter UI. This is the ninth and the door does not move. The public answer is `FilterTemplate`,
+which §31 already made the whole editor when present - no operator picker beside it, because a
+template's author sets value and operator themselves and a picker would be a second control fighting
+the first over one piece of state.
+
+### The dates
+
+The six presets sit below the operators on a date column and **apply on pick**. They need no value, so
+an Apply step after them would be a button that confirms a complete sentence.
+
+Each writes the pair §34 tabulated - `today`, `yesterday`, `last 7 days`, `last 30 days`,
+`this month`, `this year` - into a `Between`. The tokens are the model's vocabulary and the presets are
+the menu's, which is what lets a seventh be added here without touching §34.
+
+On reopen the draft's two values are matched against the six pairs. A match selects the preset; no
+match shows `Between` with its two dates. **The match is on the tokens, not on the resolved
+instants** - `Between today-6d today@end` is *last 7 days* whatever day it is read on, and two absolute
+dates that happen to span the last seven days are not.
+
+### Committing, and the draft
+
+**The panel edits a draft.** One operator and up to two values, held by the grid, replaced when the
+panel is retargeted, discarded when it closes. §31 settled that the menu applies on Apply or Enter and
+never per keystroke - *"a half-typed between bound filters to nothing on every keystroke"* - so there
+has to be somewhere uncommitted for a half-typed bound to sit. Editing `CurrentFilter` directly would
+make every keystroke a filter, which is the feature §31 refused.
+
+**Apply and Enter commit it; Clear clears the column; Escape closes without committing.** Each of
+Apply and Clear is exactly one reload. §31's *"Clear is one operation at three scopes"* has its third
+scope in ⑤ and its first two here.
+
+**Escape returns focus to the grid**, not to the icon. The grid is the one tab stop §12 built; putting
+focus on a `tabindex="-1"` button would leave the page with a focused element that Tab cannot reach
+again.
+
+### Keyboard
+
+**Alt+Down opens the menu for the focused header column** - Excel's own shortcut, and §31 chose it.
+One case in the header branch of the keyboard switch, beside the Enter that sorts.
+
+That branch is the whole change. Everything inside the panel is ordinary focusable content in a
+container the grid's handler does not see, so Tab, arrows and Enter inside it belong to the controls
+they land on. `AutoFocusFirstElement` puts the caret where a user who opened it by keyboard expects it.
+
+### `CheckBoxList` stops being a mode
+
+§31: *"`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`. The
+parameter is still accepted and maps onto the new model."* This section is where the mapping lands,
+and the mapping is what closes the crash §32's browser pass recorded.
+
+**The crash, stated:** with a scalar filter applied - a `Contains` from the text box, or a restored
+one - switching `FilterMode` to `CheckBoxList` hands `RadzenDropDown<IEnumerable>.Value` the scalar
+that filter holds. A `Multiple` drop-down casts its value to a sequence, an `int` is not one, and the
+cast terminates the circuit. It is a mode/operator mismatch exactly as §31 diagnosed the mode itself
+to be: the *editor* changed and the *filter* did not.
+
+**The mapping:** a column whose effective `FilterMode` is `CheckBoxList` filters by `In`. A filter
+whose operator is not a sequence operator is not offered to a check-box list at all - it is cleared
+when the mode changes, the way §32 made a stored filter that cannot be rebuilt get dropped rather than
+handed on unexamined. The scalar never reaches the cast because it never reaches the control.
+
+This is an operator rule and not a menu one, so it fixes `FilterUI.Row` as well - which matters,
+because the row is where the crash was found and the row is the default.
+
+### What this section does not do
+
+- **The checklist.** `In` and `NotIn` are offered by the operator table but §35's panel edits them with
+  the multiselect the filter row already uses. §36 replaces it with the real check-box list, the
+  checklist-first rule for lookups and enums, and the *"Filter by value..."* on-demand distinct scan
+  that §10 measured the cost of leading with.
+- **The pills.** §31's ⑤.
+- **The row's one-value box.** Recorded above.
+- **§33's `Between`-in-a-compound hole.** Not reached, and now known not to be reached from here.
+
+### The gate
+
+**Per-row and per-cell allocation unchanged, and a closed menu costing nothing.** §31 set both and
+neither is a number to report afterwards - the first can fail the piece.
+
+Bench rows, following the drop-down's *"never opened"* precedent, which is what makes the second half
+measurable rather than asserted:
+
+- the header chrome with the icon on, against the same grid under `FilterUI.Row`;
+- a grid under `FilterUI.Menu` with the panel never opened, against `FilterUI.Row` with filtering on.
+
+**Swept over two row counts**, because §33's review is the reason that sweep exists: a fixed cost and a
+per-row cost look identical at one row count, and §34 shipped a bench pair that filtered nothing and
+read as beautifully flat. The sweep has to move something.
+
+The panel's own cost - one popup component, one draft, the editors of one column - is permitted per
+open and is not measured against a budget, because it is a control a user asked for by clicking.
+
+### How it is verified
+
+- **The operator table as a pure rule.** Which operators a column of a given type offers, and what
+  `Equals` on a date writes, are rules about a type and not about a rendered grid. §33's review
+  finding - a test one layer above a rule is not a test of the rule - is why they are tested where they
+  live rather than through a panel.
+- **Preset recognition as a pure rule**, both directions: each of the six pairs recognised, and a pair
+  that is not one of them not recognised.
+- **The panel through bUnit** for what only a render can answer: the icon's presence and active state,
+  the absence of the filter row under `Menu`, the panel's body re-keying when the target changes, Apply
+  committing and Escape not.
+- **The crash, as a test that fails first.** A scalar filter, then `FilterMode` set to `CheckBoxList`.
+  §32's finding had a browser to find it in; this one gets a test.
+- **The playground** - §9 layer 6, and not optional for behavioural change. A `FilterUI` toggle beside
+  the existing settings controls, so the two UIs can be compared on the same data, and Alt+Down tried
+  against a real browser's own handling of it.
+
+### Where this could still be wrong
+
+- **`FilterUI` grid-wide against `FilterMode` per-column** is §31's separation and it has still never
+  been used. This section is the first thing that could find out, and it does not: nothing here wants a
+  menu on one column and a row cell on another. The first author who does will find out whether it
+  holds.
+- **A panel reparented to `document.body` is a contract with upstream's JavaScript**, not with Blazor.
+  Every upstream drop-down depends on it, so it is well-trodden - but the rule it imposes here, that the
+  panel is never removed from the render tree once built, is invisible at the place it would be broken.
+  A future section that makes the panel conditional would find out at run time.
+- **"At least as friendly as Excel" still has no number.** §31 flagged it and this section is where the
+  judgement is actually exercised - the operator list, the preset placement, apply-on-pick against
+  apply-on-Apply. Every one of those is defended by an argument and none by a measurement.
+- **Recognising a preset by shape reads a hand-authored range as a preset.** Argued above as harmless.
+  It stops being harmless the day something *writes* differently depending on which it thinks it is,
+  and ⑤'s pills are the first thing that will want to.
+- **Escape returning focus to the grid rather than the icon** is right for §12's one-tab-stop model and
+  wrong for what a screen reader user is told: the thing they opened is not the thing they are returned
+  to. There is no third option that is both, and the tab stop wins because it is the older promise.
+- **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
+  that can fail the piece.
