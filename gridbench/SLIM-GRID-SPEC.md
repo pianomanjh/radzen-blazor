@@ -1390,104 +1390,6 @@ that paints nothing.
 One commit each, which is what every other feature on this branch did, and the only reason resize,
 reorder and frozen columns have separate numbers at all.
 
-### What the currency move changed
-
-**"One currency" is not reachable, and the seam that refuses it is upstream's.**
-`LoadDataArgs.Filters` is `IEnumerable<FilterDescriptor>` - not ours to retype - so a handler's
-*structured* view is projected back from the composites, while `LoadDataArgs.Filter`, the string and the
-half a handler usually reads, is built from the composites and keeps whatever nesting they carry. The
-projection is faithful while a column carries one condition, which is all there is to carry until the
-model lands. Where it starts losing something is a compound wider than two value slots, and that is the
-model commit's problem.
-
-**One behaviour change, named rather than absorbed.** `FilterString` used to copy each descriptor into a
-composite field by field, and the copy dropped `FilterProperty` - the member of a collection's element
-that a `CollectionColumn` filters by. So the string a `LoadData` handler received compared against the
-collection itself rather than the member. Composites go straight through now and the copy is gone with
-it. It is a fix, it is not what the commit is for, and it has a test that fails against the copy.
-
-**The parity suite now references the overload the grid actually calls.** `FilterExpressionParityTests`
-compared the typed builder against `QueryableExtension.Where(FilterDescriptor)`; `Composition.Reflective`
-calls the `CompositeFilterDescriptor` overload since this commit, so the reference moved with it -
-pinning parity against an overload the grid no longer reaches would be a test agreeing with itself. All
-of it passes against the new reference, which is also the first evidence that the two upstream overloads
-agree everywhere the suite looks.
-
-### What the review found that the build had not
-
-Two reviewers in parallel. Between them they found two faults that put **wrong rows on the screen**, and
-one that the build had measured and failed to explain.
-
-**A `Between` inside a compound was flattened into a flat `OR`.** `DescriptorFor` put a range's two
-bounds into the parent's child list beside the other condition, so `Between(200,300) OR IsNull` became
-three siblings under one `Or` and the `And` that makes a range a range was gone. The typed routes never
-see a descriptor, so they stayed right - and the string sent to a server did not:
-
-```
-x => ((((x.Bonus ?? null) >= 200) || ((x.Bonus ?? null) <= 300)) || (x.Bonus == null))
-```
-
-An in-memory grid showed two rows while the same filter asked a server for nearly the table, and both
-strings parse and read plausibly. **This section bought the nesting for exactly this case and then did
-not spend it**, and the build note's "all three composition routes learned the compound" was wrong: two
-did. A range is now a child of its own, with its bounds under it.
-
-**`LoadDataArgs.Filters` said `Property Equals null`** for any compound - not a lossy projection but a
-false one, so a handler building a query from it returned the null rows. A `FilterDescriptor` carries two
-comparisons, so a range and a two-condition column both fit exactly; only a compound needing three
-overflows, and such a column is **left out** now rather than flattened. A handler filtering less than it
-was asked is recoverable; a blank page is not. The remark that filed this under "the model commit's
-problem" was itself in the model commit.
-
-**A UTC `DateTime` restored as a different instant.** `Convert.ChangeType` is the one path that *can* see
-a `DateTime` and reads it without `RoundtripKind`, so `2019-05-04T00:00:00Z` came back as
-`2019-05-03 17:00` local - and the same blob restored differently in every time zone, which is the exact
-thing storing invariant text was meant to prevent. The build had added explicit branches for the four
-types `Convert.ChangeType` cannot see and missed the one it mishandles. *"Lossless by construction"* was
-true of the write and not of the read.
-
-**The unattributed ~0.8 KB has a name.** `DeclaredFilter()` never returned null, so every column
-allocated a filter, a condition and a one-element array on its first parameter set - about 104 bytes,
-five columns at a time - whether or not it declared a filter and whether or not the grid allowed
-filtering. That is §3's third rule, and the method's own summary already promised *"or null when it
-declares none"*. Fixed, the in-memory delta falls from **+0.85 to +0.33 KB**, which is §9's stated noise
-floor, and it is still flat in N.
-
-**Declining moved §32's finding 1a rather than removing it.** This section claimed to have closed the
-crash where an ordered operator meets a type with no ordering. The typed builder does decline now - and a
-decline is absorbed by the reflective builder, which threw the same `InvalidOperationException` one frame
-later. Nothing but *refusing the filter* removes it, so a stored operator the column's type cannot be
-compared with is now refused at the restore, where the type is known. §32's finding **1b** - that a
-decline has two causes and only one was fixed - was right, and this is the half of it that a stored
-filter can reach.
-
-**Smaller, and all real:** a lookup's blank entry was lost on the way back, because a stored `null` and
-an unparseable text were indistinguishable after the parse and the rebuild kept only values that were
-already keys; an empty second condition was read as a *failed* one and took the whole filter with it;
-three comments about `Custom` guarded code that could not run and each said something different; and
-`AnyValue`'s arity-`Many` branch is provably a no-op.
-
-**Five mutations survived the first loop and four more the second**, every one because a behaviour was
-covered only through a route that could not see it - a range tested over a list while the mutation was in
-the expression builder, an unjoined second condition where every path that could produce one dropped it
-first, an arity rule the restore rejected before it was reached. They are why `FastGridFilterModelTests`
-exists: **a test one layer above a rule is not a test of the rule.** All thirteen are caught now.
-
-### What is still owed
-
-- **A markup-declared `Between` cannot also declare a second condition.** `SecondFilterValue` is the
-  range's upper bound *and* the second condition's value, so the one combination joining this section's
-  headline operator to its two-condition justification is unauthorable from markup. It is silently
-  ignored rather than refused.
-- **`SecondFilterText` can only echo what a restore put there.** Nothing else writes it, and a range's
-  two bounds - one condition of arity two - have nowhere to keep a text at all. It was justified by a
-  date range, which this section then made a single condition.
-- **Ordered operators on a string over a queryable now produce no filter**, where dynamic LINQ could
-  express `Name > 'M'` and a provider translate it. Refusing beats throwing, and it is a new parity
-  divergence from `QueryableExtension` that nothing measures.
-- **An `In` over OData renders the typed list's `ToString`.** Pre-existing, upstream's, and on the seam
-  this section promised not to touch - but nothing in the suite covers it.
-
 ### Where this could still be wrong
 
 - **The row/column asymmetry** of "focus follows the item, focus follows the position" will read as an
@@ -7605,6 +7507,29 @@ Three commits, because a mechanical move and a model change in one diff is unrev
 2. **The model.** Vocabulary, arity, string values, the format, the column surface.
 3. **The review fix.**
 
+### What the currency move changed
+
+**"One currency" is not reachable, and the seam that refuses it is upstream's.**
+`LoadDataArgs.Filters` is `IEnumerable<FilterDescriptor>` - not ours to retype - so a handler's
+*structured* view is projected back from the composites, while `LoadDataArgs.Filter`, the string and the
+half a handler usually reads, is built from the composites and keeps whatever nesting they carry. The
+projection is faithful while a column carries one condition, which is all there is to carry until the
+model lands. Where it starts losing something is a compound wider than two value slots, and that is the
+model commit's problem.
+
+**One behaviour change, named rather than absorbed.** `FilterString` used to copy each descriptor into a
+composite field by field, and the copy dropped `FilterProperty` - the member of a collection's element
+that a `CollectionColumn` filters by. So the string a `LoadData` handler received compared against the
+collection itself rather than the member. Composites go straight through now and the copy is gone with
+it. It is a fix, it is not what the commit is for, and it has a test that fails against the copy.
+
+**The parity suite now references the overload the grid actually calls.** `FilterExpressionParityTests`
+compared the typed builder against `QueryableExtension.Where(FilterDescriptor)`; `Composition.Reflective`
+calls the `CompositeFilterDescriptor` overload since this commit, so the reference moved with it -
+pinning parity against an overload the grid no longer reaches would be a test agreeing with itself. All
+of it passes against the new reference, which is also the first evidence that the two upstream overloads
+agree everywhere the suite looks.
+
 ### What the model cost, and the control that reads it
 
 `FastGridFeatureBench.FilteringApplied`, `--job short`, swept over two row counts because the gate is
@@ -7629,6 +7554,81 @@ obvious candidates - the model objects, the descriptor, the expression tree - ar
 number of times as before, so the ~0.8 KB has no mechanism named yet. Times are quoted from a short job
 and are therefore noise by §9's own rule; the time half of §33's gate is **not measured to that
 standard** and remains owed.
+
+### What the review found that the build had not
+
+Two reviewers in parallel. Between them they found two faults that put **wrong rows on the screen**, and
+one that the build had measured and failed to explain.
+
+**A `Between` inside a compound was flattened into a flat `OR`.** `DescriptorFor` put a range's two
+bounds into the parent's child list beside the other condition, so `Between(200,300) OR IsNull` became
+three siblings under one `Or` and the `And` that makes a range a range was gone. The typed routes never
+see a descriptor, so they stayed right - and the string sent to a server did not:
+
+```
+x => ((((x.Bonus ?? null) >= 200) || ((x.Bonus ?? null) <= 300)) || (x.Bonus == null))
+```
+
+An in-memory grid showed two rows while the same filter asked a server for nearly the table, and both
+strings parse and read plausibly. **This section bought the nesting for exactly this case and then did
+not spend it**, and the build note's "all three composition routes learned the compound" was wrong: two
+did. A range is now a child of its own, with its bounds under it.
+
+**`LoadDataArgs.Filters` said `Property Equals null`** for any compound - not a lossy projection but a
+false one, so a handler building a query from it returned the null rows. A `FilterDescriptor` carries two
+comparisons, so a range and a two-condition column both fit exactly; only a compound needing three
+overflows, and such a column is **left out** now rather than flattened. A handler filtering less than it
+was asked is recoverable; a blank page is not. The remark that filed this under "the model commit's
+problem" was itself in the model commit.
+
+**A UTC `DateTime` restored as a different instant.** `Convert.ChangeType` is the one path that *can* see
+a `DateTime` and reads it without `RoundtripKind`, so `2019-05-04T00:00:00Z` came back as
+`2019-05-03 17:00` local - and the same blob restored differently in every time zone, which is the exact
+thing storing invariant text was meant to prevent. The build had added explicit branches for the four
+types `Convert.ChangeType` cannot see and missed the one it mishandles. *"Lossless by construction"* was
+true of the write and not of the read.
+
+**The unattributed ~0.8 KB has a name.** `DeclaredFilter()` never returned null, so every column
+allocated a filter, a condition and a one-element array on its first parameter set - about 104 bytes,
+five columns at a time - whether or not it declared a filter and whether or not the grid allowed
+filtering. That is §3's third rule, and the method's own summary already promised *"or null when it
+declares none"*. Fixed, the in-memory delta falls from **+0.85 to +0.33 KB**, which is §9's stated noise
+floor, and it is still flat in N.
+
+**Declining moved §32's finding 1a rather than removing it.** This section claimed to have closed the
+crash where an ordered operator meets a type with no ordering. The typed builder does decline now - and a
+decline is absorbed by the reflective builder, which threw the same `InvalidOperationException` one frame
+later. Nothing but *refusing the filter* removes it, so a stored operator the column's type cannot be
+compared with is now refused at the restore, where the type is known. §32's finding **1b** - that a
+decline has two causes and only one was fixed - was right, and this is the half of it that a stored
+filter can reach.
+
+**Smaller, and all real:** a lookup's blank entry was lost on the way back, because a stored `null` and
+an unparseable text were indistinguishable after the parse and the rebuild kept only values that were
+already keys; an empty second condition was read as a *failed* one and took the whole filter with it;
+three comments about `Custom` guarded code that could not run and each said something different; and
+`AnyValue`'s arity-`Many` branch is provably a no-op.
+
+**Five mutations survived the first loop and four more the second**, every one because a behaviour was
+covered only through a route that could not see it - a range tested over a list while the mutation was in
+the expression builder, an unjoined second condition where every path that could produce one dropped it
+first, an arity rule the restore rejected before it was reached. They are why `FastGridFilterModelTests`
+exists: **a test one layer above a rule is not a test of the rule.** All thirteen are caught now.
+
+### What is still owed
+
+- **A markup-declared `Between` cannot also declare a second condition.** `SecondFilterValue` is the
+  range's upper bound *and* the second condition's value, so the one combination joining this section's
+  headline operator to its two-condition justification is unauthorable from markup. It is silently
+  ignored rather than refused.
+- **`SecondFilterText` can only echo what a restore put there.** Nothing else writes it, and a range's
+  two bounds - one condition of arity two - have nowhere to keep a text at all. It was justified by a
+  date range, which this section then made a single condition.
+- **Ordered operators on a string over a queryable now produce no filter**, where dynamic LINQ could
+  express `Name > 'M'` and a provider translate it. Refusing beats throwing, and it is a new parity
+  divergence from `QueryableExtension` that nothing measures.
+- **An `In` over OData renders the typed list's `ToString`.** Pre-existing, upstream's, and on the seam
+  this section promised not to touch - but nothing in the suite covers it.
 
 ### Where this could still be wrong
 
