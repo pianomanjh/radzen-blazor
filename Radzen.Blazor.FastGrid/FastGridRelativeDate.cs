@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 
 namespace Radzen.FastGrid
@@ -113,7 +114,8 @@ namespace Radzen.FastGrid
         /// else - a missing unit, a bare anchor with a sign, trailing text - is not a token, and saying
         /// so by returning false is what lets a caller fall through to reading it as a date.
         /// </remarks>
-        public static bool TryParse(string? text, out FastGridRelativeDate? token)
+        public static bool TryParse(string? text,
+            [NotNullWhen(true)] out FastGridRelativeDate? token)
         {
             token = null;
 
@@ -204,19 +206,12 @@ namespace Radzen.FastGrid
                 return false;
             }
 
-            var digits = span[1..^1];
-
-            // int.TryParse would accept a sign of its own, so the digits are checked before it reads
-            // them: `today+-6d` is not a token.
-            foreach (var character in digits)
-            {
-                if (!char.IsAsciiDigit(character))
-                {
-                    return false;
-                }
-            }
-
-            if (!int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var magnitude))
+            // NumberStyles.None is what refuses a second sign, whitespace and a thousands separator, so
+            // `today+-6d` is not a token. An explicit digit loop stood in front of this and the mutation
+            // loop showed it up: with the loop there, nothing could tell None from Integer, which is the
+            // definition of untested. One guard, and it is the one under test.
+            if (!int.TryParse(span[1..^1], NumberStyles.None, CultureInfo.InvariantCulture,
+                    out var magnitude))
             {
                 return false;
             }
@@ -266,7 +261,7 @@ namespace Radzen.FastGrid
                 // The stamp's own offset rather than the machine's: the clock the grid was given is what
                 // decides which zone "today" is in, and asking TimeZoneInfo.Local here would put a
                 // second answer beside it.
-                return new DateTimeOffset(instant, now.Offset);
+                return new DateTimeOffset(Reachable(instant, now.Offset), now.Offset);
             }
 
             return instant;
@@ -306,6 +301,31 @@ namespace Radzen.FastGrid
         // a tick back is exact - a DateTime is ticks - where 23:59:59.999 would leave a window.
         static DateTime EndOf(DateTime day) =>
             day >= DateTime.MaxValue.Date ? DateTime.MaxValue : day.AddDays(1).AddTicks(-1);
+
+        /// <summary>An instant that <see cref="DateTimeOffset" /> can hold at this offset.</summary>
+        /// <remarks>
+        /// <see cref="Day" /> clamps rather than throwing, under a comment that commits to never putting
+        /// an exception inside <c>BuildRenderTree</c> - and the review found the clamp being undone one
+        /// line later. <c>DateTimeOffset(DateTime, TimeSpan)</c> throws when the instant less the offset
+        /// leaves the calendar, so a clamped <see cref="DateTime.MinValue" /> threw for every clock east
+        /// of UTC and a clamped <see cref="DateTime.MaxValue" /> for every clock west of it. The rule was
+        /// applied in one method and not in its neighbour, which is §10b's recurring finding inside a
+        /// single expression.
+        /// </remarks>
+        static DateTime Reachable(DateTime instant, TimeSpan offset)
+        {
+            if (offset.Ticks > 0 && instant.Ticks < offset.Ticks)
+            {
+                return DateTime.MinValue + offset;
+            }
+
+            if (offset.Ticks < 0 && DateTime.MaxValue.Ticks - instant.Ticks < -offset.Ticks)
+            {
+                return DateTime.MaxValue + offset;
+            }
+
+            return instant;
+        }
 
         /// <summary>The canonical text this token is stored as.</summary>
         public override string ToString()

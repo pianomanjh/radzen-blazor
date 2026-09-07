@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using Bunit;
 using Xunit;
 
 namespace Radzen.FastGrid.Tests
@@ -8,9 +10,10 @@ namespace Radzen.FastGrid.Tests
     /// §34's token: its grammar, what it resolves to, and the one rule that keeps it a value.
     /// </summary>
     /// <remarks>
-    /// Asked directly, against a fixed instant. Everything here is a pure rule, and process rule 4 is
-    /// why it is tested as one: a test that reaches `today-6d` through a rendered grid is a test of the
-    /// grid. <see cref="RelativeDateGridTests" /> is what covers the layer above.
+    /// Asked directly, against a fixed instant. Everything here is a pure rule, and §33's review finding
+    /// is why it is tested as one - <em>a test one layer above a rule is not a test of the rule</em> - so
+    /// a test that reaches `today-6d` through a rendered grid is a test of the grid.
+    /// <see cref="RelativeDateGridTests" /> is what covers the layer above.
     /// </remarks>
     public class RelativeDateTests
     {
@@ -133,7 +136,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void AnOffsetOffTheCalendarClamysRatherThanThrows()
+        public void AnOffsetOffTheCalendarClampsRatherThanThrows()
         {
             // Throwing would put an exception inside BuildRenderTree, which §32 established is a dead
             // circuit on Blazor Server that the application never sees.
@@ -144,6 +147,29 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(DateTime.MinValue, far.Resolve(typeof(DateTime), Now));
             Assert.Equal(DateTime.MaxValue, further.Resolve(typeof(DateTime), Now));
+        }
+
+        [Theory]
+        [InlineData(9)]
+        [InlineData(-7)]
+        [InlineData(0)]
+        public void TheClampSurvivesTheOffsetColumnToo(int hours)
+        {
+            // The review found the clamp undone one line later: DateTimeOffset(DateTime, TimeSpan)
+            // throws when the instant less the offset leaves the calendar, so a clamped MinValue threw
+            // for every clock east of UTC and a clamped MaxValue for every clock west of it. The old
+            // test picked the two arms that cannot throw - a DateTime column, and one negative offset.
+            var stamp = new DateTimeOffset(2026, 9, 6, 12, 0, 0, TimeSpan.FromHours(hours));
+
+            var far = new FastGridRelativeDate(FastGridRelativeDateAnchor.Today, int.MinValue,
+                FastGridRelativeDateUnit.Days, endOfDay: false);
+            var further = new FastGridRelativeDate(FastGridRelativeDateAnchor.Today, int.MaxValue,
+                FastGridRelativeDateUnit.Years, endOfDay: true);
+
+            // The assertion is that neither throws; the instants themselves are whatever the calendar's
+            // edge is at this offset, and pinning those would be pinning the clamp's arithmetic twice.
+            Assert.IsType<DateTimeOffset>(far.Resolve(typeof(DateTimeOffset), stamp));
+            Assert.IsType<DateTimeOffset>(further.Resolve(typeof(DateTimeOffset), stamp));
         }
 
         [Fact]
@@ -205,6 +231,10 @@ namespace Radzen.FastGrid.Tests
 
         // ---- the filter-level rule -------------------------------------------------------------
 
+        static FastGridFilter Range(string lower, string upper) =>
+            new FastGridFilter(new FastGridFilterCondition(FastGridFilterOperator.Between,
+                new object?[] { Parse(lower), Parse(upper) }));
+
         static FastGridFilter Between(object lower, object upper) =>
             new FastGridFilter(new FastGridFilterCondition(FastGridFilterOperator.Between,
                 new[] { lower, upper }));
@@ -223,9 +253,18 @@ namespace Radzen.FastGrid.Tests
         [Fact]
         public void ANonDateColumnIsNotEvenWalked()
         {
+            // A token on an int column stays a token rather than becoming a DateTime in an int's slot.
+            // The first assertion alone could not tell the guard from walking and finding nothing, which
+            // the review pointed out - and the guard is what the allocation gate rests on.
             var numbers = Between(1, 5);
 
             Assert.Same(numbers, FilterResolution.Resolve(numbers, typeof(int), Now));
+
+            var confused = Between(Parse("today"), 5);
+
+            Assert.Same(confused, FilterResolution.Resolve(confused, typeof(int), Now));
+            Assert.IsType<FastGridRelativeDate>(
+                FilterResolution.Resolve(confused, typeof(int), Now).First.Value);
         }
 
         [Fact]
@@ -274,12 +313,19 @@ namespace Radzen.FastGrid.Tests
         [Fact]
         public void AnInIsLeftAlone()
         {
-            // Its single value is a typed list, and a relative date in a set of specific days says
-            // nothing a range does not say better. Never entered, so never resolved.
+            // A list of dates has no token in it to find, so this half passes whether or not the arity
+            // guard exists - which the review pointed out. The second half is the guard: a token sitting
+            // directly in an In's values is left as one.
             var picked = new FastGridFilter(new FastGridFilterCondition(FastGridFilterOperator.In,
                 new object?[] { new List<DateTime> { new DateTime(2019, 5, 4) } }));
 
             Assert.Same(picked, FilterResolution.Resolve(picked, typeof(DateTime), Now));
+
+            var declared = new FastGridFilter(
+                new FastGridFilterCondition(FastGridFilterOperator.In, Parse("today")));
+
+            Assert.Same(declared, FilterResolution.Resolve(declared, typeof(DateTime), Now));
+            Assert.IsType<FastGridRelativeDate>(declared.First.Value);
         }
 
         [Fact]
@@ -289,6 +335,80 @@ namespace Radzen.FastGrid.Tests
             Assert.False(FilterResolution.IsRelative(
                 Between(new DateTime(2019, 1, 1), new DateTime(2020, 1, 1))));
             Assert.True(FilterResolution.IsRelative(Between(Parse("today-6d"), Parse("today@end"))));
+        }
+
+        [Fact]
+        public void ACachedTotalOutlivesTheDayOnlyWhenSomethingIsRelative()
+        {
+            // The rule behind DropStaleTotal, pulled out of the virtualized provider so a test can reach
+            // it at all. The mutation loop is why it is out here: with the comparison inline, changing it
+            // left 990 tests passing, because bUnit never runs Virtualize's items provider.
+            using var bench = new FilterBench();
+
+            var absolute = bench.Hired(new FastGridFilter(new FastGridFilterCondition(
+                FastGridFilterOperator.GreaterThanOrEquals, new DateTime(2026, 9, 1))));
+            var relative = bench.Hired(Range("today-6d", "today@end"));
+
+            var yesterday = Now.Date.AddDays(-1);
+
+            // The day has not turned: nothing can have been outlived.
+            Assert.False(Composition.OutlivedTheDay(new[] { relative }, Now.Date, Now));
+
+            // It has turned, but nothing on the grid reads a clock.
+            Assert.False(Composition.OutlivedTheDay(new[] { absolute }, yesterday, Now));
+
+            // It has turned and something does.
+            Assert.True(Composition.OutlivedTheDay(new[] { relative }, yesterday, Now));
+            Assert.True(Composition.OutlivedTheDay(new[] { absolute, relative }, yesterday, Now));
+        }
+
+        [Fact]
+        public void TheQueryableRouteResolvesWithoutTheDescriptorsBeingBuilt()
+        {
+            // Composition.Filter is reached directly by an async source's page query and by the count
+            // beside it - neither of which builds a descriptor first. The mutation loop found that the
+            // resolve call there was covered only through the render path, which does build them.
+            using var bench = new FilterBench();
+
+            var column = bench.Hired(Range("today-6d", "today@end"));
+
+            var people = new[]
+            {
+                new Person { Id = 1, Hired = new DateTime(2026, 9, 6, 9, 0, 0) },
+                new Person { Id = 2, Hired = new DateTime(2026, 8, 31) },
+                new Person { Id = 3, Hired = new DateTime(2026, 8, 30) },
+            };
+
+            var options = new CompositionOptions(true, FilterCaseSensitivity.Default,
+                LogicalFilterOperator.And, Now);
+
+            var kept = Composition.Filter(new[] { column }, people.AsQueryable(), options)
+                .Select(p => p.Id).ToArray();
+
+            Assert.Equal(new[] { 1, 2 }, kept);
+        }
+
+        /// <summary>A renderer and a grid, so a column can be born and given a filter.</summary>
+        sealed class FilterBench : IDisposable
+        {
+            readonly Bunit.TestContext ctx = new Bunit.TestContext();
+            readonly RadzenFastGrid<Person> grid = new RadzenFastGrid<Person>();
+
+            internal ColumnBase<Person> Hired(FastGridFilter filter)
+            {
+                var column = ctx.RenderComponent<PropertyColumn<Person, DateTime>>(p =>
+                {
+                    p.AddCascadingValue(grid);
+                    p.Add(c => c.Property, (System.Linq.Expressions.Expression<Func<Person, DateTime>>)
+                        (x => x.Hired));
+                }).Instance;
+
+                column.SetFilter(filter, text: null);
+
+                return column;
+            }
+
+            public void Dispose() => ctx.Dispose();
         }
 
         // ---- storage ---------------------------------------------------------------------------

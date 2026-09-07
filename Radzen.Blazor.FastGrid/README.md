@@ -797,6 +797,16 @@ A relative date only applies to a date column (`DateTime`, `DateTimeOffset`, `Da
 nullable forms). A string column filtered to the literal text `today-6d` stores and restores that
 string.
 
+**The filter box reads the same words.** Typing `today-6d` into a date column's filter box sets a
+relative filter, the same one the text form describes - so what a settings blob stores and what the box
+accepts are one vocabulary.
+
+Two things a relative date does not reach. A check-box list (`In`/`NotIn`) picks specific values and is
+not what a single instant is for; a token stored in one is dropped on restore. And on the OData wire a
+`DateTime` is formatted to the millisecond, so `today@end` goes out as `23:59:59.000` and the last second
+of the day is lost - a range against an OData source is safest written to the start of the next day
+instead.
+
 ## Choosing which columns are drawn
 
 `AllowColumnPicking` puts a drop-down above the grid listing the columns, ticked for the ones on screen.

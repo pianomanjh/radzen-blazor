@@ -7803,7 +7803,8 @@ The parameter is not a convenience. It is the only answer available to **Blazor 
 different zone from its user** - the app hands over a provider carrying the user's zone and the grid asks
 no further questions - and it is what makes the rule testable at all. §9's protocol has nowhere to put a
 test of "yesterday" against a real clock; with a fixed provider it is an ordinary pure-function test at
-the layer the rule lives at, which is what process rule 4 asks for.
+the layer the rule lives at - §33's review finding, that **a test one layer above a rule is not a
+test of the rule**, which is what `FastGridFilterModelTests` exists for.
 
 `TimeProvider` rather than a hand-rolled clock interface because it is the framework's own abstraction
 since .NET 8, this component targets net9.0 and net10.0, and inventing a second one would be a seam with
@@ -7838,7 +7839,7 @@ identical at one row count.
 ### How it is verified
 
 - **The grammar and the resolution as pure rules** in `FastGridFilterModelTests`, against a fixed
-  `TimeProvider`. Process rule 4: `today-6d@end` is a rule about a token, and a test that reaches it
+  `TimeProvider`. §33's finding again: `today-6d@end` is a rule about a token, and a test that reaches it
   through a rendered grid is a test of the grid.
 - **A settings round trip through real `System.Text.Json`**, proving a token comes back a token and
   still means the reading day's *today* rather than the writing day's.
@@ -7910,12 +7911,100 @@ now makes costs nothing measurable.
 Times are quoted from a short job and are noise by §9's own rule; the time half of the gate is **not
 measured to that standard** and remains owed, as it did in §33.
 
+### What the review found that the build had not
+
+Two reviewers in parallel. Between them, two faults that put wrong rows on the screen, one that crashes,
+and three claims of this section that were not true.
+
+**The filter box showed a token and committing it deleted the filter.** The `Simple` box renders the
+first condition's value, so a relative filter showed `today-6d` - the lower bound only, with `today@end`
+invisible. Worse, the commit path compared the text it was handed against `AppliedFilterText`, which is
+null for every filter that did not come from a box. So a blur over an untouched box re-applied the box's
+own text as a new filter, and `today-6d` does not parse as a date, so the filter was **cleared**. With
+`FilterAsYouType` on - the default - a keystroke and a backspace did it.
+
+The destructive half is §33's, not this section's: an absolute `Between 200 300` showed `200`, and the
+same blur committed it as `Equals 200`. §34 only turned a silent narrowing into a silent deletion, which
+is how it was found. Fixed at the family rather than the symptom: `ColumnBase.FilterBoxText` is the one
+place that says what the box shows, and the commit compares against *that* rather than only against what
+a box last put there. It still shows one value of a compound, which is recorded rather than fixed - a box
+holds one value and a range has two.
+
+And **the third reader**. Storage learned to read `today-6d` and the editor did not, so the same six
+characters were a relative date coming out of a settings blob and nothing at all coming out of the box
+beside it. `FilterValueFromText` reads tokens now. *"The two vocabularies cannot collide"* was argued
+about storage, and there were three readers.
+
+**The clamp was undone one line later.** `Day` catches an out-of-calendar offset and clamps, under a
+comment committing to never putting an exception inside `BuildRenderTree`. Then
+`new DateTimeOffset(instant, now.Offset)` throws when the instant less the offset leaves the calendar -
+so a clamped `MinValue` threw for every clock east of UTC and a clamped `MaxValue` for every clock west
+of it. §10b's finding inside a single method. The test that "covered" it picked exactly the two arms that
+cannot throw: a `DateTime` column, and one negative offset.
+
+**A window fetch could straddle its own stamp.** Making the stamp a field fixed the double *read*; it did
+not fix the double *stamp*. `ProvideRows` composes the window, awaits the provider, then counts - and a
+draw pass or a parameter set landing inside that await restamps the field, so the count would be taken at
+a newer instant than the rows it counts. The options are taken into a local now and held across the await.
+
+**A cached row total outlives the day it was counted on.** `virtualTotal` is nulled in exactly one place,
+the reload funnel. Before this section a filter's answer could not change without going through it; a
+relative one can, so a virtualized grid left open across midnight serves the new day's window against the
+old day's count - a scrollbar and an `aria-rowcount` that stay wrong until something reloads. This section
+named that failure and put it in `ActiveFilter`; the carrier is an integer.
+
+**Three claims corrected.** *"A token never enters an `In`"* is not enforced by the model - it is enforced
+at storage, and a token declared into an `In` from markup behaves as any other non-sequence value in one
+does. *"Process rule 4"* was cited three times and does not exist; the rule meant is §33's review finding,
+that a test one layer above a rule is not a test of the rule. And the corrections to §33's example and
+§31's list are in the *design* commit, not "the commit that makes this true" as written.
+
+**Smaller, and all real:** the resolve rule was spelled twice - `Filters` inlined the loop instead of
+calling `Resolve`, under a remark already claiming the caller it did not have; `IsRelative` had no
+production caller at all, under a comment naming editors ④ has not built; `TryParse` was missing
+`[NotNullWhen(true)]` on a public API in a library that ships at zero warnings; and `Clock` reads back
+null while documenting a default.
+
+**The mutation loop: sixteen of twenty-six the first time, twenty-six of twenty-seven the third.** Two of
+the survivors were code that could not fail - an explicit storage arm calling the same `ToString` the
+fallback arm reaches, and a digit loop in front of a `NumberStyles.None` that already refused everything
+it did. Both deleted; §33's review named that shape in `AnyValue` and it grew back here. Two more were
+`StampFilterClock` calls redundant with the other three, and a lazy guard against an unset clock that
+guards nothing - a composition reads the columns, and no column has registered until a render has run.
+Deleting the fourth stamp made the third *fail* under mutation, which is the loop earning its keep: four
+sites covering for each other tested none of them.
+
+### What is still owed
+
+- **`ProvideRows`' stamp has no test that can see it.** It is the one mutation of twenty-seven that still
+  survives. bUnit does not run `Virtualize`'s items provider, so every rule that lives only inside a
+  window fetch - this stamp and the straddle it prevents - is covered by reading the code. The stale-total
+  rule beside it was moved to `Composition.OutlivedTheDay` for exactly this reason and is now tested; the
+  stamp cannot be moved anywhere a test can reach.
+- **The box shows one value of a compound.** §33's, now named: a `Between` and a two-condition column both
+  render their first value into a control that holds one. Committing it no longer destroys anything, and
+  the box still misrepresents what it shows. ④ is where a control that can hold a range lives.
+- **A compound with a `Between` half reaches `LoadDataArgs.Filters` as nothing.** Three comparisons
+  overflow a `FilterDescriptor`, so §33 leaves the column out rather than flattening it - and a handler
+  reading only the structured half returns every row. §33's hole, and §34's menu will write exactly that
+  shape.
+- **The OData string truncates `today@end` to the second.** `QueryableExtension` formats a `DateTime` with
+  `.fff`, so 23:59:59.9999999 goes out as 23:59:59.000 and the last second of the day is lost on the wire.
+  Upstream's formatter, on the seam this section promised not to touch - and the same boundary loss
+  `@end` exists to prevent, one layer out.
+- **The `Unspecified` argument is right for the wrong reason.** This section said a `Local` instant would
+  render an offset a server has to parse; `QueryableExtension` writes a literal `Z` whatever the `Kind`,
+  so the local wall clock goes out labelled UTC either way. The choice is harmless and probably right;
+  the reason given for it is not what the code does.
+
 ### Where this could still be wrong
 
 - **`ActiveFilter` is a second thing to keep in step**, and the failure mode is a stale resolution
   surviving into a composition it does not belong to. The refresh is one place; the argument that one
   place is enough is an argument about the grid's composition lifecycle, and that lifecycle is the part
-  of this component §23 found hardest to state.
+  of this component §23 found hardest to state. *The review found the staleness and it was not here: the
+  carrier was `virtualTotal`, a cached integer. The instinct was right and the object named was wrong,
+  which is worth keeping.*
 - **The preset is not in the model**, so a stored `Between today-6d today@end` cannot be told from a
   hand-authored one, and ④ has to recognise presets by their shape to show them as presets. That is a
   cost deliberately pushed into the menu, and it may turn out to want a token that names the preset

@@ -103,8 +103,8 @@ namespace Radzen.FastGrid
         [Parameter] public FilterCaseSensitivity FilterCaseSensitivity { get; set; }
 
         /// <summary>
-        /// What "today" means, for the relative dates a filter can be written in - §34. The system clock
-        /// by default.
+        /// What "today" means, for the relative dates a filter can be written in - §34. Null, which is
+        /// the default, means <see cref="System.TimeProvider.System" />.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -116,7 +116,8 @@ namespace Radzen.FastGrid
         /// <para>
         /// It is also what makes a relative date testable at all. §9's protocol has nowhere to put a
         /// test of <em>yesterday</em> against a real clock; against a fixed provider it is an ordinary
-        /// test of a pure rule, which is the layer process rule 4 says a rule has to be tested at.
+        /// test of a pure rule - and §33's review is why that matters: a test one layer above a rule is
+        /// not a test of the rule.
         /// </para>
         /// <para>
         /// <see cref="System.TimeProvider" /> rather than a clock interface of this grid's own, because
@@ -132,12 +133,20 @@ namespace Radzen.FastGrid
         /// Reads the clock once, for the composition about to be built.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Called at the head of each operation that composes: the reload funnel, the virtualized
         /// provider, and the start of a draw pass. Not at every place a filter is read - two reads
         /// within one composition would then land on two instants, and a range whose bounds straddle
         /// midnight excludes its own start. The one composition that deliberately reads a *previous*
         /// stamp is the public <see cref="Filters" />, which reports what the grid is filtering by now
         /// rather than what it would filter by if asked again.
+        /// </para>
+        /// <para>
+        /// Nothing has to guard against an unset stamp. A fourth call stood in <c>OnParametersSetAsync</c>
+        /// and then a lazy one in <see cref="Options" />, and the mutation loop could not fail either -
+        /// they were redundant with these three. They also could not matter: a composition reads the
+        /// columns, and no column has registered until a render has run, which is a draw pass.
+        /// </para>
         /// </remarks>
         void StampFilterClock() => filterNow = (Clock ?? TimeProvider.System).GetLocalNow();
 
@@ -212,7 +221,13 @@ namespace Radzen.FastGrid
         /// </summary>
         Task ApplyTypedFilter(ColumnBase<TItem> column, string? text)
         {
-            if (string.Equals(column.AppliedFilterText, text, StringComparison.Ordinal))
+            // Against what the box is showing, not only against what a box last put there. The two are
+            // the same for a filter that came from typing; for every other filter AppliedFilterText is
+            // null, so a blur over an untouched box used to re-apply the box's own text as a new filter
+            // and narrow a Between to an Equals on its lower bound. §34 turned that into a filter
+            // *cleared*, since a relative token does not parse as a date - which is how it was found.
+            if (string.Equals(column.AppliedFilterText ?? column.FilterBoxText, text,
+                StringComparison.Ordinal))
             {
                 return Task.CompletedTask;
             }
@@ -251,6 +266,9 @@ namespace Radzen.FastGrid
         // a reload does - so it is counted once per query rather than once per window. Without this an
         // endless scroll runs a COUNT(*) for every window it fetches.
         int? virtualTotal;
+
+        // The day virtualTotal was counted on, so DropStaleTotal can tell whether it still answers.
+        DateTime countedOn;
 
         /// <summary>
         /// Whether the grid is actually paging. One rule, in one place: virtualization and paging solve
@@ -317,9 +335,6 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override Task OnParametersSetAsync()
         {
-            // So that nothing composes against an unset clock. Every later composition restamps.
-            StampFilterClock();
-
             // Noted here and applied as the table draws: sorts and filters name columns, and no column
             // has registered yet on the parameter set that precedes the first render.
             // Not the settings this grid just produced: that is its own state coming back, and applying
@@ -503,8 +518,16 @@ namespace Radzen.FastGrid
             var top = request.Count > 0 ? request.Count : PageSize;
 
             // A window is fetched without going through the reload funnel, and this method reads the
-            // composition twice - once for the rows and once for the total. One stamp for both.
+            // composition twice - once for the rows and once for the total. One stamp for both, and the
+            // options are taken into a local rather than read twice off the property: a virtualized grid
+            // re-renders freely while its provider is in flight, and a draw pass or a parameter set
+            // landing inside the await below restamps the field. The count would then have been taken at
+            // a newer instant than the rows it is counting - the window is last week's and the scrollbar
+            // is this week's, once a day, with no reproduction.
             StampFilterClock();
+            DropStaleTotal();
+
+            var options = Options;
 
             if (LoadData.HasDelegate)
             {
@@ -526,7 +549,7 @@ namespace Radzen.FastGrid
 
             if (TryGetAsyncSource(out var async, out var queryable))
             {
-                var source = (IQueryable<TItem>)Compose(queryable);
+                var source = (IQueryable<TItem>)Compose(queryable, options);
 
                 try
                 {
@@ -542,8 +565,10 @@ namespace Radzen.FastGrid
                         // aggregate is what a provider is entitled to refuse to translate - SQL Server
                         // rejects it outright. LoadPageAsync counts the filtered query for this reason
                         // and this path was counting the sorted one.
-                        virtualTotal = await async.CountAsync(Composition.Filter(columns, queryable, Options),
-                            request.CancellationToken);
+                        virtualTotal = await async.CountAsync(
+                            Composition.Filter(columns, queryable, options), request.CancellationToken);
+
+                        countedOn = options.Now.Date;
                     }
 
                     // Awaiting a cancelled token throws, but a query that had already finished does
@@ -568,11 +593,15 @@ namespace Radzen.FastGrid
                 }
             }
 
-            var rows = Compose(Data ?? Enumerable.Empty<TItem>());
+            var rows = Compose(Data ?? Enumerable.Empty<TItem>(), options);
 
             // Same reason as the query above: counting a filtered in-memory sequence walks it, and
             // scrolling must not walk the whole source once per window.
-            virtualTotal ??= TotalCount();
+            if (virtualTotal is null)
+            {
+                virtualTotal = TotalCount();
+                countedOn = options.Now.Date;
+            }
 
             // Materialized, not handed over lazily: Virtualize keeps the result and re-enumerates it on
             // every render, so a deferred filter-and-sort would be re-run over the whole source each
@@ -1185,7 +1214,7 @@ namespace Radzen.FastGrid
         /// filtered, and never built unless something asks.
         /// </summary>
         public IReadOnlyList<CompositeFilterDescriptor> Filters =>
-            Composition.Filters(columns, filterNow)
+            Composition.Filters(columns, Options.Now)
                 ?? (IReadOnlyList<CompositeFilterDescriptor>)Array.Empty<CompositeFilterDescriptor>();
 
         /// <summary>
@@ -1245,7 +1274,8 @@ namespace Radzen.FastGrid
         /// three arguments repeated at five call sites, and free to build: three fields on the stack.
         /// </summary>
         CompositionOptions Options =>
-            new CompositionOptions(AllowFiltering, FilterCaseSensitivity, LogicalFilterOperator, filterNow);
+            new CompositionOptions(AllowFiltering, FilterCaseSensitivity, LogicalFilterOperator,
+                filterNow);
 
         /// <summary>
         /// What has already been worked out for the render in progress. See <see cref="DrawPass{TItem}" />
@@ -1266,7 +1296,7 @@ namespace Radzen.FastGrid
             // in-memory route then filters by - so it gets its own stamp. See StampFilterClock.
             StampFilterClock();
 
-            pass = DrawPass<TItem>.Begin(AllowFiltering ? Composition.Filters(columns, filterNow) : null);
+            pass = DrawPass<TItem>.Begin(AllowFiltering ? Composition.Filters(columns, Options.Now) : null);
         }
 
         void EndDrawing() => pass = default;
@@ -1849,6 +1879,32 @@ namespace Radzen.FastGrid
         /// makes the flash read as "no records" rather than as "not yet". Marked only where a load is
         /// known to follow: a flag raised for a load that never runs is a scrim that never lifts.
         /// </remarks>
+        /// <summary>
+        /// Forgets a cached row total that a relative filter has outlived.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Before §34 a filter's answer could not change without going through the reload funnel, which
+        /// nulls <see cref="virtualTotal" />. A relative one can: a virtualized grid left open across
+        /// midnight serves its next window at the new instant while the cached count still holds the
+        /// previous day's - a scrollbar and an <c>aria-rowcount</c> that stay wrong until something
+        /// reloads. §34 named this failure and located it in <c>ActiveFilter</c>; the carrier is a
+        /// cached integer.
+        /// </para>
+        /// <para>
+        /// By the <em>day</em>, not by the stamp. Every anchor is day-granular and <c>@end</c> stays
+        /// inside its day, so a token's answer can only change when the local date does - and comparing
+        /// stamps instead would recount on every window, which is a query per scroll.
+        /// </para>
+        /// </remarks>
+        void DropStaleTotal()
+        {
+            if (virtualTotal is not null && Composition.OutlivedTheDay(columns, countedOn, filterNow))
+            {
+                virtualTotal = null;
+            }
+        }
+
         void OweLoad()
         {
             // Whatever is in flight was composed from a column list this grid is about to compose again
@@ -1918,7 +1974,7 @@ namespace Radzen.FastGrid
 
         async Task InvokeLoadDataAsync(int? start, int? count)
         {
-            var filters = Composition.Filters(columns, filterNow);
+            var filters = Composition.Filters(columns, Options.Now);
 
             var args = new LoadDataArgs
             {
@@ -2123,9 +2179,15 @@ namespace Radzen.FastGrid
         /// Filters and sorts the source, without paging, through <see cref="Composition" /> - and
         /// records which of its two routes ran.
         /// </summary>
-        IEnumerable<TItem> Compose(IEnumerable<TItem> data)
+        IEnumerable<TItem> Compose(IEnumerable<TItem> data) => Compose(data, Options);
+
+        /// <summary>
+        /// The same, under options a caller has already taken - so that a caller composing twice does it
+        /// under one stamp. See <see cref="ProvideRows" />, which is the only one that does.
+        /// </summary>
+        IEnumerable<TItem> Compose(IEnumerable<TItem> data, CompositionOptions options)
         {
-            var composed = Composition.Compose(columns, sorts, data, Options, ref pass);
+            var composed = Composition.Compose(columns, sorts, data, options, ref pass);
 
             ComposedInMemory = composed.InMemory;
 

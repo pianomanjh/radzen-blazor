@@ -813,6 +813,28 @@ namespace Radzen.FastGrid
         internal FastGridFilterCondition? FirstCondition => CurrentFilter?.First;
 
         /// <summary>
+        /// What the <c>Simple</c> filter box shows for this column, or null when there is nothing to
+        /// show.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// One place, because it was two and they were compared against each other. The box rendered
+        /// <c>FirstCondition?.Value</c> and the commit path compared the text it received against
+        /// <see cref="AppliedFilterText" /> - which is null for every filter that did not come from a
+        /// box. So merely focusing and leaving an untouched box raised <c>onchange</c> with the box's
+        /// own text, failed the comparison, and re-applied it as a filter: a <c>Between</c> narrowed
+        /// silently to an <c>Equals</c> on its lower bound. §34 made that worse rather than causing it -
+        /// a relative token does not parse as a date, so the same blur cleared the filter outright.
+        /// </para>
+        /// <para>
+        /// It still shows only the first value of a compound, which is §33's and is recorded rather than
+        /// fixed: a box holds one value and a range has two. What is fixed is that showing it no longer
+        /// destroys it.
+        /// </para>
+        /// </remarks>
+        internal string? FilterBoxText => FirstCondition?.Value?.ToString();
+
+        /// <summary>
         /// The dotted path this column filters by. Defaults to <see cref="SortPath" />; a column with
         /// no path cannot be filtered, for the same reason it cannot be sorted.
         /// </summary>
@@ -955,6 +977,16 @@ namespace Radzen.FastGrid
             // date, and a conversion would have no idea what to do with the list.
             var declared = EffectiveFilterType;
             var type = Nullable.GetUnderlyingType(declared) ?? declared;
+
+            // §34, and the reader it forgot. Storage learned to read `today-6d` and the box did not, so
+            // the same six characters were a relative date coming out of a settings blob and nothing at
+            // all coming out of the box beside it - which is a collision between the two vocabularies
+            // after all, in the one place the section did not look for one.
+            if (FastGridRelativeDate.AppliesTo(declared)
+                && FastGridRelativeDate.TryParse(text, out var relative))
+            {
+                return relative;
+            }
 
             if (type == typeof(string) || type == typeof(object))
             {
@@ -1438,6 +1470,7 @@ namespace Radzen.FastGrid
                 declaredSecondOperator = SecondFilterOperator;
                 declaredLogicalOperator = LogicalFilterOperator;
                 CurrentFilter = DeclaredFilter();
+                activeFilter = null;
 
                 // Only here, and deliberately. A declared sort is the grid's starting state, not a live
                 // binding: honouring later changes would mean re-sorting - and, on the async path,
@@ -1460,6 +1493,11 @@ namespace Radzen.FastGrid
             // The declared value is the authority whenever it changes, and the grid's own filtering owns
             // it in between. Tracking what was declared separately keeps this out of the parameter
             // itself, which a component must not assign to.
+            //
+            // Both writes below drop the resolution beside the filter, as SetFilter does. Not reachable
+            // today - every read of ActiveFilter is behind HasFilter and every route resolves before it
+            // reads - but a rule applied to two of three writes to CurrentFilter is §10b's finding
+            // waiting for a fourth caller.
             // The declaration wins whenever it changes, and takes the picker's override with it - the
             // same rule the filter value follows, for the same reason: markup that says Visible="false"
             // is not asking to be overruled by what someone ticked before.
@@ -1487,6 +1525,7 @@ namespace Radzen.FastGrid
                 declaredLogicalOperator = LogicalFilterOperator;
 
                 CurrentFilter = DeclaredFilter();
+                activeFilter = null;
                 AppliedFilterText = null;
                 AppliedSecondFilterText = null;
             }

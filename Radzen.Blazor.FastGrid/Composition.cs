@@ -79,6 +79,8 @@ namespace Radzen.FastGrid
         {
             List<CompositeFilterDescriptor>? filters = null;
 
+            Resolve(columns, now);
+
             for (var i = 0; i < columns.Count; i++)
             {
                 var column = columns[i];
@@ -87,8 +89,6 @@ namespace Radzen.FastGrid
                 {
                     continue;
                 }
-
-                column.ResolveFilter(now);
 
                 (filters ??= new List<CompositeFilterDescriptor>()).Add(DescriptorFor(column));
             }
@@ -104,6 +104,12 @@ namespace Radzen.FastGrid
         /// descriptors all begin by asking the columns what they are filtering by, and this is that
         /// question asked as of a moment. A filter holding no tokens resolves to itself, so a grid with
         /// no relative filter anywhere pays a null check per filtered column and nothing else.
+        /// <para>
+        /// All three entries call this - <see cref="Filter{TItem}" />, <c>ComposeInMemory</c> and
+        /// <see cref="Filters{TItem}" />. The descriptors path spelled the loop out again instead until
+        /// the review found it, which left one rule in two places and this remark already claiming the
+        /// third caller it did not have.
+        /// </para>
         /// </remarks>
         static void Resolve<TItem>(IReadOnlyList<ColumnBase<TItem>> columns, DateTimeOffset now)
         {
@@ -140,6 +146,41 @@ namespace Radzen.FastGrid
         internal static List<CompositeFilterDescriptor>? DeclaredFilters<TItem>(
             IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options) =>
             options.AllowFiltering ? Filters(columns, options.Now) : null;
+
+        /// <summary>
+        /// Whether a row total counted on <paramref name="countedOn" /> can have been outlived by a
+        /// relative filter as of <paramref name="now" />.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Here rather than inline in the grid because it is a rule, and a rule inlined in a virtualized
+        /// provider is a rule no test can reach - the mutation loop proved that by changing it and
+        /// watching 990 tests pass. What it guards is in <c>DropStaleTotal</c>.
+        /// </para>
+        /// <para>
+        /// By the <em>day</em>, not by the stamp. Every anchor is day-granular and <c>@end</c> stays
+        /// inside its day, so a token's answer can only change when the local date does - and comparing
+        /// stamps instead would recount on every window, which is a query per scroll.
+        /// </para>
+        /// </remarks>
+        internal static bool OutlivedTheDay<TItem>(IReadOnlyList<ColumnBase<TItem>> columns,
+            DateTime countedOn, DateTimeOffset now)
+        {
+            if (countedOn == now.Date)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < columns.Count; i++)
+            {
+                if (columns[i].HasFilter && FilterResolution.IsRelative(columns[i].CurrentFilter))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
         /// <remarks>

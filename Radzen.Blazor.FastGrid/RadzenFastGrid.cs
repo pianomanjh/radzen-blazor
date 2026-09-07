@@ -1818,20 +1818,24 @@ namespace Radzen.FastGrid
             builder.AddAttribute(62, "class", "rz-cell-filter-label");
             builder.AddAttribute(63, "style", "height:35px; width:100%;");
 
+            // Once per render rather than three times: it is a ToString, and the aria-label, the value
+            // and the binder's baseline all want the same one.
+            var shown = column.FilterBoxText;
+
             builder.OpenElement(64, "input");
             builder.AddAttribute(65, "type", "text");
             builder.AddAttribute(66, "autocomplete", "off");
             builder.AddAttribute(67, "class", "rz-textbox");
             builder.AddAttribute(68, "style", "width: 100%;");
             builder.AddAttribute(69, "aria-label",
-                column.HeaderText + FilterValueAriaLabel + column.FirstCondition?.Value);
-            builder.AddAttribute(70, "value", column.FirstCondition?.Value);
+                column.HeaderText + FilterValueAriaLabel + shown);
+            builder.AddAttribute(70, "value", shown);
 
             // onchange is bound whether or not the filter applies as you type, because it is what a
             // blur and an Enter raise. Typing adds oninput on top of it rather than replacing it, so
             // turning the feature on cannot cost the box the event that commits it.
             builder.AddAttribute(71, "onchange", EventCallback.Factory.CreateBinder<string?>(this,
-                value => OnFilterCommitted(column, value), column.FirstCondition?.Value?.ToString()));
+                value => OnFilterCommitted(column, value), shown));
 
             if (FilterAsYouType)
             {

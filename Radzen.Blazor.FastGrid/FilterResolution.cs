@@ -51,10 +51,14 @@ namespace Radzen.FastGrid
         /// are what §34 promises not to disturb.
         /// </summary>
         /// <remarks>
-        /// An <c>In</c> is left alone. Its single value is a typed list, and a relative date in a set of
-        /// specific days says nothing a range does not say better - so a token never enters one, which
-        /// is also why <see cref="FilterValueText" /> refuses to read one back into a list that has to
-        /// be typed to <c>DateTime</c> to be translatable.
+        /// An <c>In</c> is left alone, and the review made that sentence honest. It used to read "a token
+        /// never enters one", which is not something this method enforces - it is enforced at
+        /// <em>storage</em>, where <see cref="FilterValueText.To" /> refuses to read a token back into a
+        /// list that has to be typed to <c>DateTime</c> for a provider to translate <c>Contains</c>. A
+        /// token declared into an <c>In</c> from markup is not resolved here and is not refused either;
+        /// it behaves as any other non-sequence value in an <c>In</c> does, which §32 recorded as
+        /// matching everything. A relative date is a single instant and a set of specific days is not
+        /// what one is for.
         /// </remarks>
         static FastGridFilterCondition Resolve(FastGridFilterCondition condition, Type declared,
             DateTimeOffset now)
@@ -93,7 +97,10 @@ namespace Radzen.FastGrid
 
         /// <summary>Whether a filter would read differently at a different moment.</summary>
         /// <remarks>
-        /// Asked by the editors and by the tests, not by the composition - which finds out by resolving.
+        /// Asked by the grid's <c>DropStaleTotal</c>, which has to know whether a cached row count can
+        /// have outlived the day it was counted on. Not asked by the composition, which finds out by
+        /// resolving. It had no caller at all when the review found it, under a comment naming editors
+        /// that ④ has not built - which is the shape §33's review called out in <c>AnyValue</c>.
         /// </remarks>
         internal static bool IsRelative(FastGridFilter? filter) =>
             filter is not null && (IsRelative(filter.First) || IsRelative(filter.Second));

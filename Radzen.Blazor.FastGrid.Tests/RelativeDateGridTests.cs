@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using AngleSharp.Dom;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Radzen.Blazor;
@@ -187,6 +188,15 @@ namespace Radzen.FastGrid.Tests
             var column = HiredColumn(cut);
 
             Assert.Same(column.CurrentFilter, column.ActiveFilter);
+
+            // The second half is what stops the first being vacuous, which the review pointed out:
+            // ActiveFilter falls back to CurrentFilter, so `Same` passes just as well against a grid
+            // that never resolves anything at all. A token in the same place must not be Same.
+            Apply(cut, Range("today-6d", "today@end"));
+
+            column = HiredColumn(cut);
+
+            Assert.NotSame(column.CurrentFilter, column.ActiveFilter);
         }
 
         [Fact]
@@ -220,6 +230,123 @@ namespace Radzen.FastGrid.Tests
             var column = HiredColumn(restored);
 
             Assert.IsType<FastGridRelativeDate>(column.CurrentFilter!.First.Value);
+        }
+
+        static IElement FilterBox(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
+            cut.FindAll("thead tr")[1].QuerySelectorAll("input")[1];
+
+        [Fact]
+        public void LeavingTheFilterBoxUntouchedDoesNotDestroyTheFilter()
+        {
+            // The review measured this one. The box renders the first condition's value, so a relative
+            // filter showed `today-6d`; the commit path compared what it was handed against
+            // AppliedFilterText, which is null for every filter that did not come from a box. So a blur
+            // - or, with FilterAsYouType on, a keystroke and a backspace - re-applied the box's own text
+            // as a new filter, and `today-6d` did not parse as a date, so the filter was cleared.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, new FixedClock(Now));
+
+            Apply(cut, Range("today-6d", "today@end"));
+
+            var box = FilterBox(cut);
+
+            Assert.Equal("today-6d", box.GetAttribute("value"));
+
+            box.Change("today-6d");
+
+            Assert.Equal(new[] { "Today", "Tonight", "FiveAgo", "SixAgo" }, Names(cut));
+            Assert.NotNull(HiredColumn(cut).CurrentFilter);
+        }
+
+        [Fact]
+        public void LeavingAnUntouchedBoxDoesNotNarrowARangeEither()
+        {
+            // The same fault one step back, and it predates §34: an absolute range showed its lower
+            // bound, and the blur committed that as an Equals. §34 only made the same path destroy the
+            // filter outright instead of narrowing it, which is how it was found.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, new FixedClock(Now));
+
+            Apply(cut, new FastGridFilter(new FastGridFilterCondition(FastGridFilterOperator.Between,
+                new object?[] { new DateTime(2026, 8, 31), new DateTime(2026, 9, 7).AddTicks(-1) })));
+
+            Assert.Equal(new[] { "Today", "Tonight", "FiveAgo", "SixAgo" }, Names(cut));
+
+            FilterBox(cut).Change(FilterBox(cut).GetAttribute("value"));
+
+            Assert.Equal(FastGridFilterOperator.Between, HiredColumn(cut).CurrentFilter!.First.Operator);
+            Assert.Equal(new[] { "Today", "Tonight", "FiveAgo", "SixAgo" }, Names(cut));
+        }
+
+        [Fact]
+        public void ADateBoxReadsATokenTypedIntoIt()
+        {
+            // The third reader §34 did not consider. Storage learned `today-6d` and the box did not, so
+            // the same six characters meant a date out of a settings blob and nothing at all out of the
+            // box beside it - which is a collision between the two vocabularies after all.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, new FixedClock(Now));
+
+            FilterBox(cut).Change("today-1d");
+
+            var filter = HiredColumn(cut).CurrentFilter;
+
+            Assert.IsType<FastGridRelativeDate>(filter!.First.Value);
+            Assert.Equal("today-1d", filter.First.Value!.ToString());
+
+            // And the documented cost, pinned where a user meets it: the box's default operator is
+            // Equals, and Equals on a token is midnight exactly - so this matches nothing rather than
+            // yesterday's rows. §31's table calls date Equals "whole day"; that is true of a date the
+            // user picked and false of a token, and the menu in ④ is what resolves it by writing the
+            // Between instead.
+            Assert.Empty(Names(cut));
+        }
+
+        [Fact]
+        public void ANewFilterDoesNotInheritTheOldOnesResolution()
+        {
+            // The mutation loop found this one: dropping the resolution in SetFilter changed nothing,
+            // because every route resolves before it reads. That makes the rule real and untested rather
+            // than unnecessary - read ActiveFilter between the two, which is what a FilterTemplate author
+            // or a pill would do, and a stale resolution is what answers.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, new FixedClock(Now));
+
+            Apply(cut, Range("today-6d", "today@end"));
+
+            var column = HiredColumn(cut);
+            var absolute = new FastGridFilter(new FastGridFilterCondition(
+                FastGridFilterOperator.GreaterThanOrEquals, new DateTime(2026, 9, 1)));
+
+            cut.InvokeAsync(() => column.SetFilter(absolute, text: null)).Wait();
+
+            Assert.Same(absolute, column.ActiveFilter);
+        }
+
+        [Fact]
+        public void ARerenderWithNoReloadReadsTheClockToo()
+        {
+            // The draw pass's stamp. An in-memory grid composes as it draws, so a render that follows a
+            // clock change - a parent re-rendering, a checkbox toggling - has to see the new day without
+            // anything reloading.
+            using var ctx = new TestContext();
+
+            var clock = new FixedClock(Now);
+            var cut = Render(ctx, clock);
+
+            Apply(cut, Range("today-6d", "today@end"));
+
+            Assert.Equal(new[] { "Today", "Tonight", "FiveAgo", "SixAgo" }, Names(cut));
+
+            clock.Advance(TimeSpan.FromDays(1));
+
+            cut.Render();
+
+            Assert.Equal(new[] { "Today", "Tonight", "FiveAgo" }, Names(cut));
         }
 
         [Fact]

@@ -380,6 +380,45 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void AReloadReadsTheClockBeforeTheHandlerRatherThanAtTheNextRender()
+        {
+            // The reload funnel's own stamp, and the only route that can see it. An in-memory grid
+            // composes as it draws, so a draw pass's stamp covers for a missing funnel stamp; a
+            // LoadData grid composes the handler's arguments inside the funnel, before anything is
+            // drawn. Without the stamp there, the handler is told about yesterday.
+            using var ctx = new TestContext();
+
+            var clock = new FixedClock(new DateTimeOffset(2026, 9, 6, 14, 30, 45, TimeSpan.FromHours(-7)));
+
+            var cut = Render(ctx, p =>
+                {
+                    p.Add(h => h.AllowFiltering, true);
+                    p.Add(h => h.Clock, clock);
+                },
+                columns: Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Property<Person, DateTime>(x => x.Hired, uniqueId: "Hired")));
+
+            var column = cut.FindComponents<PropertyColumn<Person, DateTime>>().Single().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Grid!.Filter(column, new FastGridFilter(
+                new FastGridFilterCondition(FastGridFilterOperator.Between, new object?[]
+                {
+                    new FastGridRelativeDate(FastGridRelativeDateAnchor.Today, -6,
+                        FastGridRelativeDateUnit.Days, endOfDay: false),
+                    FastGridRelativeDate.TodayEnd,
+                })))).Wait();
+
+            Assert.Contains("2026-08-31", calls[^1].Filter!, StringComparison.Ordinal);
+
+            clock.Advance(TimeSpan.FromDays(1));
+
+            cut.InvokeAsync(() => cut.Instance.Grid!.Reload()).Wait();
+
+            Assert.Contains("2026-09-01", calls[^1].Filter!, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void CarriesTheFilterAsAnODataStringForAnODataSource()
         {
             using var ctx = new TestContext();

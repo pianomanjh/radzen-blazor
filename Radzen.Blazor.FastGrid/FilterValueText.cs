@@ -27,15 +27,17 @@ namespace Radzen.FastGrid
     internal static class FilterValueText
     {
         /// <summary>One value as the text it is stored as, or null where there is nothing to store.</summary>
+        /// <remarks>
+        /// §34's relative date has no arm of its own and does not need one: it is not
+        /// <see cref="IFormattable" />, so it falls to the last arm, and
+        /// <see cref="FastGridRelativeDate.ToString" /> is where "the canonical text this is stored as"
+        /// is defined. An explicit arm calling the same method stood here until the mutation loop proved
+        /// it could not fail - which is the shape §33's review named in <c>AnyValue</c>.
+        /// </remarks>
         internal static string? From(object? value) => value switch
         {
             null => null,
             string text => text,
-
-            // §34. A token is stored as what it says rather than as what it currently means - the whole
-            // point of it being a value that is read at query time. Its canonical form is lower-case and
-            // has exactly one spelling per instant.
-            FastGridRelativeDate relative => relative.ToString(),
 
             // "O" round-trips; the invariant ToString does not. DateOnly and TimeOnly are here for the
             // same reason and because Convert.ChangeType cannot see them at all - they are not
