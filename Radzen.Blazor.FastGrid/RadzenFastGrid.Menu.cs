@@ -537,7 +537,7 @@ namespace Radzen.FastGrid
         /// <c>FilterMode</c> upstream's and put <c>FilterUI</c> beside it, one layer down.
         /// </para>
         /// </remarks>
-        string OperatorText(FastGridFilterOperator filterOperator) => filterOperator switch
+        internal string OperatorText(FastGridFilterOperator filterOperator) => filterOperator switch
         {
             FastGridFilterOperator.Equals => EqualsText,
             FastGridFilterOperator.NotEquals => NotEqualsText,
@@ -560,7 +560,7 @@ namespace Radzen.FastGrid
         };
 
         /// <summary>What the menu calls a relative-date preset.</summary>
-        string PresetText(FastGridFilterPreset preset) => preset switch
+        internal string PresetText(FastGridFilterPreset preset) => preset switch
         {
             FastGridFilterPreset.Today => TodayFilterText,
             FastGridFilterPreset.Yesterday => YesterdayFilterText,

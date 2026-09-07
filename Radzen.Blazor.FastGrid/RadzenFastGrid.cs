@@ -958,6 +958,11 @@ namespace Radzen.FastGrid
                 RenderPager(builder, 10, captureTopPager ??= p => topPager = (RadzenPager)p);
             }
 
+            // §37's bar, in the 11 to 20 band between the top pager and the scroller - which is where
+            // the placement argument settled, and the one structural thing the section demonstrated
+            // rather than inferred. It writes nothing when nothing is filtered.
+            RenderFilterPills(builder);
+
             // 21, not 20: the top pager's band runs to 20, and the numbers a region writes must ascend
             // in the order it writes them.
             //
@@ -1798,6 +1803,13 @@ namespace Radzen.FastGrid
                 {
                     builder.OpenElement(58, "div");
                     builder.AddAttribute(59, "class", "rz-cell-filter");
+
+                    // §37. What a pill's body sends the cursor to under FilterUI.Row, and only on a
+                    // column that has a pill: a grid that draws none pays no attribute for them.
+                    if (NamesFilterCellOf(column))
+                    {
+                        builder.AddAttribute(72, "id", FilterCellElementId(i));
+                    }
                     builder.OpenElement(60, "div");
                     builder.AddAttribute(61, "class", "rz-cell-filter-content");
 

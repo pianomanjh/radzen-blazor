@@ -267,6 +267,23 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         /// <remarks>
+        /// §14's map, which is the whole of §31's <em>"lookup ids resolve to names"</em>: a pill reading
+        /// <c>Status In 3, 7, 12</c> answers "why is data hidden" worse than showing nothing, and
+        /// publishing storage keys to readers is the fault §27's review caught in the column picker.
+        /// <para>
+        /// A dictionary read rather than a scan, and over a map §14 resolved once at startup - so
+        /// naming a value here costs neither a query nor a walk. An id the map does not hold falls to
+        /// the base and prints as itself, which is the honest answer for a filter naming a row that is
+        /// no longer in the lookup.
+        /// </para>
+        /// </remarks>
+        internal override string? FilterValueTextOf(object? value) =>
+            value is TKey key && Names is { } names && names.TryGetValue(key, out var name)
+                ? name
+                : base.FilterValueTextOf(value);
+
+        /// <inheritdoc />
+        /// <remarks>
         /// The lookup itself, so no <c>SELECT DISTINCT</c> runs for a lookup column. The list is
         /// therefore complete and stable rather than only what the current rows hold: a filter
         /// control whose options move as the data does moves under the reader, and that is worth more

@@ -678,6 +678,13 @@ Each layer below caught real faults the previous one missed. Use all of them.
   value that publishes the id twice. Measured at two ticks before and none after. This is row expansion
   above from the other end, it wants `ItemKey` for the same reason, and it is the first instance in this
   list whose symptom is a wrong value rather than a wasted query.
+- **A lookup column's *Simple* filter box shows the filter's list rather than what was typed.** Typing
+  a team's name into the row's box sets an `In` over the matching ids, and `ColumnBase.FilterBoxText`
+  is `FirstCondition?.Value?.ToString()` - so the box then reads
+  `System.Collections.Generic.List`1[System.Nullable`1[System.Int32]]`. `FilterText` holds what was
+  typed and is not consulted. Found by §37's browser pass, which drew a correct pill beside a wrong
+  box; it predates §37 and is the filter row's rule rather than the bar's, so it was left alone rather
+  than fixed in passing.
 
 ## 10b. Review status
 
@@ -9402,3 +9409,65 @@ the instrument works.
   about the model and may be wrong about what their editor called it.
 - **The demonstration was one browser at one width.** Sticky positioning and clipping containers are
   specified behaviour rather than a rendering detail, but the measurement is Chromium's.
+
+### What the build changed
+
+**The gate, and it did not pass on the first instrument.** Three arms, swept over two row counts:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row, nothing filtered | 52.62 KB | 159.89 KB |
+| a pill bar on, nothing filtered | 52.92 KB | 160.19 KB |
+| three filters, no pill bar (control) | 67.21 KB | 174.52 KB |
+| a pill bar on, three filters applied | 74.08 KB | 181.29 KB |
+
+**+6.87 KB at a hundred rows and +6.77 KB at a thousand** - flat to within 0.10 KB while the arms
+themselves moved 107 KB. About 2.3 KB per pill, and nothing per row. The bar with nothing filtered is
++0.30 KB at both counts, which is the parameter and the walk over the columns.
+
+**The first version of that table was 64.37 KB at both row counts and meant nothing.** The three
+filters were `Name contains "5"`, `Age equals 7` and `Salary equals 100`, which narrow a thousand rows
+to about one - so both arms rendered the same handful at both counts, the sweep moved nothing, and a
+per-row cost could not have shown even if there had been one. §34's `DateRangeColumns` states the rule
+six lines above the fragment that broke it: *the window has to keep every row at both row counts, or
+the sweep measures the same render twice*. The filters keep every row now, and the control's own
+67.21 → 174.52 is what says the instrument can see a per-row cost at all.
+
+**And the fixed instrument found a real cost.** With the sweep working, *bar on, nothing filtered* came
+in about 1 KB above the plain filter row - five string concatenations and five attribute frames, for
+the filter-cell ids the pill's body sends the cursor to, written on every column whether or not it had
+a pill. A column with no filter has no pill and needs no name; naming per column rather than per grid
+takes it to 0.30 KB.
+
+**Two other things the build settled:**
+
+- **`ClearFilters` was already one reload**, as predicted, and now has a test that counts it: six
+  filtered columns, one data query, through a counting executor rather than through a sentence.
+- **The pill's `x` needed `stopPropagation`.** It sits inside the body's own click target, so without
+  it removing a filter also opened the editor of the column it had just removed - the same rule §35's
+  header icon follows against the header cell's sort click.
+
+### What the browser found that the tests could not
+
+§9's layer 6, on the playground. Three behaviours confirmed there and nowhere else - the pill body
+under `FilterUI.Row` scrolled the grid from 960px back to 0 and put the cursor in the Name filter box;
+the body under `FilterUI.Menu` opened the panel with *Last 30 days* already highlighted; and a lookup
+pill read `Team In Growth` rather than an id. No console error and no circuit termination, which is
+what the last two pieces each needed the browser to say.
+
+**It also found a filter-row bug that is not §37's.** A lookup column filtered from the row's *Simple*
+box shows `System.Collections.Generic.List`1[System.Nullable`1[System.Int32]]` in the box afterwards:
+`ColumnBase.FilterBoxText` is `FirstCondition?.Value?.ToString()`, and a lookup column's first
+condition holds an `In` list. It predates this section - `git log -S` puts it in the commit that made
+the box speak one dialect - and it is left alone here rather than fixed in passing, because the filter
+row's text has its own rule and its own tests. Recorded in *Also open*.
+
+### Where this was wrong, found by the build
+
+- **The pill body under `FilterUI.Menu` does not scroll its column into view**, where under
+  `FilterUI.Row` it does. §31's whole reason for the body being a click target is that *"the column's
+  header may be scrolled out of view"*, and the menu path answers the second half of that - the panel
+  opens, seeded, clamped into the viewport - without answering the first. The reader edits a filter
+  whose column they cannot see. It is an asymmetry the design did not intend and did not specify;
+  closing it means a scroll on §35's open sequence, which is where the last two circuit-terminating
+  bugs came from, so it is recorded rather than added at the end of a build.

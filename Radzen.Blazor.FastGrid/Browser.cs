@@ -88,6 +88,17 @@ namespace Radzen.FastGrid
             module.InvokeVoidAsync("blurCell", viewId);
 
         /// <summary>
+        /// Puts the cursor in the filter control a cell holds, which scrolls that column into view.
+        /// </summary>
+        /// <remarks>
+        /// §37's pill body under <see cref="FilterUI.Row" />. By cell id rather than by control,
+        /// because which control a column draws is the column's business - see §18 on this seam not
+        /// knowing what it is pointing at.
+        /// </remarks>
+        internal ValueTask FocusFilterAsync(string cellId) =>
+            module.InvokeVoidAsync("focusFilter", cellId);
+
+        /// <summary>
         /// Stops watching a table's container. Held by the script rather than by the circuit, so
         /// nothing else releases it, and it is asked unconditionally - the script answers for a table
         /// it is not watching.

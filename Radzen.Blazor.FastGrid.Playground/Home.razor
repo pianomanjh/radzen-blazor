@@ -66,6 +66,12 @@
                 <option value="@FilterMode.CheckBoxList">check boxes</option>
             </select>
         </label>
+        @* §37. Independent of "Filter in" and of Filtering itself, which is the point: turn Filtering
+           off with pills on and the bar still says what is hidden, because that is where an
+           explanation is worth most. The pill body goes to the menu under one and to the filter box
+           under the other. *@
+        <label title="Applied filters, said in words, above the scroll container"
+               ><input type="checkbox" @bind="showPills" /> Filter pills</label>
         @* §34, and the reason it is here rather than in a test: a token survives a settings round trip
            only if what the page holds is a blob rather than a live object, and this is the one place
            where pressing "Round-trip through JSON" after it proves that end to end. *@
@@ -189,6 +195,7 @@
                     AllowFiltering="@allowFiltering"
                     FilterMode="@filterMode"
                     FilterUI="@filterUI"
+                    ShowFilterPills="@showPills"
                     AllowPaging="@allowPaging"
                     AllowVirtualization="@virtualize"
                     AllowColumnPicking="@allowPicking"
@@ -301,6 +308,8 @@
     FilterMode filterMode = FilterMode.Simple;
 
     FilterUI filterUI = FilterUI.Row;
+
+    bool showPills = true;
 
     /// <summary>Where a lookup's names come from. Only a query is fetched.</summary>
     enum Provenance { Map, Items, Query }

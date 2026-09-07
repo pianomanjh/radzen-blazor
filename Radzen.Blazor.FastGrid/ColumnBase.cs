@@ -1629,6 +1629,43 @@ namespace Radzen.FastGrid
         List<object>? Entries => entryList;
 
         /// <summary>
+        /// What one filter value is called, for a reader looking at it outside any control.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §37's naming hook, and the rule it exists to keep is that <strong>a name costs no query</strong>.
+        /// A pill draws on the render after a filter is applied, so resolving an id by scanning would
+        /// spend §36's queries-per-open gate somewhere §36 never looks. Every override below answers
+        /// from a map that is already in memory - an enum's type, or §14's lookup, resolved once at
+        /// startup - or from the value itself.
+        /// </para>
+        /// <para>
+        /// <strong>Not through <see cref="Entries" />.</strong> That list exists only once a check-box
+        /// list has been drawn, so naming through it would make the same filter read one way before the
+        /// menu was opened and another after. The blank is spelled here instead, from the same string
+        /// the entry uses.
+        /// </para>
+        /// <para>
+        /// §34's relative-date token falls to <c>ToString</c> and that is its designed answer: §34 named
+        /// a pill as one of the two places a token "sits alone with no position to be judged by", and
+        /// <c>today-6d</c> is the canonical text it settled on. A token that is half of one of the six
+        /// presets never reaches here - <see cref="FastGridFilterPresets.Recognize" /> answers for the
+        /// whole filter before the values are read one at a time.
+        /// </para>
+        /// </remarks>
+        internal virtual string? FilterValueTextOf(object? value) => value switch
+        {
+            null => Grid?.BlankFilterText,
+
+            // The same wording the check-box list draws, for the same reason EntryText gives: an enum
+            // column that reads one way in a list and another in a pill would be one rule with two
+            // spellings.
+            Enum member => Radzen.Blazor.EnumExtensions.GetDisplayDescription(member),
+
+            _ => value.ToString(),
+        };
+
+        /// <summary>
         /// Draws one slot of §35's filter menu editor.
         /// </summary>
         /// <remarks>

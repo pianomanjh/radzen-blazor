@@ -222,6 +222,47 @@ public class FastGridFeatureBench
         Column<decimal>(x => x.Salary, "Salary");
     };
 
+    // §37. Three of the five filtered, so the pill bar has three pills to draw rather than one -
+    // which is what makes the bar's own cost separable from the cost of one pill.
+    //
+    // **Every filter keeps every row**, and the first draft of this did not. §34's DateRangeColumns
+    // states the rule six lines from here - "the window has to keep every row at both row counts, or
+    // the sweep measures the same render twice and cannot tell a fixed cost from a per-row one" - and
+    // filtering to Age 7 and Salary 100 narrowed both arms to about one row, so the sweep moved
+    // nothing and the flat number it produced could not have come out any other way. Name is always
+    // "Person i", Age is always at least 20, and Salary always at least 40000.
+    static readonly RenderFragment ThreeFilteredColumns = b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title,
+            object filterValue, FastGridFilterOperator? filterOperator = null)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+
+            if (filterValue is not null)
+            {
+                b.AddAttribute(s++, "FilterValue", filterValue);
+
+                if (filterOperator is { } picked)
+                {
+                    b.AddAttribute(s++, "FilterOperatorOf", picked);
+                }
+            }
+
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id", null);
+        Column<string>(x => x.Name, "Name", "Person");
+        Column<int>(x => x.Age, "Age", 20, FastGridFilterOperator.GreaterThanOrEquals);
+        Column<DateTime>(x => x.Hired, "Hired", null);
+        Column<decimal>(x => x.Salary, "Salary", 40000m,
+            FastGridFilterOperator.GreaterThanOrEquals);
+    };
+
     // §34. The same five columns with a date range on Hired, written twice: once as two DateTimes and
     // once as two tokens. The pair is the measurement - the delta between them is what a relative date
     // costs, with the range itself held constant, and the sweep over N is what says whether that cost is
@@ -700,6 +741,37 @@ public class FastGridFeatureBench
     {
         p["AllowFiltering"] = true;
         p["ChildContent"] = CheckBoxListColumns;
+    });
+
+    // §37's three rows, and the half of its gate that can fail the piece. The claim is that the pill
+    // bar costs per active filter and never per row, so the sweep over two row counts is the whole
+    // instrument: a fixed cost and a per-row cost are indistinguishable at one row count, which is
+    // §33's review finding and the reason the sweep exists at all.
+    //
+    // The control is a filtered grid with the bar switched off, not the bare grid: what these measure
+    // is the bar, not the filtering under it.
+    [Benchmark(Description = "+ three filters, no pill bar (control)")]
+    public Task ThreeFiltersNoPills() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ChildContent"] = ThreeFilteredColumns;
+    });
+
+    // The band is not drawn while nothing is filtered, so this row is the parameter and the walk over
+    // the columns that decides so - and it should be indistinguishable from the plain filter row.
+    [Benchmark(Description = "+ a pill bar, nothing filtered")]
+    public Task PillsNothingFiltered() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ShowFilterPills"] = true;
+    });
+
+    [Benchmark(Description = "+ a pill bar, three filters applied")]
+    public Task PillsThreeFilters() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ShowFilterPills"] = true;
+        p["ChildContent"] = ThreeFilteredColumns;
     });
 
     // The one hook on this component that runs per cell rather than per row or per column, so the

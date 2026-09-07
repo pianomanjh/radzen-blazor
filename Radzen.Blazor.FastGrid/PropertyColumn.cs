@@ -301,6 +301,23 @@ namespace Radzen.FastGrid
         static readonly object[] BooleanChoices = { true, false };
 
         /// <inheritdoc />
+        /// <remarks>
+        /// The column's own <see cref="Format" />, so a pill reads what the cells read - <c>$50,000</c>
+        /// rather than <c>50000</c>, and a date in the column's own pattern. <see cref="Format" /> lives
+        /// here and not on the base, which is why the base cannot apply it and this override exists.
+        /// <para>
+        /// An <see cref="Enum" /> is handed back to the base rather than formatted. Enum format
+        /// specifiers are <c>G</c>, <c>D</c>, <c>X</c> and <c>F</c> and nothing else, so a column that
+        /// declares <c>Format="C"</c> beside an enum property - which is a mistake, but a reachable one
+        /// - would throw out of a render on the pill and not on the cell.
+        /// </para>
+        /// </remarks>
+        internal override string? FilterValueTextOf(object? value) =>
+            value is null or Enum || Format is not { Length: > 0 } format
+                ? base.FilterValueTextOf(value)
+                : CellText.Of(value, format);
+
+        /// <inheritdoc />
         protected override void OnDerive()
         {
             // Equivalent rather than ReferenceEquals: Razor hands this a freshly built expression tree on

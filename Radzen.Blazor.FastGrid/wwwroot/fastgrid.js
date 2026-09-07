@@ -271,6 +271,32 @@ export function blurCell(viewId) {
   }
 }
 
+// §37. A pill's body sends the reader to where its filter can be adjusted, and under FilterUI.Row
+// that is the box in the filter row. By id and from here rather than by ElementReference, because a
+// reference per filter cell per render is a capture per column per render, which is what §3's third
+// rule is about - the id is one attribute on a cell the grid already draws.
+//
+// Nothing scrolls explicitly: focusing a control the scroller has moved off screen is what scrolls it
+// back, and the browser's own scroll knows about the sticky header and the frozen columns that
+// bringIntoView above has to be told about.
+export function focusFilter(cellId) {
+  const cell = document.getElementById(cellId);
+
+  if (!cell) {
+    return;
+  }
+
+  // The first thing in the cell that can take focus, whatever the column chose to draw - a text box,
+  // upstream's drop-down trigger, or a FilterTemplate's own control. Asking for the control by name
+  // would make this file know which editor each column kind renders, which is the coupling §18 named.
+  const control = cell.querySelector(
+    'input, select, textarea, button, [tabindex]:not([tabindex="-1"])');
+
+  if (control) {
+    control.focus();
+  }
+}
+
 function clearFocus(view) {
   const previous = view._fastGridFocus;
 

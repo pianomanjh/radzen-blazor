@@ -1,0 +1,261 @@
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.AspNetCore.Components.Web;
+
+namespace Radzen.FastGrid
+{
+    /// <summary>§37's pill bar: what is filtered, said in words, above the scroll container.</summary>
+    public partial class RadzenFastGrid<TItem>
+    {
+        /// <summary>
+        /// Whether the applied filters are shown as removable pills above the grid.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Off by default, as every feature here is. <c>Show</c> rather than <c>Allow</c> because it
+        /// displays a thing rather than permitting one - the family already holds
+        /// <see cref="ShowHeader" />, <c>ShowPagingSummary</c> and <c>ShowLoadingIndicator</c>.
+        /// </para>
+        /// <para>
+        /// <strong>Independent of <see cref="FilterUI" />, and of <see cref="AllowFiltering" />.</strong>
+        /// §31's reason for the first: a bar explains <em>applied filters</em>, and tying an
+        /// explanation to an input feature would mean a team that prefers the row can never have one.
+        /// The second follows from <see cref="ColumnBase{TItem}.HasFilter" />, which never consulted
+        /// <see cref="AllowFiltering" /> - so a grid filtered by <c>ApplyFilters</c> with no filter UI
+        /// at all still says what it is hiding, which is where an explanation is worth most.
+        /// </para>
+        /// </remarks>
+        [Parameter] public bool ShowFilterPills { get; set; }
+
+        /// <summary>The filter cell an id is written on, so a pill can send the cursor there.</summary>
+        /// <remarks>
+        /// Written only while <see cref="ShowFilterPills" /> is on and the row is the editor, so a grid
+        /// that does not use the feature pays no attribute for it. Numbered by drawn index, which is
+        /// what the pill has and what the filter row writes.
+        /// </remarks>
+        internal string FilterCellElementId(int index) => ElementId + "-fc-" + index;
+
+        /// <summary>Whether a filter cell should carry that id on this render.</summary>
+        /// <remarks>
+        /// <strong>Per column, and the benchmark is why.</strong> Written for the feature and the mode
+        /// alone, this cost about 1 KB a render on a grid with the bar on and nothing filtered - five
+        /// concatenations and five attribute frames for ids no pill existed to use. A column with no
+        /// filter has no pill, so it needs no name.
+        /// </remarks>
+        internal bool NamesFilterCellOf(ColumnBase<TItem> column) =>
+            ShowFilterPills && AllowFiltering && FilterUI == FilterUI.Row && column.HasFilter;
+
+        /// <summary>Whether anything is filtered, which is whether the bar is drawn at all.</summary>
+        /// <remarks>
+        /// A walk rather than a held count. It runs once per render of a grid with the feature on, over
+        /// the columns and not the rows, and a count maintained beside <c>SetFilter</c> would be a
+        /// second thing that has to agree with <c>HasFilter</c> - §10b's recurring finding.
+        /// </remarks>
+        bool AnyColumnFiltered()
+        {
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                if (visibleColumns[i].HasFilter)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// The bar, above the scroll container and below the top pager.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>Above the scroller, and §37 measured why.</strong> A bar below the headers is inside
+        /// <c>.rz-data-grid-data</c>, whose <c>thead</c> is sticky on the vertical axis only, so it
+        /// slides out of view exactly when there are enough columns to want one - demonstrated at 960px
+        /// of scroll on eleven columns. Making it sticky on both axes does not rescue it:
+        /// <c>.rz-grid-table thead th</c> carries the <c>overflow: hidden</c> that gives a header cell
+        /// its ellipsis, and a clipping ancestor is what a sticky child resolves <c>left</c> against.
+        /// </para>
+        /// <para>
+        /// <strong>Nothing when nothing is filtered.</strong> A permanently empty band costs a row of
+        /// chrome forever to avoid one layout shift on the first filter, which is the wrong trade in a
+        /// component whose argument is what it does not draw.
+        /// </para>
+        /// <para>
+        /// Every class here is upstream's and already styled in every shipped theme.
+        /// <c>rz-datatable-header</c> is the interesting one: the themes dress it as a toolbar band with
+        /// the grid's own header padding and a bottom border, and no upstream component renders it.
+        /// </para>
+        /// </remarks>
+        void RenderFilterPills(RenderTreeBuilder builder)
+        {
+            if (!ShowFilterPills || !AnyColumnFiltered())
+            {
+                return;
+            }
+
+            builder.OpenElement(15, "div");
+            builder.AddAttribute(16, "class", "rz-datatable-header rz-filter-pills");
+
+            builder.OpenElement(17, "div");
+            builder.AddAttribute(18, "class", "rz-chip-list rz-chip-list-horizontal");
+            builder.AddAttribute(19, "role", "list");
+            builder.AddAttribute(20, "aria-label", ActiveFiltersText);
+
+            for (var i = 0; i < visibleColumns.Count; i++)
+            {
+                var column = visibleColumns[i];
+
+                if (column.HasFilter && column.CurrentFilter is { } filter)
+                {
+                    RenderFilterPill(builder, column, filter, i);
+                }
+            }
+
+            RenderClearAllFilters(builder);
+
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        /// <summary>One column's filter, said in words, with a way to remove it and a way to edit it.</summary>
+        /// <remarks>
+        /// <para>
+        /// A render tree rather than <c>RadzenChip</c> inside <c>RadzenChipList</c>. That pair is a
+        /// <c>FormComponent</c> carrying selection, focus and keyboard semantics for a list of chips a
+        /// reader picks from, which is not what this is - and it would cost three components per active
+        /// filter where §3's third rule wants none. <c>RenderFilterIcon</c> made the same choice.
+        /// </para>
+        /// <para>
+        /// <strong>The pill is a real tab stop</strong>, which is where this band disagrees with §35's
+        /// header icon. §12's <em>one tab stop</em> is a rule about the grid's cells, reached by
+        /// <c>aria-activedescendant</c>, which is why the icon sits at <c>tabindex="-1"</c>. This is
+        /// outside <c>role="grid"</c>, a sibling of the pager, whose buttons have always been in the
+        /// tab order - and a filter only a mouse can remove is the mouse-only control §31 refused.
+        /// </para>
+        /// </remarks>
+        void RenderFilterPill(RenderTreeBuilder builder, ColumnBase<TItem> column,
+            FastGridFilter filter, int index)
+        {
+            var editable = CanEditFilterOf(column);
+
+            builder.OpenElement(30, "div");
+            builder.AddAttribute(31, "class", "rz-chip-list-item");
+            builder.AddAttribute(32, "role", "listitem");
+
+            // Keyed on the column, so removing the third pill does not leave the fourth wearing the
+            // third's handlers - the diff would otherwise match these by position.
+            builder.SetKey(column);
+
+            builder.OpenElement(33, "span");
+            builder.AddAttribute(34, "class",
+                "rz-chip rz-chip-base rz-shade-default rz-variant-filled");
+
+            // A door to the editor, and only where there is one to open. Under FilterUI.Menu that is
+            // the column's menu; under the row it is the box in the filter row, which focusing scrolls
+            // into view. Where there is neither - AllowFiltering off, a filter that arrived through
+            // ApplyFilters - the body is text: a control that looks clickable and does nothing is the
+            // affordance fault §27's review caught in the column picker.
+            if (editable)
+            {
+                builder.AddAttribute(35, "role", "button");
+                builder.AddAttribute(36, "tabindex", "0");
+                builder.AddAttribute(37, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
+                    this, _ => EditFilterAsync(column, index)));
+                builder.AddAttribute(38, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(
+                    this, args => OnFilterPillKeyAsync(column, index, args)));
+            }
+
+            builder.OpenElement(39, "span");
+            builder.AddAttribute(40, "class", "rz-chip-text");
+            builder.AddContent(41, FilterPill.Phrase(this, column, filter));
+            builder.CloseElement();
+
+            builder.OpenElement(42, "button");
+            builder.AddAttribute(43, "type", "button");
+            builder.AddAttribute(44, "class",
+                "rz-button rz-button-xs rz-button-icon-only rz-variant-text rz-base rz-shade-lighter");
+            builder.AddAttribute(45, "aria-label", column.HeaderText + " " + RemoveFilterText);
+            builder.AddAttribute(46, "title", RemoveFilterText);
+            builder.AddAttribute(47, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
+                this, _ => Filter(column, null)));
+
+            // The body's click is on the element this button sits inside, so without this, removing a
+            // filter also opens the editor of the column it was just removed from. The same rule the
+            // header icon follows against the header cell's own sort click.
+            builder.AddEventStopPropagationAttribute(48, "onclick", true);
+
+            builder.OpenElement(49, "i");
+            builder.AddAttribute(50, "class", "notranslate rzi");
+            builder.AddAttribute(51, "aria-hidden", "true");
+            builder.AddContent(52, "close");
+            builder.CloseElement();
+
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        /// <summary>Whether this column's filter has an editor the bar can send a reader to.</summary>
+        bool CanEditFilterOf(ColumnBase<TItem> column) =>
+            AllowFiltering && (FilterUI == FilterUI.Menu || column.CanFilter
+                || column.FilterTemplate is not null);
+
+        void RenderClearAllFilters(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(60, "button");
+            builder.AddAttribute(61, "type", "button");
+            builder.AddAttribute(62, "class",
+                "rz-button rz-button-sm rz-variant-text rz-base rz-shade-default");
+            builder.AddAttribute(63, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
+                this, _ => ClearFilters()));
+            builder.AddContent(64, ClearAllFiltersText);
+            builder.CloseElement();
+        }
+
+        /// <summary>Enter and Space open the pill, which is what a <c>role="button"</c> promises.</summary>
+        /// <remarks>
+        /// Spelled out because this is a <c>span</c> rather than a <c>button</c>: it holds the remove
+        /// button, and a button inside a button is markup no browser agrees about. Taking the role means
+        /// taking the keys that come with it.
+        /// </remarks>
+        Task OnFilterPillKeyAsync(ColumnBase<TItem> column, int index, KeyboardEventArgs args) =>
+            args.Key is "Enter" or " " ? EditFilterAsync(column, index) : Task.CompletedTask;
+
+        /// <summary>Sends the reader to wherever this column's filter is authored.</summary>
+        /// <remarks>
+        /// §31's reason, which is the whole point of the body being a click target: <em>"the column's
+        /// header may be scrolled out of view, and that is precisely when someone wants to adjust
+        /// rather than remove."</em> §31 wrote it as <em>reopens that column's menu</em> and the same
+        /// paragraph had just made pills independent of <see cref="FilterUI" />, under which there is
+        /// no menu - so what survives is the intent rather than the mechanism.
+        /// </remarks>
+        Task EditFilterAsync(ColumnBase<TItem> column, int index)
+        {
+            if (FilterUI == FilterUI.Menu)
+            {
+                OpenFilterMenu(column, index);
+
+                return Task.CompletedTask;
+            }
+
+            return FocusFilterCellAsync(index);
+        }
+
+        /// <summary>Puts the cursor in a column's filter box, which scrolls that column into view.</summary>
+        /// <remarks>
+        /// <strong>No <c>ConfigureAwait(false)</c>, on §35's finding.</strong> This is a JavaScript call
+        /// from a UI event, so the await genuinely suspends; discarding the synchronization context
+        /// resumes off the renderer's dispatcher, which terminates a circuit and which no bUnit test
+        /// can see.
+        /// </remarks>
+        async Task FocusFilterCellAsync(int index)
+        {
+            if (await BrowserAsync() is { } seam)
+            {
+                await seam.FocusFilterAsync(FilterCellElementId(index));
+            }
+        }
+    }
+}

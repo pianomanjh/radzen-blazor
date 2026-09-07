@@ -28,7 +28,7 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
-        /// The module behind the facade that names its nine calls, or null when there is no runtime to
+        /// The module behind the facade that names its ten calls, or null when there is no runtime to
         /// import it with. Every caller that has to <em>reach</em> for the module goes through this
         /// rather than through <see cref="ModuleAsync" />: the point of <see cref="Browser{TItem}" />
         /// is that an export name and an argument list exist in one place, and a second way in would

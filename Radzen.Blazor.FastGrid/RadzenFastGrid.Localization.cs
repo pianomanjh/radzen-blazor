@@ -479,6 +479,101 @@ namespace Radzen.FastGrid
             set => thisYearFilterText = value;
         }
 
+        // §37's six, of which two are upstream's keys used verbatim and four have no upstream key.
+        // DataFilter_ClearFilterText is the interesting reuse: it is RadzenDataFilter's own name for
+        // the button that clears everything, it is already "Clear all" in five cultures, and it means
+        // exactly what the bar's button means.
+
+        string? andFilterText;
+
+        /// <summary>The word joining a filter's two conditions where both must hold.</summary>
+        [Parameter]
+        public string AndFilterText
+        {
+            get => andFilterText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_AndOperatorText));
+            set => andFilterText = value;
+        }
+
+        string? orFilterText;
+
+        /// <summary>The word joining a filter's two conditions where either may hold.</summary>
+        [Parameter]
+        public string OrFilterText
+        {
+            get => orFilterText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_OrOperatorText));
+            set => orFilterText = value;
+        }
+
+        string? rangeFilterText;
+
+        /// <summary>The word between a range's two bounds.</summary>
+        /// <remarks>
+        /// <strong>Not <see cref="AndFilterText" />, and the two agreeing in English is a coincidence
+        /// of English.</strong> One joins two conditions and the other separates two bounds of one, and
+        /// the languages that spell those differently would have no way to say so if this read the
+        /// conjunction. It is also lower case where the conjunction is capitalised, because it sits
+        /// inside a phrase rather than between two of them.
+        /// </remarks>
+        [Parameter]
+        public string RangeFilterText
+        {
+            get => rangeFilterText ?? Localize("DataGrid_RangeText", "and");
+            set => rangeFilterText = value;
+        }
+
+        string? moreFilterText;
+
+        /// <summary>
+        /// How a pill ends a set it has stopped naming. A composite format string taking the count.
+        /// </summary>
+        [Parameter]
+        public string MoreFilterText
+        {
+            get => moreFilterText ?? Localize("DataGrid_MoreText", "or {0} more");
+            set => moreFilterText = value;
+        }
+
+        string? removeFilterText;
+
+        /// <summary>The accessible name of a pill's remove button, after the column's title.</summary>
+        /// <remarks>
+        /// Its own string rather than <see cref="ClearFilterText" />, which is <em>Clear</em> and is the
+        /// name of the menu's button. A pill has no menu around it to be read in, so its button says
+        /// what it removes.
+        /// </remarks>
+        [Parameter]
+        public string RemoveFilterText
+        {
+            get => removeFilterText ?? Localize("DataGrid_RemoveFilterText", "Remove filter");
+            set => removeFilterText = value;
+        }
+
+        string? clearAllFiltersText;
+
+        /// <summary>The pill bar's button that clears every column at once.</summary>
+        [Parameter]
+        public string ClearAllFiltersText
+        {
+            get => clearAllFiltersText
+                ?? Localize(nameof(Blazor.RadzenStrings.DataFilter_ClearFilterText));
+            set => clearAllFiltersText = value;
+        }
+
+        string? activeFiltersText;
+
+        /// <summary>The pill bar's accessible name.</summary>
+        /// <remarks>
+        /// §12 leaves nothing on this grid unnamed. A list of removable controls that a screen reader
+        /// announces as "list, four items" is the same fault §36 found in an unnamed <em>Select all</em>
+        /// box, one control wider.
+        /// </remarks>
+        [Parameter]
+        public string ActiveFiltersText
+        {
+            get => activeFiltersText ?? Localize("DataGrid_ActiveFiltersText", "Active filters");
+            set => activeFiltersText = value;
+        }
+
         string? selectVisibleColumnsAriaLabel;
 
         /// <summary>The column picker's accessible name.</summary>

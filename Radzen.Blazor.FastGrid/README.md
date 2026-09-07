@@ -910,6 +910,55 @@ not what a single instant is for; a token stored in one is dropped on restore. A
 of the day is lost - a range against an OData source is safest written to the start of the next day
 instead.
 
+### Filter pills
+
+`ShowFilterPills` puts a bar of removable pills above the grid, one per filtered column, saying in words
+what each filter does.
+
+```razor
+<RadzenFastGrid TItem="Order" Data="@orders" AllowFiltering="true" ShowFilterPills="true" />
+```
+
+```
+Department In Sales, Ops   x     Hired Last 7 days   x     Salary Greater than $50,000   x     Clear all
+```
+
+Off by default. **Independent of `FilterUI`** - a bar explains applied filters, and a team that prefers
+the row should not have to take the menu to get one. **Independent of `AllowFiltering` too**: a grid
+filtered by `ApplyFilters` or by a `RadzenDataFilter`, with no filter UI at all, still says what it is
+hiding, which is where an explanation is worth most.
+
+The wording is the column's title, the operator's own word - the same strings the menu shows, so there
+is one vocabulary rather than two - and the values:
+
+- A **lookup** id resolves to its name through the lookup's own map. No query runs to find it.
+- An **enum** reads the word its check-box list draws, `[Display]` names included.
+- A **formatted** column reads as its cells do: `Salary Greater than $50,000`, not `50000`.
+- A **relative date range** that is one of the six presets reads as its name - `Hired Last 7 days` -
+  and one that is not reads as its tokens: `Hired Between today-2d and today@end`.
+- A **set** names three values and counts the rest: `Tags In Remote, Contract, On call or 4 more`.
+- A **blank** reads `BlankFilterText`.
+
+**`x` clears that column** and reloads once. **Clear all** clears every filtered column and also reloads
+once, not once per column. **The pill body opens the filter's editor** - the column's menu under
+`FilterUI.Menu`, or the column's filter box under `FilterUI.Row`, which scrolls that column into view.
+That matters because the column's header may be scrolled out of sight, which is exactly when someone
+wants to adjust rather than remove. Where there is no editor to open - `AllowFiltering` off - the body
+is plain text and only the `x` is interactive.
+
+Pills are in the tab order and take Enter and Space, unlike the header's filter icon, which is at
+`tabindex="-1"` because it lives inside the grid's single tab stop.
+
+The bar draws nothing while nothing is filtered. Its words come from `ActiveFiltersText`,
+`RemoveFilterText`, `ClearAllFiltersText`, `RangeFilterText`, `MoreFilterText`, `AndFilterText` and
+`OrFilterText`, plus the operator and preset strings the menu already uses.
+
+**The bar sits above the horizontal scroll container, not under the headers.** A bar under the headers is
+inside that scroller, whose header row is sticky vertically only, so it slides out of view exactly when
+there are enough columns to want one - measured here at 960px of scroll on eleven columns. Making it
+sticky on both axes does not rescue it: the theme gives header cells `overflow: hidden` for their
+ellipsis, and a clipping ancestor is what a sticky child resolves `left` against.
+
 ## Choosing which columns are drawn
 
 `AllowColumnPicking` puts a drop-down above the grid listing the columns, ticked for the ones on screen.
