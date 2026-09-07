@@ -35,8 +35,14 @@ namespace Radzen.FastGrid.Tests
         static string[] CellsOfColumn(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
             cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[index].TextContent).ToArray();
 
+        /// <summary>
+        /// The members the list offers, unwrapped out of §36's entries and minus its blank - which a
+        /// column of nullable elements, strings included, now leads with. This file is about which
+        /// member a collection column projects onto; the entry is pinned in
+        /// <c>FastGridChecklistTests</c>.
+        /// </summary>
         static object[] Offered(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
-            cut.FindComponents<RadzenDropDown<IEnumerable>>()[index].Instance.Data.Cast<object>().ToArray();
+            FilterList.Values(cut.FindComponents<RadzenDropDown<IEnumerable>>()[index].Instance.Data);
 
         static void TypeInFilter(IRenderedComponent<RadzenFastGrid<Person>> cut, int index, string text) =>
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[index].Change(text);

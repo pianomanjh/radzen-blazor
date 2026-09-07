@@ -635,8 +635,25 @@ namespace Radzen.FastGrid
 
         /// <summary>The sequence as a list of the column's own type, dropping what will not convert.</summary>
         /// <remarks>
-        /// A null in the list is dropped rather than matched: it is what an untouched check box puts
-        /// there, not a request to match rows whose value is missing.
+        /// <para>
+        /// <strong>§36 gave a null a meaning here, and this comment used to deny it one.</strong> It
+        /// said a null was what an untouched check box puts in the list rather than a request to match
+        /// the rows whose value is missing - which was true while nothing could put one there on
+        /// purpose. §36's blank entry is that request, and it arrives as a null exactly as §14's
+        /// <c>SelectedKeys</c> has carried one for a nullable lookup key since it was built.
+        /// </para>
+        /// <para>
+        /// It survives only where the column can hold one. On a non-nullable value type a null read as
+        /// <c>default</c> would filter to the rows whose value happens to be zero while the list shows
+        /// nothing ticked, which is §14's own trap; those are still dropped.
+        /// </para>
+        /// <para>
+        /// A string is the exception and it is this builder's existing rule rather than a new one: a
+        /// null string is the empty string to every operator but <c>IsNull</c>, <c>In</c> coalesces the
+        /// column through <c>NotNull</c>, and <c>InPredicate</c> reads a null row as empty. So the blank
+        /// on a string column joins the list as the empty string, which is what a null row compares as
+        /// on both sides.
+        /// </para>
         /// </remarks>
         static List<TProp> Listed(IEnumerable sequence)
         {
@@ -646,6 +663,15 @@ namespace Radzen.FastGrid
             {
                 if (item is null)
                 {
+                    if (typeof(TProp) == typeof(string))
+                    {
+                        values.Add((TProp)(object)string.Empty);
+                    }
+                    else if (Nullable.GetUnderlyingType(typeof(TProp)) is not null)
+                    {
+                        values.Add(default!);
+                    }
+
                     continue;
                 }
 

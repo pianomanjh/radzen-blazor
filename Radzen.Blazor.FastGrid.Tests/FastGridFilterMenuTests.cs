@@ -378,7 +378,7 @@ namespace Radzen.FastGrid.Tests
             OpenMenu(cut, 0);
             PickItem(cut, "In");
 
-            var list = cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[0];
+            var list = cut.FindComponents<RadzenListBox<System.Collections.IEnumerable>>()[0];
 
             cut.InvokeAsync(() => list.Instance.Change.InvokeAsync(new List<object> { Grade.Senior }));
 
@@ -405,7 +405,7 @@ namespace Radzen.FastGrid.Tests
             OpenMenu(cut, 0);
             PickItem(cut, "Not in");
 
-            var list = cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[0];
+            var list = cut.FindComponents<RadzenListBox<System.Collections.IEnumerable>>()[0];
 
             cut.InvokeAsync(() => list.Instance.Change.InvokeAsync(new List<object> { Grade.Senior }));
             cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
@@ -665,7 +665,7 @@ namespace Radzen.FastGrid.Tests
             OpenMenu(cut, 0);
             PickItem(cut, "In");
 
-            var list = cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[0];
+            var list = cut.FindComponents<RadzenListBox<System.Collections.IEnumerable>>()[0];
             var offered = list.Instance.Data.Cast<object>().ToArray();
 
             cut.InvokeAsync(() => list.Instance.Change.InvokeAsync(

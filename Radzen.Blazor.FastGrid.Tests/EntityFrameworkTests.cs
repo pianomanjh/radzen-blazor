@@ -163,8 +163,10 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
             });
 
-            var offered = cut.FindComponents<RadzenDropDown<IEnumerable>>()[1]
-                .Instance.Data.Cast<object>().ToArray();
+            // Unwrapped out of §36's entries and minus its blank. What this test is about is that the
+            // three values came back from a Distinct the provider translated.
+            var offered = FilterList.Values(
+                cut.FindComponents<RadzenDropDown<IEnumerable>>()[1].Instance.Data);
 
             Assert.Equal(new object[] { "Engineering", "Ops", "Sales" }, offered);
         }

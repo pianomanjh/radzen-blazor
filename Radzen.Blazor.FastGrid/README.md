@@ -729,6 +729,9 @@ one filter would be two places that have to agree.
   changes. `FilterLookupData` supplies them instead for a source too large or remote to ask, and a
   lookup column supplies its own.
 
+`FilterMode.CheckBoxList` is also **the declaration that a column's values are a set worth listing**,
+and under `Menu` it is what gets that column a check-box list at all. See *The checklist* below.
+
 `FilterAsYouType` (default `true`) filters while the box still has focus, after `FilterDelay`
 milliseconds of no typing (default 500). Turning it off leaves the filter applying when the box is left
 or Enter is pressed, which it also does with the flag on - a box abandoned before the pause still
@@ -754,7 +757,7 @@ opens one panel for the whole grid. The operators offered come from the column's
 | number, `TimeSpan`, `TimeOnly` | Equals, Not equals, Less than, Less than or equals, Greater than, Greater than or equals, Between |
 | date | Equals, Less than, Greater than, Between, then the six relative presets |
 | bool | Equals, against a true/false pick |
-| enum, lookup | In, Not in |
+| enum, lookup, or a column declaring `FilterMode.CheckBoxList` | In, Not in |
 
 A column that can hold no value also offers Is null and Is not null, at the end. A column whose type
 says nothing - `PropertyColumn<T, object>`, or a template column whose path does not resolve - offers
@@ -768,6 +771,33 @@ Editors follow the type too: a text box, a `RadzenNumeric` for numbers, a date p
 column's own type so a `DateOnly` column gets a `DateOnly` back, a true/false pick for a bool, and a
 check-box list for `In` and `Not in`. Each opens **empty** on an unfiltered column - the menu draws no
 editor at all until an operator is picked, so nothing offers Apply on a value nobody chose.
+
+### The checklist
+
+**A column is offered `In` and `Not in` - and the check-box list that edits them - when something
+already knows its values.** There are three ways that happens, and no fourth:
+
+| | where the values come from | queries to open the list |
+| --- | --- | --- |
+| a **lookup** column | its own map, which it holds | none |
+| an **enum** column | the type, so every member is offered whether or not a row holds it | none |
+| a column declaring **`FilterMode.CheckBoxList`** | `FilterLookupData`, else one `SELECT DISTINCT` | one, the first time |
+
+Every other column is offered its type's operators and no list. There is deliberately **no "filter by
+value" action** on an arbitrary column: the grid cannot tell a five-value column from a fifty-thousand
+one without running the scan, so an action offered everywhere would have a price nobody can know until
+it has been paid. The attribute is where the person who *does* know says so, and it is the same
+attribute `RadzenDataGrid` wants for the same list.
+
+The scan runs **once per column**, after the render rather than inside it, and against the unfiltered
+source - a list whose options moved as the data did would move under the reader. `Reload()` is what
+drops it. It is not paged: what a wide column costs to open is roughly 3 KB and 4 us per distinct value,
+so a column with tens of thousands of them wants `FilterLookupData` rather than a scan.
+
+**A nullable column leads its list with a blank entry**, drawing `BlankFilterText`, which is how
+*"these three values or nothing"* is asked in one filter. It becomes a null in the `In` list, which a
+provider translates as `x IN (...) OR x IS NULL`. On a string column the blank stands for the empty
+string too, because every operator here but `Is null` already reads a null string as an empty one.
 
 **One condition per column.** Is null is an operator to pick rather than a tail ored onto another one;
 the two-condition model is still there and `FilterTemplate` and markup still reach it.
@@ -808,8 +838,12 @@ compiles and behaves identically.
 
 Arity belongs to the operator: `IsNull` takes none, `Equals` one, `Between` two, `In` many. A column can
 carry a **second condition** - `SecondFilterValue`, `SecondFilterOperator` and `LogicalFilterOperator` -
-which is what expresses *"these three values or blank"*. The first condition gates: a column with only
-the second set is not filtered.
+joined by an `And` or an `Or`. The first condition gates: a column with only the second set is not
+filtered.
+
+*"These three values or blank"* was the example this width was chosen for, and the menu no longer needs
+the second condition to say it: a null rides in the `In` list itself, which is one condition and the
+same rows. The width still earns its place for what markup and `FilterTemplate` reach through it.
 
 ### Relative dates
 

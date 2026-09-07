@@ -1,0 +1,430 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Bunit;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
+using Radzen.Blazor;
+using Xunit;
+
+namespace Radzen.FastGrid.Tests
+{
+    /// <summary>
+    /// §36: the checklist is offered where something already knows the column's values - a lookup's map,
+    /// an enum's type, or the author declaring a check-box list - and nowhere else.
+    /// </summary>
+    /// <remarks>
+    /// The gate is <em>queries per open</em>, which is the number §10 measured going wrong at three
+    /// scans for one render. Everything below the operator rules is about that count.
+    /// </remarks>
+    public class FastGridChecklistTests
+    {
+        static IRenderedComponent<RadzenFastGrid<Person>> Render(TestContext ctx,
+            RenderFragment columns,
+            Action<ComponentParameterCollectionBuilder<RadzenFastGrid<Person>>>? extra = null,
+            IEnumerable<Person>? data = null, FilterUI ui = FilterUI.Menu)
+        {
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            return ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, data ?? People.Sample());
+                p.Add(g => g.ChildContent, columns);
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, ui);
+                extra?.Invoke(p);
+            });
+        }
+
+        static void OpenMenu(IRenderedComponent<RadzenFastGrid<Person>> cut, int column) =>
+            cut.FindAll("thead button.rz-filter-button")[column].Click();
+
+        static void PickItem(IRenderedComponent<RadzenFastGrid<Person>> cut, string label) =>
+            cut.FindAll("button.rz-filter-menu-item").Single(item => item.TextContent == label).Click();
+
+        static RadzenListBox<IEnumerable>[] Lists(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
+            cut.FindComponents<RadzenListBox<IEnumerable>>().Select(c => c.Instance).ToArray();
+
+        /// <summary>The blank is the entry standing for no value, wherever it sits in the list.</summary>
+        static FastGridFilterEntry Blank(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
+            Lists(cut).Single().Data.Cast<object>().OfType<FastGridFilterEntry>()
+                .Single(e => e.Value is null);
+
+        // ---- the operator rule, where it is a rule about nothing but a flag ----
+
+        [Fact]
+        public void ASetOffersTheTwoSequenceOperatorsAndNothingElse()
+        {
+            Assert.Equal(
+                new[] { FastGridFilterOperator.In, FastGridFilterOperator.NotIn },
+                FastGridFilterOperators.Set(nullable: false));
+        }
+
+        [Fact]
+        public void ANullableSetGetsTheSameAbsenceTailEveryOtherTypeGets()
+        {
+            // The append is factored rather than copied, so this is the same two operators in the same
+            // place as on a string or a date - which is the thing a second copy would let drift.
+            var set = FastGridFilterOperators.Set(nullable: true);
+            var text = FastGridFilterOperators.Menu(typeof(string), nullable: true);
+
+            Assert.Equal(
+                new[]
+                {
+                    FastGridFilterOperator.In,
+                    FastGridFilterOperator.NotIn,
+                    FastGridFilterOperator.IsNull,
+                    FastGridFilterOperator.IsNotNull,
+                },
+                set);
+
+            Assert.Equal(text.TakeLast(2), set.TakeLast(2));
+        }
+
+        // ---- the operator rule, where it needs a column to have declared something ----
+
+        [Fact]
+        public void ADeclaredCheckBoxListIsOfferedTheSetOperators()
+        {
+            // Without this the declaration is inert under FilterUI.Menu: a string column would be handed
+            // Contains and StartsWith and no way to reach the list its author asked for.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.First,
+                filterMode: FilterMode.CheckBoxList)));
+
+            var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
+
+            Assert.Contains(FastGridFilterOperator.In, column.MenuOperators);
+            Assert.DoesNotContain(FastGridFilterOperator.Contains, column.MenuOperators);
+        }
+
+        [Fact]
+        public void TheSameColumnWithoutTheDeclarationIsOfferedItsTypesOperators()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.First)));
+
+            var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
+
+            Assert.Contains(FastGridFilterOperator.Contains, column.MenuOperators);
+            Assert.DoesNotContain(FastGridFilterOperator.In, column.MenuOperators);
+        }
+
+        [Fact]
+        public void ALookupIsASetWhateverTheGridsModeIs()
+        {
+            // Unconditional, where the base asks the declaration: a lookup filters by ids whatever
+            // editor is drawing, and has since §14.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(x => x.CategoryId,
+                FastGridLookup.Items(Lookups.CategoryRows(), c => c.Id, c => c.Name))), ui: FilterUI.Menu);
+
+            var column = cut.FindComponent<LookupColumn<Person, int>>().Instance;
+
+            Assert.Equal(
+                new[] { FastGridFilterOperator.In, FastGridFilterOperator.NotIn },
+                column.MenuOperators);
+        }
+
+        // ---- the enum arm: values from the type, and no query to get them ----
+
+        [Fact]
+        public void AnEnumOffersEveryMemberOfItsTypeRatherThanTheOnesTheRowsHold()
+        {
+            // Offering only what the data holds is the defect §14 rejected for lookups by name - a
+            // filter control whose options move as the data does moves under the reader. Every sample
+            // row is Junior; Senior is still offered.
+            using var ctx = new TestContext();
+            var data = People.Sample();
+
+            foreach (var person in data)
+            {
+                person.Grade = Grade.Junior;
+            }
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, Grade>(x => x.Grade)), data: data);
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            Assert.Equal(
+                new object[] { Grade.Junior, Grade.Senior },
+                Lists(cut).Single().Data.Cast<object>());
+        }
+
+        // ---- the blank ----
+
+        [Fact]
+        public void ANullableColumnLeadsWithTheBlankEntry()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, int?>(x => x.RegionId,
+                filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            var offered = Lists(cut).Single().Data.Cast<object>().ToArray();
+
+            // First, and standing for no value - §14's own placement and §14's own meaning.
+            Assert.Equal(cut.Instance.BlankFilterText, offered[0].ToString());
+            Assert.Null(Assert.IsType<FastGridFilterEntry>(offered[0]).Value);
+        }
+
+        [Fact]
+        public void ANonNullableColumnOffersNoBlank()
+        {
+            // Read as default it would filter to the rows whose value happens to be zero while the list
+            // showed nothing ticked, which is §14's own trap.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, int>(x => x.Id,
+                filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            // Not wrapped at all: a column that cannot hold a blank offers the raw values it always did.
+            Assert.DoesNotContain(Lists(cut).Single().Data.Cast<object>(), v => v is FastGridFilterEntry);
+        }
+
+        [Fact]
+        public void TickingTheBlankFiltersToTheRowsWithNothingInThem()
+        {
+            // The whole point of the entry, and the round trip it needs: the blank becomes a null in the
+            // In list, and List<int?>.Contains is what matches the rows carrying no id.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, int?>(x => x.RegionId, filterMode: FilterMode.CheckBoxList),
+                Columns.Property<Person, string>(x => x.First)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            var blank = Blank(cut);
+
+            cut.InvokeAsync(() => Lists(cut).Single().Change
+                .InvokeAsync(new List<object> { blank }));
+
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            var column = cut.FindComponent<PropertyColumn<Person, int?>>().Instance;
+            var values = ((IEnumerable)column.CurrentFilter!.First.Value!).Cast<object?>().ToArray();
+
+            Assert.Equal(new object?[] { null }, values);
+
+            // And it narrows to exactly the rows that have no region, rather than to none at all.
+            var shown = cut.FindAll("tbody tr")
+                .Select(row => row.QuerySelectorAll("td")[1].TextContent).ToArray();
+
+            Assert.Equal(
+                People.Sample().Where(p => p.RegionId is null).Select(p => p.First).ToArray(),
+                shown);
+        }
+
+        [Fact]
+        public void TheBlankSurvivesReopeningTheMenuAsATickedBox()
+        {
+            // SelectionOf's half of the round trip: the committed null has to come back as the entry,
+            // because a raw null is not one of the values the list is bound to.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, int?>(x => x.RegionId,
+                filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            var blank = Blank(cut);
+
+            cut.InvokeAsync(() => Lists(cut).Single().Change.InvokeAsync(new List<object> { blank }));
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            OpenMenu(cut, 0);
+
+            Assert.Same(blank, Lists(cut).Single().Value!.Cast<object>().Single());
+        }
+
+        [Fact]
+        public void AStringColumnsBlankStandsForTheEmptyStringToo()
+        {
+            // In coalesces a null string to the empty one, so leaving the scanned "" beside the blank
+            // would put two entries in the list that filter identically - one of them drawn as an empty
+            // row.
+            using var ctx = new TestContext();
+            var data = People.Sample();
+
+            data[0].First = string.Empty;
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.First,
+                filterMode: FilterMode.CheckBoxList)), data: data);
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            // One entry standing for nothing, and no separate entry whose value is the empty string.
+            var offered = Lists(cut).Single().Data.Cast<object>().OfType<FastGridFilterEntry>().ToArray();
+
+            Assert.Single(offered.Where(e => e.Value is null));
+            Assert.DoesNotContain(offered, e => e.Value as string == string.Empty);
+        }
+
+        // ---- the gate: queries per open ----
+
+        /// <summary>
+        /// §10's own control, and the instrument this section's gate needs: it counts the queries that
+        /// were <em>issued</em>, and the failure mode here is N of them where one is right.
+        /// </summary>
+        sealed class ScanCountingExecutor : IFastGridQueryExecutor
+        {
+            public int Scans { get; private set; }
+
+            public bool IsSupported<T>(IQueryable<T> queryable) => true;
+
+            public Task<int> CountAsync<T>(IQueryable<T> queryable, CancellationToken token = default) =>
+                Task.FromResult(queryable.Count());
+
+            public Task<List<T>> ToListAsync<T>(IQueryable<T> queryable, CancellationToken token = default)
+            {
+                // The page load and the check-box list's scan both come through here; only one of them
+                // composes a Distinct.
+                if (queryable.Expression.ToString().Contains("Distinct", StringComparison.Ordinal))
+                {
+                    Scans++;
+                }
+
+                return Task.FromResult(queryable.ToList());
+            }
+        }
+
+        static (IRenderedComponent<RadzenFastGrid<Person>> Cut, ScanCountingExecutor Executor) Counted(
+            TestContext ctx, RenderFragment columns)
+        {
+            var executor = new ScanCountingExecutor();
+
+            ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
+
+            return (Render(ctx, columns, data: People.Sample().AsQueryable()), executor);
+        }
+
+        [Fact]
+        public void ALookupsOpenCostsNoQuery()
+        {
+            // §14 holds the map, so there is nothing to scan for. The lookup's own resolve is once at
+            // startup and is not this gate's business.
+            using var ctx = new TestContext();
+            var (cut, executor) = Counted(ctx, Columns.Of(
+                Columns.Lookup<Person, int>(x => x.CategoryId,
+                    FastGridLookup.Items(Lookups.CategoryRows(), c => c.Id, c => c.Name))));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            Assert.Equal(0, executor.Scans);
+        }
+
+        [Fact]
+        public void AnEnumsOpenCostsNoQuery()
+        {
+            using var ctx = new TestContext();
+            var (cut, executor) = Counted(ctx, Columns.Of(
+                Columns.Property<Person, Grade>(x => x.Grade)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            Assert.Equal(0, executor.Scans);
+        }
+
+        [Fact]
+        public void OneOpenOfOneColumnIsOneScanAndNotOnePerColumn()
+        {
+            // The gate, in the shape §10 measured it failing: three scans for one render. Two declared
+            // columns and one open - a panel that warmed every column's list, which is what leading with
+            // the checklist means, would read two here.
+            using var ctx = new TestContext();
+            var (cut, executor) = Counted(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, filterMode: FilterMode.CheckBoxList),
+                Columns.Property<Person, string>(x => x.Last, filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            cut.WaitForAssertion(() => Assert.Equal(1, executor.Scans));
+
+            // And the second column's own open is its own one, rather than free or double.
+            OpenMenu(cut, 1);
+            PickItem(cut, "In");
+
+            cut.WaitForAssertion(() => Assert.Equal(2, executor.Scans));
+        }
+
+        [Fact]
+        public void ReopeningTheSameColumnScansNothingFurther()
+        {
+            using var ctx = new TestContext();
+            var (cut, executor) = Counted(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            cut.WaitForAssertion(() => Assert.Equal(1, executor.Scans));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            Assert.Equal(1, executor.Scans);
+        }
+
+        [Fact]
+        public void ReloadIsWhatMakesTheNextOpenScanAgain()
+        {
+            using var ctx = new TestContext();
+            var (cut, executor) = Counted(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First, filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            cut.WaitForAssertion(() => Assert.Equal(1, executor.Scans));
+
+            cut.InvokeAsync(() => cut.Instance.Reload());
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            cut.WaitForAssertion(() => Assert.Equal(2, executor.Scans));
+        }
+
+        [Fact]
+        public void AColumnThatNothingKnowsTheValuesOfDrawsNoListAndCostsNoQuery()
+        {
+            // The refutation of §31's "Filter by value...", asked as a number: an undeclared column
+            // cannot reach a scan at all, whatever its reader picks.
+            using var ctx = new TestContext();
+            var (cut, executor) = Counted(ctx, Columns.Of(
+                Columns.Property<Person, string>(x => x.First)));
+
+            OpenMenu(cut, 0);
+
+            Assert.DoesNotContain(FastGridFilterOperator.In,
+                cut.FindComponent<PropertyColumn<Person, string>>().Instance.MenuOperators);
+
+            PickItem(cut, "Contains");
+
+            Assert.Empty(Lists(cut));
+            Assert.Equal(0, executor.Scans);
+        }
+    }
+}

@@ -199,6 +199,29 @@ public class FastGridFeatureBench
         Column<decimal>(x => x.Salary, "Salary", null);
     };
 
+    // §36. The same five columns with the declaration that says "this column's values are a set worth
+    // listing" - which is the third way a column's values can be known, beside a lookup's map and an
+    // enum's type. Name is the wide one: one distinct value per row.
+    static readonly RenderFragment CheckBoxListColumns = b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+            b.AddAttribute(s++, "FilterMode", FilterMode.CheckBoxList);
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id");
+        Column<string>(x => x.Name, "Name");
+        Column<int>(x => x.Age, "Age");
+        Column<DateTime>(x => x.Hired, "Hired");
+        Column<decimal>(x => x.Salary, "Salary");
+    };
+
     // §34. The same five columns with a date range on Hired, written twice: once as two DateTimes and
     // once as two tokens. The pair is the measurement - the delta between them is what a relative date
     // costs, with the range itself held constant, and the sweep over N is what says whether that cost is
@@ -653,6 +676,30 @@ public class FastGridFeatureBench
         p["AllowFiltering"] = true;
         p["FilterUI"] = FilterUI.Menu;
         p["ChildContent"] = FilteredColumns;
+    });
+
+    // §36's half of the gate that can fail the piece. A column declaring FilterMode.CheckBoxList is
+    // offered a set and, under a menu, a list that nobody has opened - so a declaration must cost what
+    // the row above costs and no more. Nothing here is drawn per row, but "by construction" is what
+    // §33's residual was also called.
+    [Benchmark(Description = "+ a filter menu, never opened, over a declared check-box list")]
+    public Task FilterMenuClosedDeclared() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["FilterUI"] = FilterUI.Menu;
+        p["ChildContent"] = CheckBoxListColumns;
+    });
+
+    // What a wide open costs, measured where this harness can reach it. §36 declines to cap the
+    // distinct scan or to page it, so the honest number is what a list of N distinct values costs to
+    // build and draw - and Name has one per row, which is the widest a column here gets. The harness
+    // renders rather than drives, so it cannot click a panel open; the filter row draws the same list
+    // through the same FilterLookup, which is the work the open would do.
+    [Benchmark(Description = "+ a filter row of check-box lists, one value per row")]
+    public Task FilterRowCheckBoxLists() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ChildContent"] = CheckBoxListColumns;
     });
 
     // The one hook on this component that runs per cell rather than per row or per column, so the

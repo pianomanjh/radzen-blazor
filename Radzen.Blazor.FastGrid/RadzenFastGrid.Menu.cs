@@ -412,9 +412,8 @@ namespace Radzen.FastGrid
             builder.OpenElement(30, "div");
             builder.AddAttribute(31, "class", "rz-filter-menu-editor");
 
-            // The check-box list proper is §36's. What this draws is the filter row's control bound to
-            // the *draft* rather than to the committed filter, and the difference is the whole of the
-            // review's first finding: bound the row's way, the list applied on every tick and Apply then
+            // The list bound to the *draft* rather than to the committed filter, which is the whole of
+            // §35's review's first finding: bound the row's way, it applied on every tick and Apply then
             // wrote the draft back over it, so confirming a selection undid it. It also filtered per
             // keystroke, which §31 bans by name.
             if (arity == FastGridFilterArity.Many)
@@ -438,27 +437,50 @@ namespace Radzen.FastGrid
             builder.CloseElement();
         }
 
-        /// <summary>The multiselect, bound to the draft and to the operator the menu picked.</summary>
+        /// <summary>The check-box list, bound to the draft and to the operator the menu picked.</summary>
         /// <remarks>
+        /// <para>
+        /// <strong>§36's control, replacing the drop-down §35 left as a placeholder.</strong>
+        /// <c>RadzenListBox</c> in <c>Multiple</c> mode draws a check box per value in a scrolling
+        /// panel with a search box over it, which is the list §31 asked for and the one
+        /// <c>RadzenDataGridHeaderCell</c> already draws for <c>FilterMode.CheckBoxList</c> - so its
+        /// parameters here are upstream's own, for the reason §7's table gives.
+        /// </para>
+        /// <para>
+        /// The row keeps the drop-down. A three-hundred-pixel scrolling list does not go in a header
+        /// row, and the panel has room the row does not; what stays shared is the mapping that feeds
+        /// them both, <see cref="ColumnBase{TItem}.SelectionOf" /> and
+        /// <c>FilterValueFromSelection</c>.
+        /// </para>
+        /// <para>
         /// Not <c>RenderFilterList</c>, which exists for the filter row: that one reads
         /// <c>FilterSelection</c> - the committed filter - and its change handler calls <c>Filter</c>
         /// with <c>In</c> hard-coded. Both are right for a row and wrong here: the row has no Apply to
         /// wait for, and it has no operator list beside it, so <c>NotIn</c> was unreachable through it
         /// even though the menu offers it.
+        /// </para>
         /// </remarks>
         void RenderFilterMenuList(RenderTreeBuilder builder, ColumnBase<TItem> column)
         {
-            builder.OpenComponent<RadzenDropDown<IEnumerable>>(60);
-            builder.AddAttribute(61, nameof(RadzenDropDown<IEnumerable>.Data), FilterLookup(column));
-            builder.AddAttribute(62, nameof(RadzenDropDown<IEnumerable>.Multiple), true);
-            builder.AddAttribute(63, nameof(RadzenDropDown<IEnumerable>.AllowClear), true);
-            builder.AddAttribute(64, nameof(RadzenDropDown<IEnumerable>.AllowFiltering), true);
-            builder.AddAttribute(65, nameof(RadzenDropDown<IEnumerable>.FilterCaseSensitivity),
+            builder.OpenComponent<RadzenListBox<IEnumerable>>(60);
+            builder.AddAttribute(61, nameof(RadzenListBox<IEnumerable>.Data), FilterLookup(column));
+            builder.AddAttribute(62, nameof(RadzenListBox<IEnumerable>.Multiple), true);
+            builder.AddAttribute(63, nameof(RadzenListBox<IEnumerable>.AllowClear), true);
+            builder.AddAttribute(64, nameof(RadzenListBox<IEnumerable>.AllowFiltering), true);
+            builder.AddAttribute(65, nameof(RadzenListBox<IEnumerable>.FilterCaseSensitivity),
                 FilterCaseSensitivity.CaseInsensitive);
-            builder.AddAttribute(66, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
-            builder.AddAttribute(67, nameof(RadzenDropDown<IEnumerable>.Value),
+
+            // Bounded rendering, not bounded querying: the scan is one query and whole, and paging it
+            // as the reader scrolls - which is what upstream's LoadData does - would make §36's
+            // queries-per-open gate stop bounding anything.
+            builder.AddAttribute(66, nameof(RadzenListBox<IEnumerable>.AllowVirtualization), true);
+            builder.AddAttribute(67, nameof(RadzenListBox<IEnumerable>.AllowSelectAll), true);
+            builder.AddAttribute(68, nameof(RadzenListBox<IEnumerable>.SelectAllText), SelectAllFilterText);
+            builder.AddAttribute(69, nameof(RadzenListBox<IEnumerable>.Style),
+                "width: 100%; height: 15rem");
+            builder.AddAttribute(70, nameof(RadzenListBox<IEnumerable>.Value),
                 column.SelectionOf(menuValue));
-            builder.AddAttribute(68, nameof(RadzenDropDown<IEnumerable>.Change),
+            builder.AddAttribute(71, nameof(RadzenListBox<IEnumerable>.Change),
                 EventCallback.Factory.Create<object>(this, value => DraftSelection(column, value)));
             builder.CloseComponent();
         }

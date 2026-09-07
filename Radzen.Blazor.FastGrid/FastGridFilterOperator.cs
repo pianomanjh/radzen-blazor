@@ -220,16 +220,41 @@ namespace Radzen.FastGrid
         {
             ArgumentNullException.ThrowIfNull(type);
 
-            var underlying = Nullable.GetUnderlyingType(type) ?? type;
-            var offered = Offered(underlying);
+            return WithNull(Offered(Nullable.GetUnderlyingType(type) ?? type), nullable);
+        }
 
+        /// <summary>
+        /// The operators a column whose values are a set offers - a lookup, an enum, or one whose author
+        /// declared a check-box list.
+        /// </summary>
+        /// <remarks>
+        /// §36. The type cannot answer this: a lookup's <c>EffectiveFilterType</c> is its key type and a
+        /// declared check-box list is most often a string, so both would be handed operators the list
+        /// cannot write. What decides is whether something knows the column's values, not what those
+        /// values are.
+        /// </remarks>
+        internal static FastGridFilterOperator[] Set(bool nullable) => WithNull(SetOperators, nullable);
+
+        /// <summary>
+        /// <c>IsNull</c> and <c>IsNotNull</c> after whatever came before, on a nullable column.
+        /// </summary>
+        /// <remarks>
+        /// Appended rather than woven in: they are about the absence of a value and everything above
+        /// them is about one, and a menu that mixes the two reads worse than one that does not.
+        /// <para>
+        /// Factored out of <see cref="Menu" /> rather than copied into <see cref="Set" />. §35's review
+        /// found this file's nullability rule spelled in two places and unreachable in one of them, and
+        /// §34's found four call sites covering for each other; a third copy of the append is how that
+        /// becomes a rule nobody can change in one place.
+        /// </para>
+        /// </remarks>
+        static FastGridFilterOperator[] WithNull(FastGridFilterOperator[] offered, bool nullable)
+        {
             if (!nullable)
             {
                 return offered;
             }
 
-            // Appended rather than woven in: they are about the absence of a value and everything above
-            // them is about one, and a menu that mixes the two reads worse than one that does not.
             var withNull = new FastGridFilterOperator[offered.Length + 2];
 
             Array.Copy(offered, withNull, offered.Length);

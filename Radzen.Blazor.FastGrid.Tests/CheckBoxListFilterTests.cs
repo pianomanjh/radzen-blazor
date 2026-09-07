@@ -44,6 +44,15 @@ namespace Radzen.FastGrid.Tests
         static object[] Offered(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
             Picker(cut, index).Data.Cast<object>().ToArray();
 
+        /// <summary>
+        /// The values the list offers, unwrapped out of §36's entries and minus its blank - which every
+        /// nullable column now leads with, a string one included, because a string can be null. The
+        /// entry itself is pinned in <c>FastGridChecklistTests</c> rather than by every test here that
+        /// asserts which values a scan found.
+        /// </summary>
+        static object[] Values(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
+            FilterList.Values(Picker(cut, index).Data);
+
         static void Pick(IRenderedComponent<RadzenFastGrid<Person>> cut, int index, params object[] values) =>
             cut.InvokeAsync(() => cut.FindComponents<RadzenDropDown<IEnumerable>>()[index]
                 .Instance.Change.InvokeAsync(values.ToList()));
@@ -96,7 +105,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.Customer.Name)));
 
-            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Values(cut, 0));
         }
 
         [Fact]
@@ -110,7 +119,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, string>(x => x.Customer.Name)), data: data);
 
-            Assert.Equal(new object[] { "Whisky", "Xray", "Zeta" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "Whisky", "Xray", "Zeta" }, Values(cut, 0));
         }
 
         [Fact]
@@ -168,7 +177,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, Columns.Of(Columns.Property<Person, List<string>>(x => x.Regions)));
 
-            Assert.Equal(new object[] { "East", "North", "South", "West" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "East", "North", "South", "West" }, Values(cut, 0));
         }
 
         [Fact]
@@ -209,7 +218,7 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, string>(x => x.Customer.Name,
                     filterLookupData: new object[] { "Zeta", "Nowhere" })));
 
-            Assert.Equal(new object[] { "Zeta", "Nowhere" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "Zeta", "Nowhere" }, Values(cut, 0));
         }
 
         [Fact]
@@ -219,11 +228,11 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.First)));
 
-            Assert.Equal(4, Offered(cut, 0).Length);
+            Assert.Equal(4, Values(cut, 0).Length);
 
             cut.SetParametersAndRender(p => p.Add(g => g.Data, People.Many(2)));
 
-            Assert.Equal(new object[] { "First1", "First2" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "First1", "First2" }, Values(cut, 0));
         }
 
         [Fact]
@@ -236,7 +245,7 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, string>(x => x.First)),
                 data: People.Sample().AsQueryable());
 
-            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Values(cut, 0));
 
             Pick(cut, 0, "Whisky");
 
@@ -320,13 +329,13 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(x => x.Customer.Name)),
                 data: People.Sample().AsQueryable());
 
-            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Values(cut, 0));
             Assert.Equal(1, executor.DistinctCalls);
 
             cut.SetParametersAndRender(p => p.Add(g => g.Data, People.Sample().AsQueryable()));
             cut.SetParametersAndRender(p => p.Add(g => g.Data, People.Sample().AsQueryable()));
 
-            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Offered(cut, 0));
+            Assert.Equal(new object[] { "Whisky", "Xray", "Yankee", "Zeta" }, Values(cut, 0));
             Assert.Equal(1, executor.DistinctCalls);
         }
 

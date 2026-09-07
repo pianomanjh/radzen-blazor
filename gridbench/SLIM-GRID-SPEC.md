@@ -8902,8 +8902,129 @@ what §33's residual was also called.
   was one thing when §35 wrote it. A column that declares `CheckBoxList` and then has its filter set
   programmatically to `Contains` is a case the screening rule handles and the operator list now also
   has an opinion about, and the two have never been exercised together.
+- **The blank is offered wherever a column is nullable, not where a blank was seen.** Excel shows
+  *(Blanks)* only when the data has some, because its list comes from the data. A declared column with
+  no empty rows offers an entry that filters to nothing - visible on the playground's *Department*,
+  which has none. This is §14's rule exactly, and §14 chose it for a reason that does not hold for a
+  scan: a lookup cannot know without a query, and a scan already has the answer. One rule across four
+  value sources was judged worth more than the better answer on one of them, and that trade has no
+  measurement behind it.
+- **A string column's blank means null or empty and cannot be made to mean only one.** The empty string
+  collapses into it because `In` coalesces, which makes the entry honest about what it filters and
+  leaves the genuinely-null rows reachable only through the `Is null` operator beside it.
+- **An `In` carrying a null still reaches upstream's OData formatter**, which §33 records as rendering
+  `ToString` over the list. The blank makes that reachable from the menu where before it needed markup.
+  Not fixed here and not measured.
+- **The wide-open figure is the filter row's, not the panel's.** Five lists rather than one, and derived
+  per value rather than measured at a single open, because the harness cannot click. The order of
+  magnitude is right; the figure for one open is inferred from it.
 - **The blank's translation is `List<int?>` reaching a provider**, which is asserted here from §14's
   precedent over `TKey` and not from a run against a real database on a non-lookup column. §14's is
-  exercised; this one's first real test is the playground's Entity Framework switch.
+  exercised; this one's first real test is the playground's Entity Framework switch. *It is exercised:
+  the playground's Entity Framework switch shows the same two values SQLite returns for the filter the
+  in-memory source answered.*
 - **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
-  that can fail the piece.
+  that can fail the piece. *It is built: see What it cost, where the declaration reads 0.12 KB flat
+  across a tenfold change in rows.*
+
+### What the build changed
+
+Two of this section's decisions did not survive, one of them found by a browser on the second click,
+and the gate's instrument turned out to be a different one from the one named.
+
+**The blank had to be every entry, not one sentinel among the values.** This section said *§14's shape,
+generalised* and the build generalised half of it: a lone object drawing *(Blank)* at the head of a
+list of raw values. `DropDownBase` infers a multiple selection's element type from **the first item in
+`Data`** and casts the whole selection to it - so with the blank first, ticking a second box asked
+upstream to cast an `int` to the sentinel's type and **took the circuit down**. §14 never meets this
+because every one of its entries is a `FastGridLookupEntry` including its blank; a homogeneous list is
+the whole of that shape and half of it was not enough. So `FastGridFilterEntry` wraps every value on a
+nullable column, `SelectionOf` finds the ticks again by scanning - which is §14's method and §14's
+stated reason for it - and a column that cannot hold a blank goes on offering the raw values it always
+did.
+
+**All 1,074 tests passed with the sentinel in place.** bUnit invokes the control's `Change` callback
+with whatever the test hands it and never runs upstream's own selection path, so the cast that fails is
+one no test in this suite executes. The playground found it on the second tick. That is §9's sixth
+layer catching a circuit-terminating bug the whole suite passed, for the second time on this branch -
+§35's `ConfigureAwait(false)` was the first, and both are in memory as
+`bunit-hides-dispatcher-and-bubbling`.
+
+**The gate's instrument is a counting executor, not `WalkCountingProvider`.** This section named the
+provider counter because it sees a *composed* query where a counter on the source object does not -
+which is true, and is an answer to a different question. That counter exists to ask **whether a query
+ran on the render thread**, and it excludes the executor's own walk by an `AsyncLocal` in order to do
+it - so it cannot see this scan at all, because the scan is what the executor runs.
+`CheckBoxListFilterTests`'s own `CountingExecutor` is what counts queries, and it is §10's control for
+the very defect this gate exists to prevent. The right instrument was already in the file that measured
+the failure.
+
+**Smaller, and all real:** the nullable append had to be factored out of `FastGridFilterOperators.Menu`
+rather than copied, and doing it let `LookupColumnBase` delete its two arrays - one rule where §35's
+review had already found two; `FilterValueFromSelection` built its list over
+`Nullable.GetUnderlyingType(declared) ?? declared`, which strips exactly the nullability a null needs to
+ride in, so a `List<decimal>` could not have carried a blank at all; `FilterExpression.Listed` dropped
+nulls under a comment saying a null was an untouched check box rather than a request to match the rows
+with nothing, which was true until this section gave it a way to be one; and a string column's blank
+collapses the scanned empty string into itself, because `In` coalesces a null string to the empty one
+and two entries that filter identically are worse than one.
+
+### What it cost
+
+`FastGridFeatureBench`, `--job short`, swept over two row counts. The control is §35's own pair, re-run
+rather than assumed:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row | 52.55 KB | 159.82 KB |
+| a filter menu, never opened | 52.96 KB | 160.23 KB |
+| a filter menu, never opened, over a **declared check-box list** | **53.08** KB | **160.35** KB |
+
+**The declaration costs 0.12 KB, at both row counts.** Flat across a tenfold change in rows is the whole
+question - it is per column and per grid, and nothing here is drawn per row. The gate that can fail the
+piece passes.
+
+**And what a wide open costs, which this section declined to cap.** The harness renders rather than
+drives, so it cannot click a panel open; the filter row draws the same lists through the same
+`FilterLookup`, which is the work an open does. Five check-box lists, four of them over columns holding
+one distinct value per row:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row of check-box lists | 1,748 KB / 3.28 ms | 16,510 KB / 18.3 ms |
+
+Linear in the number of values - roughly **3.3 KB and 3.7 us per value per list** - so opening one
+column with a thousand distinct values costs on the order of 3.3 MB and 3.7 ms. That is the number the
+budget was standing in for, and it is large. It is also precisely the argument for requiring the
+declaration: **the grid cannot learn that a column has a thousand distinct values without paying this,
+and the author already knows.** What it does not argue for is a ceiling the grid imposes - a declared
+column is a statement about the data, and `FilterLookupData` is the lever for a source that should not
+be scanned at all.
+
+**Measured on a machine at load average 3.1 of ten cores**, against §9's "quiet machine". The allocation
+figures are unaffected by that, being deterministic; the times above are quoted for the order of
+magnitude they establish and never as a ratio.
+
+### What the mutation loop found
+
+**Thirteen of sixteen caught**, one that ends the test host rather than failing a test, and one site
+that survives.
+
+- **The survivor is §10's, not §36's.** `LoadLookupsAsync` skips a column whose values arrived while its
+  batch was in flight, and `FilterLookup` never puts an already-cached column into `pendingLookups` in
+  the first place - so the two guards cover for each other, and removing either alone leaves the count
+  at one. The one sequence that reaches it is two overlapping batches, which is a race no test can
+  construct. §34's review found four `StampFilterClock` calls covering for each other and §35 deleted a
+  pair that genuinely could not be reached; this one *can* be, so it stays, named.
+- **Removing the cache write does not fail a test, it ends the process.** The scan re-runs, `loaded` is
+  set, `StateHasChanged` renders, the render asks again: an unbounded loop - and a crashed host reports
+  zero failures. The first reading of that run called the mutation caught and the second called it
+  survived; both were wrong. **A mutation harness has to check that the expected number of tests ran**,
+  not that a total was printed: `Total time:` matched the substring the check was looking for. That is
+  `mutation-verdicts-need-a-ran-check` arriving in a shape the rule as written did not cover.
+- **And the gate test had to be rewritten before it could discriminate.** As first written it asserted
+  one scan across three opens of one column, and no single-site mutation could move it: the caching half
+  is covered by §10's own control, and anything that removes the cache kills the host. What it pins now
+  is the shape §10 *measured* failing - two declared columns, one open, one scan - which the mutation
+  that warms every column's list fails at once. **A gate that cannot fail is not a gate**, and this one
+  could not until it was asked the question §10 had actually answered wrongly.

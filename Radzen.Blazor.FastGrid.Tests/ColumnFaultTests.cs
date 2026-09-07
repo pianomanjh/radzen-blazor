@@ -109,8 +109,9 @@ namespace Radzen.FastGrid.Tests
                     p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 });
 
-            var offered = cut.FindComponent<RadzenDropDown<IEnumerable>>()
-                .Instance.Data.Cast<object>().Select(v => v.ToString()).ToArray();
+            // Unwrapped out of §36's entries and minus its blank, which a string column leads with.
+            var offered = FilterList.Values(cut.FindComponent<RadzenDropDown<IEnumerable>>().Instance.Data)
+                .Select(v => v.ToString()).ToArray();
 
             Assert.Equal(new[] { "Adams", "Bell", "Cook", "Draper" }, offered);
         }
@@ -158,8 +159,9 @@ namespace Radzen.FastGrid.Tests
                     p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 });
 
-            var offered = cut.FindComponent<RadzenDropDown<IEnumerable>>()
-                .Instance.Data.Cast<object>().Select(v => v.ToString()).ToArray();
+            // Unwrapped, and minus §36's blank: a column declared as object is nullable.
+            var offered = FilterList.Values(cut.FindComponent<RadzenDropDown<IEnumerable>>().Instance.Data)
+                .Select(v => v.ToString()).ToArray();
 
             Assert.Equal(4, offered.Length);
             Assert.Contains("n/a", offered);

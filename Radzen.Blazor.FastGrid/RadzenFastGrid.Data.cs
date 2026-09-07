@@ -846,14 +846,18 @@ namespace Radzen.FastGrid
                 return own;
             }
 
+            // Through FilterEntries from here down, which is where §36's blank joins the list. Not on
+            // the branch above: a column answering with its own values has already put one there if it
+            // offers one, which is what LookupColumnBase has done since §14 and what the enum arm on
+            // ColumnBase.FilterValues now does too.
             if (column.FilterLookupData is { } supplied)
             {
-                return supplied;
+                return column.FilterEntries(supplied);
             }
 
             if (lookups.TryGetValue(column, out var cached))
             {
-                return cached;
+                return column.FilterEntries(cached);
             }
 
             // The same rule View() and TotalCount() follow: a source the executor owns is not touched
@@ -882,7 +886,7 @@ namespace Radzen.FastGrid
 
             lookups[column] = materialized;
 
-            return materialized;
+            return column.FilterEntries(materialized);
         }
 
         readonly Dictionary<object, object> sharedNames = new();

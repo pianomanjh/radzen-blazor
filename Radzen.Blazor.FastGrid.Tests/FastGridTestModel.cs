@@ -85,6 +85,25 @@ namespace Radzen.FastGrid.Tests
     }
 
     /// <summary>
+    /// What a check-box list offers, as the values it filters by.
+    /// </summary>
+    /// <remarks>
+    /// §36 binds a nullable column's list to <see cref="FastGridFilterEntry" /> rather than to the raw
+    /// values, and leads it with the blank - a homogeneous list, because <c>DropDownBase</c> casts a
+    /// multiple selection to the type of the first item in <c>Data</c>. A test that is about which
+    /// values a scan found unwraps and drops the blank; the entry itself is pinned in
+    /// <c>FastGridChecklistTests</c>.
+    /// </remarks>
+    public static class FilterList
+    {
+        public static object[] Values(System.Collections.IEnumerable offered) =>
+            offered.Cast<object>()
+                .Select(v => v is FastGridFilterEntry entry ? entry.Value : v)
+                .Where(v => v is not null)
+                .ToArray()!;
+    }
+
+    /// <summary>
     /// Column declarations for tests. Building the fragment by hand rather than in Razor keeps the test
     /// project a plain xunit assembly, matching Radzen.Blazor.Tests.
     /// </summary>

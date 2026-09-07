@@ -32,6 +32,20 @@ public class Row
     /// </summary>
     public List<int> TagIds { get; set; } = [];
 
+    /// <summary>
+    /// §36. An enum, whose members come from the type - so the checklist offers <em>Staff</em> even
+    /// though no row is one, and offers it without a query. The generator never produces it on
+    /// purpose: a list drawn from the data could not.
+    /// </summary>
+    public Level Level { get; set; }
+
+    /// <summary>
+    /// §36. A nullable value with no lookup behind it, null on every fifth row. §14's blank entry
+    /// exists for a lookup key; this is the column that had no equivalent, and it is where "these
+    /// three or blank" can actually be ticked.
+    /// </summary>
+    public int? Rating { get; set; }
+
     static readonly string[] Departments = ["Engineering", "Sales", "Ops", "Finance", "Support"];
 
     public static List<Row> Make(int n) => Enumerable.Range(0, n).Select(i => new Row
@@ -48,7 +62,19 @@ public class Row
         Notes = "Row " + i + " has a long enough note to truncate when the column is narrowed.",
         TeamId = i % 7 == 0 ? null : Lookups.Teams[i % (Lookups.Teams.Count - 1)].Id,
         TagIds = Lookups.Tags.Where((_, t) => (i / (t + 1)) % 3 == 0).Select(tag => tag.Id).ToList(),
+        // Never Staff - see the property.
+        Level = (Level)(i % 3),
+        Rating = i % 5 == 0 ? null : 1 + (i % 5),
     }).ToList();
+}
+
+/// <summary>§36's enum column. Four members, of which the generator writes three.</summary>
+public enum Level
+{
+    Junior,
+    Senior,
+    Principal,
+    Staff,
 }
 
 /// <summary>The far side of a lookup: a row holding a name and the id other rows carry.</summary>

@@ -215,7 +215,21 @@
                             AutoFitPriority="@Identity" MinWidth="@Floor" Frozen="@frozen" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="@Wide("220px")"
                             AutoFitPriority="@Identity" MinWidth="@Floor" Frozen="@frozen" />
-            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" MinWidth="@Floor" Width="@Wide("260px")" />
+            @* §36. Declared, not discovered: the author is the only party who knows this column holds
+               five values rather than fifty thousand, and FilterMode.CheckBoxList is where they say so.
+               Under a menu it is offered "Is in" and the scan runs once, when the panel is opened. *@
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department"
+                            MinWidth="@Floor" Width="@Wide("260px")"
+                            FilterMode="FilterMode.CheckBoxList" />
+            @* §36. The type holds the members, so this list costs no query at all - and offers Staff,
+               which no row is. *@
+            <PropertyColumn TItem="Row" TProp="Level" Property="@(x => x.Level)" Title="Level"
+                            MinWidth="@Floor" Width="@Wide("140px")" />
+            @* §36. Nullable, declared, and no lookup behind it - the blank entry's own case. Tick
+               (Blank) with two numbers beside it to see "these two or nothing" in one filter. *@
+            <PropertyColumn TItem="Row" TProp="int?" Property="@(x => x.Rating)" Title="Rating"
+                            MinWidth="@Floor" Width="@Wide("140px")"
+                            FilterMode="FilterMode.CheckBoxList" />
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" MinWidth="@Floor" Width="@Wide("90px")" />
             <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" MinWidth="@Floor" Format="d" Width="@Wide("180px")" @ref="hiredColumn" />
             <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" MinWidth="@Floor" Format="C0" Width="@Wide("180px")" />

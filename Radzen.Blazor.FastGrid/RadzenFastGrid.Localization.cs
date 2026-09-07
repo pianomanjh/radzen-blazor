@@ -390,8 +390,9 @@ namespace Radzen.FastGrid
             set => filterToggleAriaLabel = value;
         }
 
-        // The seven §35 needs and upstream has no key for. Each is the key an application would add to
-        // its own RadzenStrings to translate it, with the English the resolver falls back to.
+        // The seven §35 needs and upstream has no key for - and §36's eighth. Each is the key an
+        // application would add to its own RadzenStrings to translate it, with the English the resolver
+        // falls back to.
         string? betweenText;
 
         /// <summary>The filter menu's name for an inclusive range.</summary>
@@ -400,6 +401,22 @@ namespace Radzen.FastGrid
         {
             get => betweenText ?? Localize("DataGrid_BetweenText", "Between");
             set => betweenText = value;
+        }
+
+        string? selectAllFilterText;
+
+        /// <summary>The check-box list's name for the box that ticks every value at once.</summary>
+        /// <remarks>
+        /// §36's one string, and the eighth of these. Upstream's own check-box list leaves
+        /// <c>SelectAllText</c> unset, which renders the box with an empty <c>aria-label</c> - a control
+        /// a screen reader cannot name. This grid is one tab stop with everything named
+        /// (§12), so it is named here.
+        /// </remarks>
+        [Parameter]
+        public string SelectAllFilterText
+        {
+            get => selectAllFilterText ?? Localize("DataGrid_SelectAllText", "Select all");
+            set => selectAllFilterText = value;
         }
 
         string? todayFilterText;

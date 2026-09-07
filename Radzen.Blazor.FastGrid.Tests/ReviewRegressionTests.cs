@@ -206,8 +206,8 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(0, source.Walks);
 
             // And the values still arrive - fetched after the render rather than during it.
-            cut.WaitForAssertion(() => Assert.Equal(40,
-                cut.FindComponents<RadzenDropDown<IEnumerable>>()[0].Instance.Data.Cast<object>().Count()));
+            cut.WaitForAssertion(() => Assert.Equal(40, FilterList.Values(
+                cut.FindComponents<RadzenDropDown<IEnumerable>>()[0].Instance.Data).Length));
         }
 
         [Fact]
@@ -295,7 +295,8 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(
                 new object[] { "Alice", "Bob", "Carol", "Dave" },
-                cut.FindComponents<RadzenDropDown<IEnumerable>>()[0].Instance.Data.Cast<object>());
+                FilterList.Values(
+                    cut.FindComponents<RadzenDropDown<IEnumerable>>()[0].Instance.Data));
         }
 
         [Fact]
@@ -471,16 +472,18 @@ namespace Radzen.FastGrid.Tests
             });
 
             var first = cut.FindComponents<RadzenDropDown<IEnumerable>>()[0]
-                .Instance.Data.Cast<object>().ToArray();
+                .Instance.Data;
 
-            Assert.Equal(new object[] { "First1", "First2", "First3", "First4", "First5" }, first);
+            Assert.Equal(new object[] { "First1", "First2", "First3", "First4", "First5" },
+                FilterList.Values(first));
 
             cut.Find(".rz-pager-next").Click();
 
             var second = cut.FindComponents<RadzenDropDown<IEnumerable>>()[0]
-                .Instance.Data.Cast<object>().ToArray();
+                .Instance.Data;
 
-            Assert.Equal(new object[] { "First10", "First6", "First7", "First8", "First9" }, second);
+            Assert.Equal(new object[] { "First10", "First6", "First7", "First8", "First9" },
+                FilterList.Values(second));
         }
 
         [Fact]

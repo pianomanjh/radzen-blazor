@@ -74,22 +74,15 @@ namespace Radzen.FastGrid
         /// <see cref="DefaultFilterOperator" /> has said so since §14. The key type would have answered
         /// with a number's operators, which is a menu offering "less than" over ids the reader never
         /// sees.
+        /// <para>
+        /// Unconditional, where the base asks <c>EditedAsSet</c>: a lookup filters by ids
+        /// whatever editor is drawing, and has since §14. Its own two arrays are gone - §36 put the pair
+        /// and its nullable tail in <c>FastGridFilterOperators</c>, so the nullable append is written
+        /// once for every column that offers a set rather than once here and once there.
+        /// </para>
         /// </remarks>
-        internal override FastGridFilterOperator[] MenuOperators => KeyCanBeNull ? NullableSet : Set;
-
-        static readonly FastGridFilterOperator[] Set =
-        {
-            FastGridFilterOperator.In,
-            FastGridFilterOperator.NotIn,
-        };
-
-        static readonly FastGridFilterOperator[] NullableSet =
-        {
-            FastGridFilterOperator.In,
-            FastGridFilterOperator.NotIn,
-            FastGridFilterOperator.IsNull,
-            FastGridFilterOperator.IsNotNull,
-        };
+        internal override FastGridFilterOperator[] MenuOperators =>
+            FastGridFilterOperators.Set(KeyCanBeNull);
 
         /// <inheritdoc />
         protected override void OnDerive()

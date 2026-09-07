@@ -908,9 +908,19 @@ namespace Radzen.FastGrid
         /// for the columns whose values are what they hold; a column that filters by something other
         /// than what it shows has to say so itself, which is the same reason
         /// <see cref="FilterValueFromText" /> and <see cref="SelectionOf" /> are here.
+        /// <para>
+        /// <strong>§36 asks <see cref="EditedAsSet" /> before it asks the type.</strong> A column whose
+        /// author declared a check-box list filters by a set whatever it holds, and without this the
+        /// declaration is inert under <c>FilterUI.Menu</c>: a string column would be offered
+        /// <c>Contains</c> and <c>StartsWith</c> and no way to reach the list at all. That is the third
+        /// way a column's values can be known - a lookup holds a map, an enum's type holds its members,
+        /// and the author knows - and §31 listed only the first two.
+        /// </para>
         /// </remarks>
         internal virtual FastGridFilterOperator[] MenuOperators =>
-            FastGridFilterOperators.Menu(EffectiveFilterType, FilterNullable);
+            EditedAsSet
+                ? FastGridFilterOperators.Set(FilterNullable)
+                : FastGridFilterOperators.Menu(EffectiveFilterType, FilterNullable);
 
         /// <summary>Whether this column can be filtered.</summary>
         public virtual bool CanFilter => Filterable && FilterPropertyPath is not null;
@@ -1428,7 +1438,155 @@ namespace Radzen.FastGrid
         /// The values this column's check-box list offers of its own accord, or null to leave the grid
         /// to <see cref="FilterLookupData" /> and the distinct scan.
         /// </summary>
-        internal virtual IEnumerable? FilterValues => null;
+        /// <remarks>
+        /// <para>
+        /// <strong>An enum answers here, and §36 is why.</strong> The type holds its members, so a scan
+        /// for them is a query paid to get a worse answer: it would offer only the members the current
+        /// rows happen to hold, which is the defect §14 rejected for lookups by name - a filter control
+        /// whose options move as the data does moves under the reader.
+        /// </para>
+        /// <para>
+        /// Built once per column and held, not read per render. §35's <c>FastGridFilterPresets</c>
+        /// comment objects to <c>Enum.GetValues</c> and the objection is to a call <em>per render</em>;
+        /// this is the lifetime <see cref="LookupColumnBase{TItem, TKey}" /> already gives its entries,
+        /// rebuilt only when a culture change changes the blank's word.
+        /// </para>
+        /// </remarks>
+        internal virtual IEnumerable? FilterValues
+        {
+            get
+            {
+                var declared = EffectiveFilterType;
+
+                if (!(Nullable.GetUnderlyingType(declared) ?? declared).IsEnum)
+                {
+                    return null;
+                }
+
+                return FilterEntries(EnumMembers());
+            }
+        }
+
+        List<object>? enumMembers;
+
+        /// <summary>
+        /// The enum's members, boxed once. Text is upstream's <c>GetDisplayDescription</c>, so
+        /// <c>[Display]</c> is honoured and the wording is the one <c>RadzenDataGrid</c>'s own check-box
+        /// list draws - §35's argument about the operator strings, applied to the values.
+        /// </summary>
+        List<object> EnumMembers()
+        {
+            if (enumMembers is not null)
+            {
+                return enumMembers;
+            }
+
+            var declared = EffectiveFilterType;
+            var underlying = Nullable.GetUnderlyingType(declared) ?? declared;
+            var members = Enum.GetValues(underlying);
+            var built = new List<object>(members.Length);
+
+            for (var i = 0; i < members.Length; i++)
+            {
+                if (members.GetValue(i) is { } member)
+                {
+                    built.Add(member);
+                }
+            }
+
+            return enumMembers = built;
+        }
+
+        IEnumerable? entrySource;
+        string? entryBlank;
+        List<object>? entryList;
+
+        /// <summary>
+        /// The values a check-box list draws, which is what was offered plus the blank entry on a
+        /// nullable column.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §36. On the column rather than in <c>FilterLookup</c> because the entry has to be the
+        /// <em>same object</em> the selection is mapped against - <see cref="SelectionOf" /> answers
+        /// with it and <see cref="FilterValueFromSelection" /> reads it back - and the grid's scan cache
+        /// holds values, not entries.
+        /// </para>
+        /// <para>
+        /// Cached on the values it was given and on the word, so a culture change rebuilds it and a
+        /// render does not. Nulls in the source collapse into the entry rather than sitting beside it:
+        /// there is one blank however many rows have nothing.
+        /// </para>
+        /// </remarks>
+        internal IEnumerable FilterEntries(IEnumerable values)
+        {
+            if (!FilterNullable)
+            {
+                return values;
+            }
+
+            var blank = Grid?.BlankFilterText ?? string.Empty;
+
+            if (entryList is null || !ReferenceEquals(entrySource, values)
+                || !string.Equals(entryBlank, blank, StringComparison.Ordinal))
+            {
+                entrySource = values;
+                entryBlank = blank;
+                entryList = BuildEntries(values, blank, EffectiveFilterType == typeof(string));
+            }
+
+            return entryList;
+        }
+
+        /// <summary>
+        /// The blank first, then an entry per value, minus whatever the blank already stands for.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>Every value is wrapped, not only the blank.</strong> <c>DropDownBase</c> infers a
+        /// multiple selection's element type from the first item in <c>Data</c> and casts the whole
+        /// selection to it, so a lone sentinel at the head of a list of raw values makes upstream cast
+        /// a value to the sentinel's type. A homogeneous list is what
+        /// <see cref="LookupColumnBase{TItem, TKey}" /> has always handed it.
+        /// </para>
+        /// <para>
+        /// Nulls collapse into the blank: there is one however many rows have nothing, and the scan and
+        /// the async path both strip them before they get here anyway.
+        /// </para>
+        /// <para>
+        /// <strong>The empty string collapses into it too, and only on a string column.</strong> This
+        /// grid coalesces a null string to the empty one for every operator but <c>IsNull</c> -
+        /// <c>FilterExpression.NotNull</c> is where - so on a string column <c>In [""]</c> already
+        /// matches the rows with nothing in them. Leaving the scanned empty string in the list would
+        /// put two entries beside each other that filter identically, one of them drawn as an empty
+        /// row. One entry, saying what it does.
+        /// </para>
+        /// </remarks>
+        static List<object> BuildEntries(IEnumerable values, string blank, bool text)
+        {
+            // First, and not sorted among the values: it is the absence of one. §14's own placement.
+            var built = new List<object> { new FastGridFilterEntry(null, blank) };
+
+            foreach (var value in values)
+            {
+                if (value is null || (text && value is string { Length: 0 }))
+                {
+                    continue;
+                }
+
+                // What the raw value drew in the list before it was wrapped, which is what the filter
+                // row has always shown: a check-box list has no TextProperty and renders the item.
+                built.Add(new FastGridFilterEntry(value, value.ToString() ?? string.Empty));
+            }
+
+            return built;
+        }
+
+        /// <summary>
+        /// The entries this column is offering, or null where it wraps nothing - which is every column
+        /// that cannot hold a blank.
+        /// </summary>
+        List<object>? Entries => entryList;
 
         /// <summary>
         /// Draws one slot of §35's filter menu editor.
@@ -1525,7 +1683,43 @@ namespace Radzen.FastGrid
         /// committed filter and applies on every tick, so ticking a box filtered immediately and Apply
         /// then wrote the draft back over it. A menu that undoes the selection it is confirming.
         /// </remarks>
-        internal virtual object? SelectionOf(object? value) => value;
+        internal virtual object? SelectionOf(object? value)
+        {
+            // §36: on a nullable column the list is bound to entries rather than to the values, so the
+            // ticks have to be found again - which is exactly what LookupColumnBase has done since §14,
+            // and scanned for the same reason: a selection of a few against a list of a few hundred.
+            // Where the column wraps nothing this is the identity it always was.
+            if (Entries is not { } offered || value is not IEnumerable selected || value is string)
+            {
+                return value;
+            }
+
+            var ticked = new List<object>();
+
+            foreach (var item in selected)
+            {
+                if (EntryFor(offered, item) is { } entry)
+                {
+                    ticked.Add(entry);
+                }
+            }
+
+            return ticked;
+        }
+
+        /// <summary>The entry a filter value stands for, or null when none does.</summary>
+        static object? EntryFor(List<object> offered, object? value)
+        {
+            for (var i = 0; i < offered.Count; i++)
+            {
+                if (offered[i] is FastGridFilterEntry entry && Equals(entry.Value, value))
+                {
+                    return offered[i];
+                }
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// The value a check-box-list selection means for this column. The inverse of
@@ -1547,16 +1741,20 @@ namespace Radzen.FastGrid
         /// </remarks>
         internal virtual object FilterValueFromSelection(IEnumerable selected)
         {
-            var declared = EffectiveFilterType;
-            var type = Nullable.GetUnderlyingType(declared) ?? declared;
-
+            // The declared type rather than its underlying one, which is what this line used to strip.
+            // §36's blank puts a null in here and a List<decimal> cannot hold one; a column that is not
+            // nullable has no underlying type to lose, so nothing else changes shape.
             var values = DynamicCode.Supported
-                ? (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!
+                ? (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(EffectiveFilterType))!
                 : new List<object>();
 
             foreach (var item in selected)
             {
-                values.Add(item);
+                // An entry goes back to the value it stands for, and the blank's is a null. §14's
+                // SelectedKeys does the same for a lookup entry with no key, and the null then rides in
+                // the In list all the way to List<T?>.Contains, which a provider translates as
+                // x IN (...) OR x IS NULL.
+                values.Add(item is FastGridFilterEntry entry ? entry.Value : item);
             }
 
             return values;
