@@ -340,6 +340,46 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void ARelativeDateReachesTheHandlerAsADate()
+        {
+            // §34. A token is resolved before anything is built from it, because a handler composing a
+            // query from `today-6d` has nothing to compose - and the failure would be a filter that
+            // reads plausibly and asks for the wrong week.
+            using var ctx = new TestContext();
+
+            var clock = new FixedClock(new DateTimeOffset(2026, 9, 6, 14, 30, 45, TimeSpan.FromHours(-7)));
+
+            var cut = Render(ctx, p =>
+                {
+                    p.Add(h => h.AllowFiltering, true);
+                    p.Add(h => h.Clock, clock);
+                },
+                columns: Columns.Of(
+                    Columns.Property<Person, string>(x => x.First),
+                    Columns.Property<Person, DateTime>(x => x.Hired, uniqueId: "Hired")));
+
+            var column = cut.FindComponents<PropertyColumn<Person, DateTime>>().Single().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Grid!.Filter(column, new FastGridFilter(
+                new FastGridFilterCondition(FastGridFilterOperator.Between, new object?[]
+                {
+                    new FastGridRelativeDate(FastGridRelativeDateAnchor.Today, -6,
+                        FastGridRelativeDateUnit.Days, endOfDay: false),
+                    FastGridRelativeDate.TodayEnd,
+                })))).Wait();
+
+            var last = calls[^1];
+
+            Assert.DoesNotContain("today", last.Filter!, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("2026-08-31", last.Filter!, StringComparison.Ordinal);
+
+            // The structured half too - a range fits a FilterDescriptor's two comparisons exactly.
+            var hired = last.Filters!.Where(f => f.Property == "Hired").ToList();
+
+            Assert.All(hired, f => Assert.IsType<DateTime>(f.FilterValue));
+        }
+
+        [Fact]
         public void CarriesTheFilterAsAnODataStringForAnODataSource()
         {
             using var ctx = new TestContext();
@@ -519,6 +559,9 @@ namespace Radzen.FastGrid.Tests
 
         [Parameter] public bool ShowPagingSummary { get; set; }
 
+        /// <summary>What "today" means, for §34's relative dates.</summary>
+        [Parameter] public TimeProvider? Clock { get; set; }
+
         [Parameter] public int PageSize { get; set; } = 10;
 
         /// <summary>The grid instance, for tests that drive it directly.</summary>
@@ -546,6 +589,7 @@ namespace Radzen.FastGrid.Tests
             builder.AddAttribute(6, nameof(RadzenFastGrid<Person>.PageSize), PageSize);
             builder.AddAttribute(7, nameof(RadzenFastGrid<Person>.ShowPagingSummary), ShowPagingSummary);
             builder.AddAttribute(10, nameof(RadzenFastGrid<Person>.AllowFiltering), AllowFiltering);
+            builder.AddAttribute(11, nameof(RadzenFastGrid<Person>.Clock), Clock);
             builder.AddAttribute(8, nameof(RadzenFastGrid<Person>.LoadData),
                 EventCallback.Factory.Create<LoadDataArgs>(this, args => OnLoad(args, this)));
             builder.AddComponentReferenceCapture(9, o => Grid = (RadzenFastGrid<Person>)o);

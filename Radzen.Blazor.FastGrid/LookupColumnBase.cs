@@ -411,7 +411,7 @@ namespace Radzen.FastGrid
         /// It costs that column the typed route, which it had already lost the moment it declined.
         /// </remarks>
         private protected FastGridFilterCondition? SoleCondition =>
-            CurrentFilter is { Second: null } filter ? filter.First : null;
+            ActiveFilter is { Second: null } filter ? filter.First : null;
 
         /// <inheritdoc />
         /// <remarks>

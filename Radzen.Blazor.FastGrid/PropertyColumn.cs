@@ -348,7 +348,7 @@ namespace Radzen.FastGrid
                 return null;
             }
 
-            return CurrentFilter is { } filter
+            return ActiveFilter is { } filter
                 ? FilterExpression<TItem, TProp>.For(selector, filter, caseSensitivity, inMemory)
                 : null;
         }
@@ -368,7 +368,7 @@ namespace Radzen.FastGrid
                 return null;
             }
 
-            return CurrentFilter is { } filter
+            return ActiveFilter is { } filter
                 ? FilterExpression<TItem, TProp>.PredicateFor(filterGetter ??= selector.Compile(), filter,
                     caseSensitivity)
                 : null;

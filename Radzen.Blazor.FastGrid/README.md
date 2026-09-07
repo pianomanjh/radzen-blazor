@@ -611,21 +611,25 @@ state.
 
 ### Storing settings somewhere
 
-`FastGridColumnSettings.FilterValue` is `object?`, so a blob that goes through a serializer loses the
-type it was written with: `System.Text.Json` turns a `DateTime` into text and hands back a
-`JsonElement`. The grid expects that. A restored filter is rebuilt from the stored value where it can
-be - the value as it stands, converted to the column's type, or its string form converted invariantly -
-and from the stored `FilterText` where the value cannot be. **A filter that none of those rebuild is
-dropped, and the column restores unfiltered**, which shows every row rather than hiding some for a
-reason nothing on screen explains.
+**A stored filter value is an invariant-culture string.** `FastGridColumnSettings.FilterValues` is a
+list of them - one per value, so `Equals`, `Between` and a check-box list are one storage shape - beside
+the operator, the second condition and its own operator. No serializer can turn a string into anything
+but a string, so the round trip does not depend on what `System.Text.Json` makes of a `DateTime`; the
+way back is one parse against the column's own type.
 
-One case is dropped today rather than rebuilt: **a check-box-list filter stored as a JSON array**. It
-comes back as one opaque value rather than a list, and there is nothing in it to rebuild a list from.
-A text box's filter on the same column survives, because the text is stored beside the value.
+A date is stored round-trippably (`2019-05-04T00:00:00.0000000`), a decimal invariantly (`250.5`), an
+enum by name, a `Guid` canonically. **A value the column's type cannot parse takes the whole filter with
+it, and the column restores unfiltered** - which shows every row rather than hiding some for a reason
+nothing on screen explains. A compound is all-or-nothing for the same reason: `In [...] OR IsNull` that
+lost its list would degrade to showing only the blank rows, which is a narrower and entirely different
+answer presented as the user's.
 
-The text is re-parsed in the **current culture**, since that is the culture it was typed in. A blob
-captured under one culture and restored under another falls back to the value, which is culture-free;
-where only the text can rebuild the filter, a different culture drops it rather than guessing.
+That makes the column's type load-bearing at restore. A column whose type has changed since the blob was
+written parses nothing and drops; a column whose filter type is `object` cannot parse either.
+
+`FilterText` is stored beside the value and is what the user **typed**, in their own culture. It is
+re-parsed in the current culture, because that is the culture it was typed in, and on a lookup column it
+is the only thing that can turn a name back into ids.
 
 ## Row detail
 
@@ -731,8 +735,67 @@ way, zero bound this way.
 menu, date popup, numeric range or enum picker - those are most of `RadzenDataGrid`'s filter code and
 none of its filter engine.
 
-The grid exposes `Filters` as `FilterDescriptor`s and accepts them back through `ApplyFilters`, which is
-what `RadzenDataFilter` speaks.
+The grid exposes `Filters` as `CompositeFilterDescriptor`s and accepts them back through `ApplyFilters`,
+which is what `RadzenDataFilter` speaks. A range and a two-condition column arrive nested: the parent
+carries the property and the join, the children carry the comparisons.
+
+### What a column filters by
+
+`FilterOperatorOf` takes this grid's own operator vocabulary - upstream's set plus `Between`, which
+upstream has no value for. Upstream's `FilterOperator` still works through `FilterOperator`, and every
+one of its values maps onto exactly one of these, so a column moved across from `RadzenDataGrid`
+compiles and behaves identically.
+
+Arity belongs to the operator: `IsNull` takes none, `Equals` one, `Between` two, `In` many. A column can
+carry a **second condition** - `SecondFilterValue`, `SecondFilterOperator` and `LogicalFilterOperator` -
+which is what expresses *"these three values or blank"*. The first condition gates: a column with only
+the second set is not filtered.
+
+### Relative dates
+
+A date filter can be written relative to when it is **read** rather than to when it was set, so a saved
+filter that says *last 7 days* still means it tomorrow.
+
+```csharp
+var lastWeek = new FastGridFilter(new FastGridFilterCondition(FastGridFilterOperator.Between, new object?[]
+{
+    new FastGridRelativeDate(FastGridRelativeDateAnchor.Today, -6, FastGridRelativeDateUnit.Days, endOfDay: false),
+    FastGridRelativeDate.TodayEnd,
+}));
+```
+
+A `FastGridRelativeDate` is an **anchor** (`Today`, `MonthStart`, `YearStart`), a signed **offset** in
+days, months or years, and whether it means the start or the end of its day. Its text form is what gets
+stored: `today`, `today-6d`, `month-start`, `year-start+1y`, `today@end`.
+
+It is a value, not an operator - so it goes wherever a date goes, and the operator vocabulary is
+unchanged. It resolves to a single instant, which is why a range takes two of them.
+
+**Use `@end` for the upper bound of a range.** `Between` is inclusive at both ends, so a range ending at
+a bare `today` stops at midnight and excludes everything that happened today. For the same reason
+`Equals today` matches midnight exactly rather than the whole day.
+
+| what you mean | how it is written |
+| --- | --- |
+| today | `Between today today@end` |
+| yesterday | `Between today-1d today-1d@end` |
+| last 7 days | `Between today-6d today@end` |
+| last 30 days | `Between today-29d today@end` |
+| this month | `Between month-start today@end` |
+| this year | `Between year-start today@end` |
+
+Resolution happens once per query, against one instant, so two columns and both bounds of one range can
+never land on opposite sides of midnight. What a `LoadData` handler, a provider and the OData string
+receive is always a resolved date; the token is only ever seen by the grid and by the settings blob.
+
+**`Clock`** decides what *today* means. It is a `TimeProvider`, `TimeProvider.System` by default, read
+through `GetLocalNow()`. Set it when the server is in a different timezone from its user - a Blazor
+Server app can hand over a provider carrying the user's zone - and in tests, where a fixed clock is what
+makes a relative date assertable at all.
+
+A relative date only applies to a date column (`DateTime`, `DateTimeOffset`, `DateOnly`, and their
+nullable forms). A string column filtered to the literal text `today-6d` stores and restores that
+string.
 
 ## Choosing which columns are drawn
 

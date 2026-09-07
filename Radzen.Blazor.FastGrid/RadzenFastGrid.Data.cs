@@ -103,6 +103,45 @@ namespace Radzen.FastGrid
         [Parameter] public FilterCaseSensitivity FilterCaseSensitivity { get; set; }
 
         /// <summary>
+        /// What "today" means, for the relative dates a filter can be written in - §34. The system clock
+        /// by default.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Read through <c>GetLocalNow</c>, because a user filtering <em>hired today</em> means their
+        /// today. This parameter is the only answer available to a Blazor Server application whose
+        /// server is in a different zone from its user: it hands over a provider carrying that zone and
+        /// the grid asks no further questions.
+        /// </para>
+        /// <para>
+        /// It is also what makes a relative date testable at all. §9's protocol has nowhere to put a
+        /// test of <em>yesterday</em> against a real clock; against a fixed provider it is an ordinary
+        /// test of a pure rule, which is the layer process rule 4 says a rule has to be tested at.
+        /// </para>
+        /// <para>
+        /// <see cref="System.TimeProvider" /> rather than a clock interface of this grid's own, because
+        /// it is the framework's since .NET 8 and a second one would be a seam with exactly one
+        /// implementation.
+        /// </para>
+        /// </remarks>
+        [Parameter] public TimeProvider? Clock { get; set; }
+
+        DateTimeOffset filterNow;
+
+        /// <summary>
+        /// Reads the clock once, for the composition about to be built.
+        /// </summary>
+        /// <remarks>
+        /// Called at the head of each operation that composes: the reload funnel, the virtualized
+        /// provider, and the start of a draw pass. Not at every place a filter is read - two reads
+        /// within one composition would then land on two instants, and a range whose bounds straddle
+        /// midnight excludes its own start. The one composition that deliberately reads a *previous*
+        /// stamp is the public <see cref="Filters" />, which reports what the grid is filtering by now
+        /// rather than what it would filter by if asked again.
+        /// </remarks>
+        void StampFilterClock() => filterNow = (Clock ?? TimeProvider.System).GetLocalNow();
+
+        /// <summary>
         /// Whether a filter applies as the user types rather than when the box loses focus. On by
         /// default, as in RadzenDataGrid.
         /// </summary>
@@ -278,6 +317,9 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         protected override Task OnParametersSetAsync()
         {
+            // So that nothing composes against an unset clock. Every later composition restamps.
+            StampFilterClock();
+
             // Noted here and applied as the table draws: sorts and filters name columns, and no column
             // has registered yet on the parameter set that precedes the first render.
             // Not the settings this grid just produced: that is its own state coming back, and applying
@@ -459,6 +501,10 @@ namespace Radzen.FastGrid
         async ValueTask<ItemsProviderResult<TItem>> ProvideRows(ItemsProviderRequest request)
         {
             var top = request.Count > 0 ? request.Count : PageSize;
+
+            // A window is fetched without going through the reload funnel, and this method reads the
+            // composition twice - once for the rows and once for the total. One stamp for both.
+            StampFilterClock();
 
             if (LoadData.HasDelegate)
             {
@@ -1139,7 +1185,7 @@ namespace Radzen.FastGrid
         /// filtered, and never built unless something asks.
         /// </summary>
         public IReadOnlyList<CompositeFilterDescriptor> Filters =>
-            Composition.Filters(columns)
+            Composition.Filters(columns, filterNow)
                 ?? (IReadOnlyList<CompositeFilterDescriptor>)Array.Empty<CompositeFilterDescriptor>();
 
         /// <summary>
@@ -1199,7 +1245,7 @@ namespace Radzen.FastGrid
         /// three arguments repeated at five call sites, and free to build: three fields on the stack.
         /// </summary>
         CompositionOptions Options =>
-            new CompositionOptions(AllowFiltering, FilterCaseSensitivity, LogicalFilterOperator);
+            new CompositionOptions(AllowFiltering, FilterCaseSensitivity, LogicalFilterOperator, filterNow);
 
         /// <summary>
         /// What has already been worked out for the render in progress. See <see cref="DrawPass{TItem}" />
@@ -1214,8 +1260,14 @@ namespace Radzen.FastGrid
         /// </summary>
         List<CompositeFilterDescriptor>? ActiveFilters() => Composition.ActiveFilters(columns, Options, in pass);
 
-        void BeginDrawing() =>
-            pass = DrawPass<TItem>.Begin(AllowFiltering ? Composition.Filters(columns) : null);
+        void BeginDrawing()
+        {
+            // The draw pass is a composition of its own - the descriptors it opens with are what the
+            // in-memory route then filters by - so it gets its own stamp. See StampFilterClock.
+            StampFilterClock();
+
+            pass = DrawPass<TItem>.Begin(AllowFiltering ? Composition.Filters(columns, filterNow) : null);
+        }
 
         void EndDrawing() => pass = default;
 
@@ -1670,6 +1722,11 @@ namespace Radzen.FastGrid
 
             viewGeneration++;
 
+            // Every state change a user can make funnels through here, so a load's relative dates are
+            // read once, here, and every route below - the page query, its count, and a LoadData
+            // handler's descriptors - agrees about when now was.
+            StampFilterClock();
+
             // Every state change a user can make funnels through here, so this is the one place the
             // grid has to say so - and it is not the render path, which is what keeps a grid nobody is
             // persisting from ever building the object.
@@ -1861,7 +1918,7 @@ namespace Radzen.FastGrid
 
         async Task InvokeLoadDataAsync(int? start, int? count)
         {
-            var filters = Composition.Filters(columns);
+            var filters = Composition.Filters(columns, filterNow);
 
             var args = new LoadDataArgs
             {

@@ -12,6 +12,13 @@ namespace Radzen.FastGrid
     /// <c>In</c> many - which is what makes those one shape here rather than three special cases, and
     /// what gives §31's ③ relative date tokens somewhere to live: a token is a <em>value</em>, not an
     /// operator, so nothing in this type has to learn about them.
+    /// <para>
+    /// §34 built them and the claim held - <see cref="FastGridRelativeDate" /> sits in
+    /// <see cref="FastGridFilterCondition.Values" /> and nothing here changed. What §33 got wrong was
+    /// its own example: <c>Hired Between [last-7-days]</c> is one token in a two-arity operator, and a
+    /// single value supplying two bounds would have made arity a property of the operator <em>and</em>
+    /// of what is in its slots. A token is one instant, so a range takes two of them.
+    /// </para>
     /// </remarks>
     public sealed class FastGridFilterCondition
     {

@@ -99,7 +99,7 @@ namespace Radzen.FastGrid.Tests
 
             var composed = Composition.Compose(new[] { loose }, new[] { (loose, false) }, data,
                 new CompositionOptions(false, FilterCaseSensitivity.Default,
-                    LogicalFilterOperator.And), ref pass);
+                    LogicalFilterOperator.And, DateTimeOffset.UnixEpoch), ref pass);
 
             Assert.Equal(composed.Rows.Select(column.CellText).ToArray(),
                 cut.FindAll("tbody tr td:first-child").Select(cell => cell.TextContent).ToArray());

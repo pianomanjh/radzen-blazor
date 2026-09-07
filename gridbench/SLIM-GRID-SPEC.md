@@ -7847,6 +7847,69 @@ identical at one row count.
   answers are both plausible dates.
 - **The playground's round-trip button**, which §32 added for exactly this class of bug.
 
+### What the build changed
+
+Four decisions did not survive contact, and one bug found itself.
+
+**The conditional that types itself.** `Resolve` ended with
+`type == typeof(DateTimeOffset) ? new DateTimeOffset(...) : instant`, and there is an implicit
+`DateTime`-to-`DateTimeOffset` conversion - so C# typed the whole expression as `DateTimeOffset` and
+*every* column, `DateTime` ones included, was handed one. It compiles, it boxes, and the only place it
+surfaces is the cast at the far end. Two statements now. The test that caught it was written before the
+code ran, which is the entire argument for testing the rule at the layer the rule lives at.
+
+**The stamp is a field, not a fresh read.** The design said "one instant, threaded through
+`CompositionOptions`", and `Options` is a computed property built at each call site - so `ProvideRows`,
+which reads the composition twice (once for the rows, once for the total), would have stamped twice. It
+is a field now, stamped by `StampFilterClock` at the head of the reload funnel, the virtualized provider,
+and each draw pass, and `Options` carries whatever the last stamp said. The public `Filters` deliberately
+reads the *previous* stamp: it reports what the grid is filtering by, not what it would filter by if
+asked again.
+
+**`In` refuses tokens rather than dropping them later.** An `In`'s values are collected into a list typed
+to the column so a provider can translate `Contains`; adding a `FastGridRelativeDate` to a
+`List<DateTime>` throws. `FilterValueText.To` takes a `relative` flag and the `Many` path passes false,
+so a token in a stored list is refused at the parse - §32's policy - rather than reaching a cast. A token
+in a set of specific days says nothing a range does not say better, so nothing is lost.
+
+**The playground's sample data moved.** `Hired` counted forward from 2010, so every row sat years outside
+any relative window and the one control that demonstrates the feature demonstrated an empty grid. It
+counts back from today now. The same fault reached the benchmark: the first version of §34's bench pair
+filtered *nothing*, allocated a constant 48 KB at both row counts, and read as a beautifully flat result.
+A sweep that measures the same render twice is not a control.
+
+### What it cost
+
+`FastGridFeatureBench`, `--job short`, swept over two row counts. The token-free path first, which is the
+half of the gate that can fail the piece:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter that actually filters | 49.35 → **49.55** KB | 79.92 → **79.84** KB |
+| the same over a queryable | 56.17 → **55.90** KB | 86.50 → **86.57** KB |
+
+Two of the four deltas are negative and none exceeds 0.27 KB, which is inside §9's noise floor. **A grid
+with no relative filter anywhere is unchanged**, which is what "resolves to itself" was for.
+
+The token's own cost, against a control that filters by the same two instants written as dates - so what
+separates the pair is the token being read, with the range held constant:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a date range written as two dates | 57.52 KB | 164.85 KB |
+| the same range written relative | **57.88** KB | **165.11** KB |
+
+**+0.36 and +0.26 KB, flat across a tenfold change in rows** - and the control itself grows from 57 to
+165 KB, so the sweep is measuring something. A per-row cost would have grown by ten. The permitted cost
+is per column and per active filter, and that is what it is.
+
+`alloc-types 1000 400`, interleaved, on the unfiltered path: base 13281.7 and 13284.4 KB, this change
+13282.7 and 13270.2 - a gap smaller than either arm's own spread, so the clock read that every draw pass
+now makes costs nothing measurable.
+
+Times are quoted from a short job and are noise by §9's own rule; the time half of the gate is **not
+measured to that standard** and remains owed, as it did in §33.
+
 ### Where this could still be wrong
 
 - **`ActiveFilter` is a second thing to keep in step**, and the failure mode is a stale resolution
@@ -7863,4 +7926,5 @@ identical at one row count.
 - **`Equals` with a token means midnight** and §31's table says the whole day. Two readings of one
   operator, reconciled by a rule about which one the menu writes, and a rule like that is exactly what
   §33 called two sources of truth when it found one.
-- **Nothing here is measured.** The gate is a budget until the build has run.
+- **Nothing here is measured.** The gate is a budget until the build has run - *and it has: see What it
+  cost, where the allocation half passes and the time half is still owed.*

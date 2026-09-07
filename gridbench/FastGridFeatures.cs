@@ -199,6 +199,54 @@ public class FastGridFeatureBench
         Column<decimal>(x => x.Salary, "Salary", null);
     };
 
+    // §34. The same five columns with a date range on Hired, written twice: once as two DateTimes and
+    // once as two tokens. The pair is the measurement - the delta between them is what a relative date
+    // costs, with the range itself held constant, and the sweep over N is what says whether that cost is
+    // per row or fixed.
+    static RenderFragment DateRangeColumns(object lower, object upper) => b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title, bool ranged)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+
+            if (ranged)
+            {
+                b.AddAttribute(s++, "FilterOperatorOf", FastGridFilterOperator.Between);
+                b.AddAttribute(s++, "FilterValue", lower);
+                b.AddAttribute(s++, "SecondFilterValue", upper);
+            }
+
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id", false);
+        Column<string>(x => x.Name, "Name", false);
+        Column<int>(x => x.Age, "Age", false);
+        Column<DateTime>(x => x.Hired, "Hired", true);
+        Column<decimal>(x => x.Salary, "Salary", false);
+    };
+
+    // The window has to keep every row at both row counts, or the sweep measures the same render twice
+    // and cannot tell a fixed cost from a per-row one - which is the whole reason §33's review added it.
+    // The rows are hired from 2010 forward, one day apart, so the window is that day to the end of
+    // today, and the relative arm expresses the same instant as an offset computed from it. Computed
+    // rather than written: a token spelled `year-start-16y` would mean something different every
+    // January, and a benchmark whose subject moves with the calendar measures nothing.
+    static readonly DateTime RangeFrom = new DateTime(2010, 1, 1);
+
+    static readonly RenderFragment AbsoluteRangeColumns = DateRangeColumns(
+        RangeFrom, DateTime.Today.AddDays(1).AddTicks(-1));
+
+    static readonly RenderFragment RelativeRangeColumns = DateRangeColumns(
+        new FastGridRelativeDate(FastGridRelativeDateAnchor.Today,
+            -(int)(DateTime.Today - RangeFrom).TotalDays, FastGridRelativeDateUnit.Days,
+            endOfDay: false),
+        FastGridRelativeDate.TodayEnd);
+
     async Task Render(Action<Dictionary<string, object?>> configure, RenderFragment columns = null)
     {
         var parameters = new Dictionary<string, object?>
@@ -569,6 +617,22 @@ public class FastGridFeatureBench
         p["Data"] = people.AsQueryable();
         p["AllowFiltering"] = true;
         p["ChildContent"] = FilteredColumns;
+    });
+
+    // §34's pair. The absolute one is the control: it filters by the same two instants and reaches the
+    // same builders, so whatever separates them is the token being read.
+    [Benchmark(Description = "+ a date range written as two dates")]
+    public Task FilteringAbsoluteRange() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ChildContent"] = AbsoluteRangeColumns;
+    });
+
+    [Benchmark(Description = "+ the same range written relative")]
+    public Task FilteringRelativeRange() => Render(p =>
+    {
+        p["AllowFiltering"] = true;
+        p["ChildContent"] = RelativeRangeColumns;
     });
 
     // The one hook on this component that runs per cell rather than per row or per column, so the

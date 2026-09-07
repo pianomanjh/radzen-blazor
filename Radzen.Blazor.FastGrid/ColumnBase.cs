@@ -765,6 +765,42 @@ namespace Radzen.FastGrid
         /// </remarks>
         public FastGridFilter? CurrentFilter { get; private set; }
 
+        FastGridFilter? activeFilter;
+
+        /// <summary>
+        /// The filter as of the composition being built: <see cref="CurrentFilter" /> with its relative
+        /// dates read.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §34, and two names rather than one property that means different things at different times.
+        /// <see cref="CurrentFilter" /> is what the user <em>authored</em> - tokens intact - and is what
+        /// <c>CaptureSettings</c> writes and what a pill has to read, since <em>"Hired is in the last 7
+        /// days"</em> cannot be built from two resolved dates. This is what the query takes.
+        /// </para>
+        /// <para>
+        /// §10b's recurring finding is a rule read from two places that can <em>disagree</em>; these two
+        /// are meant to differ, and the names are what say which is which. Before the first resolution -
+        /// and for every filter holding no tokens, which is almost all of them - they are the same
+        /// object.
+        /// </para>
+        /// </remarks>
+        internal FastGridFilter? ActiveFilter => activeFilter ?? CurrentFilter;
+
+        /// <summary>
+        /// Reads this column's relative dates at <paramref name="now" />.
+        /// </summary>
+        /// <remarks>
+        /// Called by <see cref="Composition" /> as a composition begins, with one instant stamped for
+        /// all of the columns: reading the clock per token lets two columns - or the two bounds of one
+        /// range - land on opposite sides of midnight and produce a range that excludes its own start,
+        /// which is a once-a-day fault with no reproduction.
+        /// </remarks>
+        internal void ResolveFilter(DateTimeOffset now) =>
+            activeFilter = CurrentFilter is { } filter
+                ? FilterResolution.Resolve(filter, EffectiveFilterType, now)
+                : null;
+
         /// <summary>
         /// The condition that decides this column, or null when it is not filtered.
         /// </summary>
@@ -858,6 +894,11 @@ namespace Radzen.FastGrid
             CurrentFilter = filter;
             AppliedFilterText = text;
             AppliedSecondFilterText = secondText;
+
+            // A resolution belongs to the filter it was read from. Dropped rather than recomputed,
+            // because the instant to recompute it at belongs to a composition and none is being built
+            // here - and until one is, ActiveFilter answering CurrentFilter is exactly right.
+            activeFilter = null;
         }
 
         /// <summary>
@@ -1188,7 +1229,7 @@ namespace Radzen.FastGrid
                 {
                     values.Add(null);
                 }
-                else if (FilterValueText.To(texts[i], declared) is { } value)
+                else if (FilterValueText.To(texts[i], declared, relative: false) is { } value)
                 {
                     values.Add(value);
                 }

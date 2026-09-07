@@ -57,6 +57,12 @@
                 <option value="@FilterMode.CheckBoxList">check boxes</option>
             </select>
         </label>
+        @* §34, and the reason it is here rather than in a test: a token survives a settings round trip
+           only if what the page holds is a blob rather than a live object, and this is the one place
+           where pressing "Round-trip through JSON" after it proves that end to end. *@
+        <button @onclick="FilterLastThirtyDays" disabled="@(!allowFiltering)"
+                title="Hired between today-29d and today@end - stored as those words, read when the query runs"
+                >Hired: last 30 days</button>
         <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
         <label><input type="checkbox" @bind="virtualize" /> Virtualize</label>
         <label><input type="checkbox" @bind="alternating" /> Alternating</label>
@@ -201,7 +207,7 @@
                             AutoFitPriority="@Identity" MinWidth="@Floor" Frozen="@frozen" />
             <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" MinWidth="@Floor" Width="@Wide("260px")" />
             <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" MinWidth="@Floor" Width="@Wide("90px")" />
-            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" MinWidth="@Floor" Format="d" Width="@Wide("180px")" />
+            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" MinWidth="@Floor" Format="d" Width="@Wide("180px")" @ref="hiredColumn" />
             <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" MinWidth="@Floor" Format="C0" Width="@Wide("180px")" />
             @* One id per row, nullable - so the check-box list offers an entry for the rows carrying
                none, and the Simple box matches what is typed against the names rather than the ids. *@
@@ -344,6 +350,9 @@
     List<Row> rows = Row.Make(500);
     ICollection<Row>? selection;
     FastGridSettings? settings;
+
+    // Held so the relative-date button has a column to filter; nothing else needs one.
+    PropertyColumn<Row, DateTime>? hiredColumn;
     int settingsRaised;
     string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it. Tab into the grid and the arrows move a cell: Enter opens a row, Space selects one, and arrowing off the end turns the page. With Multi-select on, holding Shift extends the selection from the last row Space chose.";
 
@@ -437,9 +446,39 @@
     }
 
     /// <summary>
-    /// What a consumer that actually persists settings does to them, done on demand. §32's subject: the
-    /// blob's FilterValue is `object?`, so a DateTime goes out as text and comes back a JsonElement, and
-    /// before §32 that took the circuit down on the next render rather than losing the filter.
+    /// Filters the Hired column to §34's headline case, as the column menu will once it exists.
+    /// </summary>
+    /// <remarks>
+    /// Two tokens rather than one: a relative date resolves to a single instant, so a range takes two of
+    /// them, and the upper bound is the <em>end</em> of today because Between is inclusive at both ends
+    /// and a bare `today` would stop at midnight and drop the whole of it.
+    /// </remarks>
+    async Task FilterLastThirtyDays()
+    {
+        if (grid is null || hiredColumn is null)
+        {
+            Log("no Hired column to filter");
+
+            return;
+        }
+
+        await grid.Filter(hiredColumn, new FastGridFilter(new FastGridFilterCondition(
+            FastGridFilterOperator.Between,
+            new object?[]
+            {
+                new FastGridRelativeDate(FastGridRelativeDateAnchor.Today, -29,
+                    FastGridRelativeDateUnit.Days, endOfDay: false),
+                FastGridRelativeDate.TodayEnd,
+            })));
+
+        Log("Hired filtered to today-29d .. today@end - round-trip the settings and it stays relative");
+    }
+
+    /// <summary>
+    /// What a consumer that actually persists settings does to them, done on demand. §32's subject and
+    /// §33's answer: a stored value is invariant text now, so nothing here depends on what the
+    /// serializer makes of an `object` - and §34's relative dates go out as the words they were written
+    /// as rather than as the dates they currently mean.
     /// </summary>
     void RoundTripSettings()
     {
@@ -454,7 +493,12 @@
 
         var filters = settings?.Columns?.Count(c => c.FilterOperator is not null) ?? 0;
 
-        Log($"settings round-tripped through JSON: {json.Length} chars, {filters} filtered column(s) came back");
+        var stored = string.Join(", ",
+            settings?.Columns?.Where(c => c.FilterValues is { Count: > 0 })
+                .SelectMany(c => c.FilterValues!) ?? Enumerable.Empty<string?>());
+
+        Log($"settings round-tripped through JSON: {json.Length} chars, {filters} filtered column(s) came back"
+            + (stored.Length > 0 ? $" - stored as [{stored}]" : string.Empty));
     }
 
     void Log(string line) => readout = line;

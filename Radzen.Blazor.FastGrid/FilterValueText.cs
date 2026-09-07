@@ -32,6 +32,11 @@ namespace Radzen.FastGrid
             null => null,
             string text => text,
 
+            // §34. A token is stored as what it says rather than as what it currently means - the whole
+            // point of it being a value that is read at query time. Its canonical form is lower-case and
+            // has exactly one spelling per instant.
+            FastGridRelativeDate relative => relative.ToString(),
+
             // "O" round-trips; the invariant ToString does not. DateOnly and TimeOnly are here for the
             // same reason and because Convert.ChangeType cannot see them at all - they are not
             // IConvertible, so without this pair they store and restore as nothing.
@@ -85,7 +90,15 @@ namespace Radzen.FastGrid
         /// <summary>
         /// One stored text as a value of <paramref name="declared" />, or null when it is not one.
         /// </summary>
-        internal static object? To(string? text, Type declared)
+        /// <param name="text">The stored text.</param>
+        /// <param name="declared">The type the column filters by.</param>
+        /// <param name="relative">
+        /// Whether a §34 relative date token is one of the things this text may be. True everywhere a
+        /// single instant is wanted; false for an <c>In</c>, whose values are collected into a list
+        /// typed to the column so that a provider can translate <c>Contains</c> - a token in that list
+        /// would not fit it, and a set of specific days is not what a relative date is for.
+        /// </param>
+        internal static object? To(string? text, Type declared, bool relative = true)
         {
             if (text is null)
             {
@@ -93,6 +106,15 @@ namespace Radzen.FastGrid
             }
 
             var type = Nullable.GetUnderlyingType(declared) ?? declared;
+
+            // Before the string arm and before every parse, because a date column is the only place a
+            // token is looked for and no invariant date format spells `today`. A string column filtered
+            // to the literal text is unaffected: it is never offered here.
+            if (relative && FastGridRelativeDate.AppliesTo(declared)
+                && FastGridRelativeDate.TryParse(text, out var token))
+            {
+                return token;
+            }
 
             if (type == typeof(string) || type == typeof(object))
             {

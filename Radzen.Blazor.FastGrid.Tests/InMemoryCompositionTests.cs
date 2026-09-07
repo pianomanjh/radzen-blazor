@@ -88,7 +88,8 @@ namespace Radzen.FastGrid.Tests
             people.OrderByDescending(person => person.Id).ToArray();
 
         static CompositionOptions Options(LogicalFilterOperator logical = LogicalFilterOperator.And) =>
-            new CompositionOptions(true, FilterCaseSensitivity.Default, logical);
+            new CompositionOptions(true, FilterCaseSensitivity.Default, logical,
+                DateTimeOffset.UnixEpoch);
 
         static List<Person> People20()
         {
@@ -315,7 +316,7 @@ namespace Radzen.FastGrid.Tests
             var columns = Of(bench.Property<string>(x => x.First, filterValue: "First1"));
             var people = People20();
             var off = new CompositionOptions(false, FilterCaseSensitivity.Default,
-                LogicalFilterOperator.And);
+                LogicalFilterOperator.And, DateTimeOffset.UnixEpoch);
             var pass = default(DrawPass<Person>);
 
             var composed = Composition.Compose(columns, Unsorted, people, off, ref pass);

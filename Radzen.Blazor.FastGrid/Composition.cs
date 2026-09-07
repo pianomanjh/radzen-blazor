@@ -74,7 +74,8 @@ namespace Radzen.FastGrid
         /// them is one place for them to disagree in, which is the recurring finding of §10b - a rule
         /// applied here and not in its neighbour.
         /// </remarks>
-        internal static List<CompositeFilterDescriptor>? Filters<TItem>(IReadOnlyList<ColumnBase<TItem>> columns)
+        internal static List<CompositeFilterDescriptor>? Filters<TItem>(
+            IReadOnlyList<ColumnBase<TItem>> columns, DateTimeOffset now)
         {
             List<CompositeFilterDescriptor>? filters = null;
 
@@ -87,10 +88,32 @@ namespace Radzen.FastGrid
                     continue;
                 }
 
+                column.ResolveFilter(now);
+
                 (filters ??= new List<CompositeFilterDescriptor>()).Add(DescriptorFor(column));
             }
 
             return filters;
+        }
+
+        /// <summary>
+        /// Reads every filtered column's relative dates at one instant - §34.
+        /// </summary>
+        /// <remarks>
+        /// Here rather than in the grid because this is what a composition is: the two routes and the
+        /// descriptors all begin by asking the columns what they are filtering by, and this is that
+        /// question asked as of a moment. A filter holding no tokens resolves to itself, so a grid with
+        /// no relative filter anywhere pays a null check per filtered column and nothing else.
+        /// </remarks>
+        static void Resolve<TItem>(IReadOnlyList<ColumnBase<TItem>> columns, DateTimeOffset now)
+        {
+            for (var i = 0; i < columns.Count; i++)
+            {
+                if (columns[i].HasFilter)
+                {
+                    columns[i].ResolveFilter(now);
+                }
+            }
         }
 
         /// <summary>
@@ -116,7 +139,7 @@ namespace Radzen.FastGrid
         /// </remarks>
         internal static List<CompositeFilterDescriptor>? DeclaredFilters<TItem>(
             IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options) =>
-            options.AllowFiltering ? Filters(columns) : null;
+            options.AllowFiltering ? Filters(columns, options.Now) : null;
 
         /// <summary>Composes the columns' filters onto a queryable. Untouched when nothing is filtered.</summary>
         /// <remarks>
@@ -141,6 +164,11 @@ namespace Radzen.FastGrid
             {
                 return source;
             }
+
+            // Before anything reads a filter, and here rather than at this method's callers because
+            // this is the one of the three routes they do not all pass through: a queryable source
+            // reaches Filter without Filters ever being built.
+            Resolve(columns, options.Now);
 
             // What QueryableExtension itself checks to decide whether OrdinalIgnoreCase comparisons are
             // available, so the two builders agree about a given source.
@@ -309,6 +337,11 @@ namespace Radzen.FastGrid
             {
                 Func<TItem, bool>? predicate = null;
                 var either = options.LogicalFilterOperator == LogicalFilterOperator.Or;
+
+                // The delegate route reaches the columns without going through Filter, and a pass being
+                // reused means the descriptors were built at a previous instant. Resolving here is what
+                // makes all three routes read the same one.
+                Resolve(columns, options.Now);
 
                 for (var i = 0; i < columns.Count; i++)
                 {
@@ -493,7 +526,9 @@ namespace Radzen.FastGrid
         /// </remarks>
         static CompositeFilterDescriptor DescriptorFor<TItem>(ColumnBase<TItem> column)
         {
-            var filter = column.CurrentFilter!;
+            // The resolved filter, not the authored one: a descriptor is what a provider, a LoadData
+            // handler and the OData string are built from, and none of them can read `today-6d`.
+            var filter = column.ActiveFilter!;
             var first = filter.First;
             var second = filter.EffectiveSecond;
 
@@ -618,11 +653,12 @@ namespace Radzen.FastGrid
     internal readonly struct CompositionOptions
     {
         internal CompositionOptions(bool allowFiltering, FilterCaseSensitivity filterCaseSensitivity,
-            LogicalFilterOperator logicalFilterOperator)
+            LogicalFilterOperator logicalFilterOperator, DateTimeOffset now)
         {
             AllowFiltering = allowFiltering;
             FilterCaseSensitivity = filterCaseSensitivity;
             LogicalFilterOperator = logicalFilterOperator;
+            Now = now;
         }
 
         /// <summary>Whether the columns' filters are applied at all.</summary>
@@ -633,5 +669,17 @@ namespace Radzen.FastGrid
 
         /// <summary>Whether the columns' filters are anded or ored together.</summary>
         internal LogicalFilterOperator LogicalFilterOperator { get; }
+
+        /// <summary>
+        /// The instant this composition reads its relative dates at - §34.
+        /// </summary>
+        /// <remarks>
+        /// One of the settings rather than something read from a clock down here, and for the reason
+        /// this struct exists at all: the grid stamps it once and it is threaded, so every column and
+        /// both bounds of every range in one composition agree about when now is. A composition that
+        /// read the clock per token could produce a range that excludes its own start, once a day, with
+        /// no reproduction.
+        /// </remarks>
+        internal DateTimeOffset Now { get; }
     }
 }

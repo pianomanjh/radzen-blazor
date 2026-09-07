@@ -40,7 +40,10 @@ public class Row
         Name = "Person " + i,
         Department = Departments[i % Departments.Length],
         Age = 20 + (i % 45),
-        Hired = new DateTime(2010, 1, 1).AddDays(i),
+        // Counting back from today rather than forward from a fixed year, so §34's relative dates have
+        // something to select. A fixed 2010 start put every row years outside "the last 30 days", which
+        // made the one control that demonstrates the feature demonstrate an empty grid.
+        Hired = DateTime.Today.AddDays(-i),
         Salary = 40000m + (i % 1000) * 37m,
         Notes = "Row " + i + " has a long enough note to truncate when the column is narrowed.",
         TeamId = i % 7 == 0 ? null : Lookups.Teams[i % (Lookups.Teams.Count - 1)].Id,

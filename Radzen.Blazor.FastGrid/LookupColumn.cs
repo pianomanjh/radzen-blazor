@@ -87,7 +87,7 @@ namespace Radzen.FastGrid
 
             if (condition.Operator is not (FastGridFilterOperator.In or FastGridFilterOperator.NotIn))
             {
-                return FilterExpression<TItem, TKey>.For(selector, CurrentFilter!, caseSensitivity,
+                return FilterExpression<TItem, TKey>.For(selector, ActiveFilter!, caseSensitivity,
                     inMemory);
             }
 
@@ -114,7 +114,7 @@ namespace Radzen.FastGrid
 
             if (condition.Operator is not (FastGridFilterOperator.In or FastGridFilterOperator.NotIn))
             {
-                return FilterExpression<TItem, TKey>.PredicateFor(key, CurrentFilter!, caseSensitivity);
+                return FilterExpression<TItem, TKey>.PredicateFor(key, ActiveFilter!, caseSensitivity);
             }
 
             var keys = SelectedKeys();
