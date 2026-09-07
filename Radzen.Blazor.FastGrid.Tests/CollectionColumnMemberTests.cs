@@ -36,10 +36,10 @@ namespace Radzen.FastGrid.Tests
             cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[index].TextContent).ToArray();
 
         /// <summary>
-        /// The members the list offers, unwrapped out of §36's entries and minus its blank - which a
-        /// column of nullable elements, strings included, now leads with. This file is about which
-        /// member a collection column projects onto; the entry is pinned in
-        /// <c>FastGridChecklistTests</c>.
+        /// The members the list offers. §36's review settled that a collection column offers no blank -
+        /// "has no regions at all" is a different question from "has a region that is null" - so this
+        /// unwraps nothing in practice; it goes through <c>FilterList.Values</c> so that the day one of
+        /// these columns does wrap, this file reports the members rather than the wrappers.
         /// </summary>
         static object[] Offered(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
             FilterList.Values(cut.FindComponents<RadzenDropDown<IEnumerable>>()[index].Instance.Data);

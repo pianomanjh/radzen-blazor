@@ -156,6 +156,16 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         /// <remarks>
+        /// No entry for the rows carrying nothing, which is <c>LookupCollectionColumn</c>'s answer and
+        /// its reason: "has no regions at all" is a different question from "has a region that is
+        /// null", and <c>In</c> over the elements does not ask it. §36 offered one here by asking
+        /// <c>FilterNullable</c>, which reads the <em>element</em> type - so a collection of strings was
+        /// handed a blank that no element could ever be.
+        /// </remarks>
+        private protected override bool OffersBlank => false;
+
+        /// <inheritdoc />
+        /// <remarks>
         /// Fully typed: <typeparamref name="TElement" /> is a type parameter here, so the projection is
         /// an ordinary generic call and a provider sees SELECT DISTINCT over the member's own column.
         /// </remarks>

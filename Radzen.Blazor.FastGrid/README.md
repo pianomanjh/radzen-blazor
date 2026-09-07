@@ -789,12 +789,21 @@ one without running the scan, so an action offered everywhere would have a price
 it has been paid. The attribute is where the person who *does* know says so, and it is the same
 attribute `RadzenDataGrid` wants for the same list.
 
-The scan runs **once per column**, after the render rather than inside it, and against the unfiltered
-source - a list whose options moved as the data did would move under the reader. `Reload()` is what
-drops it. It is not paged: what a wide column costs to open is roughly 3 KB and 4 us per distinct value,
-so a column with tens of thousands of them wants `FilterLookupData` rather than a scan.
+The scan runs **once per column**, against the unfiltered source - a list whose options moved as the
+data did would move under the reader. `Reload()` is what drops it. On a source the grid awaits it runs
+*after* the render rather than inside it, which is the rule that keeps a blocking round trip out of
+`BuildRenderTree`; on an in-memory source there is nothing to await and it runs where it is asked. It
+is not paged: what a wide column costs to open is roughly **4 KB and 4 us per distinct value**, so a
+column with tens of thousands of them wants `FilterLookupData` rather than a scan - and that parameter
+wants a held instance, not an expression rebuilt per render.
 
-**A nullable column leads its list with a blank entry**, drawing `BlankFilterText`, which is how
+**A blank is offered only where the column can carry one.** Nullable is necessary and not sufficient:
+the entry is a null travelling in the `In` list, so a column that hands its filter to the reflective
+route - one declared as `object`, or filtering through a member path - is offered `Is null` and no
+blank. A collection column is not offered one either, for a different reason: *"has no regions at all"*
+is a different question from *"has a region that is null"*, and `In` over the elements does not ask it.
+
+**A column that offers one leads its list with a blank entry**, drawing `BlankFilterText`, which is how
 *"these three values or nothing"* is asked in one filter. It becomes a null in the `In` list, which a
 provider translates as `x IN (...) OR x IS NULL`. On a string column the blank stands for the empty
 string too, because every operator here but `Is null` already reads a null string as an empty one.

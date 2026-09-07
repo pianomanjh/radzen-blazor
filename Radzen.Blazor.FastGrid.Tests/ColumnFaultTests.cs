@@ -159,7 +159,8 @@ namespace Radzen.FastGrid.Tests
                     p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 });
 
-            // Unwrapped, and minus §36's blank: a column declared as object is nullable.
+            // A column declared as object offers no blank - it cannot carry the null the entry
+            // stands for - so this unwraps nothing; it reads the values either way.
             var offered = FilterList.Values(cut.FindComponent<RadzenDropDown<IEnumerable>>().Instance.Data)
                 .Select(v => v.ToString()).ToArray();
 

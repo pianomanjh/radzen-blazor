@@ -248,12 +248,13 @@ namespace Radzen.FastGrid
         private protected static readonly bool KeyCanBeNull =
             !typeof(TKey).IsValueType || Nullable.GetUnderlyingType(typeof(TKey)) is not null;
 
-        /// <summary>
-        /// Whether the filter offers an entry for the rows carrying no id at all. Only where a key can
-        /// be one: "which products have no category" is a question, and <c>In</c> over a nullable key
-        /// answers it.
-        /// </summary>
-        private protected virtual bool OffersBlank => KeyCanBeNull;
+        /// <inheritdoc />
+        /// <remarks>
+        /// Only where a key can be null: "which products have no category" is a question, and <c>In</c>
+        /// over a nullable key answers it. The key type rather than the base's <c>FilterNullable</c>,
+        /// which reads this column's <em>declared</em> filter type and would answer for the wrong one.
+        /// </remarks>
+        private protected override bool OffersBlank => KeyCanBeNull;
 
         /// <inheritdoc />
         /// <remarks>

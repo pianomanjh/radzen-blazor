@@ -308,6 +308,127 @@ namespace Radzen.FastGrid.Tests
             Assert.DoesNotContain(offered, e => e.Value as string == string.Empty);
         }
 
+        [Fact]
+        public void AColumnThatCannotCarryTheNullIsNotOfferedABlank()
+        {
+            // Nullable is necessary and not sufficient. A column declared as object hands its filter to
+            // the reflective route, which drops the null out of the In list - so an entry offered here
+            // would tick, commit, and narrow to no rows at all rather than to the rows with nothing.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, object>(x => x.Mixed, filterMode: FilterMode.CheckBoxList)));
+
+            var column = cut.FindComponent<PropertyColumn<Person, object>>().Instance;
+
+            // Still nullable, and still offered the operator that asks the question directly.
+            Assert.Contains(FastGridFilterOperator.IsNull, column.MenuOperators);
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            Assert.DoesNotContain(Lists(cut).Single().Data.Cast<object>(), v => v is FastGridFilterEntry);
+        }
+
+        [Fact]
+        public void ACollectionColumnIsNotOfferedABlankEither()
+        {
+            // LookupCollectionColumn has refused one since §14, and the reason is about meaning rather
+            // than mechanism: "has no regions at all" is a different question from "has a region that is
+            // null", and In over the elements does not ask it. §36 asked FilterNullable, which reads the
+            // element type, and handed a collection of strings a blank no element could ever be.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, List<string>>(x => x.Regions,
+                    filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            Assert.DoesNotContain(Lists(cut).Single().Data.Cast<object>(), v => v is FastGridFilterEntry);
+        }
+
+        [Fact]
+        public void AClassTypedColumnCarriesTheNullTheSameWay()
+        {
+            // The case the object column cannot do and this one can: a reference type the column still
+            // composes its own predicate for. This is what FilterExpression.Listed's `default(TProp) is
+            // null` arm exists for - written as a Nullable.GetUnderlyingType test it dropped the null
+            // here too.
+            using var ctx = new TestContext();
+            var data = People.Sample();
+
+            data[0].Customer = null!;
+            data[1].Customer = null!;
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, Company>(x => x.Customer, filterMode: FilterMode.CheckBoxList),
+                Columns.Property<Person, string>(x => x.First)), data: data);
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            cut.InvokeAsync(() => Lists(cut).Single().Change
+                .InvokeAsync(new List<object> { Blank(cut) }));
+
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            Assert.Equal(
+                data.Where(p => p.Customer is null).Select(p => p.First).ToArray(),
+                cut.FindAll("tbody tr").Select(r => r.QuerySelectorAll("td")[1].TextContent).ToArray());
+        }
+
+        [Fact]
+        public void EveryEntryIsWrappedWhereAnyIs()
+        {
+            // The invariant the circuit crash was about, which no test pinned: DropDownBase infers a
+            // multiple selection's element type from the first item in Data and casts the whole
+            // selection to it, so a list holding a blank beside raw values makes upstream cast a value
+            // to the blank's type. Re-introducing exactly that - wrap the blank, leave the rest raw -
+            // passed the whole suite. Asserted positively here because the browser cannot be.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, int?>(x => x.RegionId,
+                filterMode: FilterMode.CheckBoxList)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            var offered = Lists(cut).Single().Data.Cast<object>().ToArray();
+
+            Assert.True(offered.Length > 1);
+            Assert.All(offered, v => Assert.IsType<FastGridFilterEntry>(v));
+        }
+
+        [Fact]
+        public void ADeclaredFilterIsTickedOnTheFirstRenderOfTheList()
+        {
+            // A filter that was already committed when the panel opens - from markup, a settings
+            // restore or ApplyFilters - shows as ticked, which every other test here reaches only by
+            // ticking first.
+            //
+            // It does NOT pin the Data-before-Value ordering in RenderFilterMenuList, which was the
+            // reason it was written: §35's panel arms on click and opens after the render, so the list
+            // draws twice and the second draw heals a first one that had no entries to map onto. Tried
+            // and confirmed - swapping the two AddAttribute calls leaves this and the whole suite
+            // green. The ordering is a claim about one intermediate frame, which is the same shape as
+            // §35's unobservable draft clear.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, int?>(x => x.RegionId,
+                filterMode: FilterMode.CheckBoxList,
+                filterOperator: FilterOperator.In,
+                filterValue: new List<int?> { null })));
+
+            OpenMenu(cut, 0);
+
+            var ticked = Lists(cut).Single().Value;
+
+            Assert.NotNull(ticked);
+            Assert.Null(Assert.IsType<FastGridFilterEntry>(Assert.Single(ticked.Cast<object>())).Value);
+        }
+
         // ---- the gate: queries per open ----
 
         /// <summary>

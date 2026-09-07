@@ -463,6 +463,12 @@ namespace Radzen.FastGrid
         void RenderFilterMenuList(RenderTreeBuilder builder, ColumnBase<TItem> column)
         {
             builder.OpenComponent<RadzenListBox<IEnumerable>>(60);
+            // Data before Value, and not only by convention: FilterLookup is what builds the column's
+            // entries, and SelectionOf below maps the draft's values onto them. Written the other way
+            // round the first draw of a list has nothing to map onto and shows no ticks - which the
+            // second draw then heals, because §35's panel arms on click and opens after the render. So
+            // no test can see it and this comment is the guard. One frame, on a column that opens
+            // already filtered.
             builder.AddAttribute(61, nameof(RadzenListBox<IEnumerable>.Data), FilterLookup(column));
             builder.AddAttribute(62, nameof(RadzenListBox<IEnumerable>.Multiple), true);
             builder.AddAttribute(63, nameof(RadzenListBox<IEnumerable>.AllowClear), true);

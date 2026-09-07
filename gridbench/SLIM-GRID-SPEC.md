@@ -8852,10 +8852,15 @@ Asserted, per open of the panel:
 
 | column | first open | second open | after `Reload()` |
 | --- | --- | --- | --- |
-| lookup | 0 | 0 | 0 |
-| enum | 0 | 0 | 0 |
+| lookup | 0 | - | - |
+| enum | 0 | - | - |
 | declared | 1 | 0 | 1 |
-| none of the three | 0, and no list drawn | 0 | 0 |
+| none of the three | 0, and no list drawn | - | - |
+
+Only the declared row needs all three columns, and only it has them. The other three assert their first
+open and nothing else: a column that runs no query on the open that could has nothing to re-run. An
+earlier draft of this table claimed twelve cells and had six, which is a table describing a design
+rather than a suite.
 
 A lookup's zero is zero *per open*: §14 resolves a `Query` lookup once at startup and that is not this
 gate's business.
@@ -8909,7 +8914,17 @@ what §33's residual was also called.
   was one thing when §35 wrote it. A column that declares `CheckBoxList` and then has its filter set
   programmatically to `Contains` is a case the screening rule handles and the operator list now also
   has an opinion about, and the two have never been exercised together.
-- **The blank is offered wherever a column is nullable, not where a blank was seen.** Excel shows
+- **The blank now turns on `OffersBlank` rather than on `FilterNullable`**, so a column that cannot
+  compose its own predicate is not offered one - which is right, and is also a rule with four
+  implementations (`ColumnBase`, `LookupColumnBase`, `LookupCollectionColumn`, `CollectionColumn`,
+  `PropertyColumn`). §20 counted eight internal virtuals as a closed door; this makes a fifth column
+  kind able to get this wrong by not overriding.
+- **`ComposesItsOwnFilter` is `PropertyColumn`'s answer to a question the base asks generally**, and it
+  is a *proxy*: what `OffersBlank` needs to know is whether a null survives to the provider, and what it
+  actually asks is whether this column builds its own predicate. They coincide today because the
+  reflective route is the one that drops nulls. If that route ever learns to carry one, the proxy is
+  wrong in the direction that offers too little.
+- **The blank is offered wherever a column can carry one, not where a blank was seen.** Excel shows
   *(Blanks)* only when the data has some, because its list comes from the data. A declared column with
   no empty rows offers an entry that filters to nothing - visible on the playground's *Department*,
   which has none. This is §14's rule exactly, and §14 chose it for a reason that does not hold for a
@@ -8918,7 +8933,9 @@ what §33's residual was also called.
   measurement behind it.
 - **A string column's blank means null or empty and cannot be made to mean only one.** The empty string
   collapses into it because `In` coalesces, which makes the entry honest about what it filters and
-  leaves the genuinely-null rows reachable only through the `Is null` operator beside it.
+  leaves the genuinely-null rows reachable only through the `Is null` operator beside it. The mapping is
+  also one-way: a filter arriving as `In [""]` from markup or a settings restore ticks nothing, because
+  the entry the empty string collapsed into is not found by looking for it.
 - **An `In` carrying a null still reaches upstream's OData formatter**, which §33 records as rendering
   `ToString` over the list. The blank makes that reachable from the menu where before it needed markup.
   Not fixed here and not measured.
@@ -8927,9 +8944,9 @@ what §33's residual was also called.
   magnitude is right; the figure for one open is inferred from it.
 - **The blank's translation is `List<int?>` reaching a provider**, which is asserted here from §14's
   precedent over `TKey` and not from a run against a real database on a non-lookup column. §14's is
-  exercised; this one's first real test is the playground's Entity Framework switch. *It is exercised:
-  the playground's Entity Framework switch shows the same two values SQLite returns for the filter the
-  in-memory source answered.*
+  exercised; this one's first real test is the playground's Entity Framework switch. *It has a test:
+  `TheBlankRidesInTheInListAllTheWayToTheProvider` commits `In [null, 3]` against SQLite and reads 8
+  rows instead of 16 when the null is dropped. The playground found it first and could not keep it.*
 - **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
   that can fail the piece. *It is built: see What it cost, where the declaration reads 0.12 KB flat
   across a tenfold change in rows.*
@@ -8987,9 +9004,10 @@ rather than assumed:
 | a filter menu, never opened | 52.96 KB | 160.23 KB |
 | a filter menu, never opened, over a **declared check-box list** | **53.08** KB | **160.35** KB |
 
-**The declaration costs 0.12 KB, at both row counts.** Flat across a tenfold change in rows is the whole
-question - it is per column and per grid, and nothing here is drawn per row. The gate that can fail the
-piece passes.
+**The declaration costs 0.12 KB, at both row counts.** The gate is the *flatness*, not the 0.12: a
+per-row cost would have grown roughly tenfold between the two, and 0.12 to 0.12 says it did not. No
+magnitude was budgeted in advance and none is claimed to have been - what was written down before the
+run is "may not cost per row", and that is what passes.
 
 **And what a wide open costs, which this section declined to cap.** The harness renders rather than
 drives, so it cannot click a panel open; the filter row draws the same lists through the same
@@ -9000,17 +9018,91 @@ one distinct value per row:
 | --- | --- | --- |
 | a filter row of check-box lists | 1,748 KB / 3.28 ms | 16,510 KB / 18.3 ms |
 
-Linear in the number of values - roughly **3.3 KB and 3.7 us per value per list** - so opening one
-column with a thousand distinct values costs on the order of 3.3 MB and 3.7 ms. That is the number the
-budget was standing in for, and it is large. It is also precisely the argument for requiring the
-declaration: **the grid cannot learn that a column has a thousand distinct values without paying this,
-and the author already knows.** What it does not argue for is a ceiling the grid imposes - a declared
-column is a statement about the data, and `FilterLookupData` is the lever for a source that should not
-be scanned at all.
+The five lists hold **445 values at N=100 and 4,045 at N=1000** - four of the columns have one distinct
+value per row and `Age` has forty-five, which is the arithmetic the first write-up got wrong: it divided
+by five thousand and read 3.3 KB per value. The slope between the two points is **4.10 KB and 4.19 us
+per value**, and the single point at N=1000 agrees at 4.08 and 4.54 - which is also the linearity check
+this paragraph claimed from one point and can now make from two. So opening one column with a thousand
+distinct values costs on the order of **4 MB and 4.2 ms**.
+
+That is the number the budget was standing in for, and it is large. It is also precisely the argument
+for requiring the declaration: **the grid cannot learn that a column has a thousand distinct values
+without paying this, and the author already knows.** What it does not argue for is a ceiling the grid
+imposes - a declared column is a statement about the data, and `FilterLookupData` is the lever for a
+source that should not be scanned at all.
 
 **Measured on a machine at load average 3.1 of ten cores**, against §9's "quiet machine". The allocation
 figures are unaffected by that, being deterministic; the times above are quoted for the order of
 magnitude they establish and never as a ratio.
+
+### What the review found that the build had not
+
+Two reviewers in parallel, and between them **a box that filtered nothing while saying it filtered
+something, an arithmetic error that flattered the design by a quarter, and the invariant the whole
+build finding was about, unpinned.** Both were right again.
+
+**Nullable was necessary and not sufficient, and the two ends disagreed.** `FilterEntries` offered a
+blank wherever `FilterNullable` said the type could hold a null - every reference type - and
+`FilterExpression.Listed` kept the null only for a string or a `Nullable<T>`. So a column declared as
+`object` drew a blank that ticked, committed, and narrowed to **no rows at all** rather than to the rows
+with nothing in them: the silent disappearance §32 exists to refuse, reached from inside the feature
+built to ask that question. Two places deciding one thing, which is the fault §36 was already fixing in
+`FastGridFilterOperators`, in the same commit.
+
+The fix is not to widen `Listed` alone, because that only moves the disagreement. `Listed` now keeps a
+null wherever `default(TProp) is null`, which is the same set `FilterNullable` names - and the blank is
+gated on a **narrower** question than `FilterNullable`, because the two are asking different things.
+`FilterNullable` answers whether the *type* can hold a null, and that is exactly right for offering
+`IsNull`, an operator the grid composes itself. A blank in a check-box list is a null *travelling in an
+`In` list*, and only a column that composes its own predicate can carry one there. So `OffersBlank` -
+which `LookupColumnBase` has answered since §14 - is promoted to `ColumnBase`, and `PropertyColumn`
+answers it with the same condition its two filter routes already refuse under, named once as
+`ComposesItsOwnFilter` rather than spelled a third time.
+
+**And a collection column was offered a blank that no element could be.** `LookupCollectionColumn` has
+refused one since §14 for a reason that is about meaning rather than mechanism - *"has no brands at all"
+is a different question from "has an id that is null", and `In` over the elements does not ask it* - and
+`CollectionColumn` inherited the base's answer instead, because `FilterNullable` reads the *element*
+type. §36 had already met this and worked around it in a test helper rather than in the rule: the
+build's own change to `CollectionColumnMemberTests` says *"the blank - which a column of nullable
+elements, strings included, now leads with"* and strips it. **A workaround in a test is a design
+decision nobody made.**
+
+**The wide-open number was wrong by a quarter, in the flattering direction.** *"3.3 KB per value"*
+divided the bench's total by five thousand - five lists at one distinct value per row - and `Age` is
+`20 + (i % 45)`, so the five lists hold 4,045 values at N=1000 and not 5,000. The spec knew this two
+lines earlier, where it says *"four of them"*. Corrected above to 4.10 KB and 4.19 us, and the slope
+between the two row counts is now what says the cost is linear - which the paragraph asserted from a
+single point while the second point sat in the same table.
+
+**The invariant the crash was about had no test.** The build finding is that *every* value must be
+wrapped, not just the blank, because `DropDownBase` casts a selection to the type of the first item in
+`Data`. Every assertion written either read `offered[0]` or filtered through `OfType<FastGridFilterEntry>()`,
+which silently discards a raw value - so re-introducing the exact regression would have passed all 1,075
+tests. The browser cannot be a regression test; `Assert.All` can, and is.
+
+**And the claim that a null reaches a real provider was still prose.** §36 flagged it as the thing most
+likely to be wrong, and the correction appended to that bullet cited *the playground* - a session nobody
+can re-run. `EntityFrameworkTests` gains a nullable non-lookup column and commits `In [null, 3]` against
+SQLite; it fails, at 8 rows against 16, when `Listed` drops the null. A browser is how a fault is found
+and not how it stays fixed.
+
+**Smaller, and all real:** `SelectionOf`'s comment borrowed §14's bound - *"a few against a few
+hundred"* - which a lookup's map guarantees and a scanned column does not; what actually bounds it is
+that `FilterSelection` answers null unless a set filter is committed. `FilterLookupData` is handed
+straight to `FilterEntries`, whose cache is keyed on the reference, so a per-render markup expression
+rebuilds the entry list every render and hands the control a new `Data` identity with it - the lifetime
+rule §14 gives a `Lookup` and §10 gives `Data`, now written on the parameter. The async path returns
+`Array.Empty` under a comment claiming everything below it goes through `FilterEntries`. And the gate
+table claimed twelve assertions and had six.
+
+**One finding was investigated and left as a comment rather than fixed.** `SelectionOf` maps values onto
+entries that `FilterEntries` builds when the `Data` attribute is written, so `Data` has to precede
+`Value` in `RenderFilterMenuList` - a coupling invisible where it would be broken. It was worth a test
+and it cannot have one: §35's panel arms on click and opens after the render, so the list draws twice
+and the second draw heals a first that had nothing to map onto. Swapping the two lines leaves the whole
+suite green, which was checked rather than assumed. It is one frame on a column that opens already
+filtered, and the same shape as §35's unobservable draft clear.
 
 ### What the mutation loop found
 

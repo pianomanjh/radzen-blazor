@@ -643,9 +643,15 @@ namespace Radzen.FastGrid
         /// <c>SelectedKeys</c> has carried one for a nullable lookup key since it was built.
         /// </para>
         /// <para>
-        /// It survives only where the column can hold one. On a non-nullable value type a null read as
-        /// <c>default</c> would filter to the rows whose value happens to be zero while the list shows
-        /// nothing ticked, which is §14's own trap; those are still dropped.
+        /// It survives only where the column can hold one, and <em>where</em> is
+        /// <c>default(TProp) is null</c> - every reference type and every <c>Nullable&lt;T&gt;</c>,
+        /// which is the same set <c>ColumnBase.FilterNullable</c> offers the blank entry for. The two
+        /// have to agree: written as a <c>Nullable.GetUnderlyingType</c> test this dropped the null on
+        /// a column declared as <c>object</c>, so its blank ticked, committed, and narrowed to no rows
+        /// at all - a box that filters nothing while saying it filters something. On a non-nullable
+        /// value type a null read as <c>default</c> would filter to the rows whose value happens to be
+        /// zero while the list showed nothing ticked, which is §14's own trap; those are still
+        /// dropped.
         /// </para>
         /// <para>
         /// A string is the exception and it is this builder's existing rule rather than a new one: a
@@ -667,7 +673,7 @@ namespace Radzen.FastGrid
                     {
                         values.Add((TProp)(object)string.Empty);
                     }
-                    else if (Nullable.GetUnderlyingType(typeof(TProp)) is not null)
+                    else if (default(TProp) is null)
                     {
                         values.Add(default!);
                     }

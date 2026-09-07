@@ -850,6 +850,10 @@ namespace Radzen.FastGrid
             // the branch above: a column answering with its own values has already put one there if it
             // offers one, which is what LookupColumnBase has done since §14 and what the enum arm on
             // ColumnBase.FilterValues now does too.
+            // FilterEntries caches on the reference it is handed, so a FilterLookupData written as a
+            // per-render expression rebuilds the entry list every render - and hands the list control a
+            // new Data identity with it. The same lifetime rule §14 gives a Lookup and §10 gives Data:
+            // hold the instance. Documented on the parameter.
             if (column.FilterLookupData is { } supplied)
             {
                 return column.FilterEntries(supplied);
@@ -869,6 +873,10 @@ namespace Radzen.FastGrid
             {
                 pendingLookups.Add(column);
 
+                // Not through FilterEntries: there is nothing to add a blank to yet, so a nullable
+                // column shows no entry at all until the scan lands and then gains one. The alternative
+                // is a list holding only a blank, which reads as "the only value here is nothing"
+                // rather than as "still loading".
                 return Array.Empty<object>();
             }
 

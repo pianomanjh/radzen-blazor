@@ -37,6 +37,7 @@ namespace Radzen.FastGrid.Tests
                 Name = "Name" + i,
                 Department = i % 4 == 0 ? "Ops" : i % 3 == 0 ? "Sales" : "Engineering",
                 Salary = 1000 + i,
+                Rating = i % 5 == 0 ? null : i % 5,
             }));
 
             context.SaveChanges();
@@ -60,7 +61,9 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Property<Employee, string>(x => x.Name),
                     Columns.Property<Employee, string>(x => x.Department),
-                    Columns.Property<Employee, decimal>(x => x.Salary)));
+                    Columns.Property<Employee, decimal>(x => x.Salary),
+                    Columns.Property<Employee, int?>(x => x.Rating,
+                        filterMode: FilterMode.CheckBoxList)));
                 extra?.Invoke(p);
             });
         }
@@ -267,6 +270,35 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal(new[] { "Name5" }, Names(cut));
         }
 
+        [Fact]
+        public void TheBlankRidesInTheInListAllTheWayToTheProvider()
+        {
+            // §36's most likely-to-be-wrong claim, and the spec was letting a browser session stand in
+            // for it: a null among an In list's values has to reach SQLite as `x IN (...) OR x IS NULL`
+            // rather than being dropped on the way. An untranslatable query throws here, and a dropped
+            // null returns the wrong rows rather than throwing - so both halves are asserted.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p => p.Add(g => g.AllowFiltering, true));
+
+            cut.WaitForAssertion(() => Assert.Equal(40, cut.FindAll("tbody tr[role=row]").Count));
+
+            var column = cut.FindComponent<PropertyColumn<Employee, int?>>().Instance;
+
+            // The blank and one real rating, which is the "these values or nothing" §31 named.
+            cut.InvokeAsync(() => cut.Instance.Filter(column, new List<int?> { null, 3 },
+                Radzen.FilterOperator.In));
+
+            cut.WaitForAssertion(() => Assert.Equal(
+                context.People.AsNoTracking().Count(e => e.Rating == null || e.Rating == 3),
+                cut.FindAll("tbody tr[role=row]").Count));
+
+            // And it is the rows with nothing that came back, not merely the right number of them.
+            Assert.All(
+                cut.FindAll("tbody tr[role=row]").Select(r => r.QuerySelectorAll("td")[3].TextContent),
+                text => Assert.True(text.Length == 0 || text == "3", text));
+        }
+
         public class Employee
         {
             public int Id { get; set; }
@@ -276,6 +308,13 @@ namespace Radzen.FastGrid.Tests
             public string Department { get; set; } = "";
 
             public decimal Salary { get; set; }
+
+            /// <summary>
+            /// Nullable and with no lookup behind it, which is §36's blank entry's own case - and the
+            /// one whose provider translation the spec was asserting from §14's precedent rather than
+            /// from a run.
+            /// </summary>
+            public int? Rating { get; set; }
         }
 
         public class Ctx : DbContext

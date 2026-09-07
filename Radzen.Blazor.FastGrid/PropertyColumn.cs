@@ -438,6 +438,30 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         /// <remarks>
+        /// The same condition the two filter routes refuse under, for the reason the base's remark
+        /// gives: a blank is a null riding in an <c>In</c> list, and a column that hands its filter to
+        /// the reflective route cannot carry one there - the null is dropped on the way, so the box
+        /// ticks, commits, and narrows to no rows at all rather than to the rows with nothing in them.
+        /// A collection column is refused for a second reason as well, which is
+        /// <see cref="CollectionColumn{TItem, TElement}" />'s: "has no regions at all" is a different
+        /// question from "has a region that is null".
+        /// </remarks>
+        private protected override bool OffersBlank => base.OffersBlank && ComposesItsOwnFilter;
+
+        /// <summary>
+        /// Whether this column builds its own filter rather than handing the composition over.
+        /// </summary>
+        /// <remarks>
+        /// Both filter routes asked this as the same four-clause condition written twice, which is the
+        /// shape §34's and §35's reviews each found once and §36 found again in
+        /// <c>FastGridFilterOperators</c>. Naming it is what let <see cref="OffersBlank" /> ask it as
+        /// well without becoming a third copy.
+        /// </remarks>
+        bool ComposesItsOwnFilter =>
+            !IsCollection && typeof(TProp) != typeof(object) && FilterMemberPath is null;
+
+        /// <inheritdoc />
+        /// <remarks>
         /// Composed rather than enumerated, so an Entity Framework source runs SELECT DISTINCT rather
         /// than pulling every row across the wire. A collection column offers its members.
         /// </remarks>
@@ -548,8 +572,7 @@ namespace Radzen.FastGrid
         public override Expression<Func<TItem, bool>>? ApplyFilter(FilterCaseSensitivity caseSensitivity,
             bool inMemory)
         {
-            if (IsCollection || typeof(TProp) == typeof(object)
-                || FilterMemberPath is not null || (FilterBy ?? Property) is not { } selector)
+            if (!ComposesItsOwnFilter || (FilterBy ?? Property) is not { } selector)
             {
                 return null;
             }
@@ -568,8 +591,7 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         public override Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity)
         {
-            if (IsCollection || typeof(TProp) == typeof(object)
-                || FilterMemberPath is not null || (FilterBy ?? Property) is not { } selector)
+            if (!ComposesItsOwnFilter || (FilterBy ?? Property) is not { } selector)
             {
                 return null;
             }

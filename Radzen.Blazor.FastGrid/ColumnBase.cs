@@ -710,6 +710,13 @@ namespace Radzen.FastGrid
         /// The values offered by a check-box-list filter. Supply this to skip the distinct scan of the
         /// data - which is what a large or remote source wants - or to offer values the data has none of.
         /// </summary>
+        /// <remarks>
+        /// <strong>Hold the instance.</strong> On a column that offers §36's blank entry the values are
+        /// wrapped, and that wrapping is cached on the reference this returns - so a collection built
+        /// inside the markup expression rebuilds it on every render and gives the list control a new
+        /// <c>Data</c> identity each time. The same rule §14 gives a <c>Lookup</c> and §10 gives
+        /// <c>Data</c>, for the same reason.
+        /// </remarks>
         [Parameter] public IEnumerable? FilterLookupData { get; set; }
 
         /// <summary>
@@ -1498,8 +1505,32 @@ namespace Radzen.FastGrid
         List<object>? entryList;
 
         /// <summary>
+        /// Whether this column's check-box list offers an entry for the rows with nothing in them.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>Nullable is necessary and not sufficient</strong>, which is what both of §36's
+        /// reviewers arrived at from opposite ends. <see cref="FilterNullable" /> answers whether the
+        /// <em>type</em> can hold a null, and that is the right question for offering <c>IsNull</c> -
+        /// an operator the grid composes itself. A blank in a check-box list is a null travelling in an
+        /// <c>In</c> list, and only a column that composes its own predicate can carry one there: a
+        /// column that hands its filter to the reflective route offers a box that ticks, commits, and
+        /// narrows to no rows at all.
+        /// </para>
+        /// <para>
+        /// So this is the narrower question, and the hook is <see cref="LookupColumnBase{TItem, TKey}" />'s
+        /// own - it has answered it since §14, and <c>LookupCollectionColumn</c> refuses a blank through
+        /// it for a reason that is about meaning rather than mechanism: <em>"has no brands at all" is a
+        /// different question from "has an id that is null"</em>. Promoted here rather than copied,
+        /// because two places deciding which columns offer a blank is the fault §36 was already fixing
+        /// elsewhere.
+        /// </para>
+        /// </remarks>
+        private protected virtual bool OffersBlank => FilterNullable;
+
+        /// <summary>
         /// The values a check-box list draws, which is what was offered plus the blank entry on a
-        /// nullable column.
+        /// column that offers one.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -1516,7 +1547,7 @@ namespace Radzen.FastGrid
         /// </remarks>
         internal IEnumerable FilterEntries(IEnumerable values)
         {
-            if (!FilterNullable)
+            if (!OffersBlank)
             {
                 return values;
             }
@@ -1570,7 +1601,7 @@ namespace Radzen.FastGrid
                     continue;
                 }
 
-                built.Add(new FastGridFilterEntry(value, Text(value)));
+                built.Add(new FastGridFilterEntry(value, EntryText(value)));
             }
 
             return built;
@@ -1586,9 +1617,9 @@ namespace Radzen.FastGrid
         /// column that reads one way when it is nullable and another when it is not would be one rule
         /// with two spellings - which is the fault §34's and §35's reviews each found once.
         /// </remarks>
-        static string Text(object value) =>
+        static string EntryText(object value) =>
             value is Enum member
-                ? Blazor.EnumExtensions.GetDisplayDescription(member)
+                ? Radzen.Blazor.EnumExtensions.GetDisplayDescription(member)
                 : value.ToString() ?? string.Empty;
 
         /// <summary>
@@ -1694,9 +1725,12 @@ namespace Radzen.FastGrid
         /// </remarks>
         internal virtual object? SelectionOf(object? value)
         {
-            // §36: on a nullable column the list is bound to entries rather than to the values, so the
-            // ticks have to be found again - which is exactly what LookupColumnBase has done since §14,
-            // and scanned for the same reason: a selection of a few against a list of a few hundred.
+            // §36: on a column that offers a blank the list is bound to entries rather than to the
+            // values, so the ticks have to be found again - which is exactly what LookupColumnBase has
+            // done since §14. Scanned rather than indexed, but not for §14's reason: a lookup's list is
+            // bounded by the lookup and a scanned column's is not. What bounds this one is when it runs
+            // - FilterSelection answers null unless a set filter is committed, so the scan happens on a
+            // column somebody is actively filtering by a set, over the few values they ticked.
             // Where the column wraps nothing this is the identity it always was.
             if (Entries is not { } offered || value is not IEnumerable selected || value is string)
             {
