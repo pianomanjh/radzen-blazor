@@ -6886,6 +6886,10 @@ days, this month, this year, to begin with. Resolving a preset to absolute dates
 picked produces a saved filter that is *wrong by design* the next morning, which is a bug report rather
 than a limitation. Settings outlive sessions; a filter that says "last 7 days" has to still mean it.
 
+**§34 keeps every word of that and moves the list.** Those six are *presets*, and a preset is a pair of
+tokens rather than one - `last 7 days` is `Between today-6d today@end`. The tokens are the model's
+vocabulary, the presets are the menu's, and ④ is where the six live.
+
 ### Settings, and a hole that exists today
 
 **One deliberate, additive format change.** An old build reading a new blob loses the second condition
@@ -6931,6 +6935,10 @@ somewhere to go without a handle on a particular column's panel.
 | enum, lookup, collection | **In**, NotIn - edited as a check-box list |
 
 Nullable columns of any type also get IsNull / IsNotNull.
+
+**Date `Equals` is "whole day" only for a date the user picked.** §34 makes a relative token resolve to
+one instant, so `Equals today` is midnight exactly; the whole-day reading is the menu writing a
+`Between`, and that is this table's job rather than the model's.
 
 **`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`.** A check-box
 list is not a different kind of filtering, it is how a set is picked - and §14's lookup columns already
@@ -7378,6 +7386,12 @@ that operator takes.** Arity belongs to the operator: `IsNull` takes none, `Equa
 gives ③'s tokens somewhere to live without new machinery - a token is a *value*, not an operator, so
 `Hired Between [last-7-days]` needs nothing this section does not already build.
 
+**The example is wrong and §34 corrects it.** A token that supplies two bounds from one slot makes arity
+a property of the operator *and* of what is in its slots, which is the special-casing this paragraph
+exists to remove. A token resolves to one instant, and a range of them is `Between today-6d today@end` -
+two values, as the arity says. The claim that survives is the one that mattered: nothing in this model
+had to learn the word.
+
 Two conditions rather than one because §31's worked case survives its own justification: *"these three
 values or blank"* on a nullable column is `In [...] OR IsNull`, which no single condition expresses.
 Two rather than n because nothing has asked for a third and the menu will never offer one.
@@ -7643,3 +7657,210 @@ exists: **a test one layer above a rule is not a test of the rule.** All thirtee
 - **"Parsed against the column's type" makes the type load-bearing at restore** in a way it was not. §32
   made `EffectiveFilterType` matter more than its own comment claimed; this makes it decisive.
 - **Nothing here is measured.** The gate is a budget until piece 2 of the order above has run.
+
+---
+
+## 34. Relative dates are values that know when they are read - the design
+
+§31's ③, and the first piece §33 was built to make cheap. A relative date is a **value**: the operator
+vocabulary, the arity rule and the two-condition shape are all untouched by this section. That is the
+claim being tested rather than a hope - **if any of them has to learn about a token, the piece is going
+wrong**, which is the same shape of tripwire §33 set for the provider seam and for the same reason.
+
+**Nothing here is built when this section lands.**
+
+### Why a preset cannot be resolved when it is picked
+
+§31 settled this and it is worth restating, because it is the whole reason the section exists.
+
+Resolving *last 7 days* into a pair of dates at the moment the user picks it produces a filter that is
+**wrong by design the next morning**. Settings outlive sessions - that is what §32 and §33 spent two
+pieces making true - so a blob written in March comes back in September still asking about March, and
+it does it silently, with dates that look deliberate. A filter that says "last 7 days" has to still mean
+it.
+
+That is a statement about *when* a value is read. Which is why a token is a value with a resolution
+time, and not an operator with a meaning.
+
+### What a token is, and §33's own example is the one form that cannot exist
+
+§33 wrote the case as `Hired Between [last-7-days]` - one token in a two-arity operator. **That form
+cannot exist in the model §33 built.** `Between` takes two values because arity belongs to the operator;
+a single value that secretly supplies two bounds would make arity a property of the operator *and* of
+what is sitting in its slots, which is precisely the special-casing §33's model was arranged to remove.
+The sentence is corrected in the commit that makes this true, and so is §31's list.
+
+**A token resolves to a single instant.** *Last 7 days* is therefore not a token at all - it is a pair of
+them, `Between today-6d today@end` - and every one of §31's six presets is that shape:
+
+| §31's preset | what the menu writes |
+| --- | --- |
+| today | `Between today today@end` |
+| yesterday | `Between today-1d today-1d@end` |
+| last 7 days | `Between today-6d today@end` |
+| last 30 days | `Between today-29d today@end` |
+| this month | `Between month-start today@end` |
+| this year | `Between year-start today@end` |
+
+**The presets are the menu's vocabulary and the tokens are the model's**, and keeping them apart is what
+lets ④ add *last quarter* without touching anything here. What it buys downstream is that a resolved
+token is a `DateTime` in a slot that already held `DateTime`s, so `FilterExpression`, the descriptors and
+the OData string never learn the word. What it costs is honest and belongs to ④: the menu writes two
+halves where the user picked one thing, and a preset that round-trips has to be *recognised* from its
+pair rather than stored as itself - which is a display problem, not a model one, and ⑤'s pills are where
+it is felt.
+
+### The vocabulary, and the two things it refuses
+
+**An anchor, a signed offset with a unit, and an end-of-day flag.**
+
+| part | values |
+| --- | --- |
+| anchor | `today`, `month-start`, `year-start` |
+| unit | `d`, `m`, `y` |
+| day part | absent (00:00:00), or `@end` |
+
+Canonically: `today`, `today-6d`, `month-start`, `year-start+1m`, `today@end`, `today-29d@end`.
+
+Anchor-plus-offset rather than a closed set of named instants, and the difference is where the format
+settles. A closed set covers §31's six with about six members and then gains a **public enum member and
+a new settings-format value** the first time somebody asks for ninety days - so "to begin with" would be
+a promise to break the format again. Three anchors and an integer cover the six, and cover the ninety.
+
+**Refused: `week-start`.** A week's first day is culture-dependent, and nothing on this component owns a
+culture decision of that kind yet - §32 spent a paragraph establishing that stored values are invariant
+and typed text is `CurrentCulture`, and a first-day-of-week would be a third answer with no argument
+behind it. It is declined rather than overlooked, and it is the obvious first request.
+
+**Refused: a `w` unit.** It is `7d` spelled differently, and two spellings of one instant is two things a
+reader of a blob has to recognise.
+
+`today-1m` on 31 March resolves to 28 February, because that is `AddMonths` and the alternatives are
+worse. Month arithmetic that does not clamp has to either throw or skip, and a filter that throws on one
+day in twelve is not a filter.
+
+### The day boundary, which is where date ranges go wrong
+
+`Between` here is inclusive at both ends. A date column holding **times** therefore makes the upper bound
+of a range a trap: `Between today-6d today` with `today` at midnight silently excludes everything that
+happened today, which is a wrong answer that looks like a right one - the exact failure direction §32
+banned.
+
+**The day part is explicit in the grammar.** `today` is 00:00:00.0000000 and `today@end` is
+23:59:59.9999999. Nothing is implicit, a stored blob reads as exactly the instant it is, and resolution
+needs to know nothing but the token and the clock - which is what keeps "a token is a value" literally
+true.
+
+The alternative considered and rejected was **position-directed** resolution: one token text meaning
+start-of-day as a lower bound and end-of-day as an upper, so `After today` would mean after tonight the
+way a person reads it. Resolution runs at one place that has both the operator and the index, so it
+would have cost nothing structurally. It was rejected because the same text would then denote two
+instants depending where it sits, and the two places that text is *read by a human* - a settings blob
+and a pill - are both places where it sits alone with no position to be judged by.
+
+**The cost, documented rather than discovered: `Equals today` on a column holding times matches midnight
+exactly, and therefore nothing.** §31's table says date `Equals` means the whole day; for a token that is
+false, and the menu resolves it by writing the `Between` instead. An author reaching for `Equals` with a
+token from markup gets the literal reading, and that is the rule.
+
+### Where resolution runs
+
+**`CurrentFilter` stays what the user authored.** Tokens intact. It is what `CaptureSettings` writes,
+what a `FilterTemplate` author sets, and what ⑤'s pills read - a pill saying *"Hired is in the last 7
+days"* cannot be built from two resolved dates.
+
+**`ActiveFilter` is the resolved projection**, internal, refreshed where the grid composes a query, and
+it is what the three query-side readers take: `ApplyFilter`, `ApplyFilterInMemory` and `DescriptorFor`.
+Everything past those sees `DateTime`s indistinguishable from typed ones.
+
+Two names rather than one property that means different things at different times. §10b's recurring
+finding is a rule read from two places that can **disagree**; these two are *meant* to differ, and the
+names are what say which is which - the authored filter and the filter as of now.
+
+**One timestamp, stamped once for the whole composition**, handed to every token. Reading the clock per
+token lets two columns - or the two bounds of one range - land on opposite sides of midnight, producing a
+range that excludes its own start. That is a once-a-day bug with no reproduction, which is the worst kind
+this branch can ship.
+
+**A filter holding no tokens resolves to itself.** The same reference, nothing allocated, nothing copied.
+§33's review spent a finding on `DeclaredFilter` allocating a filter, a condition and a one-element array
+for every column whether or not it declared one; this is that lesson applied before rather than after -
+the common case is a grid with no relative filter anywhere, and it must cost exactly what it costs today.
+
+**Resolution targets the column's declared type.** A `DateTimeOffset` column gets a `DateTimeOffset`, a
+`DateOnly` column a `DateOnly` - where `@end` is a no-op, since a `DateOnly` has no end of day to reach.
+A `DateTime` result is `Unspecified`: comparison ignores `Kind`, but the wire does not, and a `Local`
+instant renders an offset into a string a server has to parse.
+
+### The clock
+
+**A `TimeProvider` parameter, defaulting to `TimeProvider.System`, read through `GetLocalNow()`.**
+
+Local, because a user filtering *hired today* means their today, and it is what every date editor on the
+grid already shows them.
+
+The parameter is not a convenience. It is the only answer available to **Blazor Server running in a
+different zone from its user** - the app hands over a provider carrying the user's zone and the grid asks
+no further questions - and it is what makes the rule testable at all. §9's protocol has nowhere to put a
+test of "yesterday" against a real clock; with a fixed provider it is an ordinary pure-function test at
+the layer the rule lives at, which is what process rule 4 asks for.
+
+`TimeProvider` rather than a hand-rolled clock interface because it is the framework's own abstraction
+since .NET 8, this component targets net9.0 and net10.0, and inventing a second one would be a seam with
+exactly one implementation - §16's rule about narrowing interfaces that nothing else could satisfy.
+
+### Storage, and why the two vocabularies cannot collide
+
+`FilterValueText.From` gains one arm returning the canonical text. `To` parses a token **only when the
+column's effective filter type is a date type** - so a string column filtered to the literal text
+`today-6d` stores and restores that string, untouched.
+
+Within a date column the two vocabularies are disjoint by construction: no invariant-culture date format
+parses as `today`, and no token parses as a date. §33 made values invariant strings precisely so that
+a serializer could not change what a value *is*; a token is one more string, and it survives
+`System.Text.Json` for the same reason a `DateTime`'s round-trip form does.
+
+**The format is not extended and not versioned.** §33 settled it, and a token is a value in the shape
+§33 defined rather than a new member beside it.
+
+### The gate
+
+**Per-row and per-cell allocation unchanged, and the token-free path unchanged in both time and
+allocation.** The second half is the one that can fail the piece: a grid with no relative filter must
+not pay for the existence of the feature, which is what "resolves to itself" is for and what the sweep
+has to demonstrate.
+
+A token's own cost is permitted per column and per active filter - one resolved condition and its boxed
+instants per composition - and is not permitted to grow with rows. `FilteringApplied` swept over N=100
+and N=1000, because §33's review is the reason that sweep exists: a fixed cost and a per-row cost look
+identical at one row count.
+
+### How it is verified
+
+- **The grammar and the resolution as pure rules** in `FastGridFilterModelTests`, against a fixed
+  `TimeProvider`. Process rule 4: `today-6d@end` is a rule about a token, and a test that reaches it
+  through a rendered grid is a test of the grid.
+- **A settings round trip through real `System.Text.Json`**, proving a token comes back a token and
+  still means the reading day's *today* rather than the writing day's.
+- **Three-route agreement on a token filter.** §33's review found two routes disagreeing about a range
+  with the flat one on the wire; a token multiplies whatever that class of fault costs, because the two
+  answers are both plausible dates.
+- **The playground's round-trip button**, which §32 added for exactly this class of bug.
+
+### Where this could still be wrong
+
+- **`ActiveFilter` is a second thing to keep in step**, and the failure mode is a stale resolution
+  surviving into a composition it does not belong to. The refresh is one place; the argument that one
+  place is enough is an argument about the grid's composition lifecycle, and that lifecycle is the part
+  of this component §23 found hardest to state.
+- **The preset is not in the model**, so a stored `Between today-6d today@end` cannot be told from a
+  hand-authored one, and ④ has to recognise presets by their shape to show them as presets. That is a
+  cost deliberately pushed into the menu, and it may turn out to want a token that names the preset
+  after all - which would be this section refuted rather than extended.
+- **"Local" is the app's problem to correct and most apps will not know they have one.** The default is
+  right for Blazor WebAssembly and for a server in its users' zone, and quietly wrong otherwise, in a
+  direction that shows plausible rows.
+- **`Equals` with a token means midnight** and §31's table says the whole day. Two readings of one
+  operator, reconciled by a rule about which one the menu writes, and a rule like that is exactly what
+  §33 called two sources of truth when it found one.
+- **Nothing here is measured.** The gate is a budget until the build has run.
