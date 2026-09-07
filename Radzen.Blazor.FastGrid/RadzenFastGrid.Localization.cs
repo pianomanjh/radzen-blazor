@@ -330,6 +330,24 @@ namespace Radzen.FastGrid
             set => isNotEmptyText = value;
         }
 
+        string? customFilterText;
+
+        /// <summary>
+        /// The filter menu's name for a filter the caller applies itself.
+        /// </summary>
+        /// <remarks>
+        /// The menu never offers <c>Custom</c> - it composes no predicate here - but the operator's name
+        /// is read wherever an operator's name is read, and the review found the catch-all arm labelling
+        /// it "Between". An operator that means "you filter this" reading as a range is the kind of
+        /// wrong label nobody checks.
+        /// </remarks>
+        [Parameter]
+        public string CustomFilterText
+        {
+            get => customFilterText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_CustomText));
+            set => customFilterText = value;
+        }
+
         string? secondFilterValueAriaLabel;
 
         /// <summary>The same, for a range's upper bound.</summary>

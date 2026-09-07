@@ -363,5 +363,204 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Contains("Contains", MenuLabels(cut));
         }
+
+        [Fact]
+        public void TickingABoxDraftsAndApplyKeepsWhatWasTicked()
+        {
+            // The review's first finding: the panel was reusing the filter row's multiselect, which is
+            // bound to the committed filter and applies on every tick - so ticking filtered at once and
+            // Apply then wrote the stale draft back over it. Confirming a selection undid it.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, Grade>(x => x.Grade)));
+            var column = cut.FindComponent<PropertyColumn<Person, Grade>>().Instance;
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "In");
+
+            var list = cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[0];
+
+            cut.InvokeAsync(() => list.Instance.Change.InvokeAsync(new List<object> { Grade.Senior }));
+
+            // Nothing applied yet - §31's rule holds for the set editor too.
+            Assert.False(column.HasFilter);
+
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            Assert.True(column.HasFilter);
+            Assert.Equal(FastGridFilterOperator.In, column.CurrentFilter!.First.Operator);
+            Assert.Equal(new[] { Grade.Senior },
+                ((System.Collections.IEnumerable)column.CurrentFilter.First.Value!).Cast<Grade>());
+        }
+
+        [Fact]
+        public void NotInIsReachableThroughTheList()
+        {
+            // The row's handler hard-codes In, so NotIn was offered by the menu and unreachable from it.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, Grade>(x => x.Grade)));
+            var column = cut.FindComponent<PropertyColumn<Person, Grade>>().Instance;
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "Not in");
+
+            var list = cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[0];
+
+            cut.InvokeAsync(() => list.Instance.Change.InvokeAsync(new List<object> { Grade.Senior }));
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            Assert.Equal(FastGridFilterOperator.NotIn, column.CurrentFilter!.First.Operator);
+        }
+
+        [Fact]
+        public void EnterCommitsWhatWasTypedWithoutWaitingForABlur()
+        {
+            // §31 says the menu applies on Apply or Enter. Enter was not implemented at all, and the
+            // comment claiming it was documented a feature that did not exist.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+            var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "Contains");
+
+            // Input, not change: a keydown arrives before the change event, so committing on Enter is
+            // only correct because the draft is kept current as the user types.
+            cut.Find("div.rz-filter-menu-editor input").Input("Ali");
+            cut.Find("div.rz-overlaypanel-content").KeyDown(
+                new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
+
+            Assert.True(column.HasFilter);
+            Assert.Equal("Ali", column.CurrentFilter!.First.Value);
+        }
+
+        [Fact]
+        public void TheIconSaysWhatItControlsAndWhetherItIsOpen()
+        {
+            // Without aria-controls upstream's own setPopupAriaExpanded cannot find the anchor, so the
+            // button claimed to have a menu and never said whether it was open.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+            var icon = cut.FindAll("thead button.rz-filter-button")[0];
+
+            Assert.Equal("false", icon.GetAttribute("aria-expanded"));
+            Assert.False(string.IsNullOrEmpty(icon.GetAttribute("aria-controls")));
+
+            OpenMenu(cut, 0);
+
+            Assert.Equal(icon.GetAttribute("aria-controls"),
+                cut.Find("div.rz-overlaypanel").GetAttribute("id"));
+        }
+
+        [Fact]
+        public void AnOperatorTheMenuDoesNotOfferIsNotSeededIntoTheDraft()
+        {
+            // A restored or markup-declared LessThanOrEquals on a date reached the draft, showed an
+            // editor under no selection, and committed through the arm of the whole-day rule that leaves
+            // a date literal - which is the boundary loss §34 built @end to prevent.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+            var column = cut.FindComponent<PropertyColumn<Person, DateTime>>().Instance;
+
+            cut.InvokeAsync(() => cut.Instance.Filter(column, new DateTime(2026, 3, 31),
+                FastGridFilterOperator.LessThanOrEquals));
+
+            OpenMenu(cut, 1);
+
+            // Nothing highlighted, and no editor under it: the user is asked to pick.
+            Assert.Empty(cut.FindAll("button.rz-filter-menu-item.rz-state-highlight"));
+            Assert.Empty(cut.FindAll("div.rz-filter-menu-editor"));
+
+            // And the stored filter is left alone until they do.
+            Assert.Equal(FastGridFilterOperator.LessThanOrEquals, column.CurrentFilter!.First.Operator);
+        }
+
+        [Fact]
+        public void ANumberGetsANumericEditorAndADateGetsAPicker()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, int>(x => x.Id),
+                Columns.Property<Person, DateTime>(x => x.Hired)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "Equals");
+
+            // Over decimal? rather than over int: a numeric control closed over a non-nullable TProp
+            // cannot show empty, and would open offering Apply on a zero nobody chose.
+            var numeric = cut.FindComponents<RadzenNumeric<decimal?>>().Single();
+
+            Assert.Null(numeric.Instance.Value);
+
+            cut.InvokeAsync(() => numeric.Instance.Change.InvokeAsync(3m));
+            cut.Find("div.rz-filter-menu-buttons button.rz-primary").Click();
+
+            var id = cut.FindComponent<PropertyColumn<Person, int>>().Instance;
+
+            // Back in the column's own type, not left a decimal.
+            Assert.Equal(3, id.CurrentFilter!.First.Value);
+
+            OpenMenu(cut, 1);
+            PickItem(cut, "Between");
+
+            Assert.Equal(2, cut.FindComponents<RadzenDatePicker<DateTime>>().Count);
+        }
+
+        [Fact]
+        public void ABoolEditorOpensChoosingNeither()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, bool>(x => x.Remote)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "Equals");
+
+            // Over object, so "neither" is a state it can hold - closed over bool it would open already
+            // saying false.
+            Assert.Null(cut.FindComponents<RadzenDropDown<object>>().Single().Instance.Value);
+        }
+
+        [Fact]
+        public void TheDraftDoesNotOutliveThePanel()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, DateTime>(x => x.Hired)));
+
+            OpenMenu(cut, 0);
+            PickItem(cut, "Between");
+
+            Assert.Equal(2, cut.FindAll("div.rz-filter-menu-editor").Count > 0 ? 2 : 0);
+
+            cut.Find("div.rz-filter-menu-buttons button.rz-light").Click();
+
+            OpenMenu(cut, 0);
+
+            Assert.Empty(cut.FindAll("div.rz-filter-menu-editor"));
+        }
+
+
+        [Fact]
+        public void ALookupColumnOffersASetRatherThanItsKeysNumericOperators()
+        {
+            // The browser found this: a lookup's EffectiveFilterType is its key type, so asking the type
+            // alone offered "Less than" and "Between" over ids the reader never sees, on the one column
+            // whose whole point is that it filters by In and shows names.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int?>(x => x.RegionId,
+                FastGridLookup.Map(Lookups.Regions()))));
+
+            OpenMenu(cut, 0);
+
+            Assert.Equal(new[] { "In", "Not in", "Is null", "Is not null" }, MenuLabels(cut));
+        }
+
     }
 }

@@ -31,6 +31,18 @@ namespace Radzen.FastGrid
         /// <summary>Whether the menu is the editor, which needs filtering switched on as well.</summary>
         internal bool FilterMenuEnabled => AllowFiltering && FilterUI == FilterUI.Menu;
 
+        /// <summary>
+        /// The panel's element id, so the icon can name it and upstream can find it.
+        /// </summary>
+        /// <remarks>
+        /// Explicit rather than left to <c>RadzenComponent.GetId()</c>, because two things need to agree
+        /// on it: the icon's <c>aria-controls</c>, and <c>Radzen.setPopupAriaExpanded</c>, which looks
+        /// the anchor up <em>by</em> that attribute and silently does nothing when it is missing. The
+        /// review found the icon claiming <c>aria-haspopup="menu"</c> and never saying whether the menu
+        /// was open, which is worse than not claiming it.
+        /// </remarks>
+        internal string FilterMenuElementId => ElementId + "-filter";
+
         // The panel. One for the grid, and null until the first open builds it - §31's rule, and §29's
         // reason: exactly one of these can be open, so a panel per column multiplies a cost by the
         // column count for a control that is singular by construction.
@@ -101,29 +113,36 @@ namespace Radzen.FastGrid
         /// </remarks>
         void RenderFilterIcon(RenderTreeBuilder builder, ColumnBase<TItem> column, int index)
         {
-            builder.OpenElement(90, "button");
-            builder.AddAttribute(91, "type", "button");
-            builder.AddAttribute(92, "tabindex", "-1");
-            builder.AddAttribute(93, "class", column.HasFilter
+            builder.OpenElement(0, "button");
+            builder.AddAttribute(1, "type", "button");
+            builder.AddAttribute(2, "tabindex", "-1");
+            builder.AddAttribute(3, "class", column.HasFilter
                 ? "rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base"
                     + " rz-shade-default rz-grid-filter-active"
                 : "rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base"
                     + " rz-shade-default");
-            builder.AddAttribute(94, "aria-haspopup", "menu");
-            builder.AddAttribute(95, "aria-label", column.HeaderText + " " + FilterToggleAriaLabel);
+            builder.AddAttribute(4, "aria-haspopup", "menu");
+            builder.AddAttribute(5, "aria-label", column.HeaderText + " " + FilterToggleAriaLabel);
+
+            // Both, and both matter. aria-controls is what Radzen.setPopupAriaExpanded matches the
+            // anchor on, so without it the attribute below is never maintained by the open and close.
+            // It is written here as the closed state, which is what it is on the render that draws it.
+            builder.AddAttribute(6, "aria-controls", FilterMenuElementId);
+            builder.AddAttribute(7, "aria-expanded",
+                ReferenceEquals(menuColumn, column) && menuPopup is { IsOpen: true } ? "true" : "false");
 
             // The header cell's own click sorts the column. The icon sits inside that click target, so
             // it has to stop - the same rule the resize handle and the drag handle already follow.
-            builder.AddAttribute(96, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
+            builder.AddAttribute(8, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
                 this, _ => OpenFilterMenu(column, index)));
-            builder.AddEventStopPropagationAttribute(97, "onclick", true);
+            builder.AddEventStopPropagationAttribute(9, "onclick", true);
 
-            builder.AddElementReferenceCapture(98, iconCaptures[index]);
+            builder.AddElementReferenceCapture(10, iconCaptures[index]);
 
-            builder.OpenElement(99, "i");
-            builder.AddAttribute(100, "class", "notranslate rzi");
-            builder.AddAttribute(101, "aria-hidden", "true");
-            builder.AddContent(102, FilterIcon);
+            builder.OpenElement(11, "i");
+            builder.AddAttribute(12, "class", "notranslate rzi");
+            builder.AddAttribute(13, "aria-hidden", "true");
+            builder.AddContent(14, FilterIcon);
             builder.CloseElement();
 
             builder.CloseElement();
@@ -175,9 +194,34 @@ namespace Radzen.FastGrid
         {
             var first = column.CurrentFilter?.First;
 
-            menuOperator = first?.Operator;
             menuValue = first?.Value;
             menuSecondValue = first?.SecondValue;
+
+            // Only an operator this menu offers. A filter can arrive from markup, from a restored
+            // setting or from ApplyFilters carrying one the menu does not list - LessThanOrEquals on a
+            // date, say - and seeding it did two wrong things at once: no item in the list matched, so
+            // the panel showed an editor under no selection, and editing that value committed through
+            // the arm of the whole-day rule that leaves a date literal, which is the boundary loss §34
+            // built @end to prevent. Dropping it asks the user to pick, and leaves the stored filter
+            // alone until they do.
+            menuOperator = first is { } condition && Offers(column, condition.Operator)
+                ? condition.Operator
+                : null;
+        }
+
+        static bool Offers(ColumnBase<TItem> column, FastGridFilterOperator filterOperator)
+        {
+            var offered = column.MenuOperators;
+
+            for (var i = 0; i < offered.Length; i++)
+            {
+                if (offered[i] == filterOperator)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Opens the panel, once the render that wrote its body has happened.</summary>
@@ -220,10 +264,13 @@ namespace Radzen.FastGrid
             builder.AddAttribute(741, nameof(RadzenPopup.AutoFocusFirstElement), true);
             builder.AddAttribute(742, nameof(RadzenPopup.Style), "display:none;");
             builder.AddAttribute(743, "class", "rz-overlaypanel");
+            builder.AddAttribute(748, "id", FilterMenuElementId);
             builder.AddAttribute(744, "role", "menu");
             builder.AddAttribute(745, "aria-label", FilterText);
             builder.AddAttribute(746, nameof(RadzenPopup.ChildContent),
                 (RenderFragment)RenderFilterMenuBody);
+            builder.AddAttribute(749, nameof(RadzenPopup.Close),
+                EventCallback.Factory.Create(this, OnFilterMenuClosedAsync));
             builder.AddComponentReferenceCapture(747,
                 captureMenuPopup ??= reference => menuPopup = (RadzenPopup)reference);
             builder.CloseComponent();
@@ -244,12 +291,20 @@ namespace Radzen.FastGrid
             builder.SetKey(column);
             builder.AddAttribute(1, "class", "rz-overlaypanel-content");
 
+            // §31: the menu applies on Apply or Enter. Bound on the panel rather than on the editors,
+            // because there are up to two of them and because the operator buttons are a reasonable
+            // place to press Enter from as well. The editors keep the draft current on every keystroke,
+            // which is what makes this safe: a keydown arrives before the change event, so committing
+            // from here without that would commit the value as it stood one keystroke ago.
+            builder.AddAttribute(2, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(
+                this, args => OnFilterMenuKeyAsync(column, args)));
+
             // A FilterTemplate is the whole editor, with no operator picker beside it: the template's
             // author sets value and operator themselves, so a picker would be a second control fighting
             // the first over one piece of state. §31.
             if (column.FilterTemplate is { } template)
             {
-                builder.AddContent(2, template(column));
+                builder.AddContent(3, template(column));
             }
             else
             {
@@ -264,7 +319,12 @@ namespace Radzen.FastGrid
 
         void RenderFilterMenuOperators(RenderTreeBuilder builder, ColumnBase<TItem> column)
         {
-            var offered = FastGridFilterOperators.Menu(column.EffectiveFilterType, column.FilterNullable);
+            var offered = column.MenuOperators;
+
+            // Once for the whole list rather than once per item. Recognising a preset builds a filter to
+            // ask about, so reading it seven times down this method allocated seven of them - which the
+            // field comment at the top of this file argues against by name.
+            var preset = DraftPreset();
 
             builder.OpenElement(10, "ul");
             builder.AddAttribute(11, "class", "rz-listbox-list");
@@ -278,7 +338,7 @@ namespace Radzen.FastGrid
 
                 builder.OpenElement(14, "button");
                 builder.AddAttribute(15, "type", "button");
-                builder.AddAttribute(16, "class", menuOperator == picked && menuPreset is null
+                builder.AddAttribute(16, "class", menuOperator == picked && preset is null
                     ? "rz-multiselect-item rz-state-highlight rz-filter-menu-item"
                     : "rz-multiselect-item rz-filter-menu-item");
                 builder.AddAttribute(17, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
@@ -294,21 +354,21 @@ namespace Radzen.FastGrid
             // sentence.
             if (FastGridRelativeDate.AppliesTo(column.EffectiveFilterType))
             {
-                for (var i = 0; i < FastGridFilterPresets.All.Length; i++)
+                for (var i = 0; i < FastGridFilterPresets.All.Count; i++)
                 {
-                    var preset = FastGridFilterPresets.All[i];
+                    var candidate = FastGridFilterPresets.All[i];
 
                     builder.OpenElement(19, "li");
                     builder.AddAttribute(20, "role", "presentation");
 
                     builder.OpenElement(21, "button");
                     builder.AddAttribute(22, "type", "button");
-                    builder.AddAttribute(23, "class", menuPreset == preset
+                    builder.AddAttribute(23, "class", preset == candidate
                         ? "rz-multiselect-item rz-state-highlight rz-filter-menu-item"
                         : "rz-multiselect-item rz-filter-menu-item");
                     builder.AddAttribute(24, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
-                        this, _ => ApplyFilterPresetAsync(column, preset)));
-                    builder.AddContent(25, PresetText(preset));
+                        this, _ => ApplyFilterPresetAsync(column, candidate)));
+                    builder.AddContent(25, PresetText(candidate));
                     builder.CloseElement();
 
                     builder.CloseElement();
@@ -345,11 +405,14 @@ namespace Radzen.FastGrid
             builder.OpenElement(30, "div");
             builder.AddAttribute(31, "class", "rz-filter-menu-editor");
 
-            // The set editor is §36's, and until then a column filtering by In keeps the control the
-            // filter row already gives it.
+            // The check-box list proper is §36's. What this draws is the filter row's control bound to
+            // the *draft* rather than to the committed filter, and the difference is the whole of the
+            // review's first finding: bound the row's way, the list applied on every tick and Apply then
+            // wrote the draft back over it, so confirming a selection undid it. It also filtered per
+            // keystroke, which §31 bans by name.
             if (arity == FastGridFilterArity.Many)
             {
-                RenderFilterList(builder, column);
+                RenderFilterMenuList(builder, column);
             }
             else
             {
@@ -367,6 +430,37 @@ namespace Radzen.FastGrid
 
             builder.CloseElement();
         }
+
+        /// <summary>The multiselect, bound to the draft and to the operator the menu picked.</summary>
+        /// <remarks>
+        /// Not <c>RenderFilterList</c>, which exists for the filter row: that one reads
+        /// <c>FilterSelection</c> - the committed filter - and its change handler calls <c>Filter</c>
+        /// with <c>In</c> hard-coded. Both are right for a row and wrong here: the row has no Apply to
+        /// wait for, and it has no operator list beside it, so <c>NotIn</c> was unreachable through it
+        /// even though the menu offers it.
+        /// </remarks>
+        void RenderFilterMenuList(RenderTreeBuilder builder, ColumnBase<TItem> column)
+        {
+            builder.OpenComponent<RadzenDropDown<IEnumerable>>(60);
+            builder.AddAttribute(61, nameof(RadzenDropDown<IEnumerable>.Data), FilterLookup(column));
+            builder.AddAttribute(62, nameof(RadzenDropDown<IEnumerable>.Multiple), true);
+            builder.AddAttribute(63, nameof(RadzenDropDown<IEnumerable>.AllowClear), true);
+            builder.AddAttribute(64, nameof(RadzenDropDown<IEnumerable>.AllowFiltering), true);
+            builder.AddAttribute(65, nameof(RadzenDropDown<IEnumerable>.FilterCaseSensitivity),
+                FilterCaseSensitivity.CaseInsensitive);
+            builder.AddAttribute(66, nameof(RadzenDropDown<IEnumerable>.Style), "width: 100%");
+            builder.AddAttribute(67, nameof(RadzenDropDown<IEnumerable>.Value),
+                column.SelectionOf(menuValue));
+            builder.AddAttribute(68, nameof(RadzenDropDown<IEnumerable>.Change),
+                EventCallback.Factory.Create<object>(this, value => DraftSelection(column, value)));
+            builder.CloseComponent();
+        }
+
+        /// <summary>What was ticked, in the values the column filters by, into the draft.</summary>
+        void DraftSelection(ColumnBase<TItem> column, object? value) =>
+            menuValue = value is IEnumerable sequence and not string
+                ? column.FilterValueFromSelection(sequence)
+                : null;
 
         void RenderFilterMenuButtons(RenderTreeBuilder builder, ColumnBase<TItem> column)
         {
@@ -426,6 +520,7 @@ namespace Radzen.FastGrid
             FastGridFilterOperator.IsNotNull => IsNotNullText,
             FastGridFilterOperator.IsEmpty => IsEmptyText,
             FastGridFilterOperator.IsNotEmpty => IsNotEmptyText,
+            FastGridFilterOperator.Custom => CustomFilterText,
             _ => BetweenText,
         };
 
@@ -439,6 +534,10 @@ namespace Radzen.FastGrid
             FastGridFilterPreset.ThisMonth => ThisMonthFilterText,
             _ => ThisYearFilterText,
         };
+
+        /// <summary>Applies the draft when Enter is pressed anywhere in the panel.</summary>
+        Task OnFilterMenuKeyAsync(ColumnBase<TItem> column, KeyboardEventArgs args) =>
+            args.Key == "Enter" ? ApplyFilterMenuAsync(column) : Task.CompletedTask;
 
         void PickFilterOperator(FastGridFilterOperator picked)
         {
@@ -458,7 +557,7 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>The preset the draft currently is, or null where it is not one of the six.</summary>
-        FastGridFilterPreset? menuPreset =>
+        FastGridFilterPreset? DraftPreset() =>
             menuOperator == FastGridFilterOperator.Between
             && menuValue is FastGridRelativeDate
             && menuSecondValue is FastGridRelativeDate
@@ -491,8 +590,36 @@ namespace Radzen.FastGrid
         {
             await CloseFilterMenuAsync();
 
+            // Discarded here, which §35 promised and the build did not do. Reopening reseeds from
+            // CurrentFilter, so nothing stale was ever *shown* - but a draft that outlives its panel is
+            // a value the grid holds a reference to for as long as it lives, and the sentence that said
+            // otherwise should be true rather than merely unfalsifiable.
+            menuOperator = null;
+            menuValue = null;
+            menuSecondValue = null;
+
             await Filter(column, filter);
         }
+
+        /// <summary>Puts the cursor back on the grid when the panel goes away.</summary>
+        /// <remarks>
+        /// <para>
+        /// §35 said the panel returns focus to the grid rather than to the icon, and the build shipped
+        /// nothing that did it - the review found the sentence describing upstream's behaviour rather
+        /// than ours. Upstream restores whatever had focus when the popup opened, which on a mouse open
+        /// is the icon on some browsers and nothing at all on others, and on an Escape close is a node
+        /// inside the panel that is about to be hidden.
+        /// </para>
+        /// <para>
+        /// The grid is the right answer because §12's one tab stop is the older promise: the icon is at
+        /// <c>tabindex="-1"</c>, so leaving focus there leaves the page with a focused element Tab
+        /// cannot reach again. Only for a grid that navigates, and only when it had the cursor - a
+        /// mouse user who never touched the keyboard should not have the page scroll to the grid
+        /// because a menu closed.
+        /// </para>
+        /// </remarks>
+        Task OnFilterMenuClosedAsync() =>
+            AllowKeyboardNavigation && hasFocus ? ShowFocusAsync() : Task.CompletedTask;
 
         async Task CloseFilterMenuAsync()
         {

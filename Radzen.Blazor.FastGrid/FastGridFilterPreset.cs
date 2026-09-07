@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Radzen.FastGrid
 {
@@ -55,10 +56,14 @@ namespace Radzen.FastGrid
     {
         /// <summary>Every preset, in the order the menu lists them.</summary>
         /// <remarks>
-        /// A field rather than an <c>Enum.GetValues</c> call, which allocates and reflects. The menu
-        /// walks this once per open of a date column.
+        /// A held list rather than an <c>Enum.GetValues</c> call, which allocates and reflects; the menu
+        /// walks it once per open of a date column. Typed as a read-only list rather than exposed as the
+        /// array it is, because a public array is a public setter on every one of its elements - and
+        /// this one is what <see cref="Recognize" /> and the menu both read.
         /// </remarks>
-        public static readonly FastGridFilterPreset[] All =
+        public static IReadOnlyList<FastGridFilterPreset> All => Presets;
+
+        static readonly FastGridFilterPreset[] Presets =
         {
             FastGridFilterPreset.Today,
             FastGridFilterPreset.Yesterday,
@@ -128,13 +133,13 @@ namespace Radzen.FastGrid
                 return null;
             }
 
-            for (var i = 0; i < All.Length; i++)
+            for (var i = 0; i < Presets.Length; i++)
             {
-                var (candidateLower, candidateUpper) = All[i].Range();
+                var (candidateLower, candidateUpper) = Presets[i].Range();
 
                 if (candidateLower.Equals(lower) && candidateUpper.Equals(upper))
                 {
-                    return All[i];
+                    return Presets[i];
                 }
             }
 

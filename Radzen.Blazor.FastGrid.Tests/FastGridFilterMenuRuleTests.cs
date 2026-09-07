@@ -86,7 +86,9 @@ namespace Radzen.FastGrid.Tests
         [Fact]
         public void ANullableColumnGetsTheTwoAbsenceOperatorsLast()
         {
-            var offered = Menu<int?>();
+            // The column says whether it is nullable, not the Type - a nullable reference type is erased
+            // by the time a Type is all there is, so re-deriving it here would be a second answer.
+            var offered = Menu<int?>(nullable: true);
 
             Assert.Equal(FastGridFilterOperator.IsNull, offered[^2]);
             Assert.Equal(FastGridFilterOperator.IsNotNull, offered[^1]);
@@ -100,6 +102,9 @@ namespace Radzen.FastGrid.Tests
         {
             Assert.DoesNotContain(FastGridFilterOperator.IsNull, Menu<string>());
             Assert.Contains(FastGridFilterOperator.IsNull, Menu<string>(nullable: true));
+
+            // And a Nullable<T> is not nullable behind the column's back either, for the same reason.
+            Assert.DoesNotContain(FastGridFilterOperator.IsNull, Menu<int?>());
         }
 
         [Fact]

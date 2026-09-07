@@ -37,6 +37,9 @@ namespace Radzen.FastGrid.Tests
         /// <summary>An enum, which does not convert from a string through IConvertible.</summary>
         public Grade Grade { get; set; }
 
+        /// <summary>A bool, so the filter menu's true/false editor has a column to bind to.</summary>
+        public bool Remote { get; set; }
+
         /// <summary>A Guid, which does not either.</summary>
         public Guid Reference { get; set; }
 
@@ -609,7 +612,7 @@ namespace Radzen.FastGrid.Tests
         {
             new Person
             {
-                Grade = Grade.Senior, Reference = Reference(3), Id = 3, First = "Carol", Mixed = 3, Last = "Adams", Salary = 4000m, Bonus = 250.5m,
+                Grade = Grade.Senior, Remote = true, Reference = Reference(3), Id = 3, First = "Carol", Mixed = 3, Last = "Adams", Salary = 4000m, Bonus = 250.5m,
                 Hired = new DateTime(2019, 5, 4), Customer = new Company { Name = "Zeta" },
                 Regions = new() { "North", "West" }, Codes = new[] { 10, 20 },
                 CategoryId = 10, RegionId = 1, BrandIds = new() { 100, 200 },
@@ -617,7 +620,7 @@ namespace Radzen.FastGrid.Tests
             },
             new Person
             {
-                Grade = Grade.Junior, Reference = Reference(1), Id = 1, First = "Alice", Mixed = "n/a", Last = "Draper", Salary = 2000m, Bonus = null,
+                Grade = Grade.Junior, Remote = true, Reference = Reference(1), Id = 1, First = "Alice", Mixed = "n/a", Last = "Draper", Salary = 2000m, Bonus = null,
                 Hired = new DateTime(2021, 1, 2), Customer = new Company { Name = "Yankee" },
                 Regions = new() { "South" }, Codes = new[] { 20 },
                 CategoryId = 20, RegionId = null, BrandIds = new() { 200 },
@@ -625,7 +628,7 @@ namespace Radzen.FastGrid.Tests
             },
             new Person
             {
-                Grade = Grade.Junior, Reference = Reference(4), Id = 4, First = "Dave", Mixed = 4, Last = "Bell", Salary = 1000m, Bonus = 10m,
+                Grade = Grade.Junior, Remote = true, Reference = Reference(4), Id = 4, First = "Dave", Mixed = 4, Last = "Bell", Salary = 1000m, Bonus = 10m,
                 Hired = new DateTime(2018, 11, 30), Customer = new Company { Name = "Xray" },
                 Regions = new(), Codes = System.Array.Empty<int>(),
                 CategoryId = 10, RegionId = 2, BrandIds = new(),
@@ -633,7 +636,7 @@ namespace Radzen.FastGrid.Tests
             },
             new Person
             {
-                Grade = Grade.Senior, Reference = Reference(2), Id = 2, First = "Bob", Mixed = 2, Last = "Cook", Salary = 3000m, Bonus = 99.25m,
+                Grade = Grade.Senior, Remote = true, Reference = Reference(2), Id = 2, First = "Bob", Mixed = 2, Last = "Cook", Salary = 3000m, Bonus = 99.25m,
                 Hired = new DateTime(2020, 7, 15), Customer = new Company { Name = "Whisky" },
                 Regions = new() { "North", "East", "South" }, Codes = new[] { 30 },
                 CategoryId = 30, RegionId = 1, BrandIds = new() { 300, 100 },

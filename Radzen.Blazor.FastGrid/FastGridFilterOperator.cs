@@ -210,7 +210,12 @@ namespace Radzen.FastGrid
         /// </para>
         /// </remarks>
         /// <param name="type">The column's effective filter type - already unwrapped or not, either works.</param>
-        /// <param name="nullable">Whether the column can hold no value at all.</param>
+        /// <param name="nullable">
+        /// Whether the column can hold no value at all, which is <c>ColumnBase.FilterNullable</c>'s
+        /// answer and nothing else's. Deliberately not re-derived from <paramref name="type" /> here: a
+        /// nullable reference type is erased by the time a <see cref="Type" /> is all there is, so the
+        /// column has to say - and asking twice would be two places that can disagree about one rule.
+        /// </param>
         internal static FastGridFilterOperator[] Menu(Type type, bool nullable)
         {
             ArgumentNullException.ThrowIfNull(type);
@@ -218,7 +223,7 @@ namespace Radzen.FastGrid
             var underlying = Nullable.GetUnderlyingType(type) ?? type;
             var offered = Offered(underlying);
 
-            if (!nullable && Nullable.GetUnderlyingType(type) is null)
+            if (!nullable)
             {
                 return offered;
             }

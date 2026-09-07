@@ -897,6 +897,21 @@ namespace Radzen.FastGrid
             }
         }
 
+        /// <summary>
+        /// The operators §35's menu offers for this column, in the order it lists them.
+        /// </summary>
+        /// <remarks>
+        /// On the column rather than only on the type, and the browser is what said it had to be. A
+        /// lookup column's <c>EffectiveFilterType</c> is its <em>key</em> type, so asking the type alone
+        /// offered a lookup over <c>int?</c> the numeric operators - Less than, Between - for a column
+        /// whose whole point is that it filters by <c>In</c> over ids and shows names. The type answers
+        /// for the columns whose values are what they hold; a column that filters by something other
+        /// than what it shows has to say so itself, which is the same reason
+        /// <see cref="FilterValueFromText" /> and <see cref="SelectionOf" /> are here.
+        /// </remarks>
+        internal virtual FastGridFilterOperator[] MenuOperators =>
+            FastGridFilterOperators.Menu(EffectiveFilterType, FilterNullable);
+
         /// <summary>Whether this column can be filtered.</summary>
         public virtual bool CanFilter => Filterable && FilterPropertyPath is not null;
 
@@ -1445,12 +1460,22 @@ namespace Radzen.FastGrid
             builder.AddAttribute(sequence + 5, "aria-label", editor.AriaLabel);
             builder.AddAttribute(sequence + 6, "value", FilterEditorText(editor.Value));
 
-            // onchange rather than oninput, and it is §31's rule rather than a saving: a menu holding an
-            // operator and up to two values cannot filter as you type, because a half-typed lower bound
-            // filters to nothing on every keystroke. The panel commits on Apply or Enter; this only
-            // carries what was typed into the draft.
+            // Both events, and both only reach the draft - §31's rule is that the menu does not *filter*
+            // as you type, not that it does not read what is typed. onchange is what a blur raises;
+            // oninput is what makes Enter committable, because a keydown arrives before the change
+            // event and would otherwise commit the value as it stood one keystroke ago.
             builder.AddAttribute(sequence + 7, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
                 this, args => editor.Set(FilterValueFromText(args.Value as string))));
+
+            // Through the non-rendering receiver, as the filter row's own typing is: a keystroke that
+            // changes nothing on screen must not redraw the panel, and the panel sits over a table.
+            builder.AddAttribute(sequence + 8, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(
+                this, NonRenderingHandler.Wrap<ChangeEventArgs>(args =>
+                {
+                    editor.Set(FilterValueFromText(args.Value as string));
+
+                    return Task.CompletedTask;
+                })));
 
             builder.CloseElement();
         }
@@ -1485,10 +1510,22 @@ namespace Radzen.FastGrid
         /// handing a set editor a filter that is not a set.
         /// <see cref="LookupColumnBase{TItem, TKey}" /> has guarded this since §14 and the base did not.
         /// </remarks>
-        internal virtual object? FilterSelection =>
+        internal object? FilterSelection =>
             CurrentFilter?.First is { } first && first.Operator.Arity() == FastGridFilterArity.Many
-                ? first.Value
+                ? SelectionOf(first.Value)
                 : null;
+
+        /// <summary>
+        /// A filter value as the entries a check-box list is bound to.
+        /// </summary>
+        /// <remarks>
+        /// Split out of <see cref="FilterSelection" /> because §35's menu needs the same mapping over a
+        /// value that has not been committed - the draft. It was the review that made this necessary
+        /// and not tidiness: the menu was reusing the filter row's control, which is bound to the
+        /// committed filter and applies on every tick, so ticking a box filtered immediately and Apply
+        /// then wrote the draft back over it. A menu that undoes the selection it is confirming.
+        /// </remarks>
+        internal virtual object? SelectionOf(object? value) => value;
 
         /// <summary>
         /// The value a check-box-list selection means for this column. The inverse of

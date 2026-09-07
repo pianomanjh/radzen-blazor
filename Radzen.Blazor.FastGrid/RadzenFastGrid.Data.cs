@@ -362,6 +362,13 @@ namespace Radzen.FastGrid
         {
             var dropped = false;
 
+            // Nothing to screen on a grid that does not filter, and nothing to record either - a column
+            // that has never drawn an editor cannot have had one taken away.
+            if (!AllowFiltering)
+            {
+                return false;
+            }
+
             for (var i = 0; i < columns.Count; i++)
             {
                 var column = columns[i];
@@ -378,7 +385,7 @@ namespace Radzen.FastGrid
 
                 // The set editor is the only one that is picky: a box renders any single value, and a
                 // column with no filter has nothing to screen.
-                if (mode != Radzen.FilterMode.CheckBoxList || column.CurrentFilter is not { } filter
+                if (!column.EditedAsSet || column.CurrentFilter is not { } filter
                     || filter.First.Operator.Arity() == FastGridFilterArity.Many)
                 {
                     continue;
@@ -1379,6 +1386,11 @@ namespace Radzen.FastGrid
         /// </remarks>
         void RecordEditors()
         {
+            if (!AllowFiltering)
+            {
+                return;
+            }
+
             for (var i = 0; i < columns.Count; i++)
             {
                 columns[i].LastEditorMode = FilterModeOf(columns[i]);

@@ -69,6 +69,29 @@ namespace Radzen.FastGrid
         internal override FastGridFilterOperator DefaultFilterOperator => FastGridFilterOperator.In;
 
         /// <inheritdoc />
+        /// <remarks>
+        /// A set, because that is what this column filters by - §31's table says so and
+        /// <see cref="DefaultFilterOperator" /> has said so since §14. The key type would have answered
+        /// with a number's operators, which is a menu offering "less than" over ids the reader never
+        /// sees.
+        /// </remarks>
+        internal override FastGridFilterOperator[] MenuOperators => KeyCanBeNull ? NullableSet : Set;
+
+        static readonly FastGridFilterOperator[] Set =
+        {
+            FastGridFilterOperator.In,
+            FastGridFilterOperator.NotIn,
+        };
+
+        static readonly FastGridFilterOperator[] NullableSet =
+        {
+            FastGridFilterOperator.In,
+            FastGridFilterOperator.NotIn,
+            FastGridFilterOperator.IsNull,
+            FastGridFilterOperator.IsNotNull,
+        };
+
+        /// <inheritdoc />
         protected override void OnDerive()
         {
             if (FilterLookupData is not null)
@@ -299,28 +322,25 @@ namespace Radzen.FastGrid
         /// found again. Scanned rather than indexed: this is the filter row, once per render, over a
         /// selection of a few against a lookup of a few hundred.
         /// </remarks>
-        internal override object? FilterSelection
+        internal override object? SelectionOf(object? value)
         {
-            get
+            if (value is not IEnumerable selected || value is string
+                || FilterValues is not List<object> offered)
             {
-                if (FirstCondition?.Value is not IEnumerable selected || FirstCondition.Value is string
-                    || FilterValues is not List<object> offered)
-                {
-                    return null;
-                }
-
-                var ticked = new List<object>();
-
-                foreach (var value in selected)
-                {
-                    if (EntryFor(offered, value) is { } entry)
-                    {
-                        ticked.Add(entry);
-                    }
-                }
-
-                return ticked;
+                return null;
             }
+
+            var ticked = new List<object>();
+
+            foreach (var id in selected)
+            {
+                if (EntryFor(offered, id) is { } entry)
+                {
+                    ticked.Add(entry);
+                }
+            }
+
+            return ticked;
         }
 
         /// <summary>

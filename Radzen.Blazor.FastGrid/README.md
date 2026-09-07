@@ -754,19 +754,28 @@ opens one panel for the whole grid. The operators offered come from the column's
 | number, `TimeSpan`, `TimeOnly` | Equals, Not equals, Less than, Less than or equals, Greater than, Greater than or equals, Between |
 | date | Equals, Less than, Greater than, Between, then the six relative presets |
 | bool | Equals, against a true/false pick |
-| enum | In, Not in |
+| enum, lookup | In, Not in |
 
 A column that can hold no value also offers Is null and Is not null, at the end. A column whose type
 says nothing - `PropertyColumn<T, object>`, or a template column whose path does not resolve - offers
 Equals and Not equals only, because a `Contains` on an unknown type is a substring match on whatever
-the rows turn out to hold.
+the rows turn out to hold. A **lookup column** answers for itself rather than by its key type: it
+filters by `In` over ids and shows names, so offering its key's numeric operators would be offering
+"less than" over ids nobody sees. A **collection column** is not in that row - it filters its elements,
+so a list of strings offers the string operators.
+
+Editors follow the type too: a text box, a `RadzenNumeric` for numbers, a date picker closed over the
+column's own type so a `DateOnly` column gets a `DateOnly` back, a true/false pick for a bool, and a
+check-box list for `In` and `Not in`. Each opens **empty** on an unfiltered column - the menu draws no
+editor at all until an operator is picked, so nothing offers Apply on a value nobody chose.
 
 **One condition per column.** Is null is an operator to pick rather than a tail ored onto another one;
 the two-condition model is still there and `FilterTemplate` and markup still reach it.
 
 **The menu never filters as you type.** A menu holding an operator and up to two values cannot: a
-half-typed lower bound would filter to nothing on every keystroke. It commits on Apply or Enter, clears
-on Clear, and closes on Escape without committing. Each of Apply and Clear costs exactly one reload.
+half-typed lower bound would filter to nothing on every keystroke. It commits on **Apply or Enter**,
+clears on Clear, and closes on Escape without committing. Each of Apply and Clear costs exactly one
+reload, and that includes the check-box list - ticking a box drafts, it does not filter.
 
 **Dates are written as whole days.** Every operator in the date row names a day and means a boundary,
 so the menu writes the boundary: `Equals` becomes an inclusive range over that day, `Greater than`

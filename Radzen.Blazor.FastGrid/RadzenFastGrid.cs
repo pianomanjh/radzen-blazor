@@ -1683,7 +1683,13 @@ namespace Radzen.FastGrid
                 // the click callback are all inside the branch.
                 if (menuEnabled && (column.CanFilter || column.FilterTemplate is not null))
                 {
+                    // A region, because there is one number left between the sort glyph's 51 and the
+                    // resizer's 53 and the icon needs a dozen. A region opens a sequence space of its
+                    // own, so the outer run stays ascending at 41, 46, 50, 52, 53 and the icon numbers
+                    // itself from zero inside it. One frame per column per header render.
+                    builder.OpenRegion(52);
                     RenderFilterIcon(builder, column, i);
+                    builder.CloseRegion();
                 }
 
                 // The drag handle, a sibling of the title span inside the header's padding div - which is

@@ -8399,6 +8399,98 @@ The gate asked for *unchanged*, and it is unchanged in the direction that cannot
 Times are quoted from a short job and are noise by §9's own rule; the time half of the gate is **not**
 measured to that standard and remains owed, as it did in §33 and §34.
 
+
+### What the review found that the build had not
+
+Two reviewers in parallel, and between them two faults that put wrong rows on the screen, one that
+undid the user's own selection, a promise made three times and implemented none of them, and two more
+that only the browser could show. **Both were right again.**
+
+**Ticking a box filtered at once, and Apply put it back.** The panel reused the filter row's
+multiselect, which is bound to the *committed* filter and whose change handler calls `Filter` directly.
+So on a set column the menu applied per tick - the thing §31 bans by name - and then Apply composed
+from a draft that had never seen the tick and wrote the old selection back over the new one. A menu
+that undoes the selection it is confirming. The row's control is right for a row, which has no Apply to
+wait for; the panel needed one bound to the draft. The same handler hard-codes `In`, so **`NotIn` was
+offered by the menu and unreachable through it**. Fixing it wanted `SelectionOf` split out of
+`FilterSelection` - the mapping from values to ticked entries, over a value rather than over the
+committed filter.
+
+**A lookup column offered "Less than" over its ids.** `MenuOperators` asks the column now, not only the
+type: a lookup's `EffectiveFilterType` is its *key* type, so a type-directed table handed the one column
+whose entire point is that it filters by `In` and shows names a numeric operator list, over integers the
+reader never sees. §31's table said *lookup* in the same row as *enum* and the build read the row
+through `Type.GetTypeCode`. Found in the browser, on the first lookup column anyone opened. Collection
+columns were left on the type-directed answer deliberately, and §31's table lumps them in with the
+other two: a collection of strings filters its elements with `Contains`, which is what
+`DefaultFilterOperator` has always said and what the README documents.
+
+**Enter was never implemented.** §31 says the menu applies on Apply or Enter, §35 repeated it twice, and
+a comment in the editor claimed it. There is no `<form>`, so Enter did nothing at all. Building it
+turned up why it is not one line: a `keydown` arrives *before* the `change` event, so a panel-level
+Enter would commit the value as it stood one keystroke ago. Both editors keep the draft current as the
+user types instead - `oninput` through the non-rendering receiver for the text box, `Immediate` for the
+numeric - which is not §31's rule being broken but its other half being read properly: the menu must not
+*filter* as you type, and reading what is typed is what makes Enter possible. The browser found the
+numeric half: Enter committed an empty draft and **cleared the column instead of filtering it**.
+
+**The icon claimed a menu and never said whether it was open.** No `aria-controls` and no
+`aria-expanded`, both of which §35 specifies. Not cosmetic: upstream's `setPopupAriaExpanded` maintains
+the second attribute for free and finds the anchor *by* the first, so with neither present it looked for
+nothing and set nothing. Writing the id both ends agree on is the whole fix.
+
+**An operator the menu does not offer could still be edited through it.** `SeedFilterDraft` took the
+operator from `CurrentFilter` unfiltered, so a `LessThanOrEquals` from markup, a settings restore or
+`ApplyFilters` landed in the draft on a date column. Two things went wrong at once: no item in the list
+matched it, so the panel showed an editor under no selection at all; and editing the value committed
+through the arm of the whole-day rule that leaves a date literal - the boundary loss `@end` exists to
+prevent, reached from inside the feature built to prevent it. The draft takes only an operator the menu
+lists now, and the stored filter is left alone until the user picks one.
+
+**And one rule was spelled twice again.** `EditedAsSet` was written, documented as the mapping, and
+never called - while `ScreenFilterEditors` spelled the same comparison inline. §34's review found this
+exact shape in `Filters`/`Resolve` and the section that fixed it grew a new one. `Menu`'s nullability
+guard was the same fault in miniature: `!nullable && Nullable.GetUnderlyingType(type) is null`, where
+the only production caller passes `FilterNullable`, which is already true for every `Nullable<T>` - two
+places deciding one thing, one of them unreachable.
+
+**Where §35 is still wrong, rather than fixed: Escape does not return focus to the grid.** The panel now
+asks for it, and upstream's own restore runs *after* on a `setTimeout` and wins. Worse, that restore is
+broken for this case by its own logic: on Escape it reassigns its remembered element to the event's
+target - a node *inside* the panel that is about to be hidden - and focuses that, so focus lands on
+`document.body`. §35 argued the trade-off ("the tab stop wins because it is the older promise") for a
+behaviour nothing implemented. The grid's request is kept, because it is right for every path that
+closes through C# - Apply, Clear, a preset - and the Escape path is upstream's to fix. Recorded rather
+than worked around: this branch does not patch `Radzen.Blazor`.
+
+**The reviewer was wrong about one thing, and it is worth keeping.** The date picker was said to open
+showing `DateTime.MinValue` on a non-nullable column. It does not: `RadzenDatePicker.HasValue` treats
+`default(DateTime)` as absent and `FormattedValue` returns the empty string for it. The *bool* editor
+had exactly that defect and now draws over `object`, where "neither" is a state it can hold.
+
+**Smaller, and all real:** `DraftPreset` was a property named like a field and read seven times per
+panel render, building a filter to ask about each time; `InputAttributes` was a fresh dictionary per
+render, which is a new parameter identity on a panel that is never removed from the tree; `Custom` fell
+into the catch-all arm and was labelled *"Between"*; `StartOfDay` and `EndOfDay` were `internal` for
+nobody; `FastGridFilterPresets.All` was a public array, which is a public setter on every element of the
+table `Recognize` reads; the filter icon's sequence numbers descended against the resizer's and now sit
+in a region of their own; and the screening and recording passes walked the columns whether or not the
+grid filters at all.
+
+### The numeric editor, which this section argued itself out of
+
+§35 said the editors were a text input plus two typed controls, and gave the reason: a typed control
+cannot show *empty* for a non-nullable `TProp`, so `RadzenNumeric<int>` opens showing a zero. That is
+true - `RadzenNumeric`'s formatter asks `_value != null` and a boxed zero is not null - and the
+conclusion drawn from it was wrong. **The type that cannot hold "nothing" is `TProp`, not the control.**
+`RadzenNumeric<decimal?>` shows empty, `decimal` holds every integral type exactly, and the column
+converts at the seam in both directions - so a number gets a spinner, a numeric soft keyboard and a
+control that parses, instead of a box that might not.
+
+Upstream's own filter UI draws a `RadzenTextBox` for numbers, which is what the build followed. Copying
+a decision without its constraint is how a limit that belongs to one design gets inherited by another.
+`TimeSpan` and `TimeOnly` stay on the text box, because they order like a number and are not decimals.
+
 ### Where this could still be wrong
 
 - **`FilterUI` grid-wide against `FilterMode` per-column** is §31's separation and it has still never

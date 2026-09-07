@@ -98,20 +98,29 @@ namespace Radzen.FastGrid
         /// <inheritdoc />
         /// <remarks>
         /// <para>
-        /// Two types get a control of their own and everything else keeps the base's text input, which
-        /// is not a shortcut: upstream's own filter UI draws a <c>RadzenTextBox</c> for numbers too, and
-        /// the reason is that a typed numeric control cannot show <em>empty</em> for a non-nullable
-        /// <typeparamref name="TProp" /> - it shows a zero, and a menu that opens pre-filled with a value
-        /// nobody chose is worse than a box. The base's conversion is the column's own, so an enum, a
-        /// <see cref="Guid" /> and §34's tokens all read there.
+        /// Three kinds of column get a control of their own; everything else keeps the base's text
+        /// input, whose conversion is this column's own <c>FilterValueFromText</c> and therefore
+        /// already reads enums, <see cref="Guid" />s and §34's relative-date tokens.
         /// </para>
         /// <para>
-        /// <strong>The date picker is closed over <typeparamref name="TProp" /> and that is the whole
-        /// argument for this being on the column.</strong> <c>RadzenDatePicker</c> converts what was
-        /// picked by asking its own <c>TValue</c> - a <see cref="DateOnly" /> column gets a
-        /// <see cref="DateOnly" /> - so drawing it over <c>object</c>, as upstream does, is what hands a
-        /// <see cref="DateOnly" /> column a <see cref="DateTime" /> the predicate builder then has to
-        /// guess about.
+        /// <strong>The constraint that shapes all three is that a control must be able to show
+        /// <em>nothing</em>.</strong> A filter slot with no value yet is the ordinary state of an
+        /// unfiltered column, and a control that renders <c>default(TProp)</c> instead offers Apply on a
+        /// value nobody chose. <c>RadzenDatePicker</c> solves it itself - its <c>HasValue</c> treats
+        /// <c>default(DateTime)</c> as absent and formats it as the empty string - so the picker is
+        /// closed over <typeparamref name="TProp" /> and a <see cref="DateOnly" /> column gets a
+        /// <see cref="DateOnly" /> back, which is the whole reason this method is on the column.
+        /// <c>RadzenNumeric</c> does not: its formatter asks <c>_value != null</c>, and a boxed zero is
+        /// not null, so <c>RadzenNumeric&lt;int&gt;</c> opens showing <c>0</c>.
+        /// </para>
+        /// <para>
+        /// So the numeric editor is closed over <c>decimal?</c> rather than over
+        /// <typeparamref name="TProp" />, and converts at the seam. <strong>The build first read that
+        /// constraint as a reason to leave numbers on a text box</strong> - which is what upstream's own
+        /// filter UI does - and it is not: the type that cannot hold "nothing" is
+        /// <typeparamref name="TProp" />, not the control. <c>decimal</c> holds every integral type
+        /// exactly, and what the swap buys is a spinner, a numeric soft keyboard and a control that
+        /// parses rather than a box that might not.
         /// </para>
         /// </remarks>
         internal override void RenderFilterEditor(RenderTreeBuilder builder, int sequence,
@@ -129,6 +138,15 @@ namespace Radzen.FastGrid
             if (underlying == typeof(bool))
             {
                 RenderBooleanEditor(builder, sequence, editor);
+
+                return;
+            }
+
+            // TimeSpan and TimeOnly are ordered and are not decimals, so they order and range like a
+            // number and edit like text.
+            if (Type.GetTypeCode(underlying) is >= TypeCode.SByte and <= TypeCode.Decimal)
+            {
+                RenderNumericEditor(builder, sequence, editor, underlying);
 
                 return;
             }
@@ -154,7 +172,8 @@ namespace Radzen.FastGrid
             builder.AddAttribute(sequence + 2, nameof(RadzenDatePicker<TProp>.Style), "width:100%");
             builder.AddAttribute(sequence + 3, nameof(RadzenDatePicker<TProp>.AllowClear), true);
             builder.AddAttribute(sequence + 4, nameof(RadzenDatePicker<TProp>.InputAttributes),
-                new Dictionary<string, object> { ["aria-label"] = editor.AriaLabel });
+                EditorAttributes(editor));
+
             // ValueChanged rather than Change, and the difference is not cosmetic: Change carries a
             // DateTime? whatever TProp is, and ValueChanged carries what the picker converted it to -
             // which is the DateOnly this whole override exists to keep. It also makes the picker
@@ -165,21 +184,118 @@ namespace Radzen.FastGrid
             builder.CloseComponent();
         }
 
+        void RenderNumericEditor(RenderTreeBuilder builder, int sequence, FilterEditor editor,
+            Type underlying)
+        {
+            builder.OpenComponent<RadzenNumeric<decimal?>>(sequence);
+            builder.AddAttribute(sequence + 1, nameof(RadzenNumeric<decimal?>.Value), AsDecimal(editor.Value));
+            builder.AddAttribute(sequence + 2, nameof(RadzenNumeric<decimal?>.Style), "width:100%");
+            builder.AddAttribute(sequence + 3, nameof(RadzenNumeric<decimal?>.ShowUpDown), false);
+
+            // The same rule as the text editor's oninput, and the browser is what said it was needed:
+            // without it the control raises Change on blur only, so Enter - whose keydown arrives before
+            // any change event - committed a draft that was still empty and cleared the column instead
+            // of filtering it. Immediate costs a re-render of this one control per keystroke; the panel
+            // is not redrawn, because the callback's receiver is the column rather than the grid.
+            builder.AddAttribute(sequence + 6, nameof(RadzenNumeric<decimal?>.Immediate), true);
+            builder.AddAttribute(sequence + 4, nameof(RadzenNumeric<decimal?>.InputAttributes),
+                EditorAttributes(editor));
+            builder.AddAttribute(sequence + 5, nameof(RadzenNumeric<decimal?>.Change),
+                EventCallback.Factory.Create<decimal?>(this,
+                    value => editor.Set(FromDecimal(value, underlying))));
+            builder.CloseComponent();
+        }
+
         void RenderBooleanEditor(RenderTreeBuilder builder, int sequence, FilterEditor editor)
         {
             // §31's table: a bool offers Equals true/false, so the editor is the choice between them
-            // rather than a text box that can be typed wrong.
-            builder.OpenComponent<RadzenDropDown<TProp>>(sequence);
-            builder.AddAttribute(sequence + 1, nameof(RadzenDropDown<TProp>.Data), BooleanChoices);
-            builder.AddAttribute(sequence + 2, nameof(RadzenDropDown<TProp>.Style), "width:100%");
-            builder.AddAttribute(sequence + 3, nameof(RadzenDropDown<TProp>.Value),
-                editor.Value is TProp typed ? typed : default);
-            builder.AddAttribute(sequence + 4, nameof(RadzenDropDown<TProp>.InputAttributes),
-                new Dictionary<string, object> { ["aria-label"] = editor.AriaLabel });
-            builder.AddAttribute(sequence + 5, nameof(RadzenDropDown<TProp>.Change),
+            // rather than a text box that can be typed wrong. Over object rather than over TProp, for
+            // the reason the numeric one is over decimal?: a drop-down closed over a non-nullable bool
+            // cannot show "neither", and would open on a column nobody has filtered already saying
+            // false.
+            builder.OpenComponent<RadzenDropDown<object>>(sequence);
+            builder.AddAttribute(sequence + 1, nameof(RadzenDropDown<object>.Data), BooleanChoices);
+            builder.AddAttribute(sequence + 2, nameof(RadzenDropDown<object>.Style), "width:100%");
+            builder.AddAttribute(sequence + 3, nameof(RadzenDropDown<object>.AllowClear), true);
+            builder.AddAttribute(sequence + 4, nameof(RadzenDropDown<object>.Value), editor.Value);
+            builder.AddAttribute(sequence + 5, nameof(RadzenDropDown<object>.InputAttributes),
+                EditorAttributes(editor));
+            builder.AddAttribute(sequence + 6, nameof(RadzenDropDown<object>.Change),
                 EventCallback.Factory.Create<object>(this, value => editor.Set(value)));
             builder.CloseComponent();
         }
+
+        /// <summary>
+        /// A drafted value as the decimal the numeric editor holds, or null where there is none or it
+        /// will not fit.
+        /// </summary>
+        /// <remarks>
+        /// <c>decimal</c> covers every integral type exactly and reaches about 7.9e28, so the only
+        /// values that do not fit are <see cref="double" />s and <see cref="float" />s beyond that -
+        /// which a person does not type into a filter, but a restored setting can carry. Showing an
+        /// empty box is the honest answer there; throwing inside a render is not.
+        /// </remarks>
+        static decimal? AsDecimal(object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+            }
+            catch (Exception exception) when (exception is OverflowException or FormatException
+                                                  or InvalidCastException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>What the numeric editor holds, back in the type this column filters by.</summary>
+        static object? FromDecimal(decimal? value, Type underlying)
+        {
+            if (value is not { } number)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Convert.ChangeType(number, underlying, CultureInfo.InvariantCulture);
+            }
+            catch (Exception exception) when (exception is OverflowException or FormatException
+                                                  or InvalidCastException)
+            {
+                // Out of the column's range is not a filter, and it is exactly what a half-typed one
+                // looks like. Null is what IsPresent reads as "nothing chosen".
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The editor's accessible name, as the splat every Radzen input takes.
+        /// </summary>
+        /// <remarks>
+        /// Held per column rather than built per render. The panel is never removed from the render tree
+        /// once built, so a fresh dictionary here is a new parameter identity on every render of the
+        /// grid - which re-renders the control for a label that has not changed.
+        /// </remarks>
+        Dictionary<string, object> EditorAttributes(FilterEditor editor)
+        {
+            if (editorAttributes is null || !string.Equals(editorAttributesLabel, editor.AriaLabel,
+                    StringComparison.Ordinal))
+            {
+                editorAttributesLabel = editor.AriaLabel;
+                editorAttributes = new Dictionary<string, object> { ["aria-label"] = editor.AriaLabel };
+            }
+
+            return editorAttributes;
+        }
+
+        Dictionary<string, object>? editorAttributes;
+        string? editorAttributesLabel;
 
         // Built once for the type rather than per open: the two values a bool has do not move.
         static readonly object[] BooleanChoices = { true, false };

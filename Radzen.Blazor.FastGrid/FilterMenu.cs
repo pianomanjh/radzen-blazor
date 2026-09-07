@@ -86,7 +86,7 @@ namespace Radzen.FastGrid
         };
 
         /// <summary>The first instant of the day a value names, leaving what is not a date alone.</summary>
-        internal static object? StartOfDay(object? value) => value switch
+        static object? StartOfDay(object? value) => value switch
         {
             FastGridRelativeDate relative => relative.EndOfDay
                 ? new FastGridRelativeDate(relative.Anchor, relative.Offset, relative.Unit, endOfDay: false)
@@ -104,7 +104,7 @@ namespace Radzen.FastGrid
         /// reach, so <c>@end</c> is a no-op on it and this has to be the same no-op or the two
         /// vocabularies would disagree about one column.
         /// </remarks>
-        internal static object? EndOfDay(object? value) => value switch
+        static object? EndOfDay(object? value) => value switch
         {
             FastGridRelativeDate relative => relative.EndOfDay
                 ? relative
