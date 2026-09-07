@@ -89,7 +89,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, object>(p => p.First, filterValue: "Ca"),
                 Columns.Property<Person, string>(p => p.Last)),
-                p => p.Add(g => g.AllowFiltering, true));
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             Assert.Equal(new[] { "Carol" }, Cells(cut, 0));
         }
@@ -106,6 +106,7 @@ namespace Radzen.FastGrid.Tests
                 p =>
                 {
                     p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                     p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 });
 
@@ -131,6 +132,7 @@ namespace Radzen.FastGrid.Tests
                 p =>
                 {
                     p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                     p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 });
 
@@ -156,6 +158,7 @@ namespace Radzen.FastGrid.Tests
                 p =>
                 {
                     p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                     p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 });
 

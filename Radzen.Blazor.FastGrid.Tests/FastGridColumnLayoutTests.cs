@@ -165,7 +165,7 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, string>(p => p.First, title: "First"),
                 Columns.Property<Person, string>(p => p.Last, title: "Last", visible: false,
                     filterValue: "Adams", filterOperator: FilterOperator.Equals)),
-                p => p.Add(g => g.AllowFiltering, true));
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             // The filter row has a cell for the visible column and none for the hidden one ...
             Assert.Single(cut.FindAll("thead tr")[1].QuerySelectorAll("th"));

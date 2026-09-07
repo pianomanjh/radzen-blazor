@@ -49,6 +49,15 @@
                    it - so one wrapper serves both. The box is always named and only its bounds are
                    conditional: the id is a string per popup render, and it is what a test holds on to
                    in exactly the case where nothing bounds it. *@
+                @* FilterUI is pinned to Row below, and is not left to the grid's own default, which
+                   is Menu. A menu here would be a popup opened out of a popup: Radzen.openPopup
+                   reparents both to document.body, so the panel would stack over the drop-down that
+                   owns it and close on the first click outside itself. A drop-down is a compact
+                   picker you type into, which is what the row is - and AllowFiltering defaults true
+                   here, so every consumer of this control would have got the icons without asking.
+                   Found by changing the grid's default, and by a test rather than by reading: a
+                   comment written inside the attribute list below compiles and then fails at run time
+                   with "does not have a property matching the name '@*'". *@
                 <div id="@WrapperId" style="@WrapperStyle">
                 <RadzenFastGrid TItem="TItem" @ref="grid"
                                 Data="@Data"
@@ -56,6 +65,7 @@
                                 LoadData="@LoadData"
                                 AllowSorting="@AllowSorting"
                                 AllowFiltering="@AllowFiltering"
+                                FilterUI="FilterUI.Row"
                                 FilterMode="@FilterMode"
                                 AllowPaging="@AllowPaging"
                                 PageSize="@PageSize"

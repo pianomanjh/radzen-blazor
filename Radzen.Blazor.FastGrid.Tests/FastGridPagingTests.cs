@@ -354,6 +354,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.AllowPaging, true);
                 p.Add(g => g.PageSize, 10);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
             });
 
             cut.InvokeAsync(() => cut.Instance.GoToPage(3));
@@ -474,6 +475,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.AllowPaging, true);
                 p.Add(g => g.PageSize, 4);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
             });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("First1");

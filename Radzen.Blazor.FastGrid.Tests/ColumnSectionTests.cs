@@ -38,6 +38,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.AllowSorting, true);
                 p.Add(g => g.ChildContent, FourSections());
             });

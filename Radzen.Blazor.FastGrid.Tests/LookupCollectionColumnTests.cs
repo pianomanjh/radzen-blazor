@@ -34,6 +34,7 @@ namespace Radzen.FastGrid.Tests
             Render(ctx, columns, p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
             }, data);
 
@@ -48,8 +49,11 @@ namespace Radzen.FastGrid.Tests
             cut.InvokeAsync(() => cut.FindComponents<RadzenDropDown<System.Collections.IEnumerable>>()[index]
                 .Instance.Change.InvokeAsync(entries.ToList())).Wait();
 
-        static void Filtering(ComponentParameterCollectionBuilder<RadzenFastGrid<Person>> p) =>
+        static void Filtering(ComponentParameterCollectionBuilder<RadzenFastGrid<Person>> p)
+        {
             p.Add(g => g.AllowFiltering, true);
+            p.Add(g => g.FilterUI, FilterUI.Row);
+        }
 
         static RenderFragment Brands() => Columns.Of(Columns.LookupCollection<Person, int>(
             x => x.BrandIds, FastGridLookup.Map(Lookups.Brands())));

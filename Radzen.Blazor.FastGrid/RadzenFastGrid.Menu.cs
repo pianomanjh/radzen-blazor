@@ -13,13 +13,21 @@ namespace Radzen.FastGrid
     public partial class RadzenFastGrid<TItem>
     {
         /// <summary>
-        /// Where a column's filter is authored - a row of boxes under the headers, or a menu.
+        /// Where a column's filter is authored - a menu the header's icon opens, or a row of boxes.
         /// </summary>
         /// <remarks>
-        /// Defaults to <see cref="FilterUI.Row" />, which is today's behaviour. Requires
-        /// <see cref="AllowFiltering" />, which is what switches filtering on at all.
+        /// <para>
+        /// <strong>Defaults to <see cref="FilterUI.Menu" />, and that is a deliberate break with §31's
+        /// "everything defaults to today's behaviour".</strong> The user's call, made once the menu
+        /// existed to be looked at. A consumer who wants the old second header row of boxes writes
+        /// <c>FilterUI="Row"</c>, and nothing else about their grid changes.
+        /// </para>
+        /// <para>
+        /// Requires <see cref="AllowFiltering" />, which is what switches filtering on at all - so a
+        /// grid that never opted into filtering is unaffected by this default.
+        /// </para>
         /// </remarks>
-        [Parameter] public FilterUI FilterUI { get; set; }
+        [Parameter] public FilterUI FilterUI { get; set; } = FilterUI.Menu;
 
         /// <summary>The header icon that opens the filter menu.</summary>
         /// <remarks>
@@ -100,10 +108,25 @@ namespace Radzen.FastGrid
         /// <summary>The filter icon in a column's header.</summary>
         /// <remarks>
         /// <para>
-        /// Upstream's own class list, so a theme styles it unchanged, and upstream's
-        /// <c>rz-grid-filter-active</c> for the state that says this column is filtered. Always visible
-        /// on a filterable column: hover-only is invisible on touch and unreachable by keyboard without
-        /// inventing a second mechanism.
+        /// <strong>Upstream's own control, which §35 claimed and did not draw.</strong> §35's comment
+        /// said "upstream's own class list, so a theme styles it unchanged" and then wrote a full
+        /// <c>rz-button rz-button-md rz-button-icon-only rz-variant-flat</c> with a nested <c>i</c>
+        /// inside it. <c>RadzenDataGridHeaderCell</c> draws neither: its filter icon is a bare
+        /// <c>button</c> carrying <c>notranslate rzi rz-grid-filter-icon</c> with the glyph as its own
+        /// text, and the themes size it through <c>--rz-grid-header-filter-icon-font-size</c> for
+        /// exactly this job. Ours rendered as a boxed button a header row tall, which is what a
+        /// button-sized control looks like where an icon-sized one belongs.
+        /// </para>
+        /// <para>
+        /// <c>rz-filter-button</c> is gone with it, and it was borrowed from a third control: the
+        /// themes scope it to <c>.rz-cell-filter-content .rz-filter-button</c>, the operator button
+        /// inside a <em>filter row</em> cell, and one of those rules sets <c>.rzi { display: none }</c>
+        /// - which is a rule that would have hidden this icon's glyph had the two ever met.
+        /// </para>
+        /// <para>
+        /// <c>rz-grid-filter-active</c> stays: it is upstream's state class and the one thing §35 did
+        /// take from the right control. Always visible on a filterable column - hover-only is invisible
+        /// on touch and unreachable by keyboard without inventing a second mechanism.
         /// </para>
         /// <para>
         /// <c>tabindex="-1"</c> because §12 settled that this grid is one tab stop with the active cell
@@ -117,10 +140,8 @@ namespace Radzen.FastGrid
             builder.AddAttribute(1, "type", "button");
             builder.AddAttribute(2, "tabindex", "-1");
             builder.AddAttribute(3, "class", column.HasFilter
-                ? "rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base"
-                    + " rz-shade-default rz-grid-filter-active"
-                : "rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base"
-                    + " rz-shade-default");
+                ? "notranslate rzi rz-grid-filter-icon rz-grid-filter-active"
+                : "notranslate rzi rz-grid-filter-icon");
             builder.AddAttribute(4, "aria-haspopup", "menu");
             builder.AddAttribute(5, "aria-label", column.HeaderText + " " + FilterToggleAriaLabel);
 
@@ -139,11 +160,9 @@ namespace Radzen.FastGrid
 
             builder.AddElementReferenceCapture(10, iconCaptures[index]);
 
-            builder.OpenElement(11, "i");
-            builder.AddAttribute(12, "class", "notranslate rzi");
-            builder.AddAttribute(13, "aria-hidden", "true");
-            builder.AddContent(14, FilterIcon);
-            builder.CloseElement();
+            // The glyph is the button's own text, as it is upstream: the icon font renders the
+            // ligature, and the aria-label above is what a screen reader reads instead of it.
+            builder.AddContent(11, FilterIcon);
 
             builder.CloseElement();
         }

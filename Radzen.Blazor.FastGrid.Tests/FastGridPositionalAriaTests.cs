@@ -133,6 +133,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.AllowPaging, true);
                 p.Add(g => g.PageSize, 2);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
             }, People.Many(7));
 
             Assert.Equal("9", View(cut).GetAttribute("aria-rowcount"));
@@ -216,6 +217,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.AllowColumnPicking, true);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
             });
 
             var middle = cut.FindComponents<PropertyColumn<Person, string>>()[1].Instance;

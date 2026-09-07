@@ -261,6 +261,7 @@ namespace Radzen.FastGrid.Tests
                 p =>
                 {
                     p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                     p.Add(g => g.Template, (RenderFragment<Person>)(person => b => b.AddContent(0, person.First)));
                 });
 

@@ -35,7 +35,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         static void OpenMenu(IRenderedComponent<RadzenFastGrid<Person>> cut, int column) =>
-            cut.FindAll("thead button.rz-filter-button")[column].Click();
+            cut.FindAll("thead button.rz-grid-filter-icon")[column].Click();
 
         static IElement[] MenuItems(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
             cut.FindAll("button.rz-filter-menu-item").ToArray();
@@ -58,13 +58,13 @@ namespace Radzen.FastGrid.Tests
             var row = Render(ctx, ui: FilterUI.Row);
 
             Assert.NotEmpty(row.FindAll("th div.rz-cell-filter"));
-            Assert.Empty(row.FindAll("button.rz-filter-button"));
+            Assert.Empty(row.FindAll("button.rz-grid-filter-icon"));
 
             var menu = Render(ctx);
 
             // Not a hidden filter row and not an empty one: none at all.
             Assert.Empty(menu.FindAll("th div.rz-cell-filter"));
-            Assert.Equal(2, menu.FindAll("thead button.rz-filter-button").Count);
+            Assert.Equal(2, menu.FindAll("thead button.rz-grid-filter-icon").Count);
         }
 
         [Fact]
@@ -74,7 +74,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, filtering: false);
 
-            Assert.Empty(cut.FindAll("button.rz-filter-button"));
+            Assert.Empty(cut.FindAll("button.rz-grid-filter-icon"));
             Assert.Empty(cut.FindAll("div.rz-overlaypanel"));
         }
 
@@ -103,12 +103,12 @@ namespace Radzen.FastGrid.Tests
             var column = cut.FindComponent<PropertyColumn<Person, string>>().Instance;
 
             Assert.DoesNotContain("rz-grid-filter-active",
-                cut.FindAll("thead button.rz-filter-button")[0].ClassName);
+                cut.FindAll("thead button.rz-grid-filter-icon")[0].ClassName);
 
             cut.InvokeAsync(() => cut.Instance.Filter(column, "A", Radzen.FilterOperator.Contains));
 
             Assert.Contains("rz-grid-filter-active",
-                cut.FindAll("thead button.rz-filter-button")[0].ClassName);
+                cut.FindAll("thead button.rz-grid-filter-icon")[0].ClassName);
         }
 
         [Fact]
@@ -116,7 +116,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
 
-            var icon = Render(ctx).FindAll("thead button.rz-filter-button")[0];
+            var icon = Render(ctx).FindAll("thead button.rz-grid-filter-icon")[0];
 
             // §12 settled that this grid is one tab stop. Eight icons in the tab order would undo it.
             Assert.Equal("-1", icon.GetAttribute("tabindex"));
@@ -444,7 +444,7 @@ namespace Radzen.FastGrid.Tests
             using var ctx = new TestContext();
 
             var cut = Render(ctx);
-            var icon = cut.FindAll("thead button.rz-filter-button")[0];
+            var icon = cut.FindAll("thead button.rz-grid-filter-icon")[0];
 
             Assert.Equal("false", icon.GetAttribute("aria-expanded"));
             Assert.False(string.IsNullOrEmpty(icon.GetAttribute("aria-controls")));
@@ -586,12 +586,12 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx);
 
-            Assert.Equal("false", cut.FindAll("thead button.rz-filter-button")[0].GetAttribute("aria-expanded"));
+            Assert.Equal("false", cut.FindAll("thead button.rz-grid-filter-icon")[0].GetAttribute("aria-expanded"));
 
             OpenMenu(cut, 0);
 
-            Assert.Equal("true", cut.FindAll("thead button.rz-filter-button")[0].GetAttribute("aria-expanded"));
-            Assert.Equal("false", cut.FindAll("thead button.rz-filter-button")[1].GetAttribute("aria-expanded"));
+            Assert.Equal("true", cut.FindAll("thead button.rz-grid-filter-icon")[0].GetAttribute("aria-expanded"));
+            Assert.Equal("false", cut.FindAll("thead button.rz-grid-filter-icon")[1].GetAttribute("aria-expanded"));
         }
 
         [Fact]
@@ -695,6 +695,70 @@ namespace Radzen.FastGrid.Tests
 
             Assert.True(column.HasFilter);
             Assert.Null(column.FilterSelection);
+        }
+
+
+        // ---- the default ----
+
+        [Fact]
+        public void TheMenuIsTheDefaultFilterUI()
+        {
+            // The user's call, and a deliberate break with §31's "everything defaults to today's
+            // behaviour". A grid that switches filtering on and says nothing else gets the icons.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First)));
+                p.Add(g => g.AllowFiltering, true);
+            });
+
+            Assert.Equal(FilterUI.Menu, cut.Instance.FilterUI);
+            Assert.NotEmpty(cut.FindAll("thead button.rz-grid-filter-icon"));
+
+            // And no filter row under it - not a hidden one and not an empty one.
+            Assert.Single(cut.FindAll("thead tr"));
+        }
+
+        [Fact]
+        public void TheRowIsStillThereForAGridThatAsksForIt()
+        {
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First)));
+                p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
+            });
+
+            Assert.Equal(2, cut.FindAll("thead tr").Count);
+            Assert.Empty(cut.FindAll("thead button.rz-grid-filter-icon"));
+        }
+
+        [Fact]
+        public void TheIconIsUpstreamsOwnControlRatherThanAButton()
+        {
+            // RadzenDataGridHeaderCell draws a bare button carrying `notranslate rzi
+            // rz-grid-filter-icon` with the glyph as its text, and the themes size it through
+            // --rz-grid-header-filter-icon-font-size. §35 wrote a full rz-button with a nested i
+            // instead, which rendered a header-row-tall box.
+            using var ctx = new TestContext();
+
+            var icon = Render(ctx).FindAll("thead button.rz-grid-filter-icon")[0];
+
+            Assert.Equal("notranslate rzi rz-grid-filter-icon", icon.ClassName);
+            Assert.DoesNotContain("rz-button", icon.ClassName, StringComparison.Ordinal);
+            Assert.Empty(icon.QuerySelectorAll("i"));
+            Assert.Equal("filter_alt", icon.TextContent.Trim());
         }
 
     }

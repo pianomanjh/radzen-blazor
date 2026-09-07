@@ -211,6 +211,7 @@ namespace Radzen.Blazor.FastGrid.Tests
                     p.Add(g => g.Data, people);
                     p.Add(g => g.ChildContent, FastGridFrozenColumns);
                     p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 }).Markup;
 
                 // And with the keyboard cursor on the second row's second cell. No selection is wired,

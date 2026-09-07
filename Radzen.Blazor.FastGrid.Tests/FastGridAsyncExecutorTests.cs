@@ -190,6 +190,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.AllowPaging, true);
                 p.Add(g => g.PageSize, 4);
             });
@@ -210,6 +211,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, People.Many(30).AsQueryable(), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.AllowPaging, true);
                 p.Add(g => g.PageSize, 4);
             });
@@ -230,6 +232,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, People.Sample().AsQueryable(), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterCaseSensitivity, FilterCaseSensitivity.CaseInsensitive);
             });
 
@@ -248,6 +251,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, People.Sample().AsQueryable(), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.LogicalFilterOperator, LogicalFilterOperator.Or);
             });
 

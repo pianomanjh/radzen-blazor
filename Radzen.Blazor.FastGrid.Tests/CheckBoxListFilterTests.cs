@@ -30,6 +30,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.Data, data ?? People.Sample());
                 p.Add(g => g.ChildContent, columns);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 extra?.Invoke(p);
             });
@@ -67,6 +68,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.ChildContent, Columns.Of(Columns.Property<Person, string>(x => x.First)));
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
             });
 
             Assert.NotEmpty(cut.FindAll("input.rz-textbox"));
@@ -356,6 +358,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.ChildContent,
                     Columns.Of(Columns.Property<Person, decimal>(x => x.Salary)));
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.Simple);
             });
 
@@ -399,7 +402,7 @@ namespace Radzen.FastGrid.Tests
 
             Assert.True(column.HasFilter);
 
-            cut.SetParametersAndRender(p => p.Add(g => g.AllowFiltering, true));
+            cut.SetParametersAndRender(p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             Assert.True(column.HasFilter);
         }

@@ -28,6 +28,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.Data, data ?? People.Sample());
                 p.Add(g => g.ChildContent, columns);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 extra?.Invoke(p);
             });
         }

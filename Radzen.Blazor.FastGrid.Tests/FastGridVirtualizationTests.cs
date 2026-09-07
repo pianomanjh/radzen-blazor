@@ -138,7 +138,7 @@ namespace Radzen.FastGrid.Tests
         {
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, p => p.Add(g => g.AllowFiltering, true));
+            var cut = Render(ctx, p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("First1");
 

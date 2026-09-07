@@ -20,6 +20,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.Data, data);
                 p.Add(g => g.ChildContent, columns);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 extra?.Invoke(p);
             });
         }
@@ -225,7 +226,7 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(4, cut.FindAll("tbody tr").Count);
 
-            cut.SetParametersAndRender(p => p.Add(g => g.AllowFiltering, true));
+            cut.SetParametersAndRender(p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             Assert.Equal(1, cut.FindAll("tbody tr").Count);
         }

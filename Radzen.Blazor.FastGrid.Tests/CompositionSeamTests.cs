@@ -145,6 +145,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Many(20));
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.AllowPaging, true);
                 p.Add(g => g.PageSize, 5);
                 p.Add(g => g.ChildContent, Columns.Of(

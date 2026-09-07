@@ -6875,6 +6875,11 @@ row can never have one.
 
 Everything defaults to today's behaviour, as `AutoFitColumns` and `PopupFit` do.
 
+**§37b overturns that for `FilterUI`, on the user's call.** The menu is the default now; `FilterUI="Row"`
+is how a consumer keeps the second header row. The rule stands for everything else this section adds -
+the pills are still off by default - and it was always a rule about not surprising people rather than a
+law, which is why the person whose grid it is gets to weigh it once the thing exists to look at.
+
 ### The model, which is wider than the menu
 
 **Two conditions per column, each with its own operator, joined by a within-column AND/OR.** That is the
@@ -9570,3 +9575,74 @@ cell and the pill to the same string, and putting the exception back turns it re
 
 This is §36's rule with a second half: **a surviving mutation may mean redundant code - and redundant
 code may also be wrong.** The mutation said the line could go; only the probe said it should.
+
+## 37b. The menu is the default, and the icon was the wrong control
+
+Two changes asked for after §37 landed, once there was something to look at. Both are small; one of
+them is a correction to §35 rather than a preference.
+
+### The default
+
+**`FilterUI` defaults to `Menu`.** §31 promised *"everything defaults to today's behaviour, as
+`AutoFitColumns` and `PopupFit` do"*, and this is the one place that promise is deliberately broken -
+by the person whose grid it is, after using both. It is struck where §31 wrote it.
+
+Done with a parameter initialiser rather than by reordering the enum. The enum's numbering is public:
+`Row` stays 0, so nothing that stored or crossed a wire as a number changes meaning, and only the
+parameter's starting value moves. `FilterUI="Row"` is the whole migration, and a grid that never set
+`AllowFiltering` is unaffected either way.
+
+**`RadzenFastDropDownDataGrid` pins its inner grid to `Row`**, and that is a product decision the
+default change surfaced rather than a test accommodation. `AllowFiltering` defaults **true** on the
+drop-down, so every existing consumer would have silently got the icons - and a menu there is a popup
+opened out of a popup: `Radzen.openPopup` reparents both to `document.body`, so the panel would stack
+over the drop-down that owns it and close on the first click outside itself. A drop-down is a compact
+picker you type into, which is what the row is.
+
+Nothing else in the suite needed a behaviour change: 144 tests failed on the default and every one of
+them was a test written when the row was the only filter UI, reading boxes it no longer had. They say
+`FilterUI.Row` now, which is what they always meant. Two tests pin the new default itself, because a
+default nothing asserts is a default the next edit can silently move.
+
+### The icon
+
+**§35 claimed upstream's control and drew a different one.** Its comment says *"upstream's own class
+list, so a theme styles it unchanged"*, and what it wrote was
+
+```
+rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base rz-shade-default
+```
+
+with a nested `<i class="notranslate rzi">` inside. `RadzenDataGridHeaderCell` draws neither. Its filter
+icon is a bare `<button>` carrying `notranslate rzi rz-grid-filter-icon` with the glyph as its own text,
+and every theme sizes it through `--rz-grid-header-filter-icon-font-size` for exactly this job. Ours
+rendered as a boxed button nearly a header row tall - **measured at 16x16 after the change, against a
+`rz-button-md` box before it** - which is what a button-sized control looks like where an icon-sized one
+belongs.
+
+`rz-filter-button` goes with it, and it was borrowed from a *third* control: the themes scope it to
+`.rz-cell-filter-content .rz-filter-button`, the operator button inside a **filter row** cell. One of
+those rules is `.rz-cell-filter-content .rz-filter-button .rzi { display: none }` - a rule that would
+have hidden this icon's glyph outright had the two ever met in the same cell.
+
+`rz-grid-filter-active` stays. It is upstream's state class and the one thing §35 took from the right
+control.
+
+This is §7's rule catching its own advocate: *use upstream's vocabulary* is only worth anything if the
+thing named is the thing upstream actually draws, and a comment asserting it is not a check.
+
+### The pill bar beside a grid header
+
+Asked, and answered by demonstration rather than by argument, because the honest first half of the
+answer is that **there is no grid header to conflict with**. `RadzenFastGrid` has no `HeaderTemplate`
+and no toolbar, and nothing in this solution renders `rz-datatable-header` except §37's pill bar -
+upstream's own `RadzenDataGrid` does not render it either.
+
+A toolbar of the shape a `HeaderTemplate` would produce, injected into the band above the bar, stacks:
+two siblings inside `.rz-data-grid`, in DOM order, **each dressed by the theme as its own band** - its
+own background, its own 16px padding, its own 1px bottom border. It works, and it reads as two
+toolbars, about 128px of chrome before the first row.
+
+That is fine for today and is a constraint on whoever adds a header later: the two want to be one band,
+or the pill bar wants to stop borrowing the toolbar's clothes. Recorded rather than solved, because
+designing an integration for a component that does not exist is how a rule gets written against a guess.

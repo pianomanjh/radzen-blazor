@@ -37,6 +37,7 @@ namespace Radzen.FastGrid.Tests
             Render(ctx, columns, p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
             }, data);
 
@@ -308,6 +309,7 @@ namespace Radzen.FastGrid.Tests
                 x => x.RegionId, FastGridLookup.Map(Lookups.Regions()))), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
             });
 
@@ -382,7 +384,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(
                 x => x.CategoryId, FastGridLookup.Map(Lookups.Categories()))),
-                extra: p => p.Add(g => g.AllowFiltering, true));
+                extra: p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("puz");
 
@@ -404,7 +406,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int?>(
                 x => x.RegionId, FastGridLookup.Map(Lookups.Regions()))),
-                extra: p => p.Add(g => g.AllowFiltering, true));
+                extra: p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("bl");
 
@@ -480,6 +482,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Column(), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.SettingsChanged,
                     EventCallback.Factory.Create<FastGridSettings>(this, s => captured = s));
             });
@@ -493,6 +496,7 @@ namespace Radzen.FastGrid.Tests
             var restored = Render(second, Column(), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.Settings, captured);
             });
 
@@ -512,7 +516,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, Columns.Of(Columns.Lookup<Person, int>(
                 x => x.CategoryId, FastGridLookup.Map(many))),
-                extra: p => p.Add(g => g.AllowFiltering, true));
+                extra: p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("Item");
 
@@ -649,6 +653,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns(FastGridSort<Person>.By(p => p.CategoryId)), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 p.Add(g => g.SettingsChanged,
                     EventCallback.Factory.Create<FastGridSettings>(this, s => captured = s));
@@ -666,6 +671,7 @@ namespace Radzen.FastGrid.Tests
             var restored = Render(second, Columns(FastGridSort<Person>.By(p => p.CategoryId)), p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 p.Add(g => g.Settings, captured);
             });

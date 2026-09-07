@@ -546,5 +546,24 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(2, cut.Instance.SelectedItems.Count);
         }
+
+        [Fact]
+        public void ThePopupsGridFiltersInARowRatherThanAMenu()
+        {
+            // Pinned in the markup, not inherited. The grid's own default is FilterUI.Menu, and a menu
+            // here would be a popup opened out of a popup - Radzen.openPopup reparents both to
+            // document.body, so the panel would stack over the drop-down that owns it. AllowFiltering
+            // defaults true on this control, so every consumer would have got the icons unasked.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx);
+
+            Open(cut);
+
+            Assert.Equal(FilterUI.Row, cut.FindComponent<RadzenFastGrid<Person>>().Instance.FilterUI);
+            Assert.Empty(cut.FindAll("thead button.rz-grid-filter-icon"));
+            Assert.NotEmpty(cut.FindAll("thead .rz-cell-filter"));
+        }
+
     }
 }

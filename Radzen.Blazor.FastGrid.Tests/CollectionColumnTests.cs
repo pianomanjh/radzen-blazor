@@ -160,7 +160,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, List<string>>(p => p.Regions),
                 Columns.Property<Person, string>(p => p.First)),
-                p => p.Add(g => g.AllowFiltering, true));
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("North");
 
@@ -176,7 +176,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, List<string>>(p => p.Regions),
                 Columns.Property<Person, string>(p => p.First)),
-                p => p.Add(g => g.AllowFiltering, true));
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("out");
 
@@ -193,7 +193,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, int[]>(p => p.Codes),
                 Columns.Property<Person, string>(p => p.First)),
-                p => p.Add(g => g.AllowFiltering, true));
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("20");
 
@@ -208,7 +208,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, List<string>>(p => p.Regions),
                 Columns.Property<Person, string>(p => p.First)),
-                p => p.Add(g => g.AllowFiltering, true));
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("o");
 
@@ -222,7 +222,7 @@ namespace Radzen.FastGrid.Tests
 
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, List<string>>(p => p.Regions)),
-                p => p.Add(g => g.AllowFiltering, true));
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("North");
 
@@ -241,7 +241,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, List<string>>(p => p.Regions),
                 Columns.Property<Person, string>(p => p.First)),
-                p => p.Add(g => g.AllowFiltering, true),
+                p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); },
                 data: People.Sample().AsQueryable());
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("East");

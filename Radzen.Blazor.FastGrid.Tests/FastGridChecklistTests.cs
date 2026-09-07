@@ -40,7 +40,7 @@ namespace Radzen.FastGrid.Tests
         }
 
         static void OpenMenu(IRenderedComponent<RadzenFastGrid<Person>> cut, int column) =>
-            cut.FindAll("thead button.rz-filter-button")[column].Click();
+            cut.FindAll("thead button.rz-grid-filter-icon")[column].Click();
 
         static void PickItem(IRenderedComponent<RadzenFastGrid<Person>> cut, string label) =>
             cut.FindAll("button.rz-filter-menu-item").Single(item => item.TextContent == label).Click();

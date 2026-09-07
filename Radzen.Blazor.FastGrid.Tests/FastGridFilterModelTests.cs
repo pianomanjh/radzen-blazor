@@ -131,6 +131,7 @@ namespace Radzen.FastGrid.Tests
                     Columns.Property<Person, string>(x => x.First),
                     Columns.Property<Person, int>(x => x.Id)));
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
             });
 
             Assert.All(cut.FindComponents<PropertyColumn<Person, int>>(),

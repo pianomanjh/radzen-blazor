@@ -141,6 +141,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.AllowPaging, true);
                 p.Add(g => g.PageSize, 5);
                 p.Add(g => g.ShowPagingSummary, true);
@@ -163,6 +164,7 @@ namespace Radzen.FastGrid.Tests
             var cut = Render(ctx, p =>
             {
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
             });
 
@@ -200,6 +202,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.AllowVirtualization, true);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
             });
 
             cut.WaitForAssertion(() => Assert.Equal(40, cut.FindAll("tbody tr[role=row]").Count));
@@ -279,7 +282,7 @@ namespace Radzen.FastGrid.Tests
             // null returns the wrong rows rather than throwing - so both halves are asserted.
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, p => p.Add(g => g.AllowFiltering, true));
+            var cut = Render(ctx, p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             cut.WaitForAssertion(() => Assert.Equal(40, cut.FindAll("tbody tr[role=row]").Count));
 

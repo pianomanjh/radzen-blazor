@@ -198,6 +198,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, source);
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 p.Add(g => g.ChildContent, Columns.Of(Columns.Property<Person, string>(x => x.First)));
             });
@@ -223,6 +224,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Property<Person, object>(x => (object)x.Id),
                     Columns.Property<Person, string>(x => x.First)));
@@ -245,6 +247,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Template<Person>(item => b => b.AddContent(0, item.Id), sortProperty: "Id"),
                     Columns.Property<Person, string>(x => x.First)));
@@ -269,6 +272,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Collection<Person, Company>(x => x.Accounts)));
@@ -289,6 +293,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.FilterMode, FilterMode.CheckBoxList);
                 p.Add(g => g.ChildContent, Columns.Of(Columns.Property<Person, string>(x => x.First)));
             });
@@ -444,6 +449,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Property<Person, object>(x => x.First)));
             });
@@ -548,6 +554,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Property<Person, string>(x => x.First + " " + x.Last,
                         sortBy: x => x.Last, filterValue: "Cook")));
@@ -572,6 +579,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Property<Person, string>(x => x.First + " " + x.Last,
                         sortBy: x => x.Last, filterBy: x => x.Last, filterValue: "Cook")));
@@ -614,6 +622,7 @@ namespace Radzen.FastGrid.Tests
             {
                 p.Add(g => g.Data, People.Sample());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.Settings, settings);
                 p.Add(g => g.ChildContent, Columns.Of(
                     Columns.Property<Person, string>(x => x.First),
@@ -909,7 +918,11 @@ namespace Radzen.FastGrid.Tests
             builder.AddAttribute(3, nameof(RadzenFastGrid<Person>.AllowPaging), true);
             builder.AddAttribute(4, nameof(RadzenFastGrid<Person>.PageSize), 5);
             builder.AddAttribute(5, nameof(RadzenFastGrid<Person>.AllowFiltering), true);
-            builder.AddAttribute(6, nameof(RadzenFastGrid<Person>.FilterMode), FilterMode.CheckBoxList);
+
+            // The row, explicitly: this reads the check-box list the filter row draws, and the grid's
+            // own default is FilterUI.Menu now, under which there is no filter row to read.
+            builder.AddAttribute(6, nameof(RadzenFastGrid<Person>.FilterUI), FilterUI.Row);
+            builder.AddAttribute(7, nameof(RadzenFastGrid<Person>.FilterMode), FilterMode.CheckBoxList);
             builder.AddAttribute(7, nameof(RadzenFastGrid<Person>.ChildContent),
                 Columns.Of(Columns.Property<Person, string>(x => x.First)));
             builder.AddAttribute(8, nameof(RadzenFastGrid<Person>.LoadData),

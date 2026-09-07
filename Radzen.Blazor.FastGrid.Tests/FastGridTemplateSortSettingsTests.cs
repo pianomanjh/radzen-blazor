@@ -366,6 +366,7 @@ namespace Radzen.FastGrid.Tests
                 p =>
                 {
                     p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                     p.Add(g => g.AllowPaging, true);
                     p.Add(g => g.Settings, settings);
                 });

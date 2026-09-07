@@ -53,6 +53,7 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.Data, data ?? Rows());
                 p.Add(g => g.ChildContent, TwoColumns());
                 p.Add(g => g.AllowFiltering, true);
+                p.Add(g => g.FilterUI, FilterUI.Row);
                 p.Add(g => g.Clock, clock);
 
                 if (settings is not null)

@@ -628,6 +628,10 @@ namespace Radzen.FastGrid.Tests
             builder.AddAttribute(6, nameof(RadzenFastGrid<Person>.PageSize), PageSize);
             builder.AddAttribute(7, nameof(RadzenFastGrid<Person>.ShowPagingSummary), ShowPagingSummary);
             builder.AddAttribute(10, nameof(RadzenFastGrid<Person>.AllowFiltering), AllowFiltering);
+
+            // The row, explicitly: these tests were written when it was the only filter UI and they
+            // read the boxes in the header. The grid's own default is FilterUI.Menu now.
+            builder.AddAttribute(11, nameof(RadzenFastGrid<Person>.FilterUI), FilterUI.Row);
             builder.AddAttribute(11, nameof(RadzenFastGrid<Person>.Clock), Clock);
             builder.AddAttribute(8, nameof(RadzenFastGrid<Person>.LoadData),
                 EventCallback.Factory.Create<LoadDataArgs>(this, args => OnLoad(args, this)));

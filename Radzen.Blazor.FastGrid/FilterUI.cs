@@ -23,13 +23,17 @@ namespace Radzen.FastGrid
     public enum FilterUI
     {
         /// <summary>
-        /// A second header row of filter controls. Today's behaviour, and the default - the same rule
-        /// <c>AutoFitColumns</c> and <c>PopupFit</c> follow.
+        /// A second header row of filter controls.
         /// </summary>
+        /// <remarks>
+        /// The grid's original behaviour, and its default until the menu was built and looked at. It is
+        /// still first in this enum - the numbering is public and reordering it would move every
+        /// serialized value - but the parameter now initialises to <see cref="Menu" />.
+        /// </remarks>
         Row,
 
         /// <summary>
-        /// A filter icon on each filterable header, opening one context-aware menu.
+        /// A filter icon on each filterable header, opening one context-aware menu. The default.
         /// </summary>
         /// <remarks>
         /// <strong>There is no filter row under this.</strong> Not a hidden one and not an empty one:

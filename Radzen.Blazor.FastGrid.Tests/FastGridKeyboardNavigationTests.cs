@@ -804,7 +804,7 @@ namespace Radzen.FastGrid.Tests
             // have to decide whether it is navigation or typing.
             using var ctx = new TestContext();
 
-            var cut = Render(ctx, p => p.Add(g => g.AllowFiltering, true));
+            var cut = Render(ctx, p => { p.Add(g => g.AllowFiltering, true); p.Add(g => g.FilterUI, FilterUI.Row); });
 
             Press(cut, "ArrowDown");
 

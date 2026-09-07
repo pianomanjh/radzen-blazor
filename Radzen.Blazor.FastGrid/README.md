@@ -715,11 +715,16 @@ LINQ or OData form depending on the source) and `Filters` (as descriptors), and 
 
 `AllowFiltering` switches filtering on. `FilterUI` chooses where it is authored, grid-wide:
 
-- `Row` (default) - a second header row of filter controls, which is what the grid has always drawn.
-- `Menu` - a filter icon on every filterable header, opening one context-aware menu.
+- `Menu` (default) - a filter icon on every filterable header, opening one context-aware menu.
+- `Row` - a second header row of filter controls, which is what the grid drew before the menu existed.
 
 There is **no filter row under `Menu`** - not a hidden one and not an empty one. Two places to author
 one filter would be two places that have to agree.
+
+**Upgrading:** the default changed from `Row` to `Menu`. A grid that wants the second header row of
+boxes back writes `FilterUI="Row"`, and nothing else about it changes. A grid that never set
+`AllowFiltering` is unaffected either way. `RadzenFastDropDownDataGrid` pins its inner grid to `Row`
+and is unaffected: a menu inside its popup would be a popup opened out of a popup.
 
 `FilterMode` chooses the control in the row, on the grid or per column:
 
