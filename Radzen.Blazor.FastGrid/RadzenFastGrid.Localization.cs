@@ -577,6 +577,39 @@ namespace Radzen.FastGrid
             set => activeFiltersText = value;
         }
 
+        string? gridMenuText;
+
+        /// <summary>The band menu's accessible name, and the trigger's tooltip.</summary>
+        /// <remarks>
+        /// Its own string rather than anything upstream ships, because upstream has no such control -
+        /// <c>RadzenMenu</c>'s <c>ToggleAriaLabel</c> is the nearest and it names a navigation menu.
+        /// The trigger is a glyph with no text beside it, so this is the only thing that says what it
+        /// opens, to a screen reader and on hover alike.
+        /// </remarks>
+        [Parameter]
+        public string GridMenuText
+        {
+            get => gridMenuText ?? Localize("DataGrid_GridMenuText", "Grid options");
+            set => gridMenuText = value;
+        }
+
+        string? resetLayoutText;
+
+        /// <summary>The band menu's entry that puts the grid back the way its markup declares it.</summary>
+        /// <remarks>
+        /// <em>Layout</em> rather than <em>settings</em>, and the distinction is what
+        /// <see cref="ClearSettings" /> actually does: it clears the width, visibility, position and
+        /// filter a user chose and re-seeds the declared sort, on a grid that may have no
+        /// <see cref="StorageKey" /> and therefore no stored settings at all. Naming the stored blob
+        /// would promise less than it does on one grid and more than it does on another.
+        /// </remarks>
+        [Parameter]
+        public string ResetLayoutText
+        {
+            get => resetLayoutText ?? Localize("DataGrid_ResetLayoutText", "Reset layout");
+            set => resetLayoutText = value;
+        }
+
         string? selectVisibleColumnsAriaLabel;
 
         /// <summary>The column picker's accessible name.</summary>

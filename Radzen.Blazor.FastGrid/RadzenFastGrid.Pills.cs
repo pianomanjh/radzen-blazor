@@ -66,7 +66,7 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
-        /// The bar, above the scroll container and below the top pager.
+        /// The chips themselves, inside the band <c>RenderBand</c> opens.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -78,34 +78,29 @@ namespace Radzen.FastGrid
         /// its ellipsis, and a clipping ancestor is what a sticky child resolves <c>left</c> against.
         /// </para>
         /// <para>
-        /// <strong>Nothing when nothing is filtered.</strong> A permanently empty band costs a row of
-        /// chrome forever to avoid one layout shift on the first filter, which is the wrong trade in a
-        /// component whose argument is what it does not draw.
+        /// <strong>Nothing when nothing is filtered</strong> - §37's rule, and it still holds for the
+        /// pills. It is the <em>band</em> that §39 made conditional on two things rather than one:
+        /// this list is written only when something is filtered, and when it is not the band is drawn
+        /// for the menu alone or not at all. The guard lives in <c>RenderBand</c> because it is now the
+        /// band's question rather than the bar's, and an empty <c>role="list"</c> carrying an accessible
+        /// name is what writing this unconditionally would leave behind.
         /// </para>
         /// <para>
         /// Every class that <em>paints</em> is upstream's and already styled in every shipped theme.
-        /// <c>rz-datatable-header</c> is the interesting one: the themes dress it as a toolbar band with
-        /// the grid's own header padding and a bottom border, and no upstream component renders it.
-        /// <c>rz-filter-pills</c> is this grid's own and carries no rule anywhere - it is a name for the
-        /// band, which a consumer needs to restyle it and the tests need to find it. A sentence here
-        /// claimed every class was upstream's; the review found this one and it is corrected rather
-        /// than removed, because a nameless band is worse than an honest comment.
+        /// <c>rz-datatable-header</c>, on the band, is the interesting one: the themes dress it as a
+        /// toolbar band with the grid's own header padding and a bottom border, and no upstream
+        /// component renders it. <c>rz-filter-pills</c> is this grid's own and carries no rule anywhere
+        /// - it is a name for the band, which a consumer needs to restyle it and the tests need to find
+        /// it. A sentence here claimed every class was upstream's; the review found this one and it is
+        /// corrected rather than removed, because a nameless band is worse than an honest comment.
         /// </para>
         /// </remarks>
         void RenderFilterPills(RenderTreeBuilder builder)
         {
-            if (!ShowFilterPills || !AnyColumnFiltered())
-            {
-                return;
-            }
-
-            builder.OpenElement(15, "div");
-            builder.AddAttribute(16, "class", "rz-datatable-header rz-filter-pills");
-
-            builder.OpenElement(17, "div");
-            builder.AddAttribute(18, "class", "rz-chip-list rz-chip-list-horizontal");
-            builder.AddAttribute(19, "role", "list");
-            builder.AddAttribute(20, "aria-label", ActiveFiltersText);
+            builder.OpenElement(20, "div");
+            builder.AddAttribute(21, "class", "rz-chip-list rz-chip-list-horizontal");
+            builder.AddAttribute(22, "role", "list");
+            builder.AddAttribute(23, "aria-label", ActiveFiltersText);
 
             for (var i = 0; i < visibleColumns.Count; i++)
             {
@@ -119,7 +114,6 @@ namespace Radzen.FastGrid
 
             RenderClearAllFilters(builder);
 
-            builder.CloseElement();
             builder.CloseElement();
         }
 

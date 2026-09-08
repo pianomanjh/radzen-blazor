@@ -120,11 +120,9 @@ namespace Radzen.FastGrid
             }
 
             // Where a column sits is state a user chose, so it is stored for the same reason a width is.
-            // Not RefreshAsync: nothing about the data changed, only the order it is drawn in.
-            if (SettingsChanged.HasDelegate)
-            {
-                await SettingsChanged.InvokeAsync(CaptureSettings());
-            }
+            // Not RefreshAsync: nothing about the data changed, only the order it is drawn in. And not
+            // raised here for the same reason the resize no longer is - see AnnounceSettings.
+            await AnnounceSettings();
 
             StateHasChanged();
         }

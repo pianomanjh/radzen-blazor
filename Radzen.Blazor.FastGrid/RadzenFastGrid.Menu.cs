@@ -285,20 +285,50 @@ namespace Radzen.FastGrid
 
             // 300, after the bottom pager's 200 and the loading scrim: this is written last among the
             // grid's children and the numbers a run is written in have to ascend.
-            builder.OpenComponent<RadzenPopup>(300);
-            builder.AddAttribute(740, nameof(RadzenPopup.CloseOnClickOutside), true);
-            builder.AddAttribute(741, nameof(RadzenPopup.AutoFocusFirstElement), true);
-            builder.AddAttribute(742, nameof(RadzenPopup.Style), "display:none;");
-            builder.AddAttribute(743, "class", "rz-overlaypanel");
-            builder.AddAttribute(748, "id", FilterMenuElementId);
-            builder.AddAttribute(744, "role", "menu");
-            builder.AddAttribute(745, "aria-label", FilterText);
-            builder.AddAttribute(746, nameof(RadzenPopup.ChildContent),
-                (RenderFragment)RenderFilterMenuBody);
-            builder.AddAttribute(749, nameof(RadzenPopup.Close),
-                EventCallback.Factory.Create(this, OnFilterMenuClosedAsync));
-            builder.AddComponentReferenceCapture(747,
+            RenderOverlayMenu(builder, 300, FilterMenuElementId, FilterText, RenderFilterMenuBody,
+                EventCallback.Factory.Create(this, OnFilterMenuClosedAsync),
                 captureMenuPopup ??= reference => menuPopup = (RadzenPopup)reference);
+        }
+
+        /// <summary>
+        /// One popup panel, declared once, because there are two of them.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>Extracted after the second copy dropped an attribute.</strong> §39's band menu was
+        /// written from this block with the numbers changed and left <see cref="RadzenPopup.Close" />
+        /// out, which is the fault §35's review found on the filter icon reappearing one panel over: the
+        /// popup's own <c>OnClose</c> sets its <c>IsOpen</c>, but nothing tells the <em>grid</em> to
+        /// re-render, so the trigger's <c>aria-expanded</c> stays as the last render wrote it until
+        /// something else happens to redraw the grid.
+        /// </para>
+        /// <para>
+        /// It is invisible in a browser, which is the point: <c>Radzen.setPopupAriaExpanded</c> writes
+        /// that attribute into the DOM directly, so the screen is right while the render tree is wrong,
+        /// and the two only disagree where nothing runs upstream's JavaScript - which is every test.
+        /// §35 wrote the rule this breaks: <em>two writers agreeing by luck is still one of them being
+        /// wrong.</em>
+        /// </para>
+        /// <para>
+        /// Sequence numbers off a parameter rather than literals. Blazor wants them constant per code
+        /// path and they are: each caller passes its own literal base, and this method is the only path
+        /// under it.
+        /// </para>
+        /// </remarks>
+        static void RenderOverlayMenu(RenderTreeBuilder builder, int sequence, string elementId,
+            string ariaLabel, RenderFragment body, EventCallback close, Action<object> capture)
+        {
+            builder.OpenComponent<RadzenPopup>(sequence);
+            builder.AddAttribute(sequence + 1, nameof(RadzenPopup.CloseOnClickOutside), true);
+            builder.AddAttribute(sequence + 2, nameof(RadzenPopup.AutoFocusFirstElement), true);
+            builder.AddAttribute(sequence + 3, nameof(RadzenPopup.Style), "display:none;");
+            builder.AddAttribute(sequence + 4, "class", "rz-overlaypanel");
+            builder.AddAttribute(sequence + 5, "id", elementId);
+            builder.AddAttribute(sequence + 6, "role", "menu");
+            builder.AddAttribute(sequence + 7, "aria-label", ariaLabel);
+            builder.AddAttribute(sequence + 8, nameof(RadzenPopup.ChildContent), body);
+            builder.AddAttribute(sequence + 9, nameof(RadzenPopup.Close), close);
+            builder.AddComponentReferenceCapture(sequence + 10, capture);
             builder.CloseComponent();
         }
 

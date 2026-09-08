@@ -72,6 +72,10 @@
            under the other. *@
         <label title="Applied filters, said in words, above the scroll container"
                ><input type="checkbox" @bind="showPills" /> Filter pills</label>
+        @* §39's band half. Here rather than in a test because the whole question the section left open
+           was how tall the band is with a menu in it, which only a browser answers. *@
+        <label title="The grid's own verbs, in the same band as the pills"
+               ><input type="checkbox" @bind="showGridMenu" /> Grid menu</label>
         @* §34, and the reason it is here rather than in a test: a token survives a settings round trip
            only if what the page holds is a blob rather than a live object, and this is the one place
            where pressing "Round-trip through JSON" after it proves that end to end. *@
@@ -205,6 +209,7 @@
                     FilterMode="@filterMode"
                     FilterUI="@filterUI"
                     ShowFilterPills="@showPills"
+                    ShowGridMenu="@showGridMenu"
                     AllowPaging="@allowPaging"
                     AllowVirtualization="@virtualize"
                     AllowColumnPicking="@allowPicking"
@@ -320,6 +325,7 @@
     FilterUI filterUI = FilterUI.Menu;
 
     bool showPills = true;
+    bool showGridMenu = true;
 
     /// <summary>Where a lookup's names come from. Only a query is fetched.</summary>
     enum Provenance { Map, Items, Query }

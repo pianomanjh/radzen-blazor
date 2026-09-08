@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -512,6 +513,122 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal(new[] { "First", "Last", "Salary" },
                 cut.Instance.VisibleColumns.Select(c => c.Title).ToArray());
+        }
+
+        // --- the two changes that announced without storing ------------------------------------
+
+        // Both of these passed with the fault in place for as long as a handler was wired, which is why
+        // neither grid below wires one: a StorageKey and no SettingsChanged is what §39 calls the
+        // ordinary way to use the storage, and it is the only arrangement the fault could be seen in.
+        // Found in the playground rather than here - a drag from 260px to 540px stored nothing while the
+        // pager beside it stored CurrentPage - and the suite was 1204 green while it was true.
+
+        [Fact]
+        public async Task ADraggedWidthIsStoredUnderTheKey()
+        {
+            using var ctx = Context();
+            var store = new Store();
+
+            var cut = Render(ctx, store);
+
+            await cut.InvokeAsync(() => cut.Instance.OnColumnResized(0, 321));
+
+            Assert.True(store.Writes > 0);
+            Assert.Equal("321px", store.Held("people")!.Columns!.Single(c => c.UniqueID == "First").Width);
+        }
+
+        [Fact]
+        public async Task AMovedColumnIsStoredUnderTheKey()
+        {
+            using var ctx = Context();
+            var store = new Store();
+
+            var cut = Render(ctx, store);
+
+            await cut.InvokeAsync(() => cut.Instance.ReorderColumn(0, 2));
+
+            Assert.True(store.Writes > 0);
+
+            // As OrderIndex per column, not as the order of the entries: the capture walks the columns
+            // in declaration order and records where each one was dragged to. Moving First to the end
+            // is what these three numbers say.
+            Assert.Equal(new[] { ("First", 2), ("Last", 0), ("Salary", 1) },
+                store.Held("people")!.Columns!.Select(c => (c.UniqueID!, c.OrderIndex!.Value)).ToArray());
+        }
+
+        /// <summary>
+        /// The two drag settles that do not reload: their names for what a user changed.
+        /// </summary>
+        /// <remarks>
+        /// A theory rather than two tests because the property is one property and the symmetry is the
+        /// point - the sweep caught the reorder half surviving while the resize half was covered, which
+        /// is what two hand-written siblings drift into.
+        /// </remarks>
+        public static TheoryData<string, Func<RadzenFastGrid<Person>, Task>> DragSettles => new()
+        {
+            { "a resize", grid => grid.OnColumnResized(0, 321) },
+            { "a reorder", grid => grid.ReorderColumn(0, 2) },
+        };
+
+        /// <summary>
+        /// A drag settle still reaches the application's handler, and still reaches it awaited.
+        /// </summary>
+        /// <remarks>
+        /// Both halves are here because the review found the second one going. Routing the three
+        /// announce sites through one method took <c>RefreshAsync</c>'s answer to a question the sites
+        /// disagreed about: it does not await the callback, on the argument in its own comment, and the
+        /// resize and the reorder always had. Awaited is what makes a consumer's handler throwing
+        /// something the caller sees rather than an unobserved task, which is what this asserts - a
+        /// fire-and-forget invoke would let the call return cleanly.
+        /// </remarks>
+        [Theory]
+        [MemberData(nameof(DragSettles))]
+        public async Task ADragSettleReachesTheHandlerAndIsAwaited(string _, Func<RadzenFastGrid<Person>, Task> settle)
+        {
+            using var ctx = Context();
+            var store = new Store();
+
+            FastGridSettings handed = null;
+
+            var cut = Render(ctx, store, extra: p => p.Add(g => g.SettingsChanged,
+                EventCallback.Factory.Create<FastGridSettings>(new object(), s => handed = s)));
+
+            await cut.InvokeAsync(() => settle(cut.Instance));
+
+            Assert.NotNull(handed);
+            Assert.NotNull(handed.Columns);
+
+            // Asynchronously, and that is the whole point: a handler that throws on the way in throws at
+            // the call site whether the task is awaited or discarded, so it cannot tell the two apart.
+            // One that yields first faults the task instead, and only an await sees that. The first
+            // draft of this threw synchronously and passed with the fault reinstated.
+            var throwing = Render(ctx, store, key: "throwing", extra: p => p.Add(g => g.SettingsChanged,
+                EventCallback.Factory.Create<FastGridSettings>(new object(),
+                    async (FastGridSettings _) =>
+                    {
+                        await Task.Yield();
+
+                        throw new InvalidOperationException("from the handler");
+                    })));
+
+            var caught = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => throwing.InvokeAsync(() => settle(throwing.Instance)));
+
+            Assert.Equal("from the handler", caught.Message);
+        }
+
+        [Fact]
+        public async Task ADraggedWidthComesBackOnASecondGrid()
+        {
+            using var ctx = Context();
+            var store = new Store();
+
+            var first = Render(ctx, store);
+            await first.InvokeAsync(() => first.Instance.OnColumnResized(0, 321));
+
+            var second = Render(ctx, store);
+
+            Assert.Equal("321px", second.Instance.VisibleColumns[0].EffectiveWidth);
         }
     }
 }

@@ -635,7 +635,8 @@ public interface IFastGridSettingsStore
 }
 ```
 
-`ClearSettings()` forgets the key and puts the grid back to what its markup declares - the width,
+`ClearSettings()` - which [the grid menu](#the-grid-menu) offers as *Reset layout*, and which an
+application can call itself - forgets the key and puts the grid back to what its markup declares - the width,
 visibility and position a user changed, the filters, the sort and the page. It clears the overrides
 and nothing else: the declared values come back because each of the three is read as "what a drag
 said, or what the markup did" on every render. A declared `SortOrder` is the exception and is re-seeded
@@ -1008,6 +1009,36 @@ inside that scroller, whose header row is sticky vertically only, so it slides o
 there are enough columns to want one - measured here at 960px of scroll on eleven columns. Making it
 sticky on both axes does not rescue it: the theme gives header cells `overflow: hidden` for their
 ellipsis, and a clipping ancestor is what a sticky child resolves `left` against.
+
+### The grid menu
+
+`ShowGridMenu` puts a menu of the grid's own actions at the end of that same band. Today it holds one
+entry, *Reset layout*, which is `ClearSettings()` with somewhere to click it:
+
+```razor
+<RadzenFastGrid TItem="Order" Data="@orders" StorageKey="orders-list"
+                AllowColumnResize="true" ShowGridMenu="true" />
+```
+
+Off by default, and **it does not need a `StorageKey`**. `ClearSettings()` means something on a grid
+that stores nothing - it takes back the widths, visibility, positions and filters changed in this
+session and puts the declared sort back - and a grid whose user cannot get their layout back any other
+way is exactly the one that should not have the menu withheld.
+
+**In the pill bar's band rather than in a toolbar above it, and the difference is measured.** A toolbar
+is a second `rz-datatable-header`, which every theme dresses as its own band - its own background, its
+own padding, its own bottom border - so the two stack: 69px + 67px = **136px of chrome** before the
+first row. The menu inside the band leaves it at the **67px** the bar costs without it.
+
+The one cost worth knowing: with the menu on and nothing filtered, the band draws anyway, at **53px**.
+That is why this is a parameter rather than something the grid decides. A grid that leaves it off is
+unchanged, and the bar still appears only when something is filtered.
+
+`GridMenuText` names the trigger, for a screen reader and on hover; `ResetLayoutText` is the entry.
+
+**No template.** An application that wants its own actions in that band is asking for a
+`HeaderTemplate`, which is the two-band question again - it should be argued when someone needs it,
+against a band that by then has something to be measured against.
 
 ## Choosing which columns are drawn
 

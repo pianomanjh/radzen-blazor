@@ -1236,6 +1236,13 @@ namespace Radzen.FastGrid
                 await OpenPendingFilterMenuAsync();
             }
 
+            // §39's band menu, on the same terms: the click set the flag and rendered, and only now is
+            // there a list for the browser to measure.
+            if (gridMenuPending)
+            {
+                await OpenPendingGridMenuAsync();
+            }
+
             // Before the focus is put back, because a fit changes how wide every column is and
             // bringing the cursor's cell into view is measured against exactly that.
             //
@@ -1873,6 +1880,59 @@ namespace Radzen.FastGrid
         }
 
         /// <summary>
+        /// Says that something a user chose has changed: to the application, and to the store.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>One method because there are three callers, and the browser found the two that had
+        /// drifted.</strong> §39 recorded <em>storing must not be gated on <c>SettingsChanged</c></em> -
+        /// a grid with a <see cref="StorageKey" /> and no handler is the ordinary way to use the
+        /// storage - and fixed it where <c>RefreshAsync</c> announces. <c>RaiseColumnResized</c> and the
+        /// reorder drop announce too, do not reload, and so were not on that path: both still read
+        /// <c>if (SettingsChanged.HasDelegate)</c>, and on a grid using the storage the way §39 says it
+        /// is meant to be used, <strong>a dragged width and a moved column were never stored</strong>.
+        /// Measured in the playground: a resize from 260px to 540px left <c>Columns</c> at <c>[]</c>
+        /// while the paging beside it stored <c>CurrentPage</c> the same second. Nothing threw; the
+        /// layout simply did not come back.
+        /// </para>
+        /// <para>
+        /// The second half of the drift is quieter. Neither site set <see cref="raisedSettings" />, so
+        /// an application that stores what it is handed and passes it back - which is the whole point of
+        /// the parameter - had a resize's echo read as an instruction where a sort's was not.
+        /// </para>
+        /// </remarks>
+        Task AnnounceSettings()
+        {
+            // Either reason to build the object, and §39 added the second: a grid with a StorageKey and
+            // no SettingsChanged handler is the ordinary way to use the storage, and gating the capture
+            // on the callback alone would store nothing for it.
+            if (!SettingsChanged.HasDelegate && StorageKey is not { Length: > 0 })
+            {
+                return Task.CompletedTask;
+            }
+
+            // Remembered so the settings the grid hands out are not then read back as an instruction.
+            // An application that stores what it is given and passes it back would otherwise return this
+            // object as a parameter change, and a grid that reloads on a settings change would reload,
+            // raise, and be handed it again.
+            raisedSettings = CaptureSettings();
+
+            // The same object, so what is stored and what the application was handed cannot disagree.
+            // Never awaited: this sits on the path of every sort, filter, page, resize and reorder, and
+            // a store that goes to a server would otherwise make each of them wait for a round trip.
+            _ = StoreSettingsAsync(raisedSettings);
+
+            // The callback is the caller's to await or not, and the two callers disagree for reasons
+            // that predate this method - which is why it is returned rather than decided here. The
+            // review caught the first draft deciding it: RefreshAsync does not await, on the argument
+            // in its own comment, and the extraction quietly applied that to the resize and the reorder
+            // as well - both of which awaited, and on which a consumer's handler throwing was observed.
+            return SettingsChanged.HasDelegate
+                ? SettingsChanged.InvokeAsync(raisedSettings)
+                : Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Re-reads the data for whatever the grid is currently showing.
         /// </summary>
         /// <param name="announce">
@@ -1898,27 +1958,11 @@ namespace Radzen.FastGrid
             // Every state change a user can make funnels through here, so this is the one place the
             // grid has to say so - and it is not the render path, which is what keeps a grid nobody is
             // persisting from ever building the object.
-            // Either reason to build the object, and §39 added the second: a grid with a StorageKey
-            // and no SettingsChanged handler is the ordinary way to use the storage, and gating the
-            // capture on the callback alone would have stored nothing for it.
-            if (announce && (SettingsChanged.HasDelegate || StorageKey is { Length: > 0 }))
+            // Not awaited, and that is this method's own long-standing choice rather than the shared
+            // one: it is on the path of every sort, filter and page.
+            if (announce)
             {
-                // Remembered so the settings the grid hands out are not then read back as an instruction.
-                // An application that stores what it is given and passes it back - which is the whole
-                // point of the parameter - would otherwise return this object as a parameter change, and
-                // a grid that reloads on a settings change would reload, raise, and be handed it again.
-                raisedSettings = CaptureSettings();
-
-                if (SettingsChanged.HasDelegate)
-                {
-                    _ = SettingsChanged.InvokeAsync(raisedSettings);
-                }
-
-                // The same object, so what is stored and what the application was handed cannot
-                // disagree. Not awaited, for the same reason the callback above is not: this method is
-                // on the path of every sort, filter and page, and a store that goes to a server would
-                // otherwise make each of them wait for a round trip.
-                _ = StoreSettingsAsync(raisedSettings);
+                _ = AnnounceSettings();
             }
 
             // Every branch below either starts a load that supersedes the one in flight or starts none

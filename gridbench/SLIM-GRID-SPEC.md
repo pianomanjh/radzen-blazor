@@ -9987,6 +9987,174 @@ measured the same way, against the same stage, or this section has replaced one 
   second consumer wants, made from one consumer. If it ships as `localStorage` and a delegate, that is
   probably the honest version, and the closed type is the thing to refuse.
 
+### What the band half measured
+
+*Nothing here is measured* was the second of the three risks above, and it was the one blocking the
+build. It is measured now, on the running playground with a ruler on it - the same instrument §37b
+used, pointed at the control that did not exist when §37b was written.
+
+**The band, at 1200px, eleven columns, one filter applied:**
+
+| arm | band |
+| --- | --- |
+| pill bar alone - §37's bar as it shipped | **67px** |
+| pill bar with the menu in it, as a flex item | **67px** - unchanged |
+| pill bar with the menu as a block sibling | 86.5px, 88px or 103px, by control |
+| a toolbar above the pill bar - §37b's arrangement | 69px + 67px = **136px** |
+| the band with a menu and nothing filtered | **53px** |
+| the band with nothing in it at all | 33px |
+
+So **§39's choice holds and §37b's "about 128px" was close**: a menu in the band is one band, a
+toolbar is two, and the second costs twice the first. What the measurement added is three things the
+design did not have.
+
+- **The trigger has to be a flex item in the band's row.** `.rz-datatable-header` is `display:block`
+  and `.rz-chip-list` is a block-level flex container, so a trigger appended as the band's second child
+  wraps to a second line. It is a second *row* rather than a second band - 20px to 36px rather than
+  67px - but it is chrome bought for nothing, and it is what the obvious implementation does. The band
+  is laid out as a row **only on the render that draws the menu**: an inline style is the one thing a
+  consumer's own rule cannot override without `!important`, and §37 named this band `rz-filter-pills`
+  precisely so that it could be restyled. A grid using the bar alone keeps the block band it had.
+- **The band with a menu and nothing filtered costs 53px**, which is the number §37's conditional-draw
+  argument was missing. *"A permanently empty band costs a row of chrome forever to avoid one layout
+  shift"* is exactly what a grid with the menu on and no filter now pays, so the first risk above is
+  real rather than hypothetical - and the answer is that `ShowGridMenu` is a parameter, off by default
+  like everything else here. A grid that has not asked for it is untouched; a grid that has, has a
+  reason for the band on every render, which is the case §37's rule was distinguishing itself from.
+- **`rz-button-md` is the control that grows the band**, to 69px even as a flex item. §37b's warning,
+  reproduced.
+
+**The trigger is `rz-menu-toggle`, and the obvious borrow would have failed an audit.**
+
+§39 asked for *"whatever upstream component actually draws an overflow menu, read out of the rendered
+markup"*. That is `RadzenMenu`'s `Responsive` toggle, and the class carries no scope of its own:
+`appearance:none; background:none; border:none; display:inline-flex; padding:0;
+color:var(--rz-menu-top-item-color)`, with that variable defined at `:root`. Measured in the band:
+20x20, no padding, no margin. The `li.rz-menu-toggle-item` upstream wraps it in is `display:none`
+until a breakpoint and is deliberately not taken - that is `RadzenMenu`'s responsive machinery rather
+than part of the button.
+
+The borrow that suggests itself is **`rz-grid-filter-icon`** - it is the class §37b corrected §35's
+icon *to*, it is unscoped, and it renders at 16x16 here. It fails on a check §37b never had to make:
+its colour is `--rz-grid-filter-color`, rgb(175,175,178), which against this band's white is
+**2.19:1** - below WCAG 2.2 1.4.11's 3:1 for a user interface component. It is faint on purpose,
+because in a header cell it is a hint beside a title; in this band it would be the only control on its
+side. `rz-menu-toggle` measures **8.18:1**, in company with the band's own *Clear all filters* at 21:1
+and its chip text at 15.27:1. **The right class for one job is the wrong class for another, and only
+the rendered thing says which.**
+
+**The glyph is `more_horiz`, because `more_vert` is taken.** The themes draw the column drag handle
+with `.rz-column-drag:after { content: "more_vert" }`, so a vertical kebab already means *pick this
+column up* one band away in this same component. Upstream's own toggle uses `menu`, which reads as
+site navigation in a grid.
+
+### §37b's finding, a third time - and this one the tests could not see
+
+The panel's entries are upstream's command-menu vocabulary rather than §35's listbox vocabulary, and
+the distinction is what the two panels are: §35's is an operator picker, a list one of whose entries is
+chosen; this is a command menu, whose entries do things and none of which is selected afterwards.
+Upstream keeps the two apart the same way - `RadzenSplitButton`'s popup is
+`ul.rz-menu-list > li.rz-menuitem`.
+
+The entry is a real `button` inside a presentational `li`, which is where this departs from
+`RadzenSplitButtonItem` - that puts `role="menuitem"` and the click on the `li` and manages focus
+through `aria-activedescendant` on the list. A button is focusable, takes Enter and Space from the
+browser, and is what §35's panel already does one panel over.
+
+**And `rz-menuitem-link` on a `button` rendered the user agent's own control.** `.rz-menuitem
+.rz-menuitem-link` is `color:inherit; display:flex; align-items:center; text-decoration:none` and
+nothing else, because upstream only ever puts it on a `span` or a `NavLink` - neither of which needs a
+reset. Measured on a button: `border: 2px outset`, `background: rgb(239,239,239)`, Arial at 13.33px,
+inside a themed panel. The fix is `rz-filter-menu-item`, which is
+`width:100%; text-align:start; background:none; border:none; font:inherit; cursor:pointer` - upstream's
+own class for exactly this, applied by `RadzenDataGrid` to the buttons in its filter menu and by §35 to
+the operators in this component's other panel. Its name says *filter* and its rules say *button in a
+menu*; the rules are what is borrowed, and there is no more general class shipped.
+
+That is §37b's rule for the third time, and all three were the same shape: **a class is only
+upstream's if the element under it is the element upstream puts it on.** §35 claimed a control it did
+not draw. §37b corrected it. This took the right class and put it on the wrong tag. Every one of them
+was invisible to a test asserting the markup and obvious the moment it was on a screen - which is what
+*"a test asserting the menu renders is not a test that it looks like one control"* was written to
+predict, and it predicted correctly.
+
+### The defect the browser found in the half that was already built
+
+Driving the reset needed something to reset, so a column was dragged wider - and the width was never
+stored. Paging stored `CurrentPage` the same second; a drag from 260px to 540px left `Columns` at
+`[]`. Nothing threw. The suite was 1204 green while it was true.
+
+**It is this section's own finding, applied in one place out of three.** *Storing must not be gated on
+`SettingsChanged`* was recorded above and fixed where `RefreshAsync` announces. `RaiseColumnResized`
+and the reorder drop announce too, do not reload, and so were never on that path: both still read
+`if (SettingsChanged.HasDelegate)`. On a grid with a `StorageKey` and no handler - which this section
+calls *the ordinary way to use this feature* - **a dragged width and a moved column were the two
+settings that did not survive a reload**, which are the two a *remember my layout* feature exists for.
+
+The second half of the drift is quieter. Neither site set `raisedSettings`, so an application that
+stores what it is handed and passes it back - the whole point of the parameter - had a resize's echo
+read as an instruction where a sort's was not.
+
+All three sites go through one `AnnounceSettings` now. Three tests cover it, none of them wiring a
+handler, because a handler is the only arrangement the fault could not be seen in; all three fail with
+the fault reinstated and no others do.
+
+**And a rule of this section is weaker in practice than it reads.** *Each of visibility, width and
+order is null until something records a choice* is true per column, but the resize script reports
+every column's width on every drag and the grid records all of them - so one drag pins eleven widths,
+declared ones included. That is §37-era resize behaviour rather than anything this section introduced,
+and changing it would change what a resize means; recorded rather than solved.
+
+### What the two-axis review found
+
+Three, and one of them is a decision this section left to the build rather than a fault.
+
+- **The panel was declared twice and the second copy dropped an attribute.** §39's panel was written
+  from §35's with the numbers changed, and left `RadzenPopup.Close` out. `RadzenPopup.OnClose` sets its
+  own `IsOpen`, so nothing was stuck open - but nothing told the *grid* to render, so the trigger's
+  `aria-expanded` stayed as the last render wrote it. **A browser looks perfectly correct throughout**,
+  because `Radzen.setPopupAriaExpanded` writes that attribute into the DOM itself; the render tree and
+  the DOM disagree, and only where upstream's JavaScript does not run - which is every test - can
+  anyone see it. That is §35's own rule coming back: *two writers agreeing by luck is still one of them
+  being wrong.* The declaration is one `RenderOverlayMenu` now, which is what makes the omission
+  impossible to repeat, and a test reads the writer that was wrong.
+- **Routing three announce sites through one method decided a question they disagreed about.**
+  `RefreshAsync` does not await `SettingsChanged`, on the argument in its own comment - it is on the
+  path of every sort, filter and page. `RaiseColumnResized` and the reorder always did await it. The
+  extraction silently gave all three `RefreshAsync`'s answer, which makes a consumer's handler throwing
+  an unobserved task on two of them. `AnnounceSettings` returns the callback's task now and each caller
+  keeps its own answer. **The test written for this first did not work**: a handler that throws on the
+  way in throws at the call site whether the task is awaited or discarded, so it passed with the fault
+  reinstated. It yields before it throws now, and fails.
+- **`ShowGridMenu` is a decision this section did not make, and the review is right to say so.** §39
+  wrote *"the band must now draw when there is a menu **or** a filter"* as though the menu simply
+  exists, and it refused a `ShowResetButton` on the grounds that it is *"the toolbar question wearing a
+  boolean"*. This is a boolean that shows a control. The distinction it turns on: that refusal was
+  about **which control** the reset gets - a button in the band, or an entry in a menu - and this is
+  about **whether the band's menu exists at all**. The 53px above is what makes it a real question
+  rather than a stylistic one, and §3's rule that nothing is paid for when switched off is what settles
+  it. A grid that has not asked for the menu is exactly as it was.
+
+Not acted on: the review also noted that `gridMenuPopup`, its capture, the element, its capture,
+`gridMenuPending` and `gridMenuBuilt` travel as one concept and restate §35's fields one panel over.
+True, and it stays two copies rather than a `PopupHost`, because two is where it stops: §40's export is
+an entry in this menu rather than a third panel. A third would be the point to bundle them.
+
+### How the band half was actually verified
+
+The measurements above are the verification the section asked for, and the tests are the logic around
+them. Eighteen tests: five for the storage defect, thirteen for the band.
+
+**Eleven mutations, eleven caught - and four of them only after the test that should have caught them
+was written, repaired, or generalised.** Deleting the band's `display:flex` left every other test passing, because
+the menu still rendered and still opened: the whole finding of the first measurement, with nothing
+pinning it. Dropping `RadzenPopup.Close` was invisible until a test read `aria-expanded` across an
+open and a close. And the await test passed with its own fault reinstated until the handler learned to
+yield first. And the reorder's await survived while the resize's was covered, by two tests that should
+always have been one - they are a theory over both settles now. Each of the four is §9's first rule
+earning its keep: a test that cannot fail is worse
+than no test, and the only way to know which kind you have written is to break the thing on purpose.
+
 ---
 
 ## 40. The workbook was already in the box - the design

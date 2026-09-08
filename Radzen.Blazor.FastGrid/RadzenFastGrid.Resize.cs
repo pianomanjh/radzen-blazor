@@ -114,10 +114,9 @@ namespace Radzen.FastGrid
 
             // A width is state a user chose, so it belongs in the settings for the same reason a sort
             // does. This is not RefreshAsync: nothing about the data changed, only how wide it is drawn.
-            if (SettingsChanged.HasDelegate)
-            {
-                await SettingsChanged.InvokeAsync(CaptureSettings());
-            }
+            // Through AnnounceSettings rather than raising here, because raising here is what left a
+            // dragged width unstored on every grid persisting by StorageKey alone - see that method.
+            await AnnounceSettings();
         }
     }
 

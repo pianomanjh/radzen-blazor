@@ -970,10 +970,10 @@ namespace Radzen.FastGrid
                 RenderPager(builder, 10, captureTopPager ??= p => topPager = (RadzenPager)p);
             }
 
-            // §37's bar, in the 11 to 20 band between the top pager and the scroller - which is where
-            // the placement argument settled, and the one structural thing the section demonstrated
-            // rather than inferred. It writes nothing when nothing is filtered.
-            RenderFilterPills(builder);
+            // §37's bar and §39's menu, in the 11 to 20 band between the top pager and the scroller -
+            // which is where the placement argument settled, and the one structural thing §37
+            // demonstrated rather than inferred. It writes nothing when there is neither.
+            RenderBand(builder);
 
             // 21, not 20: the top pager's band runs to 20, and the numbers a region writes must ascend
             // in the order it writes them.
@@ -1074,6 +1074,10 @@ namespace Radzen.FastGrid
             // is - Radzen.openPopup reparents it to document.body the moment it opens, which is what
             // stops the scroll container clipping it.
             RenderFilterMenu(builder);
+
+            // §39's panel, on the same terms and for the same reason: nothing until the first open,
+            // and inside the grid's element because that is where its subtree is.
+            RenderGridMenu(builder);
 
             builder.CloseElement();
         }
