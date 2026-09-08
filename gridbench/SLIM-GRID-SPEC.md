@@ -11909,3 +11909,70 @@ without breaking a public signature**, for 111.6 → ~41 MB and every collection
 price of ten internal call sites, value equality on `Cell`, and moving one internal event. That is a
 proposal that answers "existing patterns and existing API" rather than one that argues with it - and the
 answer to "what failure does this prevent" is still none, which is the sentence it has to lead with.
+
+## 55. The export measured end to end, and the identity §54 got wrong
+
+§54 composed its figures from parts and asked to be checked. Two of the three answers moved.
+
+### The composition was right; the sink in it was not
+
+Measured end to end on `upstream/xlsx-writer-perf` `84200d156`, into `Stream.Null`:
+
+| | allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- |
+| fill only | 94.0 MB | 9 | 4 | 0 |
+| fill and save | **103.6 MB** | 10 | 5 | 1 |
+| the save's share | **9.6 MB** | | | |
+
+94.0 + 9.6 = 103.6 exactly, so **composing separately measured parts is sound here** - which is what
+§54's variant rows rely on. What was not sound is that §54 used **17.7 MB** for the save, and that is the
+figure through a `MemoryStream`. 17.7 − 9.6 = 8.1 MB is the sink's chain of doublings, the constant 8 MB
+this work has charged the writer for before. §54 mixed a `MemoryStream` save with a `Stream.Null` fill.
+
+Restated, all into `Stream.Null`:
+
+| | fill | read | write | export |
+| --- | --- | --- | --- | --- |
+| today, with #2708 | 94.0 | none | 9.6 | **103.6 MB** |
+| façades, writer untouched | 23.5 | 16.8 | 9.6 | ~50 MB |
+| slots, writer taught to read them | 23.5 | none | 9.6 | **~33 MB** |
+
+Every library-independent arm reproduced to the tenth of a megabyte across the branch switch, and the
+fill read 94.0 on both, so the writer branch changes nothing about the fill.
+
+### None of the ten sites needs a detached cell
+
+All ten read `Address`, `Value`, `Formula` or `Hyperlink` and nothing else. Five take `.ToList()`, and
+in every case the reason is that the store is mutated during the iteration - `GetAutoFitMeasureItems`
+says so in a comment, *"computing effective formats can populate cells in the store"*. **That is a
+snapshot of the key set, not of cell contents**, and a slot store satisfies it more cheaply than a list
+of 550,000 objects does today.
+
+### §54's equality is wrong, and this is the real blocker
+
+§54 said `Cell` should gain value equality on worksheet and address, and called it behaviour-preserving.
+It is not. **`Cell.Address` is mutable**: `CellStore.UpdateCellAddress` rewrites it in place as
+`DictionaryShift.Remap` moves cells for a row or column insert. `CellDependencyGraph` holds
+`Dictionary<Cell, HashSet<Cell>>` and is **never rebuilt after a shift** - it survives one precisely
+because reference equality is the only equality that stays stable while the address changes.
+
+Value equality on a mutable address would key those dictionaries on a field that changes under them, and
+every entry would be orphaned by the first inserted row. Silently.
+
+So a per-access façade needs a stable identity that is not its address. Either
+
+- a per-cell id in the slot, plus a way to reach a cell by id, which is a second dictionary and gives
+  back some of what was saved; or
+- the dependency graph becomes address-keyed and is remapped during a shift, using the same
+  `DictionaryShift.Remap` the store already uses.
+
+The second is the smaller change and is internal. **It is also the piece that decides whether the
+variant is viable**, and it is not measured here.
+
+### On the order of the two PRs
+
+The fill is 91% of a 103.6 MB export **only because #2708 took the save from 442 MB to 9.6**. Before it,
+the same fill is 18% of 536 MB and this work would be noise. #2708 also rewrites `XlsxWriter`'s per-cell
+read path, which is the exact code a slot-reading writer would change again. **The model work is
+downstream of the writer work in both senses**, and nothing here should reach a pull request until
+#2708 is reviewed.
