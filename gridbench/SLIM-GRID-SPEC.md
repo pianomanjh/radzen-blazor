@@ -10316,3 +10316,189 @@ order and not declaration order; a filtered grid exports the filtered rows.
   keeping numbers, dates and bools typed so that Excel sorts and sums them, and it hand-maps `DateOnly`
   through `DateTime` to get there. Whether `Cell.Value` infers the same set - and what it does with a
   `DateOnly`, a `TimeSpan` or a nullable enum - is read from one file here and not tested.
+
+### What the build measured, and the three things the section had wrong
+
+*Nothing here is measured, and one thing should be* was the first of the risks above, and it named the
+right one. It is measured now, and two more went with it.
+
+**The number that was asked for.** A 50,000-row workbook over eleven columns, three interleaved passes,
+stable across all three:
+
+| step | time | allocated | live heap |
+| --- | --- | --- | --- |
+| building the workbook | ~610 ms | 212 MB | 209 MB |
+| `SaveToStream` | ~3.6 s | 417 MB | |
+| `SaveAsCsv` | ~280 ms | 71 MB | |
+
+So the answer to *"like the grid or like ClosedXML"* is **like ClosedXML**: about 4.2 KB per row, which is
+a `Cell` object and a dictionary entry per cell, and `CellStore` is a `Dictionary<(int, int), Cell>` with
+no bulk path. §40 worried about "a feature that hangs the circuit for six seconds"; it is four, and 209 MB
+of live heap per concurrent export on a Server circuit.
+
+**What that changes is nothing about the shape and everything about the argument for it.** The section
+chose to answer a `Workbook` on composability grounds - *"a method that wrote bytes would be a method that
+had already decided all three"* - and the split of the four seconds turns that from a taste into a
+measurement: **the expensive step is the one `ToWorkbook` does not take.** A `ToXlsxBytes` would have
+baked 3.6 s into the seam. And *CSV costs nothing to reach through the same `Workbook`* is now a number:
+**thirteen times cheaper** than the same data as `.xlsx`.
+
+**The trimming argument, which nothing had tested either.** Published as a trimmed Blazor WebAssembly app,
+with and without one call to `ToWorkbook` rooted behind a flag the trimmer cannot fold away:
+
+| | raw | brotli |
+| --- | --- | --- |
+| the grid alone | 9,764 KB | 3,172 KB |
+| the grid with the export rooted | 11,052 KB | 3,572 KB |
+
+**+400 KB over the wire on every consumer**, and **four** assemblies rather than the two the section
+names: `System.Private.Xml` and `System.Private.Xml.Linq` arrive with `System.IO.Compression` and
+`System.Xml.Linq`. The separate package is worth what it claimed to be worth, and slightly more.
+
+### `Cell.Value` does not format oddly. It throws.
+
+The third risk read: *"Whether `Cell.Value` infers the same set - and what it does with a `DateOnly`, a
+`TimeSpan` or a nullable enum - is read from one file here and not tested."* Probed one type at a time
+against a real workbook, the answer is that `CellData`'s type switch ends in
+`throw new NotSupportedException`, and its whole accepted set is:
+
+> `null`, `string`, `bool`, `DateTime`, and the eleven numeric primitives - plus their nullable forms.
+
+**`DateOnly`, `TimeOnly`, `TimeSpan`, `DateTimeOffset`, `Guid` and every enum throw**, nullable or not.
+An enum column is an ordinary thing for a grid to draw, so without a coercion step an ordinary export does
+not export wrongly - **it crashes.** That is a different class of finding from the one the section
+expected, and it is the reason `ExportValue` exists at all rather than being a formatting nicety.
+
+The rule it settles is §40's own fallback rule, arrived at from the other side: **typed where a
+spreadsheet gains something, the column's text where it does not.** A `DateOnly` and a `DateTimeOffset`
+are dates, so they are converted to `DateTime` rather than stringified - which keeps them sortable and
+earns them the writer's own `mm/dd/yyyy`, measured. Everything the writer refuses becomes `CellTextOf`,
+which is what the reader was looking at.
+
+**A `bool` is the one deliberate demotion**, and it is the round trip that produced it: `Cell.Value`
+accepts a bool and the *file* cannot keep one. Written and read back, `true` is the number `1` carrying no
+format, so Excel shows a column of ones. §38's application is explicit about keeping bools typed so Excel
+sorts them; this writer cannot, so the column's own word wins.
+
+**And text has to be insisted on, which is the finding a user would have made rather than a test.** Handed
+a string, `CellData` runs `TryConvertFromString` and keeps whatever it infers - so the text a column drew
+does not survive being written. It was found by a test expecting *True* from a bool column and getting
+**1**: the coercion had already turned the bool into the word, and the writer turned the word back into a
+number. `"02:00:00"` comes back a `DateTime` the same way. The case nobody would have caught until it
+shipped is a product code: **`"007"` stored as the number 7.** `Cell.SetValue` with a leading apostrophe
+is the writer's own answer and its comment names this exact case; it is applied only where the inference
+actually bit, so an ordinary word carries no flag.
+
+### The interface could not reach the columns it was designed for
+
+*"A column controls its own export through one interface"* - `IFastGridExportColumn<TItem>`, adopted from
+the consuming application unchanged but for its name, on the grounds that it was *"doing exactly one job
+well"*.
+
+**In that application the columns are the application's own types. Here every built-in column is
+`sealed`.** `PropertyColumn`, `LookupColumn`, `CollectionColumn` and `TemplateColumn` cannot be derived
+from, so nobody can implement the interface on a column they actually declare - and the section's one
+worked example, *a lookup column exports its label instead of its raw id by implementing it*, is a case
+this grid already handles natively through `CellTextOf` without anyone implementing anything. What the
+interface was actually needed for was the template column, which is the one it can least reach.
+
+The interface is kept, because a custom column deriving from `ColumnBase` or `LookupColumnBase` can
+implement it and that is the shape the surveyed application had. Beside it,
+`FastGridExportOptions<TItem>.Columns` says the same four things from outside, keyed by the `UniqueID`
+§27 gave every column and the stored settings already key on. A column that implements the interface wins,
+because the type is the more specific statement.
+
+**Unsealing was the alternative and is refused.** Sealed is what lets the JIT devirtualise `CellTextOf` on
+the render path, which is §3's argument, and an export is not a reason to spend it.
+
+### Two smaller corrections
+
+- **`Axis.IsAutoFit` is not the lever the table said it was.** §40 mapped ClosedXML's `AdjustToContents`
+  onto it and added *"and the writer measures the widths itself"*. `IsAutoFit` is a read-only query of a
+  flag the `.xlsx` reader sets, and the only method that sets it - `Axis.SetAutoFit` - is `internal` to
+  `Radzen.Blazor`. **Nothing outside that assembly can ask for auto-fit at all.** The width is computed
+  here instead, from text the writer already has in hand while filling each cell, so it costs no second
+  pass.
+- **The columns and the view did not have to be opened up.** The section said *"`View()` is private, the
+  column list is a private field, and both have to become readable for this to exist at all"*. §39's
+  storage half made `VisibleColumns`, `DrawnRows` and `FilteredRows` public while this section was still a
+  design, and `FilteredRows` is precisely answer ①. The one thing the grid did have to gain is
+  `CellValueOf` - the companion to `CellTextOf`, null on every column whose text *is* its meaning, which
+  is what makes a lookup column export its name without the export knowing what a lookup is.
+
+### How it was verified
+
+Round trip, as the section asked: every assertion is made after a `SaveToStream` and a `LoadFromStream`,
+because the writer is where the surprises were. Twenty-six tests, and the section's own list of
+discriminating cases is covered one for one - a hidden column absent, a reordered column in the reader's
+order, a filtered grid exporting the filtered rows, a lookup column exporting its name, a template column
+exporting blank.
+
+Two of those tests read differently from how the section wrote them, and both are the sample data being
+honest: a lookup id with no name in the map exports as the id, which is also what the cell draws; and an
+enum exports `Senior` rather than its `[Display]` name `Senior engineer`, because the `[Display]` name is
+§36's *filter* vocabulary and a cell draws `ToString`. The export says what the cell said, which is the
+rule, and both are pinned so that a later edit unifying the two names has to argue for it.
+
+`ANumberIsStillANumberAndADateIsStillADate` is the counterweight to the four tests about text. Without it,
+an exporter that turned everything into strings would pass all of them and be worse than the one §38
+surveyed: a spreadsheet that cannot sum a salary column has lost the argument.
+
+### What the two-axis review found, and one thing the sweep did
+
+Both axes read the built package against the section. Nine findings; the three that changed behaviour:
+
+- **The column's own `Format` never reached the file, and now that is a decision rather than an
+  oversight.** A column declaring `Format="C"` draws *$4,000.00* and exported **4000** with no format at
+  all. The two format languages are not the same - `C`, `N2` and `P` are .NET's, `$#,##0.00` and `0.00%`
+  are the file's - so bridging them means a translation table, which is a second format vocabulary to
+  keep correct forever. **§39 refused exactly that for the settings blob and the same argument holds.**
+  What survives is the half that matters, a column of numbers Excel can sum; `ExportFormat` says the
+  other half in the language the file speaks. Both are pinned, because exporting the formatted text
+  instead is a one-line change that would look like an improvement and would quietly make the column
+  unsummable.
+- **Every table was called `Export`.** Nothing in the model objects - `AddTable` checks uniqueness within
+  one worksheet, and two sheets each carrying an `Export` save and load without complaint, which is
+  measured - but Excel wants the name unique across the workbook, and putting two exported grids in one
+  file is the first thing the README shows. The name comes from the sheet's now, with the characters
+  Excel refuses replaced.
+- **A header-only export lost its filter buttons**, because the table was written only when there were
+  rows. An empty result is where a reader most needs the control that clears the filter.
+
+And the sweep found the one that mattered most: **swapping `FilteredRows` for `DrawnRows` changed no
+test.** That is §40's central decision - *"`View`, not the page - filtered and sorted, every matching
+row"* - and every grid in the file had paging off, so the two were the same list. One test with
+`AllowPaging` and a page size of two now separates them, which is the *make the arms move* rule reaching
+the one place it had not been applied.
+
+Fifteen mutations, fourteen caught. **The survivor is redundant code rather than a hole**, and
+investigating it rather than writing a test for it is §39's own finding repeating: making
+`ColumnBase.CellValueOf` return `CellTextOf(item)` instead of `null` changes nothing observable, because
+every caller reads it as `CellValueOf(item) ?? CellTextOf(item)`. Null stays, because null is the
+statement - *this column has no value distinct from its text* - and a caller that ever needs to tell
+those apart cannot reconstruct the distinction later.
+
+Not acted on: the review noted that `bool` demoted to text leaves booleans unsortable as booleans with no
+opt-out short of `ExportValue`. True, and it is the file format's constraint rather than this seam's.
+
+### §39's menu and §40's package cannot both have what they asked for
+
+*"A button. §39's menu is where an export entry would live, and it should be argued there, once there is
+a menu to put it in."* There is a menu now, and the entry cannot be built.
+
+The menu is rendered by `RadzenFastGrid`, in `Radzen.Blazor.FastGrid`. The export is in
+`Radzen.Blazor.FastGrid.Export`, which references the grid and not the other way round - and it has to be
+that way round, because the whole packaging argument is that nothing in the core roots `XlsxWriter`, now
+measured at 400 KB over the wire. So the core cannot call `ToWorkbook`, and:
+
+- **§39 refused an extension point** on the menu - *"an application that wants its own actions in the band
+  is asking for a `HeaderTemplate`, and that is the two-band question again with a different sponsor"*.
+- **§40 requires the separate package**, and a core that referenced it would undo the 400 KB.
+
+**Both decisions are individually right and jointly unsatisfiable.** Recorded rather than resolved,
+because resolving it means reopening one of them and that is a decision with a sponsor, not a build
+detail. The three shapes it could take, in the order they look least bad: an extension point on the menu
+narrower than a `HeaderTemplate` - a list of items an application adds, which is the thing §39 argued
+should be argued when someone needs it, and someone now does; a `ToWorkbook` entry the application wires
+to `ClearSettings`'s neighbour by handing the grid a callback; or the export moving into the core behind
+a feature switch, which trades a measured 400 KB for a convenience and is the one to refuse first.

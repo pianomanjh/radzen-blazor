@@ -27,6 +27,7 @@ namespace Radzen.FastGrid
         Expression<Func<TItem, TProp>>? sortBy;
         Expression<Func<TItem, TProp>>? filterBy;
         Func<TItem, string?>? cellText;
+        Func<TItem, object?>? cellValue;
         string? format;
         string? separator;
 
@@ -352,9 +353,15 @@ namespace Radzen.FastGrid
             // class on entry - here, on every parameter set of every column, taken branch or not.
             // A column with no Property renders empty cells rather than throwing out of the render: the
             // parameter is EditorRequired, which is a warning, not a guarantee.
-            cellText = Property is null
+            var compiled = Property?.Compile();
+
+            cellText = compiled is null
                 ? null
-                : BuildCellText(Property.Compile(), Separator, Format is { Length: > 0 } ? Format : null);
+                : BuildCellText(compiled, Separator, Format is { Length: > 0 } ? Format : null);
+
+            // The same compiled getter, boxed on the way out. Built here rather than on demand because
+            // the alternative is compiling the expression once per exported cell.
+            cellValue = compiled is null ? null : item => compiled(item);
 
             var propertyPath = PropertyPathResolver.For(Property);
 
@@ -548,6 +555,16 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         public override string? CellTextOf(TItem item) => cellText?.Invoke(item);
+
+        /// <summary>
+        /// The property's value, boxed - this being the one column whose text is a formatting of a
+        /// value rather than the value itself.
+        /// </summary>
+        /// <remarks>
+        /// Off <c>cellValue</c> rather than off <see cref="Property" />, for the reason the field beside
+        /// it exists: compiling the expression per call would compile it per cell of an export.
+        /// </remarks>
+        public override object? CellValueOf(TItem item) => cellValue?.Invoke(item);
 
         /// <summary>
         /// A collection column has nothing to order by: no provider can sort rows by a list, and

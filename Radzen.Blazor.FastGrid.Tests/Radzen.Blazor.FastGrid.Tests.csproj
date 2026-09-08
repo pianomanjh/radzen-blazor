@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Radzen.Blazor.FastGrid\Radzen.Blazor.FastGrid.csproj" />
+    <ProjectReference Include="..\Radzen.Blazor.FastGrid.Export\Radzen.Blazor.FastGrid.Export.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1664,6 +1664,25 @@ itself, and the reason is sound - a switch read at run time cannot promise the t
 build time, because the trimmer finished before then. Trim warnings are removed by not calling
 reflective code. Everything above is the shape that requirement forces.
 
+## Exporting to a spreadsheet
+
+`Radzen.Blazor.FastGrid.Export` is a separate package that turns the grid into a `Workbook`:
+
+```csharp
+using Radzen.FastGrid.Export;
+
+Workbook workbook = grid.ToWorkbook();
+```
+
+It exports every row the filters and the sort produce, and the columns the reader is looking at in the
+order they arranged them. See that package's own README for what it does with each type, and for how a
+column says it wants something else.
+
+**Separate on purpose, and measured.** The writer needs `System.IO.Compression` and `System.Xml.Linq`,
+and rooting them costs a trimmed WebAssembly build **400 KB over the wire**. Nothing in this package
+touches the writer, so a grid that does not export pays none of it - which is the same argument as
+[Trimming and Native AOT](#trimming-and-native-aot) below, one package out.
+
 ## What it does not do
 
 Not oversights - the reasons are in `gridbench/SLIM-GRID-SPEC.md` in the repository:

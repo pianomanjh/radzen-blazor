@@ -2158,6 +2158,44 @@ namespace Radzen.FastGrid
         public virtual string? CellTextOf(TItem item) => null;
 
         /// <summary>
+        /// The column's own value for a row, boxed, or null where its text <em>is</em> its value.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The companion to <see cref="CellTextOf" />, for a caller that wants the value rather than
+        /// the rendering of it - which today is §40's export, where a number written as a number is a
+        /// number Excel can sum and a number written as text is not.
+        /// </para>
+        /// <para>
+        /// <strong>Null is the right answer for most columns, and that is the point rather than an
+        /// omission.</strong> Only a column whose text is a <em>formatting</em> of an underlying value
+        /// has a value worth preferring over that text. A lookup column's text is the name it resolved
+        /// and its value is an id nobody asked to see; a collection column's text is a joined list and
+        /// its value is a sequence; a template column has no text at all. For all three the text is the
+        /// meaning, so they inherit this and the caller falls back to <see cref="CellTextOf" />.
+        /// </para>
+        /// <para>
+        /// <strong>Returning the text here instead of null would be observationally identical today</strong>,
+        /// because every caller reads this as <c>CellValueOf(item) ?? CellTextOf(item)</c> - a mutation
+        /// making the default <c>CellTextOf(item)</c> changed no test, and investigating rather than
+        /// patching it is §39's lesson. It stays null because null is the <em>statement</em>: this
+        /// column has no value distinct from its text. A caller that ever wants to tell the two apart -
+        /// "has a value" from "has a value equal to its text" - needs the distinction to have been
+        /// preserved, and it cannot be reconstructed later.
+        /// </para>
+        /// <para>
+        /// <strong>It boxes, and that is a considered exception to §3's fifth rule.</strong> That rule
+        /// is about the render path, which this is not on: this is asked once per cell of an export
+        /// that is already allocating a spreadsheet cell object per cell. Keeping it generic would mean
+        /// a typed interface reaching through <see cref="ColumnBase{TItem}" />, which is a large change
+        /// to the column hierarchy to avoid an allocation that is a rounding error beside the one it
+        /// sits next to.
+        /// </para>
+        /// </remarks>
+        /// <param name="item">The row.</param>
+        public virtual object? CellValueOf(TItem item) => null;
+
+        /// <summary>
         /// Applies this column's ordering to <paramref name="source" />. Overridden by columns that know
         /// their property type, so the ordering is a typed expression the provider can translate rather
         /// than a parsed string.
