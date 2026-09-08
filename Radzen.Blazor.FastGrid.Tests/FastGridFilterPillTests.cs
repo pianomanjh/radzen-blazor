@@ -803,14 +803,16 @@ namespace Radzen.FastGrid.Tests
         static IElement[] HiddenPills(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
             cut.FindAll(".rz-filter-pills .rz-filter-pill-hidden").ToArray();
 
-        /// <summary>What the notice says, which is empty while it is saying nothing.</summary>
+        /// <summary>What the notice says: nothing when it is absent, and nothing when it is quiet.</summary>
         /// <remarks>
-        /// The element itself is always written once the bar is, because a hidden pill's
-        /// <c>aria-controls</c> names it and an id that is not in the document is the §35 fault. So the
-        /// assertion has to be about its text rather than about its presence.
+        /// Two states answer the empty string and the difference is worth keeping out of the tests
+        /// below, which are about what a reader is told rather than about which of the two produced it.
+        /// The element is written only where a hidden pill was, because that pill's
+        /// <c>aria-controls</c> is the only thing that names it - so a bar with nothing hidden has no
+        /// notice at all, and a bar with one that nobody has clicked has an empty one.
         /// </remarks>
         static string Notice(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
-            cut.Find(".rz-filter-pill-notice").TextContent;
+            cut.FindAll(".rz-filter-pill-notice").SingleOrDefault()?.TextContent ?? "";
 
         static RenderFragment TwoColumnsSecondHidden() => Columns.Of(
             Columns.Property<Person, string>(x => x.First, title: "First"),
@@ -833,6 +835,22 @@ namespace Radzen.FastGrid.Tests
             Assert.NotEmpty(cut.FindAll(".rz-filter-pills"));
             Assert.Equal("Last Contains B", Assert.Single(PillText(cut)));
             Assert.Single(HiddenPills(cut));
+        }
+
+        [Fact]
+        public void ABarWithNothingHiddenWritesNoNoticeAtAll()
+        {
+            // §3: the bar was measured before this section and the notice must not appear in that
+            // number. The pill's aria-controls is the only thing that names the element, so the two are
+            // written by one walk and a bar with no hidden column writes neither.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "First", "A");
+
+            Assert.Single(Pills(cut));
+            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
         }
 
         [Fact]
@@ -860,6 +878,9 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal("", Notice(cut));
             Assert.Equal("false", HiddenPills(cut).Single().GetAttribute("aria-expanded"));
+
+            // The element is there for the pill's aria-controls to name, and only because it is.
+            Assert.NotEmpty(cut.FindAll(".rz-filter-pill-notice"));
 
             HiddenPills(cut).Single().Click();
 

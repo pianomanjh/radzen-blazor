@@ -133,6 +133,8 @@ namespace Radzen.FastGrid
             // The hidden ones after the drawn ones, in a walk of their own. Their pills carry no drawn
             // index because there is no cell to send anyone to, and grouping them at the end keeps the
             // drawn pills in the order their columns are in for the reader who can see them.
+            var anyHidden = false;
+
             for (var i = 0; i < columns.Count; i++)
             {
                 var column = columns[i];
@@ -140,6 +142,8 @@ namespace Radzen.FastGrid
                 if (!column.IsVisible && column.HasFilter && column.CurrentFilter is { } filter)
                 {
                     RenderHiddenFilterPill(builder, column, filter);
+
+                    anyHidden = true;
                 }
             }
 
@@ -147,7 +151,10 @@ namespace Radzen.FastGrid
 
             RenderClearAllFilters(builder);
 
-            RenderHiddenColumnNotice(builder);
+            if (anyHidden)
+            {
+                RenderHiddenColumnNotice(builder);
+            }
         }
 
         /// <summary>One column's filter, said in words, with a way to remove it and a way to edit it.</summary>
@@ -323,11 +330,14 @@ namespace Radzen.FastGrid
         /// carries the same sentence in its own name.
         /// </para>
         /// <para>
-        /// <strong>The element is always written and its text is not.</strong> An
+        /// <strong>Written whenever a hidden pill was, and its text only when one is open.</strong> An
         /// <c>aria-controls</c> pointing at an id that is not in the document is the fault §35 found in
-        /// <c>Radzen.setPopupAriaExpanded</c>, one attribute over. Empty it is a zero-width flex item
-        /// and the band stays the height §39 measured; the <c>flex-basis</c> that gives it a line of its
-        /// own is written only when there is something on that line.
+        /// <c>Radzen.setPopupAriaExpanded</c>, one attribute over - and the only thing that writes that
+        /// attribute is a hidden pill, so the two are driven by the one walk and cannot disagree. A bar
+        /// with no hidden column writes neither, which is what keeps the pills at the cost §37 measured.
+        /// Empty of text it is a zero-width flex item and the band stays the height §39 measured; the
+        /// <c>flex-basis</c> that gives it a line of its own is written only when there is something on
+        /// that line.
         /// </para>
         /// <para>
         /// <strong>Read back off the column rather than cleared by hand.</strong> The text is drawn only

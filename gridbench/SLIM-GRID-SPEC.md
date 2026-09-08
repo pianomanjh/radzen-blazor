@@ -11074,9 +11074,38 @@ default.
   the row, which is what a pointer click on that cell now does too. `ToggleRow` is not gated: a caller
   that expands a row itself has said what it means more directly than a predicate can contradict.
 
+### What it cost, measured against the section before it
+
+`FastGridFeatureBench` at 1,000 rows, `1eafef5ee` against here, allocation rather than wall-clock: this
+machine's `--job short` error bars run to thousands of microseconds on a 450 µs mean, and the same arm
+came back at 1.36x, 1.40x and 1.79x of baseline across three runs of the identical binary. Allocation
+does not drift, which is the whole reason §26's ladder is an allocation ladder.
+
+| Arm | Before | After |
+| --- | --- | --- |
+| bare | 156.21 KB | 156.29 KB |
+| + row detail available, none expanded | 157.30 KB | 157.42 KB |
+| + row detail, no toggle column | 156.55 KB | 156.63 KB |
+| + one filter, no pill bar | 165.26 KB | 165.34 KB |
+| + a pill bar, one filter | 168.01 KB | 168.12 KB |
+| + a pill bar, three filters | 179.91 KB | 179.98 KB |
+
+**Every arm moves by 0.07 to 0.12 KB and the instrument's own floor is 0.1 KB** - `fast-ladder` over ten
+renders of the unchanged binary reports 156.3 nine times and 156.4 once. So the honest reading is that
+nothing here is resolved as a cost, and that a per-render cost below about a tenth of a kilobyte is *not*
+excluded by this measurement. `bare` runs none of the new code at all, which is the control that says so:
+its 0.08 KB cannot be anything this section wrote.
+
+**The pill bar did move before it was gated**, and that is the one real finding. The first draft wrote the
+notice element on every render of the bar - +0.29 KB with one filter and +0.38 KB with three, three to
+four times the floor and the same shape as an element frame, two attributes and the `id` string that
+`HiddenColumnNoticeElementId` composes fresh each time. The element is now written only where a hidden
+pill was, which is the only thing that names it in `aria-controls`, so the two are driven by one walk and
+a bar with nothing hidden is the bar §37 measured.
+
 ### Verified
 
-1310 green, twenty-five of them new. Twelve mutations, twelve caught - the five on the pill, plus the
+1312 green, twenty-seven of them new. Twelve mutations, twelve caught - the five on the pill, plus the
 scrim ignoring the application's word, the empty message needing a template, the text winning over the
 template, hover not reaching the class, the predicate inverted, the keyboard toggling a row with no
 toggle, and the header taking no class of its own.
