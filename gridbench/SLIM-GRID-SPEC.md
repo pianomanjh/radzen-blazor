@@ -10916,7 +10916,7 @@ they are not the same feature:
   a chip that scrolls its column into view, and there is no column to scroll to.
 
 The first is what the application already relies on. The second is what §37 would have wanted if the
-question had come up. It needs deciding before it is written.
+question had come up. **§45 takes the second.**
 
 **② An application-driven loading state.** 39 of 91 grids set `IsLoading`. Here `IsLoading` is
 `{ get; private set; }` and only ever true on the grid's own asynchronous path, on the argument that
@@ -10955,3 +10955,52 @@ template - template wins, text is the default - is the whole feature.
 - **`Property` as a string is 528 columns and still not priced.** §38 declined to and this section
   declines to as well; `PropertyPathResolver` is the reason it is a codemod rather than a rewrite, since
   the string identity a column needs is derived from the expression rather than declared beside it.
+
+
+---
+
+## 45. §44's list, closed
+
+### ① The pill for a column nobody can see
+
+**The second answer, sponsored.** Clearing a hidden column's filter is what the wrapper does and it
+throws away something a reader authored, silently, on an action that says nothing about filtering. So
+`AnyColumnFiltered` and the pill loop walk every column rather than the drawn ones, and a filter on a
+column that is not drawn gets a pill of its own.
+
+`ClearFilters` already walked every column. What was missing was any way to reach it: the band is drawn
+only when something is filtered, that test asked the drawn columns, and the *Clear all filters* button
+lives in the band. A grid whose only filtered column had been hidden was filtered, said nothing, and hid
+the control that would have fixed it.
+
+**The pill is the same pill with the door closed.** Same phrase, same remove button - the escape hatch is
+one click either way. What changes is the body: there is no filter cell to focus and no header to open a
+menu on, so it is a **disclosure** rather than a door. `aria-expanded` and `aria-controls` over a notice
+that says the column is hidden, which is §39's menu trigger one element away.
+
+Four things the review found and one it did not:
+
+- **The pill's accessible name was a drawn pill's.** The glyph that distinguishes them is
+  `aria-hidden` and the class carries no rule, so to a screen reader the two were the same control. The
+  name is the phrase *and* the sentence now, so nobody has to open the notice to be told.
+- **`aria-controls` named an element that was not in the document** until the pill was clicked, which is
+  precisely the fault §35 found in `Radzen.setPopupAriaExpanded`. The notice element is always written
+  and its *text* is not; empty, it is a zero-width flex item and the band is the 67px §39 measured.
+- **`role="status"` written at the same instant as its text** is a live region many readers do not
+  announce. It is gone: the pill's own name is what says it, and the notice is the sighted reader's echo.
+- **The notice outlived its column.** `RemoveColumn` already drops the sort and the column's check-box
+  values for the reason that they *"would hold the column and everything it listed for as long as the
+  grid lives"*; the notice held the same reference and would have gone on answering for a pill that was
+  no longer drawn. It is dropped there too.
+- **The class inventory in `RenderFilterPills` had gone stale.** It said `rz-filter-pills` was this
+  grid's only class that paints nothing. There are three now, and the paragraph names all three.
+
+The review's own finding that is **not** acted on: *Clear all filters* is a bare `button` inside the
+`role="list"` that holds the pills, which is §37's and not this section's. It is real and it is recorded
+here rather than fixed in a change about something else.
+
+### Verified
+
+1300 green, fifteen of them new. Five mutations, five caught - the band asking only the drawn columns,
+the hidden pill's name losing its sentence, every key toggling the notice, the notice drawn regardless of
+state, and hidden columns never pilled at all.

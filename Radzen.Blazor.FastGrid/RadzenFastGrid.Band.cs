@@ -140,7 +140,12 @@ namespace Radzen.FastGrid
 
             if (menu)
             {
-                builder.AddAttribute(17, "style", "display:flex;align-items:center;gap:.5rem");
+                // Wrapping, for §44's notice: it is the one child of this row that may need a line of
+                // its own, and it takes one by asking for the whole basis rather than by the band
+                // reserving anything. Empty - which is every render until a hidden pill is clicked - it
+                // is a zero-width item and the row is the 67px §39 measured.
+                builder.AddAttribute(17, "style",
+                    "display:flex;flex-wrap:wrap;align-items:center;gap:.5rem");
             }
 
             if (pills)

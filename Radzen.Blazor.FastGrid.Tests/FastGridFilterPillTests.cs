@@ -803,6 +803,15 @@ namespace Radzen.FastGrid.Tests
         static IElement[] HiddenPills(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
             cut.FindAll(".rz-filter-pills .rz-filter-pill-hidden").ToArray();
 
+        /// <summary>What the notice says, which is empty while it is saying nothing.</summary>
+        /// <remarks>
+        /// The element itself is always written once the bar is, because a hidden pill's
+        /// <c>aria-controls</c> names it and an id that is not in the document is the §35 fault. So the
+        /// assertion has to be about its text rather than about its presence.
+        /// </remarks>
+        static string Notice(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
+            cut.Find(".rz-filter-pill-notice").TextContent;
+
         static RenderFragment TwoColumnsSecondHidden() => Columns.Of(
             Columns.Property<Person, string>(x => x.First, title: "First"),
             Columns.Property<Person, string>(x => x.Last, title: "Last", visible: false));
@@ -849,17 +858,73 @@ namespace Radzen.FastGrid.Tests
 
             Apply(cut, "Last", "B");
 
-            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+            Assert.Equal("", Notice(cut));
+            Assert.Equal("false", HiddenPills(cut).Single().GetAttribute("aria-expanded"));
 
             HiddenPills(cut).Single().Click();
 
-            Assert.Equal(cut.Instance.HiddenColumnFilterText,
-                cut.Find(".rz-filter-pill-notice").TextContent);
+            Assert.Equal(cut.Instance.HiddenColumnFilterText, Notice(cut));
+            Assert.Equal("true", HiddenPills(cut).Single().GetAttribute("aria-expanded"));
 
             // Clicking it again takes the notice away, which is what a toggle promises.
             HiddenPills(cut).Single().Click();
 
-            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+            Assert.Equal("", Notice(cut));
+        }
+
+        [Theory]
+        [InlineData("Enter")]
+        [InlineData(" ")]
+        public void TheHiddenPillTakesTheKeysItsRolePromises(string key)
+        {
+            // §31 refused the mouse-only control, and this is a role="button" on a span - which takes
+            // neither key from the browser, so both are spelled out or neither works.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "Last", "B");
+
+            HiddenPills(cut).Single().KeyDown(key);
+
+            Assert.Equal(cut.Instance.HiddenColumnFilterText, Notice(cut));
+        }
+
+        [Fact]
+        public void AnotherKeyLeavesTheHiddenPillAlone()
+        {
+            // The counterweight: without it, toggling on every key would pass the theory above and would
+            // fire on Tab out of the pill.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "Last", "B");
+
+            HiddenPills(cut).Single().KeyDown("Tab");
+
+            Assert.Equal("", Notice(cut));
+        }
+
+        [Fact]
+        public void TheHiddenPillSaysItIsHiddenWithoutBeingOpened()
+        {
+            // The glyph is aria-hidden and the phrase is the same one a drawn pill carries, so without
+            // this the two are indistinguishable to a screen reader.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "Last", "B");
+
+            var pill = HiddenPills(cut).Single();
+
+            Assert.Equal("Last Contains B " + cut.Instance.HiddenColumnFilterText,
+                pill.GetAttribute("aria-label"));
+
+            // The disclosure names what it opens, and the id is in the document before it is opened.
+            Assert.Equal(cut.Instance.HiddenColumnNoticeElementId, pill.GetAttribute("aria-controls"));
+            Assert.NotNull(cut.Find("#" + cut.Instance.HiddenColumnNoticeElementId));
         }
 
         [Fact]
@@ -928,11 +993,11 @@ namespace Radzen.FastGrid.Tests
 
             HiddenPills(cut).Single().Click();
 
-            Assert.NotEmpty(cut.FindAll(".rz-filter-pill-notice"));
+            Assert.NotEqual("", Notice(cut));
 
             cut.InvokeAsync(() => cut.Instance.Filter(Column(cut, "Last"), null)).Wait();
 
-            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+            Assert.Empty(cut.FindAll(".rz-filter-pills"));
         }
 
         /// <summary>The same two columns, with the second's visibility always written.</summary>
@@ -942,7 +1007,18 @@ namespace Radzen.FastGrid.Tests
         /// was given. The test below turns the column back on, which needs the attribute to be there
         /// both times.
         /// </remarks>
-        static RenderFragment SecondColumnVisible(bool visible) => builder =>
+        static RenderFragment SecondColumnVisible(bool visible) => SecondColumn(visible);
+
+        /// <summary>The first column always, and the second present only when it is asked for.</summary>
+        /// <remarks>
+        /// Written out rather than composed from <c>Columns.Of</c> for two reasons the tests below
+        /// need. The visibility is always written, and an omitted parameter is not a reset - so a column
+        /// re-rendered without it keeps the <c>false</c> it was given. And the first column keeps its
+        /// sequence numbers whether or not the second is there, so removing the second removes only the
+        /// second: a fragment of a different shape disposes both, which is enough to hide a fault in
+        /// what happens to the one that went.
+        /// </remarks>
+        static RenderFragment SecondColumn(bool? visible) => builder =>
         {
             builder.OpenComponent<PropertyColumn<Person, string>>(0);
             builder.AddAttribute(1, nameof(PropertyColumn<Person, string>.Property),
@@ -950,13 +1026,44 @@ namespace Radzen.FastGrid.Tests
             builder.AddAttribute(2, nameof(PropertyColumn<Person, string>.Title), "First");
             builder.CloseComponent();
 
+            if (visible is not { } declared)
+            {
+                return;
+            }
+
             builder.OpenComponent<PropertyColumn<Person, string>>(3);
             builder.AddAttribute(4, nameof(PropertyColumn<Person, string>.Property),
                 (Expression<Func<Person, string>>)(x => x.Last));
             builder.AddAttribute(5, nameof(PropertyColumn<Person, string>.Title), "Last");
-            builder.AddAttribute(6, nameof(ColumnBase<Person>.Visible), visible);
+            builder.AddAttribute(6, nameof(ColumnBase<Person>.Visible), declared);
             builder.CloseComponent();
         };
+
+        [Fact]
+        public void TheNoticeGoesWhenTheColumnLeavesTheMarkup()
+        {
+            // The one case the read-back cannot heal: a removed column keeps its filter and its
+            // invisibility, so the notice would go on answering for a pill that is not there. Same rule
+            // RemoveColumn already applies to the sort and to the column's check-box-list values.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, SecondColumnVisible(false));
+
+            Apply(cut, "Last", "B");
+
+            HiddenPills(cut).Single().Click();
+
+            Assert.NotEqual("", Notice(cut));
+
+            cut.SetParametersAndRender(p => p.Add(g => g.ChildContent, SecondColumn(null)));
+
+            Assert.Empty(cut.FindAll(".rz-filter-pills"));
+
+            // And it stays gone once something else puts the bar back.
+            Apply(cut, "First", "A");
+
+            Assert.Equal("", Notice(cut));
+        }
 
         [Fact]
         public void TheNoticeGoesWhenTheColumnComesBack()
@@ -969,12 +1076,12 @@ namespace Radzen.FastGrid.Tests
 
             HiddenPills(cut).Single().Click();
 
-            Assert.NotEmpty(cut.FindAll(".rz-filter-pill-notice"));
+            Assert.NotEqual("", Notice(cut));
 
             cut.SetParametersAndRender(p =>
                 p.Add(g => g.ChildContent, SecondColumnVisible(true)));
 
-            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+            Assert.Equal("", Notice(cut));
             Assert.Empty(HiddenPills(cut));
             Assert.Single(Pills(cut));
         }

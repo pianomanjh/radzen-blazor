@@ -557,9 +557,9 @@ namespace Radzen.FastGrid
         /// What a pill says when its column is not drawn: why there is nothing to click through to.
         /// </summary>
         /// <remarks>
-        /// Names no column, because the pill it belongs to already does - it carries the column's title
-        /// and its filter in words, and repeating the title inside the sentence would need a format
-        /// string where every other string on this grid is whole.
+        /// Names no column, because one notice answers however many hidden pills there are - and each
+        /// of those pills already carries this sentence in its own <c>aria-label</c>, after the phrase
+        /// that names the column.
         /// </remarks>
         [Parameter]
         public string HiddenColumnFilterText

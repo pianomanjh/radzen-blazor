@@ -630,6 +630,10 @@ namespace Radzen.FastGrid
 
             lookups.Remove(column);
             pendingNameColumns.Remove(column);
+
+            // Same rule, one band out: §44's notice answers for a column, and a column that has left the
+            // markup can never answer again.
+            DropHiddenColumnNotice(column);
         }
 
         /// <summary>
