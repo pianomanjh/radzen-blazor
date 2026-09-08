@@ -111,6 +111,7 @@ static long Populated(object store) => store switch
     IXLWorksheet ws => ws.CellsUsed().Count(),
     Dictionary<(int, int), Mimic> m => m.Count,
     Dictionary<(int, int), FoldedMimic> f => f.Count,
+    int n => n,
     HandleStore h => h.Count,
     StructStore s => s.Count,
     ChunkStore k => k.Count,
@@ -381,6 +382,81 @@ object ColumnarSparse()
     return store;
 }
 
+// ---- what the save pays to read the cells back --------------------------------------------
+//
+// Today the writer iterates Cell objects that already exist and allocates nothing to see them.
+// A struct store has to present something. Three shapes, over stores built outside every window.
+
+var builtSheet = (Worksheet)RadzenBulk();
+var builtSlots = (HandleStore)HandleFacade();
+
+object ReadRadzenCells()
+{
+    var seen = 0;
+
+    for (var r = 0; r < Rows; r++)
+    {
+        for (var c = 0; c < Cols; c++)
+        {
+            if (builtSheet.Cells.TryGet(r, c, out var cell) && cell.ValueType != CellDataType.Empty)
+            {
+                seen++;
+            }
+        }
+    }
+
+    return seen;
+}
+
+// What the writer would pay if GetPopulatedCells kept handing out Cell objects: one materialised
+// per cell. A facade holds only the store and the address, so it is 32 bytes and not 112.
+object ReadMaterialisedFacades()
+{
+    var seen = 0;
+
+    for (var r = 0; r < Rows; r++)
+    {
+        for (var c = 0; c < Cols; c++)
+        {
+            var cell = new CellFacade(builtSlots, r, c);
+
+            if (cell.Type != SlotType.Empty)
+            {
+                seen++;
+            }
+        }
+    }
+
+    return seen;
+}
+
+// What it would pay if the writer were taught to read slots instead - the same loop with nothing
+// materialised.
+object ReadSlotsInPlace()
+{
+    var seen = 0;
+
+    for (var r = 0; r < Rows; r++)
+    {
+        for (var c = 0; c < Cols; c++)
+        {
+            if (builtSlots.Get(r, c).Type != SlotType.Empty)
+            {
+                seen++;
+            }
+        }
+    }
+
+    return seen;
+}
+
+var reads = new (string Name, Func<object> Fill)[]
+{
+    ("Cell objects, today", ReadRadzenCells),
+    ("materialised facades", ReadMaterialisedFacades),
+    ("slots read in place", ReadSlotsInPlace),
+};
+
 // ---- run -----------------------------------------------------------------------------------
 
 var dense = new (string Name, Func<object> Fill)[]
@@ -459,6 +535,7 @@ Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
     $"sizeof(CellSlot) = {Unsafe.SizeOf<CellSlot>()} bytes"));
 
 Report("dense: 550,000 cells in a 50,000 x 11 block", dense, Rows * Cols);
+Report("read back: what the save pays to see 550,000 cells", reads, Rows * Cols);
 Report("re-box: 550,000 cells of one numeric type", boxing, Rows * Cols);
 Report(string.Create(CultureInfo.InvariantCulture,
     $"sparse: the same 550,000 cells one row in {SparseStride} over {SparseRows:N0} rows"), sparse, Rows * Cols);
@@ -677,6 +754,28 @@ readonly struct CellHandle(HandleStore store, int row, int column)
     // mutating the handle. store[r, c].Format.Bold = true compiles unchanged - see the assertion in
     // HandleFacade.
     public MimicFormat Format => store.Format(row, column);
+}
+
+// The non-breaking shape: Cell stays a class and every signature is unchanged, but it holds only
+// where the cell is. Equality is by address, because CellDependencyGraph and FormulaEvaluator key
+// dictionaries and hash sets on cells and a per-access instance would otherwise never match.
+sealed class CellFacade(HandleStore store, int row, int column) : IEquatable<CellFacade>
+{
+    private readonly HandleStore store = store;
+    private readonly int row = row;
+    private readonly int column = column;
+
+    public object? Value => store.Get(row, column).Text;
+
+    public SlotType Type => store.Get(row, column).Type;
+
+    public MimicFormat Format => store.Format(row, column);
+
+    public bool Equals(CellFacade? other) => other is not null && other.row == row && other.column == column;
+
+    public override bool Equals(object? obj) => Equals(obj as CellFacade);
+
+    public override int GetHashCode() => HashCode.Combine(row, column);
 }
 
 sealed class MimicFormat
