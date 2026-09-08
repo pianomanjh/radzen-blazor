@@ -10766,13 +10766,15 @@ Branch `upstream/spreadsheet-bulk-and-bool`, six commits, 5,135 tests green:
 - **Do not walk the dependency graph for a cell nothing depends on.**
   `Worksheet.OnCellValueChanged` runs per write and asks for dependents; the walk allocates a `HashSet`,
   a `List` and a `Stack` before it can say there are none. `HasDependents` answers off the dictionary.
-  **217 MB to 150 MB** over 550,000 cells, no API change, and callers already batching are unaffected.
+  **197.6 MB to 130.5 MB** over 550,000 cells, no API change, and callers already batching are
+  unaffected.
 - **Share one `CellData` for every empty cell.** `Cell` initialised its `Data` with a
   `new CellData(null)`, so constructing a cell allocated an object to represent nothing - and a cell
   then given a value threw it away and allocated a second. `CellData` has no setters, so one instance
-  does. **150 MB to 133 MB**, again with no API change.
-- **`CellStore.SetValues`, a bulk entrance.** One bounds check, one dictionary sizing, one lookup per
-  cell and one update batch. **133 MB and 167 ms to 114 MB and 140 ms.**
+  does. **130.5 MB to 113.7 MB**, again with no API change.
+- **`CellStore.SetValues`, a bulk entrance.** One bounds check, one dictionary sizing and one lookup per
+  cell. **113.7 MB to 94.0 MB.** No update batch, which is the review's finding and is measured in its
+  own right below.
 - ~~**Do not revoke a download's object URL in the same tick as the click.**~~ Timed at 0.1 ms and
   **withdrawn on review**: the browser bugs it guards against were fixed in Firefox 50, Firefox 70 and
   WebKit in 2020, and no download was ever observed to fail. See the paragraph in §41.
@@ -10780,14 +10782,46 @@ Branch `upstream/spreadsheet-bulk-and-bool`, six commits, 5,135 tests green:
   written: the `quotePrefix` flag was written and not honoured on read, so `4.00E+003` came back as the
   number 4000. Same root as the boolean.
 
-**217 MB to 114 MB over 550,000 cells - 47% less** - and 133 MB of that arrives without any caller
-changing a line. Against ClosedXML's 67 MB the remaining ratio is **1.7x**, down from 1.9x.
+**197.6 MB to 94.0 MB over 550,000 cells - 52% less** - and the drop to 113.7 MB arrives without any
+caller changing a line.
+
+**These are not the figures this section first published, and the difference is the harness rather than
+the code.** It said 217 → 150 → 133 → 114 MB. Those came from a throwaway program that no longer exists,
+and rebuilding it produced a ladder about 20% lower at every rung because the rebuilt one **constructs
+the test values before the measured region** rather than inside it - so it reports what the sheet costs
+and not what the strings do. The new harness is kept, in `gridbench/spreadsheet/`, which is the actual
+correction: a number nobody can reproduce is not a measurement, and §42 of all sections should not have
+had one.
+
+The ratio against ClosedXML is **not restated**. ClosedXML's 67 MB was taken with the old harness and
+comparing it to the new ladder would be the same fault one step further out; it needs measuring again on
+the harness that is kept, and has not been.
 
 **"The rest of that gap is the model, not the API" was written one measurement too early.** It was said
-with 130 MB in hand and the shared `CellData` still in it, worth another 12%. What is left now really is
-the model: 114 MB over 550,000 cells is 217 bytes each, and the `Cell` object is about 150 of them - ten
-fields and a 24-byte `CellRef`, one object per cell. Getting under that means cells that are not objects,
-which is a different library.
+before the shared `CellData`, which was worth another 13%. What is left really is the model: 94.0 MB over
+550,000 cells is 179 bytes each, and the `Cell` object is most of that - ten fields and a 24-byte
+`CellRef`, one object per cell. Getting under it means cells that are not objects, which is a different
+library.
+
+### What the batch cost, measured
+
+The review's finding on `SetValues`, which the first version of it got wrong in both directions - it
+wrapped the fill in `Worksheet.Batch`, and then a first attempt at the fix *gated* the batch on the sheet
+having formulas, which is the expensive case rather than the cheap one.
+
+`Batch` suspends formula evaluation and `EndUpdate` then walks **every formula cell on the sheet** with
+no dirty tracking. A 10x10 block written to a sheet carrying 5,000 unrelated formulas:
+
+| | allocated |
+| --- | --- |
+| `SetValues`, no batch | **0.02 MB** |
+| the same inside a batch | **1.94 MB** |
+
+A hundredfold, for a hundred cells, all of it re-evaluating formulas that never read the block. On a
+sheet with no formulas the two are identical to the byte - 94.0 MB either way over 550,000 cells - which
+is why no test could see the difference and why the gate survived a mutation before the measurement
+found it. `Worksheet.Batch` itself is untouched and still used by `Sort`, `DeleteRow` and `InsertRow`;
+what changed is that `SetValues` does not call it.
 
 ## 43. The three that were left open
 
