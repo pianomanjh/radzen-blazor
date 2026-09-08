@@ -12172,3 +12172,54 @@ change.
 What is left to solve is `Clone`, which returns a detached cell that has no slot to point at - answered
 by letting a `Cell` carry its own inline slot when it has no store. **Nothing in this needs a public
 signature to change.**
+
+## 60. The fill reaches zero, and the export cannot follow until the writer does
+
+§59's shape was built on `spreadsheet-cell-slots`. A slot holds **either** the value **or** the cell that
+has taken over from it - a cell value is never a `Cell`, so one reference answers both and the slot
+stays two words. A bulk fill writes values and builds nothing; the first thing to ask for a cell at an
+address gets one and it is kept.
+
+**The invariant that made it small**: a cell nothing has asked for cannot have dependents, because a
+formula reference materialises the cell it names, and cannot have a subscriber, because subscribing
+needs a cell. So a bulk write to an unmaterialised slot needs no notification and **the dependency
+graph does not change at all** - no rekey, none of §56's editor regression.
+
+| 550,000 cells | allocated | B / cell | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- |
+| `SetValues`, before this work | 94.0 MB | 179 | 10 | 5 | 1 |
+| `SetValues`, after #13 | 56.2 MB | 107 | 6 | 3 | 1 |
+| **`SetValues`, on slots** | **22.7 MB** | **43** | **none** | **none** | **none** |
+
+**The fill collects nothing of any generation**, which is what the save reached in #2708 and what this
+was for. It is below every prototype in §53 except the two that fail on sparse sheets.
+
+### It is not shippable, and the two reasons were measured
+
+| | #13 | on slots | |
+| --- | --- | --- | --- |
+| fill and save | 65.8 MB | **98.7 MB** | the writer materialises all 550,000 |
+| a cell at a time | 75.9 MB | **85.8 MB** | a materialised cell pays for its slot and its object |
+
+Both are the objection this work has applied to everything else, and they apply here too.
+
+The first is the blocker. `WriteRows` collects cells into a `Cell[]`, sorts it and streams from it, so
+it holds every cell for the length of the write and no flyweight can serve it. Teaching it slots is
+possible - an unmaterialised cell provably has no format, formula or hyperlink, so the fast path is the
+common one - but **that is a rewrite of the writer currently under review in #12**, and §52 closed the
+writer for a reason.
+
+The second is answered by holding materialised cells in a second dictionary, so a slot is not kept
+beside them; unmeasured.
+
+### Where the prize is
+
+| | fill | save | export | collections |
+| --- | --- | --- | --- | --- |
+| today, with #2708 | 94.0 | 9.6 | 103.6 MB | 10 / 5 / 1 |
+| #13 | 56.2 | 9.6 | 65.8 MB | 6 / 3 / 1 |
+| slots, once the writer reads them | 22.7 | 9.6 | **~32 MB** | **none** |
+
+**~32 MB and no collection of any generation, against 536 MB when this work started.** The order is
+forced: #2708, then #12, then the writer learns slots, then this. Pushed as `spreadsheet-cell-slots`
+with no pull request, because opening one now would propose a 33 MB export regression.
