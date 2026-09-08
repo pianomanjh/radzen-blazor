@@ -10772,9 +10772,9 @@ Branch `upstream/spreadsheet-bulk-and-bool`, six commits, 5,135 tests green:
   `new CellData(null)`, so constructing a cell allocated an object to represent nothing - and a cell
   then given a value threw it away and allocated a second. `CellData` has no setters, so one instance
   does. **130.5 MB to 113.7 MB**, again with no API change.
-- **`CellStore.SetValues`, a bulk entrance.** One bounds check, one dictionary sizing and one lookup per
-  cell. **113.7 MB to 94.0 MB.** No update batch, which is the review's finding and is measured in its
-  own right below.
+- **`CellStore.SetValues`, a bulk entrance.** One dictionary sizing for the block instead of rehashing
+  up to it, and one bounds check for the block instead of one per cell. **113.7 MB to 94.0 MB.** No
+  update batch, which is the review's finding and is measured in its own right below.
 - ~~**Do not revoke a download's object URL in the same tick as the click.**~~ Timed at 0.1 ms and
   **withdrawn on review**: the browser bugs it guards against were fixed in Firefox 50, Firefox 70 and
   WebKit in 2020, and no download was ever observed to fail. See the paragraph in §41.
@@ -10802,6 +10802,29 @@ before the shared `CellData`, which was worth another 13%. What is left really i
 550,000 cells is 179 bytes each, and the `Cell` object is most of that - ten fields and a 24-byte
 `CellRef`, one object per cell. Getting under it means cells that are not objects, which is a different
 library.
+
+### The saving is the pre-sizing, and the first account of it was wrong
+
+Asked why `SetValues` had measured *slower* than the indexer loop on one harness, the answer turned out
+to be that it had not: the same binary reports it faster or slower depending on the harness's shape,
+while its allocation is identical to the tenth of a megabyte every time. The timing difference was
+inside this machine's noise and should never have been reported - §26's own rule, arriving again: **if
+the failure mode is the size of the delta, the instrument excluded nothing.**
+
+What the question did find is that the *stated mechanism* was wrong. Commenting out the one line:
+
+| | allocated |
+| --- | --- |
+| a cell at a time | 113.7 MB |
+| `SetValues` | 94.0 MB |
+| `SetValues`, `EnsureCapacity` commented out | **113.7 MB** |
+
+**All of it is the dictionary pre-sizing** - the rehashing on the way to 550,000 entries - and none of it
+is the lookups. The first account claimed `SetValues` saved *"two bounds checks and two dictionary
+lookups per cell"*; tracing the code, the indexer does two bounds checks, a `TryGetValue` and an insert,
+and `SetValues` does one bounds check, a `TryGetValue` and an insert. It saves one bounds check per cell
+and no dictionary operations, because the `GetOrAdd` the review asked for routes its insert back through
+the indexer's setter. Three claims, one of them true, and the true one was the only one measured.
 
 ### What the batch cost, measured
 

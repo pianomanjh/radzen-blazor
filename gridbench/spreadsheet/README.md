@@ -13,6 +13,17 @@ running the same program against it.
 | `BatchOnAFormulaSheet.cs` | What wrapping a small `SetValues` in `Worksheet.Batch` costs on a sheet carrying formulas that do not read the block. |
 | `VersusClosedXml.cs` | The same fill, and a fill-and-save, against ClosedXML. Needs `<PackageReference Include="ClosedXML" Version="0.104.2" />` beside the project reference. |
 
+## What `SetValues` actually saves
+
+`BulkVsIndexer.cs` with `CellStore.SetValues`' `EnsureCapacity` commented out reports **113.7 MB** -
+byte for byte with the indexer loop. The whole of the 94.0 MB figure is the dictionary being sized once
+instead of rehashing up to 550,000 entries. The bounds check it also saves per cell costs no allocation
+and does not clear the noise in time.
+
+**Do not quote a time difference between these two arms.** The same binary has reported `SetValues`
+faster than the indexer loop by 9% and slower by 4%, depending only on how many arms the harness
+interleaves; allocation was identical to the tenth of a megabyte in every one of those runs.
+
 ## Against ClosedXML, measured 2026-09-08
 
 Six arms interleaved in one process, medians of three passes. **Compare like with like**: the reason §42
