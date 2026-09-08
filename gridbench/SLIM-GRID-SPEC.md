@@ -11562,3 +11562,69 @@ a tree node per cell, an `XElement` per cell. BenchmarkDotNet reports a total, a
 **So the answer is not "use BenchmarkDotNet instead" but "use it for the comparison it is right for".**
 It is right for two libraries in one build with a claim about time. It is wrong for a ladder across
 commits and blind to which object the bytes went to.
+
+## 50. The ladder was measured through an instrument that was inside it
+
+Asked whether the figures were the save and not the fill, both halves of the question check out and a
+third thing does not.
+
+**The fill is untouched by any of this work, and the windows partition it exactly.** On `upstream/master`
+and on the branch alike the fill measures **113.7 MB** by the indexer and **94.0 MB** by `SetValues` -
+identical to the tenth of a megabyte, which it should be, because nothing here is on the fill's path even
+though `CellRef` and `ColumnRef` were changed and `Worksheet` and `Table` use them. And a fill and a save
+measured in one window equal the two measured separately: 527.9 against 527.9 on master, 103.6 against
+103.6 on the branch. Nothing is double counted and no deferred work leaks across, which is also what
+says the writer starts no recalculation.
+
+**The fill's method does not change what the save costs either** - 434.0 MB after a `SetValues` fill and
+434.0 MB after an indexer fill - so the ladder's habit of using whichever fill the branch had is harmless.
+
+### What was wrong: the listener was inside the window it was reporting on
+
+`SaveTypes.cs` armed the `GCAllocationTick` listener, then measured allocation across the save. Every
+tick runs `OnEventWritten`, which allocates - and **the ticks are proportional to the allocation being
+measured**. So the instrument overstated a large arm and barely touched a small one: **16 MB on a 434 MB
+save and nothing at all on a 9.6 MB one.** The rung that suffered most is the first, and the error runs
+in the direction that flatters the work.
+
+| | as published | measured without the listener | the writer alone |
+| --- | --- | --- | --- |
+| `upstream/master` | 458 | **442.0** | 434.0 |
+| read the format without creating one | 341 | **337.1** | 329.1 |
+| write the column reference into the caller's builder | 272 | **270.0** | 261.9 |
+| sort the cells once | 217 | **215.4** | 207.4 |
+| stream the sheet's cells | 82 | **81.1** | 73.1 |
+| write the shared string table from the table | 65 | **64.0** | 55.9 |
+| format a reference into the caller's span | 64 | **64.0** | 55.9 |
+| write references and numbers as characters | 26 | **25.7** | 17.7 |
+| rent the sort array, size the string table | 18 | **17.7** | 9.6 |
+
+**The first step was 117 MB and is 105 MB.** Everything below it moves by one or two, because those arms
+tick less. The third column is the same save into `Stream.Null`: a `MemoryStream` reaches 2.8 MB through
+a chain of doublings and the save is charged for all of it, a constant 8 MB in every row and the sink's
+rather than the writer's.
+
+**One claim reverses.** §48 recorded the span-formatting commit as *"a simplification rather than a
+saving: 64.7 MB to 64.4 MB"*. Without the listener it is 64.0 MB either way - **no saving at all**, and
+the 0.3 MB was the instrument standing down as the arm got smaller. The commit stays, because it deletes
+the `StringBuilderCache` constraint and is what the next one formats through, but it buys nothing on its
+own and its message now says so.
+
+### The rule this is a case of
+
+§26's rule is *if the failure mode is the size of your delta, the instrument excluded nothing.* This is
+its neighbour: **an instrument whose cost scales with the quantity it measures does not add noise, it
+adds bias, and the bias points the way the work wants.** Nothing about the run looked wrong - the figures
+repeated to a tenth of a megabyte across passes and runs, which is exactly what a systematic error does.
+What found it was a number that would not reconcile: 458 against 442 for the same save, and chasing 16 MB
+rather than rounding it away.
+
+`SaveTypes.cs` now takes its total from an unarmed save and its type histogram from a second, armed one.
+The type *shares* it reports were never affected in kind - `Format`, `Action`, the tree nodes and the
+`XElement`s were really there and really left - but a share of an inflated total is an inflated estimate,
+so the megabyte figures beside the percentages are worth reading as the estimates the header calls them.
+
+**None of the conclusions change and every ratio is close to what it was**: 442 to 17.7 into the same
+sink is twenty-five times less, against ClosedXML's 278.7, and BenchmarkDotNet's independent 17.67 MB
+agrees with the corrected figure rather than the published one - which it did all along, and which
+should have been the tell.
