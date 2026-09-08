@@ -10853,3 +10853,105 @@ Written up here before it was fixed; it is now the sixth commit on the upstream 
 1285 green. Eight mutations, eight caught - the opt-out ignored and inverted, the scrim gone, the busy
 flag never cleared, the column format never mapped, an unmappable format still typed, currency losing
 its symbol, and a single letter falling through to the pattern check.
+
+---
+
+## 44. The survey, taken again against the application as it is now - what is left
+
+§38 read the consuming application's *wrapper* as a specification, and all four things it found are
+built. This one reads the **91 grids and 635 column declarations themselves** rather than the wrapper -
+which parameters they actually set - and asks what a grid here would refuse to compile.
+
+Taken at `986e5cd3ac` on `main`. Every count below is tag-scoped: a parameter is counted where it sits
+on a grid or column open tag, not wherever its name appears in a file. The instrument agrees with §38
+where they overlap - it finds `Data` on exactly 91 grids - and disagrees on one number: §38 said 27
+drop-down grids and there are **19**.
+
+The four features of §38 are not repeated here. What follows is only what the parameter census turned
+up, which is a different instrument again: §38 read what one team *wrote*, this reads what 91 grids
+*declare*.
+
+### The census
+
+| On a grid | Grids | Here |
+| --- | --- | --- |
+| `Data` | 91 | ✓ |
+| `IsLoading` | 39 | **read-only here** |
+| `AllowSorting`, `AllowPaging`, `AllowFiltering`, `PageSize` | 34, 34, 32, 27 | ✓ |
+| `Density`, `AllowColumnResize` | 21, 21 | ✓ |
+| `RowClick`, `EmptyText` | 20, 19 | ✓ / **no equivalent** |
+| `FilterMode`, `SelectionMode`, `RowRender` | 14, 13, 13 | ✓ / ✓ / **partly** |
+| `ExpandMode`, `AllowVirtualization`, `StorageKey`, `CellRender` | 12, 10, 9, 9 | ✓ |
+| `AllowColumnPicking`, `RowExpand` | 7, 7 | ✓ |
+| `AllowGrouping` | 1 | §1's exclusion, stands |
+
+| On a column | Columns | Here |
+| --- | --- | --- |
+| `Title`, `Property`, `Width` | 605, 528, 332 | ✓ / **expressions, not strings** |
+| `TextAlign`, `Filterable`, `Visible` | 53, 39, 39 | ✓ |
+| `FormatString` | 34 | `Format` - a rename |
+| `Sortable`, `SortOrder`, `WhiteSpace`, `OrderIndex`, `Pickable` | 30, 20, 13, 8, 6 | ✓ |
+| `FilterLookupAllowFiltering` | 6 | always on here |
+| `HeaderCssClass` | 3 | **no equivalent** |
+| `Groupable` | 2 | §1's exclusion, stands |
+| `ExportValue`, `ExportTitle`, `ExportFormat`, `ExportIgnore` | interface | ✓, adopted unchanged |
+
+### Three gaps worth closing, and one of them is a fault rather than a gap
+
+**① A filter on a hidden column is invisible, and so is the control that clears it.** This is the fault.
+`RenderFilterPills` walks `visibleColumns`, and so does `AnyColumnFiltered` - which is what decides
+whether the band is drawn at all. So a grid whose *only* filtered column has been hidden through the
+picker is filtered, says nothing anywhere on screen, and does not draw the *Clear all filters* button
+that would fix it. `ClearFilters()` itself walks every column and would clear it; there is just no way
+to reach `ClearFilters()` from that state.
+
+The wrapper works around exactly this, and its workaround is the strongest evidence the behaviour is
+wrong: `PickedColumnsChanged` clears the filter of every column the picker just hid. Two answers, and
+they are not the same feature:
+
+- **Clear the filter when the column is hidden**, as the wrapper does. Simple, and it silently discards
+  something a reader authored.
+- **Count hidden columns in `AnyColumnFiltered` and pill them**, so the band appears and the pill says
+  which column. Honest, and it puts a pill on the screen for a column that is not there - §37's pill is
+  a chip that scrolls its column into view, and there is no column to scroll to.
+
+The first is what the application already relies on. The second is what §37 would have wanted if the
+question had come up. It needs deciding before it is written.
+
+**② An application-driven loading state.** 39 of 91 grids set `IsLoading`. Here `IsLoading` is
+`{ get; private set; }` and only ever true on the grid's own asynchronous path, on the argument that
+*"there is nothing to pass, and nothing to forget to reset on the failure path"* - which is a good
+argument for not *requiring* it and not an argument against allowing it. A page that fetches its own
+rows and assigns `Data` has no way to raise the scrim it can see the grid already draw. §43 built the
+second source for exactly this shape: the scrim reads `IsLoading || exporting`, and this is a third
+term on the same expression.
+
+**③ An empty message.** `RenderEmpty` returns without writing anything when `EmptyTemplate` is null, so
+a grid with no rows renders an empty table body and no explanation. `RadzenDataGrid` writes *"No records
+to display."* by default and takes `EmptyText` to change it; 19 grids here change it, and the other 72
+are relying on the default they would silently lose. A localized `EmptyText` beside the existing
+template - template wins, text is the default - is the whole feature.
+
+### Smaller, and real
+
+- **`HeaderCssClass`**, 3 columns. There is `CssClass` and `FooterCssClass` and no header one.
+- **Row hover without selection.** `rz-selectable` is bound to `ShowsSelection`, so a grid that only
+  reads gets no hover affordance. The wrapper has a `ShowRowHover` parameter whose implementation is to
+  assign an empty `ValueChanged` - a hack against `RadzenDataGrid`'s version of the same coupling, which
+  says the want is real even though the workaround is not portable.
+- **Per-row expandability.** `RowRender` is 13 grids and almost all of them write `args.Expandable =
+  true` unconditionally, which needs nothing here. One site is genuinely conditional -
+  `args.Expandable = args.Data.ValidationFailed` - and there is no per-row predicate to carry it.
+
+### Not gaps, and worth saying so
+
+- **`FormatString` is `Format`**, 34 columns, a rename and a codemod.
+- **`FilterLookupAllowFiltering`** is 6 columns asking for the search box inside the check-box list.
+  It is hard-coded on here, so the answer is yes and there is nothing to declare.
+- **`AutoApplyCheckBoxListFilter`** is a `FilterUI` difference rather than a parameter: the row editor
+  applies as it is ticked, and the menu has Apply and Clear because it also has an operator beside it.
+- **`ClearFilterText`** and the rest of the wording are all localized parameters here already.
+- **`KeyProperty` is `ItemKey`**, one grid.
+- **`Property` as a string is 528 columns and still not priced.** §38 declined to and this section
+  declines to as well; `PropertyPathResolver` is the reason it is a codemod rather than a rewrite, since
+  the string identity a column needs is derived from the expression rather than declared beside it.
