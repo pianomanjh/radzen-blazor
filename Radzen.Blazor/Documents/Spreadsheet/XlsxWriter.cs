@@ -19,6 +19,10 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private readonly IReadOnlyList<Worksheet> sheets = sourceWorkbook.Sheets;
 
+    private const int ScratchLength = 64;
+
+    private readonly char[] scratch = new char[ScratchLength];
+
     public void Write(Stream stream)
     {
         using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
@@ -1452,10 +1456,10 @@ class XlsxWriter(Workbook sourceWorkbook)
         }
     }
 
-    private static void WriteRowStart(XmlWriter writer, Worksheet sheet, int row, int firstColumn, int lastColumn)
+    private void WriteRowStart(XmlWriter writer, Worksheet sheet, int row, int firstColumn, int lastColumn)
     {
         writer.WriteStartElement("row", Main);
-        writer.WriteAttributeString("r", XmlConvert.ToString(row + 1));
+        WriteNumberAttribute(writer, "r", row + 1);
 
         // Only persist height if it differs from the default
         if (Math.Abs(sheet.Rows[row] - sheet.Rows.Size) > 1e-6)
@@ -1471,20 +1475,58 @@ class XlsxWriter(Workbook sourceWorkbook)
 
         if (firstColumn >= 0)
         {
-            writer.WriteAttributeString("spans", string.Create(CultureInfo.InvariantCulture, $"{firstColumn + 1}:{lastColumn + 1}"));
+            (firstColumn + 1).TryFormat(scratch, out var first, provider: CultureInfo.InvariantCulture);
+            scratch[first] = ':';
+            (lastColumn + 1).TryFormat(scratch.AsSpan(first + 1), out var last, provider: CultureInfo.InvariantCulture);
+
+            writer.WriteStartAttribute("spans");
+            writer.WriteRaw(scratch, 0, first + 1 + last);
+            writer.WriteEndAttribute();
         }
     }
 
-    private static void WritePlaceholder(XmlWriter writer, CellRef address, int? styleId)
+    private void WritePlaceholder(XmlWriter writer, CellRef address, int? styleId)
     {
         writer.WriteStartElement("c", Main);
-        writer.WriteAttributeString("r", address.ToString());
+        WriteReferenceAttribute(writer, address);
 
         if (styleId is not null)
         {
-            writer.WriteAttributeString("s", XmlConvert.ToString(styleId.Value));
+            WriteNumberAttribute(writer, "s", styleId.Value);
         }
 
+        writer.WriteEndElement();
+    }
+
+    private void WriteReferenceAttribute(XmlWriter writer, CellRef address)
+    {
+        var length = address.Format(scratch);
+
+        writer.WriteStartAttribute("r");
+        writer.WriteRaw(scratch, 0, length);
+        writer.WriteEndAttribute();
+    }
+
+    private void WriteNumberAttribute(XmlWriter writer, string name, int value)
+    {
+        value.TryFormat(scratch, out var length, provider: CultureInfo.InvariantCulture);
+
+        writer.WriteStartAttribute(name);
+        writer.WriteRaw(scratch, 0, length);
+        writer.WriteEndAttribute();
+    }
+
+    private void WriteNumberValue(XmlWriter writer, int value)
+    {
+        value.TryFormat(scratch, out var length, provider: CultureInfo.InvariantCulture);
+
+        WriteRawValue(writer, length);
+    }
+
+    private void WriteRawValue(XmlWriter writer, int length)
+    {
+        writer.WriteStartElement("v", Main);
+        writer.WriteRaw(scratch, 0, length);
         writer.WriteEndElement();
     }
 
@@ -1493,11 +1535,11 @@ class XlsxWriter(Workbook sourceWorkbook)
         var isFormula = !string.IsNullOrEmpty(cell.Formula);
 
         writer.WriteStartElement("c", Main);
-        writer.WriteAttributeString("r", cell.Address.ToString());
+        WriteReferenceAttribute(writer, cell.Address);
 
         if (HasCellFormatting(cell))
         {
-            writer.WriteAttributeString("s", XmlConvert.ToString(GetOrCreateCellStyle(cell, styleTracker)));
+            WriteNumberAttribute(writer, "s", GetOrCreateCellStyle(cell, styleTracker));
         }
 
         var type = CellTypeAttribute(cell, isFormula);
@@ -1522,7 +1564,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                 sharedStrings[text] = index;
             }
 
-            WriteValue(writer, XmlConvert.ToString(index));
+            WriteNumberValue(writer, index);
         }
         else
         {
@@ -1540,7 +1582,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         _ => null,
     };
 
-    private static void WriteFormula(XmlWriter writer, Cell cell, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private void WriteFormula(XmlWriter writer, Cell cell, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var formula = cell.Formula!.StartsWith('=') ? cell.Formula![1..] : cell.Formula!;
 
@@ -1555,7 +1597,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                 writer.WriteAttributeString("ref", shared.Ref);
             }
 
-            writer.WriteAttributeString("si", XmlConvert.ToString(shared.Si));
+            WriteNumberAttribute(writer, "si", shared.Si);
 
             if (shared.Ref is null)
             {
@@ -1569,13 +1611,20 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteFullEndElement();
     }
 
-    private static void WriteTypedValue(XmlWriter writer, Cell cell)
+    private void WriteTypedValue(XmlWriter writer, Cell cell)
     {
         switch (cell.ValueType)
         {
             case CellDataType.Number:
             case CellDataType.String:
-                WriteValue(writer, FormatValueInvariant(cell.Value));
+                if (TryFormatNumber(cell.Value, out var length))
+                {
+                    WriteRawValue(writer, length);
+                }
+                else
+                {
+                    WriteValue(writer, FormatValueInvariant(cell.Value));
+                }
                 break;
 
             case CellDataType.Boolean:
@@ -1585,7 +1634,9 @@ class XlsxWriter(Workbook sourceWorkbook)
             case CellDataType.Date:
                 if (cell.Value is DateTime dateValue)
                 {
-                    WriteValue(writer, dateValue.ToNumber().ToString(CultureInfo.InvariantCulture));
+                    dateValue.ToNumber().TryFormat(scratch, out var digits, provider: CultureInfo.InvariantCulture);
+
+                    WriteRawValue(writer, digits);
                 }
                 break;
 
@@ -1595,6 +1646,21 @@ class XlsxWriter(Workbook sourceWorkbook)
 
             case CellDataType.Empty:
                 break;
+        }
+    }
+
+    private bool TryFormatNumber(object? value, out int length)
+    {
+        switch (value)
+        {
+            case double d: return d.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
+            case int i: return i.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
+            case long l: return l.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
+            case decimal m: return m.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
+            case float f: return f.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
+            default:
+                length = 0;
+                return false;
         }
     }
 
