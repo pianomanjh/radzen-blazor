@@ -24,10 +24,10 @@ namespace Radzen.FastGrid.Export
         /// <para>
         /// <strong>A model, not a stream and not a download</strong> - and the measurement is what turns
         /// that from a taste into an argument. At 50,000 rows over eleven columns, building the workbook
-        /// costs about <strong>610 ms and 212 MB</strong>; <c>SaveToStream</c> costs a further
-        /// <strong>3.6 s and 417 MB</strong>, and <c>SaveAsCsv</c> about <strong>280 ms and 71 MB</strong>.
-        /// So the expensive step is the one this method does not take. A <c>ToXlsxBytes</c> would have
-        /// baked three and a half seconds into the seam and taken the choice of format with it; handing
+        /// costs about <strong>210 ms and 212 MB</strong>; <c>SaveToStream</c> costs a further
+        /// <strong>1.5 s and 430 MB</strong>, and <c>SaveAsCsv</c> a fraction of that.
+        /// So the expensive step is the one this method does not take, by roughly seven to one. A
+        /// <c>ToXlsxBytes</c> would have baked all of it into the seam and taken the choice of format with it; handing
         /// back the model leaves the caller free to write CSV instead, to write on a background thread,
         /// or to put two grids in one file.
         /// </para>

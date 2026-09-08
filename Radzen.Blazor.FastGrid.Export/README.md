@@ -53,12 +53,12 @@ That is the whole shape of the package, and the numbers are why. At 50,000 rows 
 
 | step | time | allocated |
 | --- | --- | --- |
-| `ToWorkbook()` | ~610 ms | 212 MB |
-| `SaveToStream()` | ~3.6 s | 417 MB |
-| `SaveAsCsv()` | ~280 ms | 71 MB |
+| `ToWorkbook()` | ~210 ms | 212 MB |
+| `SaveToStream()` | ~1.5 s | 430 MB |
+| `SaveAsCsv()` | ~90 ms | 71 MB |
 
-The expensive step is the one this package does not take. A method that returned bytes would have baked
-three and a half seconds into the call and chosen the format for you; handing back the model leaves you
+The expensive step is the one this package does not take, by about seven to one. A method that returned
+bytes would have baked all of it into the call and chosen the format for you; handing back the model leaves you
 free to write CSV instead, to write on a background thread, or to put two grids in one file:
 
 ```csharp
@@ -68,8 +68,8 @@ workbook.AddSheet(closed.ToWorkbook().Sheets[0]);       // a second grid, same f
 workbook.SaveAsCsv(stream);                             // or no xlsx at all
 ```
 
-**On Blazor Server, do not call `SaveToStream` on the circuit's thread for a large grid.** Three and a
-half seconds is three and a half seconds of a frozen page.
+**On Blazor Server, do not call `SaveToStream` on the circuit's thread for a large grid.** A second and a
+half is a second and a half of a frozen page. The registered export already does this for you.
 
 ## Its own package, and here is what that saves you
 
@@ -158,8 +158,8 @@ like every other word the grid draws, and a single grid can be given a different
 what every other grid says.
 
 **Where the time goes.** The workbook is built on the renderer's thread, because it reads the grid's
-rows and columns — about 610 ms at 50,000 rows. Writing the file is moved off that thread, because it is
-the slow half at about 3.6 s, and holding a Blazor Server circuit for it would freeze the page.
+rows and columns — about 210 ms at 50,000 rows. Writing the file is moved off that thread, because it is
+the slow part at about 1.5 s, and holding a Blazor Server circuit for it would freeze the page.
 
 ## Not in the box
 

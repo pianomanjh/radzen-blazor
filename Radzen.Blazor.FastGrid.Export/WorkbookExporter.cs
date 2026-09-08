@@ -36,7 +36,7 @@ namespace Radzen.FastGrid.Export
 
             // Built here, on the renderer's thread, and that is not incidental: ToWorkbook reads
             // FilteredRows and VisibleColumns, which are the grid's own state and change under a render.
-            // Measured at about 610 ms for 50,000 rows - the cheap half of the four seconds.
+            // Measured at about 210 ms for 50,000 rows - the cheap seventh of the whole export.
             var workbook = grid.ToWorkbook(new FastGridExportOptions<TItem>
             {
                 SheetName = options.SheetName,
@@ -80,7 +80,7 @@ namespace Radzen.FastGrid.Export
         /// </para>
         /// <para>
         /// <strong>The write is off the renderer's thread and the hand-off is back on it</strong>, which
-        /// is the split the measurement asks for: <c>SaveToStream</c> is about 3.6 s at 50,000 rows and
+        /// is the split the measurement asks for: <c>SaveToStream</c> is about 1.5 s at 50,000 rows and
         /// would hold a Blazor Server circuit for all of it, and by then the workbook is a detached
         /// object no render can touch, so moving it is safe. The grid's own state was read before this.
         /// </para>

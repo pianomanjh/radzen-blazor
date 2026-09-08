@@ -10331,6 +10331,10 @@ stable across all three:
 | `SaveToStream` | ~3.6 s | 417 MB | |
 | `SaveAsCsv` | ~280 ms | 71 MB | |
 
+**The times in this table are wrong and §42 corrects them** - they were taken with the playground and a
+browser running, and are about 2.4x too high. The allocation figures stand, and so does the ratio the
+argument below rests on.
+
 So the answer to *"like the grid or like ClosedXML"* is **like ClosedXML**: about 4.2 KB per row, which is
 a `Cell` object and a dictionary entry per cell, and `CellStore` is a `Dictionary<(int, int), Cell>` with
 no bulk path. §40 worried about "a feature that hangs the circuit for six seconds"; it is four, and 209 MB
@@ -10588,3 +10592,90 @@ place the name is really used. Nine mutations, nine caught.
   does. `JSDisconnectedException` is caught because a four-second window makes a lost circuit ordinary;
   nothing else is, deliberately, because swallowing a failed export would leave a user waiting for a file
   that is never coming.
+
+---
+
+## 42. Measured against the exporter it replaces - and the timings above were wrong
+
+§38 surveyed a consuming application's 463-line ClosedXML package and §40 built a replacement without
+ever running the two side by side. Asked directly whether the application's version is more efficient,
+the answer is **yes, about twice over**, and finding that out corrected something else on the way.
+
+### The timings in §40 and §41 were taken under load
+
+**Allocation figures are right; time figures were roughly 2.4x too high.** They were measured with the
+playground and a Chromium instance running, which is exactly what this project's own note about the
+bench machine warns against - *the machine drifts, alternate the arms, prefer ratios over constants* -
+and they were then quoted as constants.
+
+| | as published in §40 | measured clean | allocation |
+| --- | --- | --- | --- |
+| `ToWorkbook` | 610 ms | **~210 ms** | 212 MB, unchanged |
+| `SaveToStream` | 3.6 s | **~1.5 s** | 430 MB, unchanged |
+| the two together | ~4.2 s | **~1.74 s** | 642 MB, unchanged |
+
+The *ratio* between the two halves - about one to seven - was stable across both runs, which is why the
+conclusion drawn from it survives: the expensive step is the one `ToWorkbook` does not take. But the
+absolute seconds were wrong wherever they were written, and they are corrected in the code, the README
+and here. Allocation never drifted, because allocation does not care what else is running.
+
+### ClosedXML against `Radzen.Documents.Spreadsheet`, same process, same data
+
+50,000 rows over eleven columns, both engines filled the way their own consumer fills them - this package
+cell by cell, the application's through `InsertData` with formats applied per column range.
+
+| | fill | fill allocation | total time | total allocation |
+| --- | --- | --- | --- | --- |
+| `Radzen.Documents.Spreadsheet` | 203 ms | 218 MB | 1,378 ms | 635 MB |
+| ClosedXML, as the application drives it | 124 ms | **77 MB** | **563 ms** | **327 MB** |
+
+**About half the allocation and, warm, about two-fifths of the time.** The allocation ratio is the
+trustworthy one - stable at 1.9-2.0x across passes - while the time ratio ranged 1.4x to 2.4x depending
+on warmth.
+
+Three reasons, in the order they matter:
+
+- **ClosedXML has a bulk path and this model has none.** `InsertData` takes a jagged array and fills a
+  range; `CellStore` is a `Dictionary<(int, int), Cell>` whose only entrance is `Cells[r, c].Value = x`,
+  at a measured **418 bytes per cell** - a `Cell`, a `CellData`, a boxed value and a dictionary entry to
+  hold one integer. The dictionary alone is 65 of those bytes; the object graph is the rest.
+- **Formats per column range rather than per cell.** The application's comment says why - *"per-cell
+  styling bloats ClosedXML's style table"* - and this package does apply `Format.NumberFormat` per cell
+  for a column that declares one. Measured here it costs **4% more allocation and about 25% more time**,
+  which is real but small, and there is no range-level format API on this model to move it to.
+- **Auto-fit measured over the first 100 rows, clamped**, against every cell here. Measured at 4%.
+
+### Three things the application's version does better, and one of them contradicts §40
+
+- **It maps .NET format strings to Excel number formats**, in 62 lines, returning null where there is no
+  safe equivalent so the caller writes the display string instead. §40 declined to do this and justified
+  it by analogy to §39's refusal of a settings-blob converter - *"a second format vocabulary to keep
+  correct forever"*. **The analogy does not hold.** That converter had to be bidirectional and lossless
+  forever because it was persistence; this is one-way, best-effort, and has a null escape hatch. A
+  column declaring `Format="C"` still exports a bare `4000` here, and the honest description of that is a
+  gap rather than a decision.
+- **A `bool` stays a bool.** ClosedXML writes a real boolean cell; this writer stores the number 1 with
+  no format, which is why booleans are demoted to text here. That is the writer's limit, not the
+  consumer's choice.
+- **An enum exports its `[Display]` name.** This package exports `ToString()`, on the rule that the
+  export says what the cell said. Defensible either way, and a difference anyone migrating will see.
+
+### Two things this version does better
+
+- **No reflection per cell.** The application's resolver falls back to
+  `PropertyAccess.GetValue(item, property)` - a string path, reflected once per cell - where §4's column
+  already holds the compiled accessor its cells are drawn from. §38's survey claimed this and it is
+  confirmed at `ExcelColumnResolver.cs:50`.
+- **No third-party dependency.** The writer was already in the box, which was §40's whole argument and
+  is untouched by any of the above.
+
+### What this changes
+
+**Nothing about the shape, and one thing about the honesty of the record.** The seam is still six methods
+wide, the workbook is still the right thing to hand back, and the packaging argument still holds. What
+was wrong was quoting seconds measured under load, and calling a 62-line format mapper a cost that could
+not be paid.
+
+If the export ever has to be cheaper, the lever is not this package: it is a bulk path on `CellStore`,
+which is upstream's to add and would take the 418 bytes per cell down to something nearer ClosedXML's
+140.
