@@ -1434,65 +1434,69 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private static bool HasCellFormatting(Cell cell)
     {
-        return !cell.Format.IsDefault || cell.ValueType == CellDataType.Date || cell.QuotePrefix;
+        return cell.FormatOrNull?.IsDefault == false || cell.ValueType == CellDataType.Date || cell.QuotePrefix;
     }
 
     private int GetOrCreateCellStyle(Cell cell, StyleTracker styleTracker)
     {
-        var fontId = GetOrCreateFontStyle(cell, styleTracker);
-        var fillId = GetOrCreateFillStyle(cell, styleTracker);
-        var numFmtId = GetOrCreateNumberFormat(cell, styleTracker);
-        var borderId = GetOrCreateBorderStyle(cell, styleTracker);
+        var format = cell.FormatOrNull;
 
-        var styleKey = new CellStyleKey(fontId, fillId, borderId, cell.Format.TextAlign, cell.Format.VerticalAlign, cell.Format.WrapText, numFmtId, cell.Format.Locked, cell.Format.FormulaHidden, cell.QuotePrefix);
+        var fontId = GetOrCreateFontStyle(format, styleTracker);
+        var fillId = GetOrCreateFillStyle(format, styleTracker);
+        var numFmtId = GetOrCreateNumberFormat(cell, format, styleTracker);
+        var borderId = GetOrCreateBorderStyle(format, styleTracker);
+
+        var styleKey = new CellStyleKey(fontId, fillId, borderId, format?.TextAlign, format?.VerticalAlign, format?.WrapText == true, numFmtId, format?.Locked, format?.FormulaHidden, cell.QuotePrefix);
 
         if (!styleTracker.CellStyles.TryGetValue(styleKey, out int styleId))
         {
             styleId = styleTracker.CellStyles.Count + 1;
             styleTracker.CellStyles[styleKey] = styleId;
-            CreateCellStyleElement(cell, fontId, fillId, borderId, numFmtId, styleTracker);
+            CreateCellStyleElement(cell, format, fontId, fillId, borderId, numFmtId, styleTracker);
         }
 
         return styleId;
     }
 
-    private int GetOrCreateFontStyle(Cell cell, StyleTracker styleTracker)
+    private int GetOrCreateFontStyle(Format? format, StyleTracker styleTracker)
     {
-        var fontKey = new FontKey(cell.Format.Color, cell.Format.Bold, cell.Format.Italic, cell.Format.Underline, cell.Format.Strikethrough, cell.Format.FontFamily, cell.Format.FontSize);
+        var fontKey = new FontKey(format?.Color, format?.Bold == true, format?.Italic == true, format?.Underline == true, format?.Strikethrough == true, format?.FontFamily, format?.FontSize);
 
         if (!styleTracker.FontStyles.TryGetValue(fontKey, out int fontId))
         {
             fontId = styleTracker.FontStyles.Count + 1;
             styleTracker.FontStyles[fontKey] = fontId;
-            CreateFontElement(cell, fontId, styleTracker);
+            CreateFontElement(format, fontId, styleTracker);
         }
 
         return fontId;
     }
 
-    private int GetOrCreateFillStyle(Cell cell, StyleTracker styleTracker)
+    private int GetOrCreateFillStyle(Format? format, StyleTracker styleTracker)
     {
-        if (cell.Format.BackgroundColor is null)
+        var backgroundColor = format?.BackgroundColor;
+
+        if (backgroundColor is null)
         {
             return 0;
         }
 
-        if (!styleTracker.FillStyles.TryGetValue(cell.Format.BackgroundColor, out int fillId))
+        if (!styleTracker.FillStyles.TryGetValue(backgroundColor, out int fillId))
         {
             fillId = styleTracker.FillStyles.Count + 2; // Start from 2 as 0 and 1 are reserved
-            styleTracker.FillStyles[cell.Format.BackgroundColor] = fillId;
-            CreateFillElement(cell, fillId, styleTracker);
+            styleTracker.FillStyles[backgroundColor] = fillId;
+            CreateFillElement(backgroundColor, fillId, styleTracker);
         }
 
         return fillId;
     }
 
-    private int GetOrCreateBorderStyle(Cell cell, StyleTracker styleTracker)
+    private int GetOrCreateBorderStyle(Format? format, StyleTracker styleTracker)
     {
-        var bt = cell.Format.BorderTop;
-        var br = cell.Format.BorderRight;
-        var bb = cell.Format.BorderBottom;
-        var bl = cell.Format.BorderLeft;
+        var bt = format?.BorderTop;
+        var br = format?.BorderRight;
+        var bb = format?.BorderBottom;
+        var bl = format?.BorderLeft;
 
         if (bt is null && br is null && bb is null && bl is null)
         {
@@ -1510,22 +1514,22 @@ class XlsxWriter(Workbook sourceWorkbook)
         {
             borderId = styleTracker.BorderStyles.Count + 1;
             styleTracker.BorderStyles[borderKey] = borderId;
-            CreateBorderElement(cell, styleTracker);
+            CreateBorderElement(bl, br, bt, bb, styleTracker);
         }
 
         return borderId;
     }
 
-    private static void CreateBorderElement(Cell cell, StyleTracker styleTracker)
+    private static void CreateBorderElement(BorderStyle? left, BorderStyle? right, BorderStyle? top, BorderStyle? bottom, StyleTracker styleTracker)
     {
         var ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
         var borderElement = new XElement(XName.Get("border", ns));
 
-        AddBorderSide(borderElement, "left", cell.Format.BorderLeft, ns);
-        AddBorderSide(borderElement, "right", cell.Format.BorderRight, ns);
-        AddBorderSide(borderElement, "top", cell.Format.BorderTop, ns);
-        AddBorderSide(borderElement, "bottom", cell.Format.BorderBottom, ns);
+        AddBorderSide(borderElement, "left", left, ns);
+        AddBorderSide(borderElement, "right", right, ns);
+        AddBorderSide(borderElement, "top", top, ns);
+        AddBorderSide(borderElement, "bottom", bottom, ns);
         borderElement.Add(new XElement(XName.Get("diagonal", ns)));
 
         styleTracker.BordersElement.Add(borderElement);
@@ -1546,9 +1550,9 @@ class XlsxWriter(Workbook sourceWorkbook)
         borderElement.Add(sideElement);
     }
 
-    private static int GetOrCreateNumberFormat(Cell cell, StyleTracker styleTracker)
+    private static int GetOrCreateNumberFormat(Cell cell, Format? format, StyleTracker styleTracker)
     {
-        var formatCode = cell.Format.NumberFormat;
+        var formatCode = format?.NumberFormat;
 
         // Auto-apply default date format for date values without explicit format
         if (string.IsNullOrEmpty(formatCode) && cell.ValueType == CellDataType.Date)
@@ -1594,10 +1598,10 @@ class XlsxWriter(Workbook sourceWorkbook)
         return newId;
     }
 
-    private void CreateFontElement(Cell cell, int fontId, StyleTracker styleTracker)
+    private void CreateFontElement(Format? format, int fontId, StyleTracker styleTracker)
     {
-        var fontSize = cell.Format.FontSize ?? 11;
-        var fontName = cell.Format.FontFamily ?? "Aptos Narrow";
+        var fontSize = format?.FontSize ?? 11;
+        var fontName = format?.FontFamily ?? "Aptos Narrow";
 
         var fontElement = new XElement(XName.Get("font", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XElement(XName.Get("sz", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
@@ -1605,24 +1609,24 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XElement(XName.Get("name", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
                 new XAttribute("val", fontName)));
 
-        if (cell.Format.Color is not null)
+        if (format?.Color is not null)
         {
             fontElement.Add(new XElement(XName.Get("color", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
-                new XAttribute("rgb", cell.Format.Color.ToXLSXColor())));
+                new XAttribute("rgb", format.Color.ToXLSXColor())));
         }
-        if (cell.Format.Bold)
+        if (format?.Bold == true)
         {
             fontElement.Add(new XElement(XName.Get("b", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
-        if (cell.Format.Italic)
+        if (format?.Italic == true)
         {
             fontElement.Add(new XElement(XName.Get("i", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
-        if (cell.Format.Underline)
+        if (format?.Underline == true)
         {
             fontElement.Add(new XElement(XName.Get("u", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
-        if (cell.Format.Strikethrough)
+        if (format?.Strikethrough == true)
         {
             fontElement.Add(new XElement(XName.Get("strike", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
@@ -1631,13 +1635,13 @@ class XlsxWriter(Workbook sourceWorkbook)
         styleTracker.FontsElement.Attribute("count")!.Value = (styleTracker.FontStyles.Count + 1).ToString(CultureInfo.InvariantCulture);
     }
 
-    private void CreateFillElement(Cell cell, int fillId, StyleTracker styleTracker)
+    private void CreateFillElement(string backgroundColor, int fillId, StyleTracker styleTracker)
     {
         var fillElement = new XElement(XName.Get("fill", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XElement(XName.Get("patternFill", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
                 new XAttribute("patternType", "solid"),
                 new XElement(XName.Get("fgColor", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
-                    new XAttribute("rgb", cell.Format.BackgroundColor!.ToXLSXColor())),
+                    new XAttribute("rgb", backgroundColor.ToXLSXColor())),
                 new XElement(XName.Get("bgColor", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
                     new XAttribute("indexed", "64"))));
 
@@ -1645,7 +1649,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         styleTracker.FillsElement.Attribute("count")!.Value = (styleTracker.FillStyles.Count + 2).ToString(CultureInfo.InvariantCulture);
     }
 
-    private void CreateCellStyleElement(Cell cell, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
+    private void CreateCellStyleElement(Cell cell, Format? format, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
     {
         var xfElement = new XElement(XName.Get("xf", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XAttribute("numFmtId", numFmtId.ToString(CultureInfo.InvariantCulture)),
@@ -1658,23 +1662,23 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XAttribute("applyNumberFormat", numFmtId > 0 ? "1" : "0"),
             new XAttribute("applyBorder", borderId > 0 ? "1" : "0"));
 
-        if (cell.Format.TextAlign is not null || cell.Format.VerticalAlign is not null || cell.Format.WrapText)
+        if (format is not null && (format.TextAlign is not null || format.VerticalAlign is not null || format.WrapText))
         {
-            var alignmentElement = CreateAlignmentElement(cell);
+            var alignmentElement = CreateAlignmentElement(format);
             xfElement.Add(alignmentElement);
             xfElement.Add(new XAttribute("applyAlignment", "1"));
         }
 
-        if (cell.Format.Locked is not null || cell.Format.FormulaHidden is not null)
+        if (format?.Locked is not null || format?.FormulaHidden is not null)
         {
             var protectionElement = new XElement(XName.Get("protection", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
-            if (cell.Format.Locked is not null)
+            if (format.Locked is not null)
             {
-                protectionElement.Add(new XAttribute("locked", cell.Format.Locked.Value ? "1" : "0"));
+                protectionElement.Add(new XAttribute("locked", format.Locked.Value ? "1" : "0"));
             }
-            if (cell.Format.FormulaHidden is not null)
+            if (format.FormulaHidden is not null)
             {
-                protectionElement.Add(new XAttribute("hidden", cell.Format.FormulaHidden.Value ? "1" : "0"));
+                protectionElement.Add(new XAttribute("hidden", format.FormulaHidden.Value ? "1" : "0"));
             }
             xfElement.Add(protectionElement);
             xfElement.Add(new XAttribute("applyProtection", "1"));
@@ -1690,13 +1694,13 @@ class XlsxWriter(Workbook sourceWorkbook)
         styleTracker.CellXfsElement.Attribute("count")!.Value = (styleTracker.CellStyles.Count + 1).ToString(CultureInfo.InvariantCulture);
     }
 
-    private static XElement CreateAlignmentElement(Cell cell)
+    private static XElement CreateAlignmentElement(Format format)
     {
         var alignmentElement = new XElement(XName.Get("alignment", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
 
-        if (cell.Format.TextAlign is not null)
+        if (format.TextAlign is not null)
         {
-            var horizontalAlign = cell.Format.TextAlign switch
+            var horizontalAlign = format.TextAlign switch
             {
                 TextAlign.Center => "center",
                 TextAlign.Right => "right",
@@ -1706,9 +1710,9 @@ class XlsxWriter(Workbook sourceWorkbook)
             alignmentElement.Add(new XAttribute("horizontal", horizontalAlign));
         }
 
-        if (cell.Format.VerticalAlign is not null)
+        if (format.VerticalAlign is not null)
         {
-            var verticalAlign = cell.Format.VerticalAlign switch
+            var verticalAlign = format.VerticalAlign switch
             {
                 VerticalAlign.Middle => "center",
                 VerticalAlign.Bottom => "bottom",
@@ -1717,7 +1721,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             alignmentElement.Add(new XAttribute("vertical", verticalAlign));
         }
 
-        if (cell.Format.WrapText)
+        if (format.WrapText)
         {
             alignmentElement.Add(new XAttribute("wrapText", "1"));
         }
@@ -1846,8 +1850,6 @@ class XlsxWriter(Workbook sourceWorkbook)
                 break;
 
             case CellDataType.Empty:
-                // No cached value to emit. For formulas, leave it absent so
-                // Excel recalculates on open.
                 break;
         }
     }
@@ -2197,7 +2199,6 @@ class XlsxWriter(Workbook sourceWorkbook)
             sheetDoc.Root!.Add(dataValidationsElement);
         }
     }
-
 
     private static XElement? CreateFilterColumn(SheetFilter filter, RangeRef autoFilterRange)
     {

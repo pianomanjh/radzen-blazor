@@ -160,7 +160,6 @@ public readonly struct CellRef(int row, int column) : IEquatable<CellRef>
         var isColumnAbsolute = false;
         var isRowAbsolute = false;
 
-
         // Optional $ before column
         if (i < index.Length && index[i] == '$')
         {
