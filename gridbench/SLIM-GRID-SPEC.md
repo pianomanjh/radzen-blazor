@@ -12223,3 +12223,38 @@ beside them; unmeasured.
 **~32 MB and no collection of any generation, against 536 MB when this work started.** The order is
 forced: #2708, then #12, then the writer learns slots, then this. Pushed as `spreadsheet-cell-slots`
 with no pull request, because opening one now would propose a 33 MB export regression.
+
+## 61. The export collects nothing
+
+`CellView` lets the writer read a cell it does not have to build. A view of an unmaterialised slot
+carries no format, formula or hyperlink by §60's invariant, so the hyperlink and shared-formula sweeps
+skip it and auto-fit builds cells only for the columns that asked to be measured.
+
+| 550,000 cells, into `Stream.Null` | allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- |
+| before this work, on master | 536 MB | | | |
+| with #2708 | 103.6 MB | 10 | 5 | 1 |
+| **with #13** | **28.1 MB** | **none** | **none** | **none** |
+| of which the fill | 22.7 MB | none | none | none |
+
+**A bulk fill and the export it feeds cause no collection of any generation**, which is what §59 set out
+to reach and what the save reached in #2708. 19x less than where this started.
+
+§60 called the two regressions blockers. Against the branch base they are not regressions at all - a
+cell at a time is 113.7 → 85.8 MB - they were regressions only against an intermediate commit inside
+the same branch, which is not a thing a reviewer sees. The one real cost stands and is disclosed: the
+fourth commit costs the cell-at-a-time path 10 MB, because a materialised cell pays for its slot as
+well as for itself, and a second dictionary would remove it.
+
+`pianomanjh#13` is five commits, 5,173 tests, green at each on its own.
+
+### Review found what the record did not
+
+`CellData` overrode `GetHashCode` as `HashCode.Combine(Type, Value)` and inherited reference equality.
+Nothing could observe it while `Cell.Data` returned one instance per cell; building it on demand made
+two reads unequal while hashing them into the same bucket. **The PR description asserted it compared by
+value, and the assertion was never tested.** Equality is now strict on type and value with four tests
+that fail if it goes back to references.
+
+A claim in a description is not a measurement, and this work has otherwise been careful to know the
+difference.
