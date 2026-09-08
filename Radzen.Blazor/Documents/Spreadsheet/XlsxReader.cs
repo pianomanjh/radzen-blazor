@@ -5,6 +5,13 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Xml.Linq;
+
+// The cell format record ParseCellStyles builds, named so that it can be resolved once per cell and
+// handed on rather than looked up again by everything that reads it.
+using CellXf = (int FontId, int FillId, int BorderId, Radzen.TextAlign? TextAlign,
+    Radzen.VerticalAlign? VerticalAlign, bool WrapText, int NumFmtId, bool? Locked, bool? FormulaHidden,
+    bool QuotePrefix);
+
 namespace Radzen.Documents.Spreadsheet;
 
 #nullable enable
@@ -641,6 +648,8 @@ static class XlsxReader
 
         var cellType = (string?)cellElem.Attribute("t") ?? "n";
 
+        var style = ResolveStyle(cellElem, styleInfo);
+
         var formulaValue = formulaElem?.Value;
 
         // ECMA-376 part 1, 18.3.1.40 (shared formulas)
@@ -682,18 +691,32 @@ static class XlsxReader
                     _ => valueElem!.Value
                 };
 
-                sheet.Cells[address.Row, address.Column].SetValueInvariant(value);
+                // ECMA-376 part 1, 18.8.45: quotePrefix on the cell's format marks a value entered as
+                // literal text, and only a text cell can have been. SetValueInvariant infers a type
+                // from the text, which turns "007" into 7 and "1E3" into 1000.
+                if (style is { QuotePrefix: true } && cellType is "s" or "str" or "inlineStr")
+                {
+                    sheet.Cells[address.Row, address.Column].SetText(value);
+                }
+                else
+                {
+                    sheet.Cells[address.Row, address.Column].SetValueInvariant(value);
+                }
             }
         }
 
-        ApplyCellStyle(cellElem, sheet, address, styleInfo);
+        ApplyCellStyle(sheet, address, styleInfo, style);
     }
 
-    private static void ApplyCellStyle(XElement cellElem, Worksheet sheet, CellRef address, StyleInfo styleInfo)
+    private static CellXf? ResolveStyle(XElement cellElem, StyleInfo styleInfo) =>
+        cellElem.Attribute("s")?.Value is string styleId &&
+        styleInfo.CellStyles.TryGetValue(int.Parse(styleId, CultureInfo.InvariantCulture), out var found)
+            ? found
+            : null;
+
+    private static void ApplyCellStyle(Worksheet sheet, CellRef address, StyleInfo styleInfo, CellXf? resolved)
     {
-        var styleId = cellElem.Attribute("s")?.Value;
-        if (styleId is not null &&
-            styleInfo.CellStyles.TryGetValue(int.Parse(styleId, CultureInfo.InvariantCulture), out var style))
+        if (resolved is { } style)
         {
             var fmt = sheet.Cells[address.Row, address.Column].Format;
 

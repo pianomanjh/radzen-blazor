@@ -192,6 +192,21 @@ public class Cell
     }
 
     /// <summary>
+    /// Stores the value as literal text and sets <see cref="QuotePrefix"/> - the apostrophe protocol
+    /// of <see cref="SetValue"/> without the apostrophe.
+    /// </summary>
+    internal void SetText(string value)
+    {
+        Formula = null;
+        // Bypass the Value setter: the quote prefix means literal text, so the
+        // string must not go through type inference ('0123 stays "0123").
+        Data = CellData.FromString(value);
+        QuotePrefix = true;
+
+        Worksheet.OnCellValueChanged(this);
+    }
+
+    /// <summary>
     /// Gets the value of the cell as a string, or the formula if it exists.
     /// </summary>
     public string? GetValue()
@@ -233,12 +248,7 @@ public class Cell
     {
         if (value is not null && value.StartsWith('\''))
         {
-            Formula = null;
-            // Bypass the Value setter: the quote prefix means literal text, so the
-            // string must not go through type inference ('0123 stays "0123").
-            Data = CellData.FromString(value[1..]);
-            QuotePrefix = true;
-            Worksheet.OnCellValueChanged(this);
+            SetText(value[1..]);
         }
         else if (value?.StartsWith('=') == true && value != "=")
         {
