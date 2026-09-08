@@ -211,14 +211,24 @@ namespace Radzen.FastGrid.Tests
                 cut.Find(".rz-filter-pills .rz-menu-toggle").GetAttribute("style"));
         }
 
-        /// <summary>The band is only laid out as a row when there is something to put at its end.</summary>
+        /// <summary>The band lays itself out whether or not there is a menu at its end.</summary>
         /// <remarks>
-        /// An inline style is the one thing a consumer's own rule cannot override without
-        /// <c>!important</c>, and §37 named this band so that it could be restyled. A grid using the
-        /// pills alone keeps the block band it has always had.
+        /// <para>
+        /// This asserted the opposite until §45: the band was left unstyled without a menu, on the
+        /// argument that an inline style is the one thing a consumer's own rule cannot override without
+        /// <c>!important</c> and that §37 named this band so it could be restyled.
+        /// </para>
+        /// <para>
+        /// What changed is what is in the band. The pills' chip list is a <c>role="list"</c> and
+        /// <em>Clear all filters</em> is not one of the filters, so it moved out of the list - and §44's
+        /// notice is outside it too. Three of the band's four children are now outside the chip list,
+        /// which means laying them out is the band's job rather than something the chip list happened to
+        /// do for the two that used to be inside it. The cost is the one this remark used to name, and
+        /// it is paid on the grids that were not paying it: pills without a menu.
+        /// </para>
         /// </remarks>
         [Fact]
-        public async Task PillsWithoutAMenuLeaveTheBandUnstyled()
+        public async Task PillsWithoutAMenuStillLayOutAsARow()
         {
             using var ctx = new TestContext();
 
@@ -227,7 +237,28 @@ namespace Radzen.FastGrid.Tests
             await cut.InvokeAsync(() => cut.Instance.Filter(cut.Instance.VisibleColumns[0],
                 new FastGridFilter(new FastGridFilterCondition(FastGridFilterOperator.Contains, "a"))));
 
-            Assert.Null(cut.Find(".rz-filter-pills").GetAttribute("style"));
+            Assert.Contains("display:flex", cut.Find(".rz-filter-pills").GetAttribute("style"));
+        }
+
+        [Fact]
+        public async Task ClearAllFiltersIsNotOneOfTheFilters()
+        {
+            // The list is named "Active filters" and a screen reader counts what it owns, so a button
+            // inside it made the count one more than the grid has filters.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, menu: false, pills: true);
+
+            await cut.InvokeAsync(() => cut.Instance.Filter(cut.Instance.VisibleColumns[0],
+                new FastGridFilter(new FastGridFilterCondition(FastGridFilterOperator.Contains, "a"))));
+
+            var list = cut.Find(".rz-filter-pills [role=list]");
+
+            Assert.All(list.Children, child => Assert.Equal("listitem", child.GetAttribute("role")));
+            Assert.Single(list.Children);
+
+            // And it is still in the band, one element out.
+            Assert.NotEmpty(cut.FindAll(".rz-filter-pills > button"));
         }
 
         // --- the entry -------------------------------------------------------------------------

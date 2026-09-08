@@ -10995,9 +10995,19 @@ Four things the review found and one it did not:
 - **The class inventory in `RenderFilterPills` had gone stale.** It said `rz-filter-pills` was this
   grid's only class that paints nothing. There are three now, and the paragraph names all three.
 
-The review's own finding that is **not** acted on: *Clear all filters* is a bare `button` inside the
-`role="list"` that holds the pills, which is §37's and not this section's. It is real and it is recorded
-here rather than fixed in a change about something else.
+### The button that was counted as a filter
+
+*Clear all filters* was a bare `button` inside the `role="list"` that holds the pills. The list is named
+*Active filters* and a screen reader counts what a list owns, so it announced one item more than the grid
+had filters. It is a sibling of the list now.
+
+**That cost the band its unstyled state, and the trade is worth naming.** §39 left the band without an
+inline style unless the menu was on, because an inline style is the one thing a consumer's own rule
+cannot override without `!important` and §37 named this band so it could be restyled. The chip list was
+doing the laying out for the two children that were inside it. Three of the band's four children are now
+outside it - the list, the button and the notice - so the band lays them out itself, on every grid that
+draws it rather than only the ones with a menu. Measured either way, with the menu and without: **67px**,
+the pills and the button on one line, which is what it was.
 
 **Measured in the playground**, which is where §37 and §39 took the numbers this has to not move: pills
 on, menu on, a filter on *Name*, then *Name* hidden through the picker. The band is **67px** with the

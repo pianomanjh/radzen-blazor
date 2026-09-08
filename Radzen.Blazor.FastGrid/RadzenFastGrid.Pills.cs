@@ -143,9 +143,9 @@ namespace Radzen.FastGrid
                 }
             }
 
-            RenderClearAllFilters(builder);
-
             builder.CloseElement();
+
+            RenderClearAllFilters(builder);
 
             RenderHiddenColumnNotice(builder);
         }
@@ -393,6 +393,14 @@ namespace Radzen.FastGrid
         /// </remarks>
         bool CanEditFilterOf() => AllowFiltering;
 
+        /// <summary>The button that clears every column at once, beside the list rather than in it.</summary>
+        /// <remarks>
+        /// It sat inside the pills' <c>role="list"</c> and is not one of the filters, so a screen reader
+        /// counted it as one and announced a list one item longer than the grid has filters. Outside, the
+        /// list is exactly the pills - which is what its accessible name promises - and the button is a
+        /// button in the band. Found by the review that added the hidden pill, and left for a change of
+        /// its own because it is §37's rather than that one's.
+        /// </remarks>
         void RenderClearAllFilters(RenderTreeBuilder builder)
         {
             builder.OpenElement(60, "button");

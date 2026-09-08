@@ -138,15 +138,17 @@ namespace Radzen.FastGrid
             builder.OpenElement(15, "div");
             builder.AddAttribute(16, "class", "rz-datatable-header rz-filter-pills");
 
-            if (menu)
-            {
-                // Wrapping, for §44's notice: it is the one child of this row that may need a line of
-                // its own, and it takes one by asking for the whole basis rather than by the band
-                // reserving anything. Empty - which is every render until a hidden pill is clicked - it
-                // is a zero-width item and the row is the 67px §39 measured.
-                builder.AddAttribute(17, "style",
-                    "display:flex;flex-wrap:wrap;align-items:center;gap:.5rem");
-            }
+            // A flex row whatever is in it, which it was only when the menu was on. The band has four
+            // possible children now - the pills' list, Clear all filters, §44's notice and §39's
+            // trigger - and three of them are outside the list, so laying them out is the band's job
+            // rather than something the chip list happens to do for the two that used to be in it.
+            //
+            // Wrapping is for the notice: it is the one child that may need a line of its own, and it
+            // takes one by asking for the whole basis rather than by the band reserving anything. Empty
+            // - which is every render until a hidden pill is clicked - it is a zero-width item and the
+            // row is the 67px §39 measured.
+            builder.AddAttribute(17, "style",
+                "display:flex;flex-wrap:wrap;align-items:center;gap:.5rem");
 
             if (pills)
             {

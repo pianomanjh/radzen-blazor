@@ -619,7 +619,7 @@ namespace Radzen.FastGrid.Tests
 
             var before = executor.Loads;
 
-            cut.FindAll(".rz-filter-pills > div > button").Last().Click();
+            cut.FindAll(".rz-filter-pills > button").Last().Click();
 
             Assert.Empty(Pills(cut));
             Assert.Equal(before + 1, executor.Loads);
@@ -974,7 +974,7 @@ namespace Radzen.FastGrid.Tests
             Apply(cut, "First", "A");
             Apply(cut, "Last", "B");
 
-            cut.FindAll(".rz-filter-pills > div > button").Last().Click();
+            cut.FindAll(".rz-filter-pills > button").Last().Click();
 
             Assert.False(Column(cut, "First").HasFilter);
             Assert.False(Column(cut, "Last").HasFilter);
