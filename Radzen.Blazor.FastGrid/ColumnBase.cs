@@ -2196,6 +2196,18 @@ namespace Radzen.FastGrid
         public virtual object? CellValueOf(TItem item) => null;
 
         /// <summary>
+        /// The .NET format string this column formats its values with, or null if it does not.
+        /// </summary>
+        /// <remarks>
+        /// The third of the trio beside <see cref="CellTextOf" /> and <see cref="CellValueOf" />: the
+        /// text, the value, and how the one became the other. §40's export needs it to give a
+        /// spreadsheet a number format rather than exporting a bare number where the grid drew
+        /// currency, and only a column that formats has one - which today is
+        /// <see cref="PropertyColumn{TItem, TProp}" />.
+        /// </remarks>
+        public virtual string? CellFormat => null;
+
+        /// <summary>
         /// Applies this column's ordering to <paramref name="source" />. Overridden by columns that know
         /// their property type, so the ordering is a typed expression the provider can translate rather
         /// than a parsed string.

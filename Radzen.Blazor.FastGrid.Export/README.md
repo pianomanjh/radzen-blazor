@@ -34,7 +34,10 @@ builder.Services.AddRadzenFastGridExport(o =>
 
 **Registration is the switch.** The grid asks its service provider for an exporter once, and draws the
 entry only if it gets one. An application that does not reference this package registers nothing,
-resolves nothing, and draws a menu with one entry.
+resolves nothing, and draws a menu with one entry. A single grid opts out with `ShowExport="false"`,
+keeping the menu and its other entries.
+
+The grid shows its loading indicator while the export runs.
 
 ## Or call it yourself
 
@@ -141,6 +144,10 @@ unsealing it would cost the render path more than an export is worth.
 | `AddTable` | `true` — Excel's filter buttons. A table is not quite `SetAutoFilter`: it also carries a name and a style, which matters if your readers open these somewhere other than Excel. |
 | `AutoFitColumns` | `true` |
 | `Columns` | per-column settings, by `UniqueID` |
+
+A column's own `Format` reaches the file where it can be said in the file's language — `C`, `N2`, `P`,
+`Dn` and Excel-compatible custom patterns. Where it cannot (`E2`, `G`, `X`), the column exports the text
+it drew rather than a number wearing the wrong format. `ExportFormat` overrides both.
 
 ## Registration options
 

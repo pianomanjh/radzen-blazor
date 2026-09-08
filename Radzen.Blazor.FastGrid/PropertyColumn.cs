@@ -566,6 +566,9 @@ namespace Radzen.FastGrid
         /// </remarks>
         public override object? CellValueOf(TItem item) => cellValue?.Invoke(item);
 
+        /// <inheritdoc />
+        public override string? CellFormat => Format;
+
         /// <summary>
         /// A collection column has nothing to order by: no provider can sort rows by a list, and
         /// <see cref="SortBy" /> here is typed at <typeparamref name="TProp" />, which for such a column

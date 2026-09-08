@@ -384,8 +384,66 @@ namespace Radzen.FastGrid.Tests
 
             cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]")[1].Click();
 
-            Assert.True(closedWhenCalled > 0,
-                $"the popup had been asked to close {closedWhenCalled} times when the export ran");
+            cut.WaitForAssertion(() => Assert.True(closedWhenCalled > 0,
+                $"the popup had been asked to close {closedWhenCalled} times when the export ran"));
+        }
+
+        /// <summary>
+        /// A grid can decline the export entry without declining the menu.
+        /// </summary>
+        /// <remarks>
+        /// Registering enables the entry everywhere, which is the point of registering. Before this a
+        /// grid that should not offer it could only decline <see cref="RadzenFastGrid{TItem}.ShowGridMenu" />,
+        /// which took <em>Reset layout</em> with it.
+        /// </remarks>
+        [Fact]
+        public void AGridCanDeclineTheExportAndKeepTheMenu()
+        {
+            using var ctx = new TestContext();
+
+            ctx.Services.AddSingleton<IFastGridExporter>(new Exporter());
+
+            var cut = Render(ctx, extra: p => p.Add(g => g.ShowExport, false));
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+
+            var items = cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]");
+
+            Assert.Single(items);
+            Assert.Contains(cut.Instance.ResetLayoutText, items[0].TextContent);
+        }
+
+        /// <summary>
+        /// The grid shows its loading scrim while an export runs.
+        /// </summary>
+        /// <remarks>
+        /// An export of a large grid takes over a second - 1.74 s at 50,000 rows - and a page that looks
+        /// idle through it invites a second click. Asserted from inside the exporter, because by the time
+        /// the call returns the scrim is gone again.
+        /// </remarks>
+        [Fact]
+        public void TheGridLooksBusyWhileTheExportRuns()
+        {
+            using var ctx = new TestContext();
+
+            var cut = default(IRenderedComponent<RadzenFastGrid<Person>>);
+            var scrimWhileRunning = 0;
+
+            ctx.Services.AddSingleton<IFastGridExporter>(new Exporter
+            {
+                OnExport = () => scrimWhileRunning = cut.FindAll(".rz-datatable-loading").Count,
+            });
+
+            cut = Render(ctx, extra: p => p.Add(g => g.ShowLoadingIndicator, true));
+
+            Assert.Empty(cut.FindAll(".rz-datatable-loading"));
+
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+            cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]")[1].Click();
+
+            cut.WaitForAssertion(() => Assert.Equal(1, scrimWhileRunning));
+
+            // And gone again afterwards.
+            Assert.Empty(cut.FindAll(".rz-datatable-loading"));
         }
 
         sealed class Exporter : IFastGridExporter
@@ -394,12 +452,17 @@ namespace Radzen.FastGrid.Tests
 
             public Action OnExport { get; set; }
 
-            public Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid)
+            // Yields before doing anything, which is what a real exporter does - it writes a file and
+            // talks to the browser. Without the yield the await never suspends, the render queued by
+            // the caller's StateHasChanged never runs, and anything asserted from in here sees the
+            // state as it was before the click. §39's doubled-module blindness, one layer out.
+            public async Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid)
             {
                 Exported = grid;
-                OnExport?.Invoke();
 
-                return Task.CompletedTask;
+                await Task.Yield();
+
+                OnExport?.Invoke();
             }
         }
 

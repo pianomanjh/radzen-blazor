@@ -77,9 +77,31 @@ namespace Radzen.FastGrid.Export
             // measurement above is taken on.
             var formats = new string?[columns.Count];
 
+            // A column whose declared Format cannot be said in the file's language exports its text
+            // instead - see below.
+            var asText = new bool[columns.Count];
+
             for (var c = 0; c < columns.Count; c++)
             {
-                formats[c] = declared[c]?.ExportFormat is { Length: > 0 } format ? format : null;
+                if (declared[c]?.ExportFormat is { Length: > 0 } asked)
+                {
+                    formats[c] = asked;
+
+                    continue;
+                }
+
+                // Nothing declared, so the column's own Format is what the reader is looking at. A
+                // column drawing $4,000.00 exported a bare 4000 until this: §40 called that a decision
+                // and comparing it against the exporter §38 surveyed showed it was a gap.
+                if (columns[c].CellFormat is { Length: > 0 } declaredFormat)
+                {
+                    formats[c] = ExportFormat.ToNumberFormat(declaredFormat);
+
+                    // The format is set and there is no honest equivalent, so the number would go in
+                    // wearing the wrong clothes or none. The text the column drew is what the reader
+                    // saw, and losing the sum is the smaller loss than showing the wrong figure.
+                    asText[c] = formats[c] is null;
+                }
             }
 
             // Inside one batch, and it is worth 31% of the allocation - measured at 217 MB against
@@ -88,7 +110,7 @@ namespace Radzen.FastGrid.Export
             // the one just written; that walk allocates a HashSet, a List and a Stack whether or not the
             // sheet has a single formula in it, and an exported sheet never does. BeginUpdate skips it
             // and EndUpdate does the walk once at the end, over nothing.
-            sheet.Batch(() => Fill(sheet, columns, declared, formats, rows, header, widest));
+            sheet.Batch(() => Fill(sheet, columns, declared, formats, rows, header, asText, widest));
 
             if (options.FreezeHeader && options.IncludeHeader)
             {
@@ -116,7 +138,7 @@ namespace Radzen.FastGrid.Export
         /// <summary>The cells themselves, which is everything inside the batch.</summary>
         static void Fill<TItem>(Worksheet sheet, List<ColumnBase<TItem>> columns,
             IFastGridExportColumn<TItem>?[] declared, string?[] formats, List<TItem> rows, int header,
-            int[]? widest)
+            bool[] asText, int[]? widest)
         {
 
             if (header > 0)
@@ -146,8 +168,9 @@ namespace Radzen.FastGrid.Export
                     // accessor its cells are drawn from, so this is not reflection - which is the whole
                     // difference between this and the resolver §38 surveyed.
                     var text = column.CellTextOf(item);
+                    var value = asText[c] ? text : ValueOf(column, item, text, declared[c]);
 
-                    ExportValue.Write(cell, ValueOf(column, item, text, declared[c]), text);
+                    ExportValue.Write(cell, value, text);
 
                     if (formats[c] is { } format)
                     {

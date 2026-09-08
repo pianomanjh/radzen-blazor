@@ -635,25 +635,25 @@ namespace Radzen.FastGrid.Tests
         }
 
         /// <summary>
-        /// A column's own <c>Format</c> does not become the spreadsheet's, and that is a decision.
+        /// A column's own <c>Format</c> becomes the spreadsheet's.
         /// </summary>
         /// <remarks>
         /// <para>
-        /// A column declaring <c>Format="C"</c> draws <em>$4,000.00</em> and exports <strong>4000</strong>
-        /// as a number carrying no format. The two format languages are not the same - <c>C</c>,
-        /// <c>N2</c> and <c>P</c> are .NET's, <c>$#,##0.00</c> and <c>0.00%</c> are the file's - so
-        /// bridging them means a translation table, which is a second format vocabulary to keep correct
-        /// forever. §39 refused exactly that for the settings blob and the same argument holds here.
+        /// <strong>This asserted the opposite, and passed after the behaviour changed.</strong> §40
+        /// exported a bare <c>4000</c> from a column drawing <em>$4,000.00</em> and called it a
+        /// decision, on the argument that bridging .NET's format strings to the file's would be a
+        /// second vocabulary to keep correct forever. Comparing against the exporter §38 surveyed - 62
+        /// lines, with a null escape hatch - showed the argument was borrowed from §39's refusal of a
+        /// <em>bidirectional, lossless</em> settings converter and does not carry to a one-way,
+        /// best-effort mapping.
         /// </para>
         /// <para>
-        /// The value is what survives, which is the half that matters: a column of numbers Excel can sum.
-        /// <c>ExportFormat</c> is how an application says the other half, in the language the file
-        /// speaks. Pinned because the alternative - exporting the formatted text - is a one-line change
-        /// that would look like an improvement and would quietly make the column unsummable.
+        /// The old test asserted the number and its type, both of which are still true, so it kept
+        /// passing while its name became a lie. It reads the format now, which is what changed.
         /// </para>
         /// </remarks>
         [Fact]
-        public void AColumnsOwnFormatIsNotTheSpreadsheets()
+        public void AColumnsOwnFormatBecomesTheSpreadsheets()
         {
             using var ctx = Context();
 
@@ -661,19 +661,82 @@ namespace Radzen.FastGrid.Tests
                 Columns.Property<Person, decimal>(p => p.Salary, title: "Salary", format: "C",
                     uniqueId: "Salary")));
 
-            Assert.Equal("$4,000.00", cut.Instance.VisibleColumns[0].CellTextOf(People.Sample()[0]));
+            var sheet = RoundTrip(cut.Instance.ToWorkbook());
 
-            var bare = RoundTrip(cut.Instance.ToWorkbook());
+            // Still a number, so Excel can still sum the column - which is the half that matters.
+            Assert.Equal(CellDataType.Number, sheet.Cells[1, 0].ValueType);
+            Assert.Equal(4000d, Convert.ToDouble(sheet.Cells[1, 0].Value));
 
-            Assert.Equal(CellDataType.Number, bare.Cells[1, 0].ValueType);
-            Assert.Equal(4000d, Convert.ToDouble(bare.Cells[1, 0].Value));
-
-            // And the way to say it, in the language the file speaks.
-            var asked = RoundTrip(cut.Instance.ToWorkbook(Saying("Salary", c => c.ExportFormat = "$#,##0.00")));
-
-            Assert.Equal("$4,000.00", asked.Cells[1, 0].GetDisplayText());
-            Assert.Equal(CellDataType.Number, asked.Cells[1, 0].ValueType);
+            // And now wearing the format the grid drew it in.
+            Assert.Equal(cut.Instance.VisibleColumns[0].CellTextOf(People.Sample()[0]),
+                sheet.Cells[1, 0].GetDisplayText());
         }
+
+        /// <summary>An explicit <c>ExportFormat</c> still wins over the column's own.</summary>
+        [Fact]
+        public void AnExplicitExportFormatWinsOverTheColumnsOwn()
+        {
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, decimal>(p => p.Salary, title: "Salary", format: "C",
+                    uniqueId: "Salary")));
+
+            var sheet = RoundTrip(cut.Instance.ToWorkbook(Saying("Salary", c => c.ExportFormat = "0.000")));
+
+            Assert.Equal("0.000", sheet.Cells[1, 0].Format.NumberFormat);
+        }
+
+        /// <summary>
+        /// A format with no spreadsheet equivalent exports the text rather than a bare number.
+        /// </summary>
+        /// <remarks>
+        /// The escape hatch, and the reason the mapper is allowed to exist: where it cannot be honest it
+        /// says so, and the caller writes what the reader saw. Losing the sum on that one column is a
+        /// smaller loss than a figure formatted differently from the screen.
+        /// </remarks>
+        [Fact]
+        public void AFormatWithNoEquivalentExportsTheTextInstead()
+        {
+            using var ctx = Context();
+
+            // "E2" is scientific notation - .NET has it and a spreadsheet number format does not.
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, decimal>(p => p.Salary, title: "Salary", format: "E2",
+                    uniqueId: "Salary")));
+
+            var drawn = cut.Instance.VisibleColumns[0].CellTextOf(People.Sample()[0]);
+
+            // The workbook rather than a round trip, for the boolean's reason one type over: the file
+            // carries this as quote-prefixed text and XlsxReader re-infers it back into the number
+            // 4000, so reading it back would test the reader rather than the export.
+            var sheet = cut.Instance.ToWorkbook().Sheets[0];
+
+            Assert.Equal(drawn, sheet.Cells[1, 0].Value);
+            Assert.Equal(CellDataType.String, sheet.Cells[1, 0].ValueType);
+        }
+
+        /// <summary>The mapper's own table, at the specifiers a grid actually declares.</summary>
+        [Theory]
+        [InlineData("N", "#,##0.00")]
+        [InlineData("N0", "#,##0")]
+        [InlineData("N2", "#,##0.00")]
+        [InlineData("F1", "0.0")]
+        [InlineData("P", "0.00%")]
+        [InlineData("P0", "0%")]
+        [InlineData("D4", "0000")]
+        [InlineData("yyyy-MM-dd", "yyyy-MM-dd")]
+        [InlineData("#,##0.00", "#,##0.00")]
+        // No spreadsheet equivalent, so the caller falls back to the text.
+        [InlineData("E2", null)]
+        [InlineData("G", null)]
+        [InlineData("X", null)]
+        [InlineData("", null)]
+        [InlineData(null, null)]
+        // A bare "d" or "D" is a date, and the writer already gives a date cell a locale-aware format.
+        [InlineData("d", null)]
+        public void TheFormatMapperSaysWhatItCanAndNothingMore(string format, string expected) =>
+            Assert.Equal(expected, ExportFormat.ToNumberFormat(format));
 
         /// <summary>
         /// Everything at once, which is the test §40 actually asked for.

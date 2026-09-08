@@ -54,6 +54,22 @@ namespace Radzen.FastGrid
         /// </remarks>
         [Parameter] public bool ShowGridMenu { get; set; }
 
+        /// <summary>
+        /// Whether this grid offers the export entry, when something is registered to export with.
+        /// </summary>
+        /// <remarks>
+        /// <strong>The opt-out the review asked for and the first draft did not have.</strong>
+        /// Registering the export enables the entry on every grid in the application, which is the
+        /// point; a grid that should not offer it could previously decline only by declining
+        /// <see cref="ShowGridMenu" />, which took <em>Reset layout</em> with it. On by default, so
+        /// registering still means what it says.
+        /// </remarks>
+        [Parameter] public bool ShowExport { get; set; } = true;
+
+        // Whether an export is running. Its own flag rather than IsLoading, which belongs to the grid's
+        // data load and has a state machine around it that an export has no business entering.
+        bool exporting;
+
         /// <summary>The panel's element id, so the trigger can name it and upstream can find it.</summary>
         /// <remarks>
         /// §35's reason, unchanged: <c>Radzen.setPopupAriaExpanded</c> looks the anchor up <em>by</em>
@@ -345,7 +361,7 @@ namespace Radzen.FastGrid
 
             // Only when something is registered to do it. An application that does not reference the
             // export package resolves nothing here and gets a menu with one entry, unchanged.
-            if (Exporter is { } registered)
+            if (ShowExport && Exporter is { } registered)
             {
                 RenderGridMenuItem(builder, 20, "download", ExportText, () => ExportAsync(registered));
             }
@@ -399,7 +415,23 @@ namespace Radzen.FastGrid
                 await popup.CloseAsync();
             }
 
-            await registered.ExportAsync(this);
+            // The scrim, for the same reason the grid draws one over a slow load: an export of a large
+            // grid takes over a second - 1.74 s at 50,000 rows, measured - and a page that looks idle
+            // through it invites a second click, which is a second export.
+            exporting = true;
+
+            StateHasChanged();
+
+            try
+            {
+                await registered.ExportAsync(this);
+            }
+            finally
+            {
+                exporting = false;
+
+                StateHasChanged();
+            }
         }
 
         /// <summary>Resets the layout and closes the menu it was invoked from.</summary>

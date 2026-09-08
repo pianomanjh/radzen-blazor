@@ -1064,7 +1064,8 @@ namespace Radzen.FastGrid
                 RenderPager(builder, 200, captureBottomPager ??= p => bottomPager = (RadzenPager)p);
             }
 
-            if (ShowLoadingIndicator && IsLoading)
+            // Or an export, which is not a data load but is the same thing to someone waiting.
+            if (ShowLoadingIndicator && (IsLoading || exporting))
             {
                 RenderLoading(builder);
             }

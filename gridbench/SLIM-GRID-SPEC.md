@@ -10722,3 +10722,76 @@ with 130 MB in hand and the shared `CellData` still in it, worth another 12%. Wh
 the model: 114 MB over 550,000 cells is 217 bytes each, and the `Cell` object is about 150 of them - ten
 fields and a 24-byte `CellRef`, one object per cell. Getting under that means cells that are not objects,
 which is a different library.
+
+## 43. The three that were left open
+
+§41 and §42 each ended with a list. All three are closed, and one of them was a gap I had described as a
+decision.
+
+### The export says it is working
+
+An export of a large grid takes about 1.7 s and the page looked idle throughout, which invites a second
+click and therefore a second export. The band's own `ExportAsync` raises the grid's loading scrim around
+the call.
+
+**Its own flag rather than `IsLoading`.** That one belongs to the data load and has a state machine
+around it; an export is not a load, and borrowing the flag would mean an export could be cleared by a
+load finishing, or vice versa. The scrim reads `IsLoading || exporting`, which is the one place the two
+meet.
+
+The test asserts from **inside** the exporter, because by the time the call returns the scrim is gone -
+and it only works because the fake exporter awaits `Task.Yield()` first. Without that the await never
+suspends, the render queued by `StateHasChanged` never runs, and the assertion sees the state as it was
+before the click. That is §39's doubled-module blindness one layer out, and it broke a neighbouring test
+that had been reading the same callback synchronously.
+
+### A grid can decline the entry and keep the menu
+
+`ShowExport`, default true. Registering still enables the entry everywhere, which is the point of
+registering; before this a grid that should not offer it could only decline `ShowGridMenu`, which took
+*Reset layout* with it.
+
+### A column's `Format` reaches the file, and §40's reason for skipping it was borrowed
+
+§40 exported a bare `4000` from a column drawing *$4,000.00* and called it a decision:
+
+> bridging them means a translation table, which is a second format vocabulary to keep correct forever.
+> §39 refused exactly that for the settings blob and the same argument holds here.
+
+**It does not hold.** §39's refusal was of a *bidirectional, lossless, forever* converter, because that
+one was persistence - a blob written by one version and read by another, where a wrong answer is
+someone's stored layout. This is one-way, best-effort, and allowed to give up. The consuming application
+§38 surveyed had already written it in 62 lines. Reasoning by analogy to a rule is not the same as the
+rule applying.
+
+`ExportFormat.ToNumberFormat` maps `N`, `F`, `C`, `P` and `Dn`, passes through custom patterns already
+in the file's language, and **answers null everywhere else** - at which point the column exports the text
+it drew rather than a number wearing the wrong format. Losing the sum on one column is a smaller loss
+than a figure that disagrees with the screen.
+
+Two things the mapper had to be told:
+
+- **A single letter is a standard specifier and never a custom pattern**, and the two are disjoint in
+  .NET. `d` is the case that made it explicit: .NET's short date and Excel's day-of-month. Falling
+  through from the standard table to the pattern check exported one as the other.
+- **`C` cannot be right for everyone.** A spreadsheet number format carries a literal currency symbol
+  where .NET carries "the current culture's". The current culture's symbol is what the grid drew for
+  this reader, so that is what goes in - and an application that means something else has
+  `ExportFormat`.
+
+### The reader keeps taking the blame
+
+Two tests here assert against the workbook rather than a round trip, for the same reason the boolean's
+does: `XlsxReader` re-infers a quote-prefixed string, so text that looks like a number - `4.00E+003`
+from an `E2` column - comes back as the number 4000. The file is correct and the reader loses it, which
+is the third time that has been the answer. It is the same root as the boolean: **everything but a
+shared string, and in fact including one, goes through `SetValueInvariant` and is re-typed from its
+text.** The `quotePrefix` flag is written and not honoured on read.
+
+Not in the open PR, which was already posted. It is the obvious follow-up to the boolean commit in it.
+
+### Verified
+
+1285 green. Eight mutations, eight caught - the opt-out ignored and inverted, the scrim gone, the busy
+flag never cleared, the column format never mapped, an unmappable format still typed, currency losing
+its symbol, and a single letter falling through to the pattern check.
