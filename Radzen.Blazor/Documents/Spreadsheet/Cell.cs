@@ -155,7 +155,7 @@ public class Cell
     /// <summary>
     /// Gets the current value and its type as a CellData object.
     /// </summary>
-    public CellData Data { get; internal set; } = new CellData(null);
+    public CellData Data { get; internal set; } = CellData.Empty;
 
 
     /// <summary>

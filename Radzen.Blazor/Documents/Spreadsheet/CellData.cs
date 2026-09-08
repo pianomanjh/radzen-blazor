@@ -100,6 +100,16 @@ public class CellData : IComparable, IComparable<CellData>
     public CellDataType Type { get; }
 
     /// <summary>
+    /// The empty value, shared. <see cref="CellData"/> carries a value and a type and neither can be
+    /// set, so every empty cell can point at one instance instead of allocating its own.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="Cell"/> holds this until it is given a value, so no cell allocates an instance to
+    /// represent nothing.
+    /// </remarks>
+    public static CellData Empty { get; } = new(null);
+
+    /// <summary>
     /// Creates a new instance of CellData with the specified data. String values are type-inferred
     /// using the invariant culture.
     /// </summary>
