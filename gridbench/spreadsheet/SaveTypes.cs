@@ -210,6 +210,27 @@ static class SaveAlloc
             Filled(Block(50, cols), 50, cols).SaveToStream(warm);
         }
 
+        // Two saves, because the listener cannot be inside the window it is reporting on. Every tick
+        // runs OnEventWritten, which allocates, and the ticks are proportional to the allocation being
+        // measured - so an armed window overstates a large arm and barely touches a small one. Measured
+        // at 16 MB on a 434 MB save and nothing at all on a 9.6 MB one, which would read as a saving
+        // that is really the instrument standing down. The total comes from the unarmed save.
+        var unarmed = Filled(block, rows, cols);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        using var quiet = new MemoryStream();
+
+        var before = GC.GetTotalAllocatedBytes(precise: true);
+        var watch = Stopwatch.StartNew();
+
+        unarmed.SaveToStream(quiet);
+
+        watch.Stop();
+        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+
         var workbook = Filled(block, rows, cols);
 
         GC.Collect();
@@ -219,13 +240,9 @@ static class SaveAlloc
         using var stream = new MemoryStream();
 
         listener.Arm();
-        var before = GC.GetTotalAllocatedBytes(precise: true);
-        var watch = Stopwatch.StartNew();
 
         workbook.SaveToStream(stream);
 
-        watch.Stop();
-        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
         listener.Disarm();
 
         var tallies = listener.Drain();
