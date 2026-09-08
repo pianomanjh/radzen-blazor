@@ -147,7 +147,9 @@ public class CellData : IComparable, IComparable<CellData>
         else
         {
             Type = GetValueType(data, valType, isNullable, nullableType);
-            Value = (Type == CellDataType.Number) ? Convert.ToDouble(data, CultureInfo.InvariantCulture) : data;
+            Value = (Type == CellDataType.Number && data is not double)
+                ? Convert.ToDouble(data, CultureInfo.InvariantCulture)
+                : data;
         }
     }
 
