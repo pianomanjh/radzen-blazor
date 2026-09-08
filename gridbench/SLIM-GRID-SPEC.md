@@ -11210,3 +11210,99 @@ summary, `RenderLoading`'s, and the README's *"there is no flag to forget to cle
 `Loading` now is for the pages that pass it. It also found `HeaderCssClass` proved only through the fold
 and never through a `th`, and a helper parameter added for a render test that was never written; that
 test exists now. The stray playground screenshot committed with the previous change is gone.
+
+## 46. The writer, profiled - three faults and what is left
+
+§42 ended by saying the save was 83% of the export's allocation and that `XlsxWriter` had never been
+profiled. It has been now. The instrument is `gridbench/spreadsheet/SaveTypes.cs`, kept beside the other
+four: a `GCAllocationTick` histogram armed around `SaveToStream` alone, so nothing is subtracted and the
+answer is a list of types rather than a total.
+
+**The baseline is 458 MB, not 442.** §42 reached 442 by subtracting a `SetValues` fill from a
+fill-and-save on the branch where `SetValues` exists; this arms the window directly on
+`upstream/master`, where the fill is the indexer. Same quantity, measured two ways, and the direct one
+is the one to quote about the writer.
+
+### What the histogram said
+
+| type | est MB | | type | est MB |
+| --- | --- | --- | --- | --- |
+| XElement | 91.9 | | SortedDictionary node | 30.2 |
+| **Format** | **71.9** | | char[] | 29.1 |
+| XAttribute | 55.3 | | StringBuilder | 28.4 |
+| String | 55.1 | | boxed Int32 | 8.0 |
+| **Action** | **36.2** | | | |
+
+**`Format` and `Action` are the finding, and neither belongs in a writer at all.** Nothing about
+serialising a file should construct a format or subscribe to an event. Both were one fault:
+`Cell.Format`'s getter is lazy *and* mutating - it allocates a `Format`, hangs `OnFormatChanged` off it
+and keeps it - and `XlsxWriter.HasCellFormatting` asked `!cell.Format.IsDefault` once per populated cell
+to find out whether the cell had one. So **saving a workbook gave most of its cells a format object and
+an event handler they had never had**, at 136 and 64 bytes each. The model already had the read-only
+accessor: `Cell.FormatOrNull`.
+
+The `StringBuilder` and `char[]` rows are a second fault with nothing to do with the first.
+`StringBuilderCache` is a one-slot `[ThreadStatic]`; `CellRef.ToString` acquired it and then called
+`ColumnRef.ToString(int)`, which acquired again, **found the slot empty and allocated** - a builder, its
+char array and an intermediate string, once per call, on the path that writes every `r="A1"`.
+
+The third is the shape of `ProcessSheetData`. `GetPopulatedCells` is `Dictionary.Values`, so the writer
+recovered ECMA-376's row-and-column ordering with a `SortedDictionary` of `SortedDictionary` - **one
+tree node per cell**, plus a `KeyCollection` and two enumerators per row for the `spans` attribute.
+
+### The ladder
+
+Three commits on `upstream/xlsx-writer-save`, off `upstream/master` 76088c1e8, each interleaved over two
+passes:
+
+| | allocated |
+| --- | --- |
+| `upstream/master` | 458 MB |
+| read the format without creating one | **341 MB** |
+| write the column reference into the caller's builder | **272 MB** |
+| sort the cells once instead of a tree per row | **217 MB** |
+
+**53% of the save, and each step attributed by type rather than by total** - which is §42's own rule
+arriving again. `Format` and `Action` leave the histogram entirely at the first step. At the third, the
+tree machinery - `SortedDictionary`, its three node types, `TreeSet`, and the enumerators and stacks
+that walk them - is **62.8 MB before and nothing after**, against a measured step of 55 MB; the gap is
+the sampler's ~100 KB granularity and the boxed `Int32` that went with it.
+
+### The one thing that is not byte-identical, and why it is better
+
+The first two commits change no byte of the file. The third renumbers the **shared string table and
+`cellXfs`**, because both are now built in the order the cells are written rather than the order the
+store happened to enumerate. Three things had to be true before that was acceptable, and all three were
+checked rather than assumed:
+
+- **Every index still selects what it selected.** A normalising comparison resolves each cell's shared
+  string and the full meaning of its `<xf>` - attributes and children - and reported all 80 lines
+  identical across a sheet carrying merges, hidden rows, custom heights, a quote prefix, dates, borders,
+  fills and number formats. **The comparison was then proved able to fail**, by mutating one value and
+  one `numFmtId`.
+- **Something that is not this library agrees.** ClosedXML opens the file and reads back nineteen
+  assertions - bold, fill, the built-in `numFmtId`, a date, the quote-prefixed text, the merge -
+  identically on both arms. Two of your own components agreeing is not evidence; §42 learned that from
+  the boolean.
+- **The new order is the more defensible one.** Dictionary order is a function of a sheet's edit
+  history, so two workbooks with identical contents could serialise differently. Document order is a
+  function of the contents alone.
+
+It is stated in the commit rather than smuggled: *"byte-identical"* is the default reading of a
+performance commit and it would have been false.
+
+### What is left, and what it would take
+
+The remaining 217 MB is **XElement, XAttribute, String and boxed Int32, and nothing else** - the sheet
+is still built as a whole `XDocument` in memory and then serialised. No further tidying reaches it; only
+writing the sheet through an `XmlWriter` instead of a tree does, and that is a rewrite of `SaveSheet`
+rather than a hunk, because everything after `sheetData` - merges, filters, conditional formats,
+validations, protection, hyperlinks, drawings, page margins, table parts - is appended to the same root
+afterwards. It is not attempted here.
+
+### One pre-existing fault, found and not fixed
+
+A merge anchor that carries formatting but no value gets no `<c>` at all, so its style is lost - the
+placeholders inside the range are written, the anchor is not. It is on `upstream/master`, it is
+unchanged by any of these three commits, and it is unrelated to them, which is why it is recorded here
+rather than folded in.

@@ -7,6 +7,9 @@
     <IsPackable>false</IsPackable>
     <NoWarn>$(NoWarn);BL0006</NoWarn>
   </PropertyGroup>
+  <ItemGroup Label="The spreadsheet harnesses are standalone dotnet run programs, one Main each">
+    <Compile Remove="spreadsheet\**" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
     <PackageReference Include="bunit.web" Version="1.36.0" />

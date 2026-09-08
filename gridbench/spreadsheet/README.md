@@ -12,6 +12,7 @@ running the same program against it.
 | `BulkVsIndexer.cs` | The same fill against `CellStore.SetValues`, both arms interleaved in one process. |
 | `BatchOnAFormulaSheet.cs` | What wrapping a small `SetValues` in `Worksheet.Batch` costs on a sheet carrying formulas that do not read the block. |
 | `VersusClosedXml.cs` | The same fill, and a fill-and-save, against ClosedXML. Needs `<PackageReference Include="ClosedXML" Version="0.104.2" />` beside the project reference. |
+| `SaveTypes.cs` | What `SaveToStream` allocates and, by `GCAllocationTick`, which types it goes to. The fill is outside the armed window, so nothing is subtracted. |
 
 ## What `SetValues` actually saves
 
@@ -45,6 +46,35 @@ time are in the writer, so further work belongs in `XlsxWriter` rather than in `
 Times are recorded by the program and deliberately not tabulated here: between two runs of this harness
 the indexer and `SetValues` arms swapped places on time - 142/96 ms, then 87/112 ms - while both runs
 reported allocation identical to the tenth of a megabyte.
+
+## Where the save's allocation goes
+
+`SaveTypes.cs` against `upstream/master` 76088c1e8, 550,000 cells, **458.0 MB**. §42 put this at 442 MB
+by *subtracting* a `SetValues` fill from a fill-and-save; this arms the window around `SaveToStream`
+alone and subtracts nothing, on a branch where the fill is the indexer. Same quantity, two ways.
+
+| type | est MB | | type | est MB |
+| --- | --- | --- | --- | --- |
+| XElement | 91.9 | | SortedDictionary node | 30.2 |
+| **Format** | **71.9** | | char[] | 29.1 |
+| XAttribute | 55.3 | | StringBuilder | 28.4 |
+| String | 55.1 | | boxed Int32 | 8.0 |
+| **Action** | **36.2** | | | |
+
+**`Format` and `Action` are the finding**: nothing about writing a file should construct a format or
+subscribe an event. `Cell.Format`'s getter is lazy *and* mutating, and `XlsxWriter.HasCellFormatting`
+read it once per cell, so saving gave most of a sheet's cells a format object and an event handler they
+never had. Reading `Cell.FormatOrNull` instead is **458 -> 341 MB**.
+
+The `StringBuilder` and `char[]` rows are a second, unrelated fault: `StringBuilderCache` holds one
+instance per thread, and `CellRef.ToString` acquired it and then called `ColumnRef.ToString(int)`, which
+acquired again, found the slot empty and allocated. Appending into the caller's builder is
+**341 -> 272 MB**.
+
+Both were confirmed by removing the line rather than by reading the code - the arm *is* the removal -
+and read per type rather than by total: `Format` and `Action` leave the histogram entirely, and
+`StringBuilder` and `char[]` fall together. 68.3 MB over 550,000 cells is ~124 B a cell, which is a
+`StringBuilder`, a `char[16]` and a two-character string.
 
 ## Method
 
