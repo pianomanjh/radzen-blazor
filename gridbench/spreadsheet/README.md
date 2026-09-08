@@ -11,6 +11,29 @@ running the same program against it.
 | `Ladder.cs` | What filling 550,000 cells a cell at a time allocates. Run at each commit for the ladder. |
 | `BulkVsIndexer.cs` | The same fill against `CellStore.SetValues`, both arms interleaved in one process. |
 | `BatchOnAFormulaSheet.cs` | What wrapping a small `SetValues` in `Worksheet.Batch` costs on a sheet carrying formulas that do not read the block. |
+| `VersusClosedXml.cs` | The same fill, and a fill-and-save, against ClosedXML. Needs `<PackageReference Include="ClosedXML" Version="0.104.2" />` beside the project reference. |
+
+## Against ClosedXML, measured 2026-09-08
+
+Six arms interleaved in one process, medians of three passes. **Compare like with like**: the reason §42
+first concluded ClosedXML was *"more efficient, about twice over"* is that it put this library's
+cell-at-a-time fill against ClosedXML's bulk `InsertData`.
+
+| arm | allocated | ClosedXML | allocated |
+| --- | --- | --- | --- |
+| a cell at a time | 113.7 MB | a cell at a time | 344.8 MB |
+| `SetValues` | 94.0 MB | `InsertData` | 75.1 MB |
+| fill + save | 536.0 MB | fill + save | 353.8 MB |
+
+Bulk against bulk is **1.25x**; cell against cell this library is **3x cheaper**, because ClosedXML's
+per-cell path is the expensive one and a bulk entrance was the whole of its advantage. On the entire
+export it is **1.51x**, down from the 1.94x §42 measured before `SetValues` existed - and subtracting the
+fill, **the save alone is 442 MB against 279 MB**. Four fifths of the allocation and nine tenths of the
+time are in the writer, so further work belongs in `XlsxWriter` rather than in `CellStore`.
+
+Times are recorded by the program and deliberately not tabulated here: between two runs of this harness
+the indexer and `SetValues` arms swapped places on time - 142/96 ms, then 87/112 ms - while both runs
+reported allocation identical to the tenth of a megabyte.
 
 ## Method
 
