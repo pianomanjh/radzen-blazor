@@ -1311,29 +1311,122 @@ class XlsxWriter(Workbook sourceWorkbook)
     {
         var sharedFormulas = BuildSharedFormulaGroups(sheet);
 
-        // row -> (col -> <c> element). SortedDictionary keeps cells in column
-        // order within each row, as required by ECMA-376.
-        var rowMap = new SortedDictionary<int, SortedDictionary<int, XElement>>();
+        // GetPopulatedCells enumerates a dictionary, so that order is recovered by sorting.
+        var cells = new List<Cell>(sheet.Cells.PopulatedCount);
 
-        SortedDictionary<int, XElement> EnsureRow(int row) =>
-            rowMap.TryGetValue(row, out var existing)
-                ? existing
-                : (rowMap[row] = new SortedDictionary<int, XElement>());
-
-        // 1. Real data cells.
-        foreach (var cell in sheet.Cells.GetPopulatedCells().Where(c => c.Value is not null || c.Formula is not null))
+        foreach (var cell in sheet.Cells.GetPopulatedCells())
         {
-            var rowDict = EnsureRow(cell.Address.Row);
-            rowDict[cell.Address.Column] = CreateCellElement(sheet, cell.Address.Row, cell.Address.Column, cell, styleTracker, sharedStrings, sharedStringsDoc, sharedFormulas);
+            if (IsWritten(cell))
+            {
+                cells.Add(cell);
+            }
         }
 
-        // 2. Empty <c> placeholders for cells inside merge ranges. Excel
-        // always writes these (carrying the anchor's style) so border/fill
-        // styling visually applies across the merged range.
+        cells.Sort(static (left, right) =>
+        {
+            var byRow = left.Address.Row.CompareTo(right.Address.Row);
+
+            return byRow != 0 ? byRow : left.Address.Column.CompareTo(right.Address.Column);
+        });
+
+        var placeholders = CreateMergePlaceholders(sheet, styleTracker);
+        var styledRows = CollectStyledRowIndices(sheet);
+
+        var cellIndex = 0;
+        var placeholderIndex = 0;
+        var styledRowIndex = 0;
+
+        while (cellIndex < cells.Count || placeholderIndex < placeholders.Count || styledRowIndex < styledRows.Count)
+        {
+            var row = int.MaxValue;
+
+            if (cellIndex < cells.Count)
+            {
+                row = Math.Min(row, cells[cellIndex].Address.Row);
+            }
+
+            if (placeholderIndex < placeholders.Count)
+            {
+                row = Math.Min(row, placeholders[placeholderIndex].Address.Row);
+            }
+
+            if (styledRowIndex < styledRows.Count)
+            {
+                row = Math.Min(row, styledRows[styledRowIndex]);
+            }
+
+            var rowElement = CreateRowElement(sheet, row);
+            var firstColumn = -1;
+            var lastColumn = -1;
+
+            while (true)
+            {
+                var cellColumn = cellIndex < cells.Count && cells[cellIndex].Address.Row == row
+                    ? cells[cellIndex].Address.Column
+                    : int.MaxValue;
+
+                var placeholderColumn = placeholderIndex < placeholders.Count && placeholders[placeholderIndex].Address.Row == row
+                    ? placeholders[placeholderIndex].Address.Column
+                    : int.MaxValue;
+
+                if (cellColumn == int.MaxValue && placeholderColumn == int.MaxValue)
+                {
+                    break;
+                }
+
+                int column;
+                XElement element;
+
+                if (cellColumn <= placeholderColumn)
+                {
+                    var cell = cells[cellIndex++];
+                    column = cellColumn;
+                    element = CreateCellElement(sheet, row, column, cell, styleTracker, sharedStrings, sharedStringsDoc, sharedFormulas);
+                }
+                else
+                {
+                    (var address, element) = placeholders[placeholderIndex++];
+                    column = address.Column;
+                }
+
+                // Two ranges covering one position contribute one placeholder between them.
+                if (column <= lastColumn)
+                {
+                    continue;
+                }
+
+                if (firstColumn < 0)
+                {
+                    firstColumn = column;
+                }
+
+                lastColumn = column;
+                rowElement.Add(element);
+            }
+
+            if (firstColumn >= 0)
+            {
+                rowElement.Add(new XAttribute("spans", $"{firstColumn + 1}:{lastColumn + 1}"));
+            }
+
+            while (styledRowIndex < styledRows.Count && styledRows[styledRowIndex] <= row)
+            {
+                styledRowIndex++;
+            }
+
+            sheetData.Add(rowElement);
+        }
+    }
+
+    private List<(CellRef Address, XElement Element)> CreateMergePlaceholders(Worksheet sheet, StyleTracker styleTracker)
+    {
+        var placeholders = new List<(CellRef Address, XElement Element)>();
         var ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
         foreach (var range in sheet.MergedCells.Ranges)
         {
             var anchor = sheet.Cells[range.Start];
+
             int? anchorStyleId = HasCellFormatting(anchor)
                 ? GetOrCreateCellStyle(anchor, styleTracker)
                 : null;
@@ -1347,53 +1440,51 @@ class XlsxWriter(Workbook sourceWorkbook)
                         continue;
                     }
 
-                    var rowDict = EnsureRow(r);
-                    if (rowDict.ContainsKey(c))
+                    if (sheet.Cells.HasCell(r, c) && IsWritten(sheet.Cells[r, c]))
                     {
                         continue;
                     }
 
+                    var address = new CellRef(r, c);
+
                     var placeholder = new XElement(XName.Get("c", ns),
-                        new XAttribute("r", new CellRef(r, c).ToString()));
+                        new XAttribute("r", address.ToString()));
+
                     if (anchorStyleId is not null)
                     {
                         placeholder.Add(new XAttribute("s", anchorStyleId.Value));
                     }
-                    rowDict[c] = placeholder;
+
+                    placeholders.Add((address, placeholder));
                 }
             }
         }
 
-        // 3. Rows with custom height or hidden state but no cells.
-        foreach (var rowIndex in sheet.Rows.GetCustomSizedIndices())
+        return placeholders
+            .OrderBy(placeholder => placeholder.Address.Row)
+            .ThenBy(placeholder => placeholder.Address.Column)
+            .ToList();
+    }
+
+    private static bool IsWritten(Cell cell) => cell.Value is not null || cell.Formula is not null;
+
+    private static List<int> CollectStyledRowIndices(Worksheet sheet)
+    {
+        var rows = new List<int>();
+
+        foreach (var row in sheet.Rows.GetCustomSizedIndices())
         {
-            EnsureRow(rowIndex);
+            rows.Add(row);
         }
 
-        foreach (var rowIndex in sheet.Rows.GetHiddenIndices())
+        foreach (var row in sheet.Rows.GetHiddenIndices())
         {
-            EnsureRow(rowIndex);
+            rows.Add(row);
         }
 
-        // 4. Emit.
-        foreach (var (row, rowDict) in rowMap)
-        {
-            var rowElement = CreateRowElement(sheet, row);
+        rows.Sort();
 
-            if (rowDict.Count > 0)
-            {
-                var firstCol = rowDict.Keys.First();
-                var lastCol  = rowDict.Keys.Last();
-                rowElement.Add(new XAttribute("spans", $"{firstCol + 1}:{lastCol + 1}"));
-
-                foreach (var (_, cellEl) in rowDict)
-                {
-                    rowElement.Add(cellEl);
-                }
-            }
-
-            sheetData.Add(rowElement);
-        }
+        return rows;
     }
 
     private static XElement CreateRowElement(Worksheet sheet, int row)
