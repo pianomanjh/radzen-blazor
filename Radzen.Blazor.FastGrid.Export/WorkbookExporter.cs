@@ -111,8 +111,9 @@ namespace Radzen.FastGrid.Export
             }
             catch (JSDisconnectedException)
             {
-                // The circuit went away while the file was being written - four seconds is long enough
-                // for that to be ordinary rather than exceptional. Nothing is left to save it to.
+                // The circuit went away while the file was being written - a second and a half of
+                // writing is long enough for that to be ordinary rather than exceptional. Nothing is
+                // left to save it to.
             }
         }
     }

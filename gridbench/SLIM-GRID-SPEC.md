@@ -10606,14 +10606,17 @@ place the name is really used. Nine mutations, nine caught.
 
 ### Still open
 
-- **No busy state.** The export blocks for about four seconds at 50,000 rows and the page looks idle
-  throughout. The grid has `IsLoading` and this does not use it.
-- **No opt-out per grid.** A grid can decline the entry only by declining `ShowGridMenu`, which takes
-  *Reset layout* with it.
+**The first two are closed in §43**, and the seconds in them are §42's error: the export blocks for
+about **1.7 s** at 50,000 rows, not four.
+
+- ~~**No busy state.**~~ The export blocks and the page looks idle throughout. The grid has `IsLoading`
+  and this does not use it. *§43: its own `exporting` flag, and the scrim reads `IsLoading || exporting`.*
+- ~~**No opt-out per grid.**~~ A grid can decline the entry only by declining `ShowGridMenu`, which takes
+  *Reset layout* with it. *§43: `ShowExport`, default true.*
 - **An export that throws takes the circuit down**, as any unhandled exception in a Blazor event handler
-  does. `JSDisconnectedException` is caught because a four-second window makes a lost circuit ordinary;
-  nothing else is, deliberately, because swallowing a failed export would leave a user waiting for a file
-  that is never coming.
+  does - and this one is still open. `JSDisconnectedException` is caught because a second and a half of
+  writing makes a lost circuit ordinary; nothing else is, deliberately, because swallowing a failed
+  export would leave a user waiting for a file that is never coming.
 
 ---
 
@@ -10721,7 +10724,7 @@ one reader agreeing to be wrong together.
 
 ### Offered upstream
 
-Branch `upstream/spreadsheet-bulk-and-bool`, four commits, 5,128 tests green:
+Branch `upstream/spreadsheet-bulk-and-bool`, six commits, 5,135 tests green:
 
 - **Read a boolean cell back as a boolean.** The above.
 - **Do not walk the dependency graph for a cell nothing depends on.**
@@ -10736,6 +10739,9 @@ Branch `upstream/spreadsheet-bulk-and-bool`, four commits, 5,128 tests green:
   cell and one update batch. **133 MB and 167 ms to 114 MB and 140 ms.**
 - **Do not revoke a download's object URL in the same tick as the click.** Timed at 0.1 ms; the anchor is
   also put in the document for the click, which Firefox needs.
+- **Keep a quote-prefixed cell as text when reading.** §43's finding, added after this list was first
+  written: the `quotePrefix` flag was written and not honoured on read, so `4.00E+003` came back as the
+  number 4000. Same root as the boolean.
 
 **217 MB to 114 MB over 550,000 cells - 47% less** - and 133 MB of that arrives without any caller
 changing a line. Against ClosedXML's 67 MB the remaining ratio is **1.7x**, down from 1.9x.
@@ -10811,7 +10817,8 @@ is the third time that has been the answer. It is the same root as the boolean: 
 shared string, and in fact including one, goes through `SetValueInvariant` and is re-typed from its
 text.** The `quotePrefix` flag is written and not honoured on read.
 
-Not in the open PR, which was already posted. It is the obvious follow-up to the boolean commit in it.
+Written up here before it was fixed; it is now the sixth commit on the upstream branch and in the PR,
+`3908e9fce`, which is where the boolean commit already was.
 
 ### Verified
 
