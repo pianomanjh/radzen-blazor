@@ -14,6 +14,7 @@ running the same program against it.
 | `VersusClosedXml.cs` | The same fill, and a fill-and-save, against ClosedXML. Needs `<PackageReference Include="ClosedXML" Version="0.104.2" />` beside the project reference. |
 | `SaveTypes.cs` | What `SaveToStream` allocates and, by `GCAllocationTick`, which types it goes to. The fill is outside the armed window, so nothing is subtracted. |
 | `SaveVersusClosedXml.cs` | The save alone against ClosedXML's, both filled outside the armed window, plus each engine's fill and whole export. Needs the ClosedXML package reference. |
+| `SavedParts.cs` | Every part of a workbook using every worksheet feature, unpacked for byte comparison between two checkouts. Pair with `compare-parts.py`. |
 
 ## What `SetValues` actually saves
 

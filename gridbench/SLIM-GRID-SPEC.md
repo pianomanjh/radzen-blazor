@@ -11342,3 +11342,71 @@ more. **The obvious reading is that its allocation is transient and this one is 
 `XElement` and `XAttribute` is a graph that has to live until the document is serialised, where a
 streaming writer's buffers die in gen0 - but that is a hypothesis about a collection cost, and nothing
 here has measured GC time. It is written down as one.
+
+## 47. The tail §46 declined, taken - the sheet is written rather than built
+
+§46 named the remaining 217 MB as *"XElement, XAttribute, String and boxed Int32, and nothing else"*,
+said only an `XmlWriter` would reach it, and stopped: *"It is not attempted here."* It is attempted
+here, on `upstream/xlsx-writer-stream` off `upstream/xlsx-writer-save`, so the two can be judged apart.
+
+| | allocated |
+| --- | --- |
+| `upstream/xlsx-writer-save` | 217 MB |
+| stream the sheet's cells | **82 MB** |
+| write the shared string table from the table | **65 MB** |
+
+**458 MB to 65 MB over 550,000 cells, seven times less, against ClosedXML's 278.7 MB for the same
+save.** After the second, the histogram has no `XElement` row at all: 92.6% of what is left is
+`String`, which is the `r="A1"` of every cell and the text of its value.
+
+### The shape that made it a hunk after all
+
+§46 expected a rewrite of `SaveSheet` *"because everything after `sheetData` - merges, filters,
+conditional formats, validations, protection, hyperlinks, drawings, page margins, table parts - is
+appended to the same root afterwards"*. That turned out to be the wrong way round. Everything except
+the cells is small, so it stays a document; `WriteSheetXml` walks that document and, at the empty
+`sheetData` it carries, **writes the rows into the gap instead of the element**. No caller of the eight
+`Add` methods changed, and their order and content are untouched.
+
+The second commit is the same observation about a different graph. The strings were held twice - a
+dictionary from text to index, and an `XDocument` of `si` and `t` elements accumulated beside it and
+threaded through six signatures. The dictionary already says everything the part contains.
+
+### Byte for byte, and this time it is claimed
+
+§46 had to say out loud that its third commit renumbered two tables. These two change **no byte**, and
+the instrument that says so is kept: `gridbench/spreadsheet/SavedParts.cs` builds one workbook carrying
+every child element a worksheet can have - a drawing, a table, hyperlinks, merges, conditional
+formatting, data validations, an autofilter, sheet protection, shared formulas with a master and a
+follower, error cells, a formula with a text result, a quote prefix, hidden and custom sized rows and
+columns, text needing escaping including a surrogate pair, an embedded newline and a tab, and a second
+sheet with no cells at all - and unpacks its sixteen parts. `compare-parts.py` normalises the revision
+uid and the timestamp, and nothing else. Sixteen parts, none differing, at both commits.
+
+**The comparison was proved able to fail before it was believed**, by mutating one text part and one
+byte of the embedded PNG - which is not ceremony here, because **an earlier version of this comparison
+reported a clean pass over two empty directories**: the program behind it had failed to build, and a
+run that never happened looks exactly like nothing differing. The same shape twice in one session, and
+the guard against it both times was to make the instrument fail on purpose.
+
+### Two faults the review found that the tests could not
+
+Both were byte-identity faults, invisible to 5,137 passing tests because none of them compares bytes:
+
+- **`NewLineChars = "\n"` was platform-specific.** `XmlWriterSettings.NewLineChars` defaults to
+  `Environment.NewLine` on .NET Core rather than to `"\r\n"`, so pinning it to a line feed matched
+  `XDocument.Save` **only because this machine is macOS**; on Windows the indenting would have changed,
+  and with `NewLineHandling.Replace` so would newlines inside text. The settings now set `Indent` and
+  nothing else, which is the honest way to say "whatever the document would have written".
+- **`WriteFullEndElement` on `sheetData` gave `<sheetData></sheetData>`** where an empty `XElement`
+  serialises to `<sheetData />`. `WriteEndElement` writes the short form for an element with no content
+  and the long form otherwise, which is what an `XElement` does. A sheet with no cells was the only
+  shape that reached it, and the fixture now carries one.
+
+### What is left, and it is not the writer's to spend
+
+~60 MB over 550,000 cells is about 114 bytes a cell, and it is two strings: `cell.Address.ToString()`
+for the `r` attribute and the value's own text. Getting under it means writing the reference and the
+digits into the writer as characters rather than as strings - `WriteStartAttribute`, a pooled buffer,
+`WriteRaw` - which neither a cell reference nor a decimal integer needs escaping for. That is a real
+lever and it is a different kind of change from these; it is named here rather than taken.
