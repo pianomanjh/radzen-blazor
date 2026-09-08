@@ -114,6 +114,7 @@ static long Populated(object store) => store switch
     Dictionary<(int, int), FoldedMimic> f => f.Count,
     int n => n,
     HandleStore h => h.Count,
+    IdStore i => i.Count,
     StructStore s => s.Count,
     ChunkStore k => k.Count,
     ColumnStore c => c.Count,
@@ -238,6 +239,40 @@ object RadzenExport()
     workbook.SaveToStream(Stream.Null);
 
     return sheet;
+}
+
+// The stable-id shape: an address index onto ids, and slots addressed by id. The id is what the
+// dependency graph keys on, and it does not move when a row is inserted - only the index does, which
+// is the remap the store already performs today. The slot carries its own address so an id can be
+// resolved back to a cell.
+object IdStoreDense()
+{
+    var store = new IdStore(Rows * Cols);
+
+    for (var r = 0; r < Rows; r++)
+    {
+        for (var c = 0; c < Cols; c++)
+        {
+            store.Set(r, c, block[r][c]);
+        }
+    }
+
+    return store;
+}
+
+object IdStoreSparse()
+{
+    var store = new IdStore(Rows * Cols);
+
+    for (var r = 0; r < Rows; r++)
+    {
+        for (var c = 0; c < Cols; c++)
+        {
+            store.Set(r * SparseStride, c, block[r][c]);
+        }
+    }
+
+    return store;
 }
 
 object ClosedXmlInsertData()
@@ -471,11 +506,30 @@ var export = new (string Name, Func<object> Fill)[]
     ("fill and save", RadzenExport),
 };
 
+var builtIds = (IdStore)IdStoreDense();
+
+// What the dependency graph pays to turn its keys back into cells.
+object ReadByStableId()
+{
+    var seen = 0;
+
+    for (var id = 0; id < builtIds.Count; id++)
+    {
+        if (builtIds.SlotAt(id).Type != SlotType.Empty)
+        {
+            seen++;
+        }
+    }
+
+    return seen;
+}
+
 var reads = new (string Name, Func<object> Fill)[]
 {
     ("Cell objects, today", ReadRadzenCells),
     ("materialised facades", ReadMaterialisedFacades),
     ("slots read in place", ReadSlotsInPlace),
+    ("resolved by stable id", ReadByStableId),
 };
 
 // ---- run -----------------------------------------------------------------------------------
@@ -488,6 +542,7 @@ var dense = new (string Name, Func<object> Fill)[]
     ("struct dict, sized", StructDictSizedDense),
     ("readonly handle", HandleFacade),
     ("ref return", RefReturn),
+    ("stable id, sized", IdStoreDense),
     ("chunked slot blocks", ChunkedDense),
     ("columnar arrays", ColumnarDense),
     ("calibration, 152 B", Calibration),
@@ -505,6 +560,7 @@ var sparse = new (string Name, Func<object> Fill)[]
 {
     ("Radzen indexer", RadzenSparse),
     ("struct in dictionary", StructDictSparse),
+    ("stable id, sized", IdStoreSparse),
     ("chunked slot blocks", ChunkedSparse),
     ("columnar arrays", ColumnarSparse),
 };
@@ -803,6 +859,62 @@ sealed class CellFacade(HandleStore store, int row, int column) : IEquatable<Cel
 sealed class MimicFormat
 {
     public bool Bold;
+}
+
+// A slot that knows where it is, so an id resolves back to a cell without a second dictionary.
+struct IdSlot
+{
+    public double Number;
+    public object? Text;
+    public int StyleId;
+    public SlotType Type;
+    public bool QuotePrefix;
+    public int Row;
+    public int Column;
+}
+
+sealed class IdStore
+{
+    private readonly Dictionary<(int row, int column), int> index;
+    private IdSlot[] slots;
+
+    public IdStore(int capacity)
+    {
+        index = new(capacity);
+        slots = new IdSlot[Math.Max(capacity, 4)];
+    }
+
+    public int Count { get; private set; }
+
+    public ref IdSlot SlotAt(int id) => ref slots.AsSpan()[id];
+
+    public void Set(int row, int column, object? value)
+    {
+        ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(index, (row, column), out var existed);
+
+        if (!existed)
+        {
+            if (Count == slots.Length)
+            {
+                Array.Resize(ref slots, slots.Length * 2);
+            }
+
+            id = Count++;
+            slots[id].Row = row;
+            slots[id].Column = column;
+        }
+
+        ref var slot = ref slots.AsSpan()[id];
+
+        var cell = default(CellSlot);
+
+        Infer.Into(ref cell, value);
+
+        slot.Number = cell.Number;
+        slot.Text = cell.Text;
+        slot.Type = cell.Type;
+        slot.QuotePrefix = cell.QuotePrefix;
+    }
 }
 
 // Sparse-shaped: the dictionary CellStore already has, holding the value instead of a reference to

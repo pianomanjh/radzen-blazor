@@ -12028,3 +12028,60 @@ any of this work and is what makes the remap expensive.
 
 **Neither is measured.** What is measured is that the rekey is correct, is guarded, and is a regression
 where it hurts most. The spike is on `spike/graph-rekey`, one commit, not pushed.
+
+## 57. The stable id is the shape that survives every objection raised so far
+
+§56 ended with the rekey correct and paying for itself out of the editor's pocket, and named a stable
+per-cell id as the way out. Measured:
+
+| store | allocated | B / cell | Gen0 | Gen1 | Gen2 | dense | sparse |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `CellStore.SetValues` | 94.0 MB | 179 | 10 | 5 | 1 | 94.0 | 113.7 |
+| struct in a sized dictionary | 23.5 MB | 45 | none | none | none | 23.5 | 54.5 |
+| **stable id, sized** | **31.8 MB** | **61** | **none** | **none** | **none** | **31.8** | **31.8** |
+
+An address index onto ids, slots addressed by id, each slot carrying its own address. It costs 16 bytes
+a cell more than the plain struct dictionary and **is the only arm in this work that is identical dense
+and sparse** - 31.8 both, against the incumbent's 94.0 and 113.7.
+
+What the graph pays to turn a key back into a cell:
+
+| | allocated | ms |
+| --- | --- | --- |
+| materialised façades | 16.8 MB | 59 |
+| **resolved by stable id** | **none** | **0** |
+
+An id is an array index. §54's 16.8 MB façade cost applies only to a design that has to construct
+something; this one does not.
+
+### Every objection this work has raised, against this one design
+
+| objection | where | answer |
+| --- | --- | --- |
+| public API break | §53 | none - `Cell` stays a class, every signature intact |
+| makes a sparse sheet worse | §53 | 31.8 MB either way; the incumbent is 94.0 dense, 113.7 sparse |
+| the save has to materialise cells | §54 | resolution is an array index, and allocates nothing |
+| shift regresses the editor | §56 | no remap - an id does not move, so the graph is untouched |
+| `Cell` identity is not stable | §55 | the id **is** the stable identity the graph needs |
+
+Composed the way §55 validated (94.0 + 9.6 = 103.6 measured exactly):
+
+| | fill | read | write | export |
+| --- | --- | --- | --- | --- |
+| today, with #2708 | 94.0 | none | 9.6 | **103.6 MB** |
+| stable id, writer reads slots | 31.8 | none | 9.6 | **~41 MB** |
+
+### What is argued rather than measured
+
+**The shift figure is by construction, not by experiment.** An id is isomorphic to an object reference
+for keying: it does not change when a row moves, so an id-keyed graph needs exactly the maintenance
+today's object-keyed one needs, which is none, and the 14.91 MB baseline of §56 stands. The extra work a
+shift does is rewriting each moved slot's address, which is what `UpdateCellAddress` already does per
+cell today. That reasoning is sound but it is reasoning; the library has no ids to measure yet.
+
+Nothing else here is new risk, and the 61 bytes are not tight - the slot's `Row`, `Column`,
+`QuotePrefix` and `Type` occupy 14 bytes that pack into 8.
+
+**This is the design to put to akorchev as a question**, and the sentence it leads with is unchanged
+from §52: it prevents no failure. It makes an export of 550,000 cells cost 41 MB instead of 104 and
+collect nothing, and it does it without changing a public signature or making any other operation worse.
