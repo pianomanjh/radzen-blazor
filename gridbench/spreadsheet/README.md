@@ -17,6 +17,7 @@ running the same program against it.
 | `SavedParts.cs` | Every part of a workbook using every worksheet feature, unpacked for byte comparison between two checkouts. Pair with `compare-parts.py`. |
 | `SpanFormatAgreement.cs` | Whether `TryFormat` spells a number the way `ToString(InvariantCulture)` and `XmlConvert.ToString` do, over the values a fixture would not carry. |
 | `SaveFloor.cs` | What is left in the save and who pays for it - the sink against the writer, and a distinct against a repeated string table. |
+| `FillFloor.cs` | What the fill would cost if a cell were not an object. Six stores over the same block, dense and sparse, plus two calibration arms of known shape. Needs the ClosedXML package reference. |
 
 ## What `SetValues` actually saves
 
@@ -79,6 +80,22 @@ Both were confirmed by removing the line rather than by reading the code - the a
 and read per type rather than by total: `Format` and `Action` leave the histogram entirely, and
 `StringBuilder` and `char[]` fall together. 68.3 MB over 550,000 cells is ~124 B a cell, which is a
 `StringBuilder`, a `char[16]` and a two-character string.
+
+## Do not put a live-size column in one of these
+
+`FillFloor.cs` had one and it was wrong. `GC.GetTotalMemory`, after a blocking compacting gen-2 collect,
+reported the incumbent's store at **173 MB against the 94 MB its own fill allocated** - which cannot
+happen, since a store cannot outweigh what was allocated to build it. Dropping the store and settling
+again returned the heap to baseline exactly, so the store really was being reported at 173 MB.
+
+What found it was the calibration arm: a graph of **known** shape - 550,000 objects of 96 B, 550,000 of
+32 B and a sized dictionary, 81.8 MB by arithmetic - measured **82.1 MB allocated** and **149 MB** by
+`GetTotalMemory`. Allocation agrees with arithmetic to 0.4%; the other instrument over-reports graphs of
+many small objects by about 1.8x and array-shaped stores by nothing.
+
+**That bias runs in the direction the work wants**, inflating the incumbent and not the prototypes, which
+is what a systematic error looks like. `GC.GetTotalAllocatedBytes` and `GC.CollectionCount` are the two
+to quote. A calibration arm of known shape is cheap and is the only reason this was caught.
 
 ## Method
 

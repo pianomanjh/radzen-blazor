@@ -11741,3 +11741,105 @@ Two contained things would reduce it without redesigning anything - folding `Cel
 save a header and a reference per cell, and skipping the re-box when the value is already a double -
 and neither removes a collection, they only make the graph smaller. **The writer's side of the export is
 finished; the model's side is a different piece of work and is not started here.**
+
+## 53. A cell that is not an object, priced on both sides
+
+§52 left the fill's 94 MB standing on §42's sentence - *"getting under it means cells that are not
+objects, which is a different library"* - and said to test it rather than inherit it. `FillFloor.cs`
+builds the same 550,000-cell block into six stores in one process, three interleaved passes, values
+built outside the measured region.
+
+| store | allocated | B / cell | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- |
+| `CellStore.SetValues` | 94.0 MB | 179 | 10 | 5 | 1 |
+| ClosedXML `InsertData` | 73.1 MB | 139 | 7 | 3 | 1 |
+| struct in a dictionary | 54.5 MB | 104 | 1 | 1 | 1 |
+| **struct in a sized dictionary** | **23.5 MB** | **45** | **none** | **none** | **none** |
+| through a `readonly` handle | 23.5 MB | 45 | none | none | none |
+| through a `ref` return | 23.5 MB | 45 | none | none | none |
+| chunked slot blocks | 12.9 MB | 25 | 1 | 0 | 0 |
+| columnar arrays | 8.9 MB | 17 | none | none | none |
+
+Collection counts here are per fill and reconcile with §52's per-thousand figures: 10/5/1 against
+10667/5667/1000. **A sized struct store causes no collection of any generation**, which is the same
+verdict the save reached, and it reaches it at 45 bytes a cell against 179.
+
+The prototypes run the same inference `CellData` runs - a string parsed for number, date and boolean
+before it is accepted as text, a number widened to double - because a store that skipped it would be
+measuring a different program.
+
+### The floor is not the answer; the sparse column is
+
+| store | dense | sparse | |
+| --- | --- | --- | --- |
+| `CellStore` indexer | 113.7 MB | 113.7 MB | |
+| struct in a dictionary | 54.5 MB | 54.5 MB | shape-independent |
+| columnar arrays | 8.9 MB | 89.2 MB | **10x worse** |
+| chunked slot blocks | 12.9 MB | 128.3 MB | **worse than the incumbent** |
+
+Sparse is the same 550,000 values one row in ten over 500,000 rows. The two stores that reach the floor
+get there by allocating for rows that hold nothing, and the chunked one ends up **allocating more than
+the store it replaces**. That is the objection the maintainer raises by habit, and it is fatal to the
+columnar family: 8.9 MB is a real floor and it is only a floor for one shape. **The dictionary of structs
+is the only arm that is never worse than what exists**, and it is unchanged between the two shapes.
+
+### What it costs the public API, checked by the compiler
+
+`Cell` is a public class and `Cells[r, c]` returns the stored instance, which is why
+`sheet.Cells[r, c].Format.Bold = true` works. Replacing it with a handle was not argued but compiled:
+
+| written as | result |
+| --- | --- |
+| `store[r, c].Value = x` | **CS1612**, cannot modify the return value because it is not a variable |
+| `store[r, c].SetValue(x)` | compiles |
+| `store[r, c].Format.Bold = true` | compiles - `Format` returns a class, so the chain is unaffected |
+| `ref CellSlot` return | compiles, and the ref is void after the next insert resizes the dictionary |
+
+So a `readonly struct` handle costs nothing to allocate - 23.5 MB and 21 ms, identical to writing into
+the store directly - and preserves every property chain that ends in a reference. **What it cannot
+preserve is assignment to a property of the indexer's result**, which is the pattern the library
+documents. `ref` returns get that back and hand a consumer a reference that a later insert silently
+invalidates, which is worse than the problem.
+
+`CellData` is public too. Converting it to a `readonly struct` breaks **242 distinct call sites in the
+library alone** (deduplicated by file and line across three target frameworks; 126 files reference it,
+702 uses, plus 26 test files), almost all of them because `CellData?` quietly becomes
+`Nullable<CellData>`. Two further changes are forced and are not mechanical: `CompareTo(CellData?)`
+loses its null branch, and `default(CellData)` has `Type` = `Number`, because `CellDataType.Empty` is
+the fourth member of the enum - so the fold implies reordering a public enum.
+
+### The two contained wins, measured rather than predicted
+
+| | before | after | |
+| --- | --- | --- | --- |
+| re-box skipped, caller passes `double` | 103.1 MB | **90.5 MB** | −12.6 MB |
+| re-box skipped, caller passes `int` | 103.1 MB | 103.1 MB | unchanged, and the control |
+| `CellData` folded into `Cell` (calibration graph) | 82.1 MB | **65.3 MB** | −16.8 MB |
+
+The re-box is `data is not double` at `CellData.cs:150`; the suite passes 5,144 with it and **fails 64
+with the condition inverted**, so the semantics are guarded. It is worth nothing at all to a caller
+passing `int`, which is the arm that was kept in both runs so the cross-build comparison had a control.
+The fold is measured on the calibration graph rather than by rewriting 242 sites - §52 predicted ~13 MB
+by arithmetic and the experiment says 16.8 MB.
+
+### The instrument that had to be thrown away
+
+`FillFloor.cs` first carried a live-size column, and it reported the incumbent's store at **173 MB
+against the 94 MB its own fill allocated**, which cannot happen. The calibration arm settled it: a graph
+of known shape, 81.8 MB by arithmetic, measured 82.1 MB allocated and 149 MB by `GC.GetTotalMemory`.
+`GetTotalMemory` over-reports graphs of small objects by about 1.8x and array-shaped stores by nothing -
+**a bias pointing the way the work wanted**, inflating the incumbent and none of the prototypes. Four of
+the seven traps in this work's handoff produced a wrong number that looked right; this is the fifth, and
+what caught it was again a figure that would not reconcile rather than one that looked wrong.
+
+### Where this leaves the model
+
+A cell that is not an object is worth **94.0 → 23.5 MB and every collection the export still causes**,
+holds that in both shapes, and does not need a columnar rewrite to get there. It costs a public `Cell`
+that can no longer be assigned through, a public `CellData` that is 242 call sites and a reordered enum,
+and a `CellStore` whose `virtual` indexer and `protected` dictionary are inheritance surface someone may
+be standing on. **That is a proposal to put as a question, not a branch to build** - and §52's maintainer
+note applies: the honest answer to "what failure does this prevent" is still none.
+
+The re-box fix is the one piece that is contained, measured, guarded by the suite, and invisible in the
+public API. It is on `spike/cellstore-model` off `upstream/master` and is not pushed anywhere.
