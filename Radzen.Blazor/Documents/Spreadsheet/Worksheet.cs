@@ -398,7 +398,7 @@ public partial class Worksheet
 
         // During a batch, EndUpdate recalculates dependent formulas once. The changed cell
         // itself is not a formula node, so it would never be notified - fire its event here.
-        if (!IsUpdating)
+        if (!IsUpdating && graph.HasDependents(cell))
         {
             var dependents = graph.GetTopologicallySortedDependencies(cell);
 

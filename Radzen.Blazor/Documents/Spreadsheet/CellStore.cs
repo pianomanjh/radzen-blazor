@@ -41,12 +41,7 @@ public class CellStore(Worksheet sheet)
         {
             EnsureWithinBounds(row, column);
 
-            if (!data.TryGetValue((row, column), out var cell))
-            {
-                this[row, column] = cell = new(Worksheet, new CellRef(row, column));
-            }
-
-            return cell;
+            return GetOrAdd(row, column);
         }
 
         set
@@ -218,6 +213,92 @@ public class CellStore(Worksheet sheet)
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Fills a rectangular block of cells from a jagged array, in one pass.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Filling a sheet a cell at a time through <see cref="this[int, int]"/> pays, per cell, two
+    /// bounds checks and two dictionary operations - the getter looks the cell up, misses, and the
+    /// setter it delegates to looks it up again to insert - plus whatever rehashing the dictionary
+    /// does on the way up to its final size. This does the bounds check once for the block, sizes the
+    /// dictionary once and looks each cell up once.
+    /// </para>
+    /// <para>
+    /// Not wrapped in an update batch. Each write notifies its own dependents, exactly as an
+    /// assignment through the indexer does; suspending evaluation would make the sheet re-run every
+    /// formula it has, including the ones that do not read the block.
+    /// </para>
+    /// <para>
+    /// Rows may be ragged; a short row leaves the cells past its end untouched, and a null row is
+    /// skipped. A value replaces whatever the cell held, a formula included. Values are assigned
+    /// through <see cref="Cell.Value"/>, so the same type inference applies as when they are written
+    /// one at a time.
+    /// </para>
+    /// </remarks>
+    /// <param name="row">The zero-based row the block starts at.</param>
+    /// <param name="column">The zero-based column the block starts at.</param>
+    /// <param name="values">The values, one array per row.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="values"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The block does not fit in the sheet.</exception>
+    public void SetValues(int row, int column, IReadOnlyList<IReadOnlyList<object?>?> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        if (values.Count == 0)
+        {
+            return;
+        }
+
+        var widest = 0;
+        var total = 0;
+
+        for (var r = 0; r < values.Count; r++)
+        {
+            if (values[r] is { } line)
+            {
+                widest = Math.Max(widest, line.Count);
+                total += line.Count;
+            }
+        }
+
+        if (total == 0)
+        {
+            return;
+        }
+
+        EnsureWithinBounds(row, column);
+        EnsureWithinBounds(row + values.Count - 1, column + widest - 1);
+
+        data.EnsureCapacity(data.Count + total);
+
+        for (var r = 0; r < values.Count; r++)
+        {
+            if (values[r] is not { } line)
+            {
+                continue;
+            }
+
+            for (var c = 0; c < line.Count; c++)
+            {
+                var cell = GetOrAdd(row + r, column + c);
+
+                cell.Formula = null;
+                cell.Value = line[c];
+            }
+        }
+    }
+
+    private Cell GetOrAdd(int row, int column)
+    {
+        if (!data.TryGetValue((row, column), out var cell))
+        {
+            this[row, column] = cell = new Cell(Worksheet, new CellRef(row, column));
+        }
+
+        return cell;
     }
 
     /// <summary>

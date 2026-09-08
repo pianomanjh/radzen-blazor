@@ -18,6 +18,8 @@ internal class CellDependencyGraph
         return [];
     }
 
+    public bool HasDependents(Cell cell) => dependents.TryGetValue(cell, out var cells) && cells.Count > 0;
+
     public IEnumerable<Cell> GetTopologicallySortedDependencies(Cell cell) => GetTopologicallySortedDependencies(GetDependentCells(cell));
 
     public IEnumerable<Cell> GetTopologicallySortedDependencies() => GetTopologicallySortedDependencies(dependencies.Keys);
