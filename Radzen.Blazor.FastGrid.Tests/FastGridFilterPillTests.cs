@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AngleSharp.Dom;
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
 using Radzen.Blazor;
 using Xunit;
@@ -796,5 +798,185 @@ namespace Radzen.FastGrid.Tests
                 Phrase(cut, column, One(FastGridFilterOperator.Equals, Grade.Senior)));
         }
 
+        // ---- §44: a filter on a column nobody can see ----
+
+        static IElement[] HiddenPills(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
+            cut.FindAll(".rz-filter-pills .rz-filter-pill-hidden").ToArray();
+
+        static RenderFragment TwoColumnsSecondHidden() => Columns.Of(
+            Columns.Property<Person, string>(x => x.First, title: "First"),
+            Columns.Property<Person, string>(x => x.Last, title: "Last", visible: false));
+
+        [Fact]
+        public void TheBandIsDrawnForAFilterOnAColumnThatIsNotDrawn()
+        {
+            // The fault §44 found. AnyColumnFiltered asked the drawn columns, so a grid filtered by
+            // nothing but a hidden column drew no band - and Clear all filters, which does reach every
+            // column, was behind the button the band was not drawing.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Assert.Empty(cut.FindAll(".rz-filter-pills"));
+
+            Apply(cut, "Last", "B");
+
+            Assert.NotEmpty(cut.FindAll(".rz-filter-pills"));
+            Assert.Equal("Last Contains B", Assert.Single(PillText(cut)));
+            Assert.Single(HiddenPills(cut));
+        }
+
+        [Fact]
+        public void ADrawnColumnsPillIsNotMarkedHidden()
+        {
+            // The counterweight: without it, marking every pill hidden would pass the test above.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "First", "A");
+
+            Assert.Single(Pills(cut));
+            Assert.Empty(HiddenPills(cut));
+        }
+
+        [Fact]
+        public void AHiddenColumnsPillSaysWhyWhenItIsClicked()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "Last", "B");
+
+            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+
+            HiddenPills(cut).Single().Click();
+
+            Assert.Equal(cut.Instance.HiddenColumnFilterText,
+                cut.Find(".rz-filter-pill-notice").TextContent);
+
+            // Clicking it again takes the notice away, which is what a toggle promises.
+            HiddenPills(cut).Single().Click();
+
+            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+        }
+
+        [Fact]
+        public void AHiddenColumnsPillDoesNotSendAnyoneToAFilterCell()
+        {
+            // The drawn pill's click focuses the filter cell through JS. There is no cell for a column
+            // that is not drawn, so the click has to do something else entirely rather than aim at one.
+            using var ctx = new TestContext();
+
+            var module = ctx.JSInterop.SetupModule("./_content/Radzen.Blazor.FastGrid/fastgrid.js");
+
+            module.SetupVoid("focusFilter", _ => true).SetVoidResult();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "Last", "B");
+
+            HiddenPills(cut).Single().Click();
+
+            Assert.Empty(module.Invocations["focusFilter"]);
+        }
+
+        [Fact]
+        public void AHiddenColumnsFilterIsStillRemovableFromItsPill()
+        {
+            // The escape hatch, and the reason a pill is the answer rather than clearing the filter when
+            // the column goes: one click either way, and the reader is the one who chooses.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "Last", "B");
+
+            cut.FindAll(".rz-filter-pills .rz-filter-pill-hidden button").Single().Click();
+
+            Assert.False(Column(cut, "Last").HasFilter);
+            Assert.Empty(cut.FindAll(".rz-filter-pills"));
+        }
+
+        [Fact]
+        public void ClearAllFiltersReachesTheColumnNobodyCanSee()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "First", "A");
+            Apply(cut, "Last", "B");
+
+            cut.FindAll(".rz-filter-pills > div > button").Last().Click();
+
+            Assert.False(Column(cut, "First").HasFilter);
+            Assert.False(Column(cut, "Last").HasFilter);
+        }
+
+        [Fact]
+        public void TheNoticeGoesWhenTheFilterItExplainsDoes()
+        {
+            // Read back off the column rather than cleared by hand, so removing the filter, showing the
+            // column and Clear all each take it away without knowing the notice exists.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, TwoColumnsSecondHidden());
+
+            Apply(cut, "Last", "B");
+
+            HiddenPills(cut).Single().Click();
+
+            Assert.NotEmpty(cut.FindAll(".rz-filter-pill-notice"));
+
+            cut.InvokeAsync(() => cut.Instance.Filter(Column(cut, "Last"), null)).Wait();
+
+            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+        }
+
+        /// <summary>The same two columns, with the second's visibility always written.</summary>
+        /// <remarks>
+        /// Not <c>Columns.Property(visible: ...)</c>, which omits the attribute when it is true - and an
+        /// omitted parameter is not a reset, so a column re-rendered that way keeps the <c>false</c> it
+        /// was given. The test below turns the column back on, which needs the attribute to be there
+        /// both times.
+        /// </remarks>
+        static RenderFragment SecondColumnVisible(bool visible) => builder =>
+        {
+            builder.OpenComponent<PropertyColumn<Person, string>>(0);
+            builder.AddAttribute(1, nameof(PropertyColumn<Person, string>.Property),
+                (Expression<Func<Person, string>>)(x => x.First));
+            builder.AddAttribute(2, nameof(PropertyColumn<Person, string>.Title), "First");
+            builder.CloseComponent();
+
+            builder.OpenComponent<PropertyColumn<Person, string>>(3);
+            builder.AddAttribute(4, nameof(PropertyColumn<Person, string>.Property),
+                (Expression<Func<Person, string>>)(x => x.Last));
+            builder.AddAttribute(5, nameof(PropertyColumn<Person, string>.Title), "Last");
+            builder.AddAttribute(6, nameof(ColumnBase<Person>.Visible), visible);
+            builder.CloseComponent();
+        };
+
+        [Fact]
+        public void TheNoticeGoesWhenTheColumnComesBack()
+        {
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, SecondColumnVisible(false));
+
+            Apply(cut, "Last", "B");
+
+            HiddenPills(cut).Single().Click();
+
+            Assert.NotEmpty(cut.FindAll(".rz-filter-pill-notice"));
+
+            cut.SetParametersAndRender(p =>
+                p.Add(g => g.ChildContent, SecondColumnVisible(true)));
+
+            Assert.Empty(cut.FindAll(".rz-filter-pill-notice"));
+            Assert.Empty(HiddenPills(cut));
+            Assert.Single(Pills(cut));
+        }
     }
 }

@@ -48,15 +48,24 @@ namespace Radzen.FastGrid
 
         /// <summary>Whether anything is filtered, which is whether the bar is drawn at all.</summary>
         /// <remarks>
+        /// <para>
         /// A walk rather than a held count. It runs once per render of a grid with the feature on, over
         /// the columns and not the rows, and a count maintained beside <c>SetFilter</c> would be a
         /// second thing that has to agree with <c>HasFilter</c> - §10b's recurring finding.
+        /// </para>
+        /// <para>
+        /// <strong>Every column, not the drawn ones.</strong> A hidden column keeps its filter - which
+        /// <see cref="ColumnBase{TItem}.Visible" /> says outright - and asking only the drawn columns
+        /// meant a grid filtered by nothing but a hidden column drew no band, so the filter applied,
+        /// nothing on screen said so, and <see cref="ClearFilters" />, which does walk every column,
+        /// was behind the button the band was not drawing.
+        /// </para>
         /// </remarks>
         bool AnyColumnFiltered()
         {
-            for (var i = 0; i < visibleColumns.Count; i++)
+            for (var i = 0; i < columns.Count; i++)
             {
-                if (visibleColumns[i].HasFilter)
+                if (columns[i].HasFilter)
                 {
                     return true;
                 }
@@ -112,9 +121,24 @@ namespace Radzen.FastGrid
                 }
             }
 
+            // The hidden ones after the drawn ones, in a walk of their own. Their pills carry no drawn
+            // index because there is no cell to send anyone to, and grouping them at the end keeps the
+            // pills in the order the columns are in for the reader who can see them.
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var column = columns[i];
+
+                if (!column.IsVisible && column.HasFilter && column.CurrentFilter is { } filter)
+                {
+                    RenderHiddenFilterPill(builder, column, filter);
+                }
+            }
+
             RenderClearAllFilters(builder);
 
             builder.CloseElement();
+
+            RenderHiddenFilterNotice(builder);
         }
 
         /// <summary>One column's filter, said in words, with a way to remove it and a way to edit it.</summary>
@@ -193,6 +217,119 @@ namespace Radzen.FastGrid
             builder.CloseElement();
             builder.CloseElement();
             builder.CloseElement();
+        }
+
+        /// <summary>
+        /// A filter on a column that is not drawn: the same pill, with the door closed.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>A pill rather than a cleared filter, and the difference is whose the filter is.</strong>
+        /// Dropping a column's filter when it stops being drawn is the other answer, and it throws away
+        /// something a reader authored on a grid they were reading - silently, on an action that says
+        /// nothing about filtering. This says what is applied and leaves the choice.
+        /// </para>
+        /// <para>
+        /// The remove button is the same one, so the escape hatch is one click either way. What changes
+        /// is the body: there is no filter cell to focus and no header to open a menu on, so clicking it
+        /// says why rather than pretending to be a door. The glyph is <c>visibility_off</c>, which is
+        /// the picker's own vocabulary for the same state.
+        /// </para>
+        /// </remarks>
+        void RenderHiddenFilterPill(RenderTreeBuilder builder, ColumnBase<TItem> column,
+            FastGridFilter filter)
+        {
+            builder.OpenElement(80, "div");
+            builder.AddAttribute(81, "class", "rz-chip-list-item");
+            builder.AddAttribute(82, "role", "listitem");
+
+            builder.SetKey(column);
+
+            builder.OpenElement(83, "span");
+            builder.AddAttribute(84, "class",
+                "rz-chip rz-chip-base rz-shade-default rz-variant-filled rz-filter-pill-hidden");
+            builder.AddAttribute(85, "role", "button");
+            builder.AddAttribute(86, "tabindex", "0");
+            builder.AddAttribute(87, "title", HiddenColumnFilterText);
+            builder.AddAttribute(88, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
+                this, _ => ToggleHiddenFilterNotice(column)));
+            builder.AddAttribute(89, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(
+                this, args => OnHiddenFilterPillKey(column, args)));
+
+            builder.OpenElement(90, "i");
+            builder.AddAttribute(91, "class", "notranslate rzi");
+            builder.AddAttribute(92, "aria-hidden", "true");
+            builder.AddContent(93, "visibility_off");
+            builder.CloseElement();
+
+            builder.OpenElement(94, "span");
+            builder.AddAttribute(95, "class", "rz-chip-text");
+            builder.AddContent(96, FilterPill.Phrase(this, column, filter));
+            builder.CloseElement();
+
+            builder.OpenElement(97, "button");
+            builder.AddAttribute(98, "type", "button");
+            builder.AddAttribute(99, "class",
+                "rz-button rz-button-xs rz-button-icon-only rz-variant-text rz-base rz-shade-lighter");
+            builder.AddAttribute(100, "aria-label", column.HeaderText + " " + RemoveFilterText);
+            builder.AddAttribute(101, "title", RemoveFilterText);
+            builder.AddAttribute(102, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
+                this, _ => Filter(column, null)));
+            builder.AddEventStopPropagationAttribute(103, "onclick", true);
+
+            builder.OpenElement(104, "i");
+            builder.AddAttribute(105, "class", "notranslate rzi");
+            builder.AddAttribute(106, "aria-hidden", "true");
+            builder.AddContent(107, "close");
+            builder.CloseElement();
+
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        // The column whose hidden-filter pill was last clicked, or null while none was.
+        ColumnBase<TItem>? hiddenFilterNoticeFor;
+
+        /// <summary>Says the pill's column is hidden, beside the pill that was clicked.</summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>Outside the chip list, because the list is a <c>role="list"</c>.</strong> A child of
+        /// it that is not a <c>listitem</c> is a list a screen reader miscounts, which is §12's rule
+        /// about the bar one element out.
+        /// </para>
+        /// <para>
+        /// <strong>Read back off the column rather than cleared by hand.</strong> The notice is drawn
+        /// only while its column is still both filtered and hidden, so showing the column, removing the
+        /// filter and <em>Clear all filters</em> each take it away without knowing it exists - which is
+        /// three places that would otherwise have to remember to.
+        /// </para>
+        /// </remarks>
+        void RenderHiddenFilterNotice(RenderTreeBuilder builder)
+        {
+            if (hiddenFilterNoticeFor is not { } column || column.IsVisible || !column.HasFilter)
+            {
+                return;
+            }
+
+            builder.OpenElement(110, "div");
+            builder.AddAttribute(111, "class", "rz-filter-pill-notice");
+            builder.AddAttribute(112, "role", "status");
+            builder.AddContent(113, HiddenColumnFilterText);
+            builder.CloseElement();
+        }
+
+        /// <summary>Shows the notice for this column, or takes it away if it is already showing.</summary>
+        void ToggleHiddenFilterNotice(ColumnBase<TItem> column) =>
+            hiddenFilterNoticeFor = ReferenceEquals(hiddenFilterNoticeFor, column) ? null : column;
+
+        /// <summary>Enter and Space toggle it, which is what a <c>role="button"</c> promises.</summary>
+        void OnHiddenFilterPillKey(ColumnBase<TItem> column, KeyboardEventArgs args)
+        {
+            if (args.Key is "Enter" or " ")
+            {
+                ToggleHiddenFilterNotice(column);
+            }
         }
 
         /// <summary>Whether this column's filter has an editor the bar can send a reader to.</summary>

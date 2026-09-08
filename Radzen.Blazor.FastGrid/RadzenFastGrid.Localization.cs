@@ -551,6 +551,24 @@ namespace Radzen.FastGrid
             set => removeFilterText = value;
         }
 
+        string? hiddenColumnFilterText;
+
+        /// <summary>
+        /// What a pill says when its column is not drawn: why there is nothing to click through to.
+        /// </summary>
+        /// <remarks>
+        /// Names no column, because the pill it belongs to already does - it carries the column's title
+        /// and its filter in words, and repeating the title inside the sentence would need a format
+        /// string where every other string on this grid is whole.
+        /// </remarks>
+        [Parameter]
+        public string HiddenColumnFilterText
+        {
+            get => hiddenColumnFilterText ?? Localize("DataGrid_HiddenColumnFilterText",
+                "This column is hidden. Show it to adjust its filter.");
+            set => hiddenColumnFilterText = value;
+        }
+
         string? clearAllFiltersText;
 
         /// <summary>The pill bar's button that clears every column at once.</summary>
