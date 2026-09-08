@@ -11410,3 +11410,88 @@ for the `r` attribute and the value's own text. Getting under it means writing t
 digits into the writer as characters rather than as strings - `WriteStartAttribute`, a pooled buffer,
 `WriteRaw` - which neither a cell reference nor a decimal integer needs escaping for. That is a real
 lever and it is a different kind of change from these; it is named here rather than taken.
+
+## 48. The lever §47 named, taken - and what C# actually offers here
+
+§47 ended with *"a real lever and it is a different kind of change from these; it is named here rather
+than taken"*. Taken, in two commits on `upstream/xlsx-writer-stream`.
+
+| | allocated |
+| --- | --- |
+| after the shared string table | 64.7 MB |
+| format a reference into the caller's span | 64.4 MB |
+| write a reference and a number to the stream as characters | **25.8 MB** |
+
+**458 MB to 25.8 MB over 550,000 cells - seventeen times less - and no allocation is left that a cell
+makes.** The histogram is down to twenty ticks and every row of it is a large array: the deflate
+buffers, the shared string dictionary's entries, and the list the cells are sorted in. Nothing is per
+cell any more.
+
+### What the language actually gives, and what it does not
+
+The question was whether recent C# or runtime features help. The honest inventory:
+
+- **`Utf8String` never shipped.** It was prototyped and abandoned. What did land is `u8` literals, which
+  give a `ReadOnlySpan<byte>`, and `Utf8.TryWrite` and `IUtf8SpanFormattable` in .NET 8, which format
+  straight to UTF-8 bytes. **None of them helps here**, because the sink is `XmlWriter`, which is a
+  char and string API from 2005.
+- **`XmlWriter` has no span overload at all.** Checked rather than assumed: `WriteRaw(char[], int, int)`,
+  `WriteRaw(string)`, `WriteString(string)`, `WriteValue(...)`, `WriteChars(char[], int, int)`. And
+  `WriteValue(int)` is no help either - it calls `XmlConvert.ToString` and allocates the string anyway.
+  So the one span-shaped exit is a `char[]` handed to `WriteRaw`, which is what the writer keeps.
+- **`ISpanFormattable.TryFormat` is the feature that does the work**, with a reusable buffer. Available
+  on the net8.0 floor this library targets, so no conditional compilation.
+- **`Dictionary.GetAlternateLookup<ReadOnlySpan<char>>`** would let the shared string table be probed
+  without a string, but it is .NET 9 and the floor is net8.0. It would not help anyway: the text is
+  already a string on the cell.
+
+**The ceiling is the sink, not the language.** Going further means writing UTF-8 bytes to the stream
+directly, at which point `u8` literals and `Utf8.TryWrite` become the right tools and the char to UTF-8
+transcode disappears too - but so does `XmlWriter`'s escaping, which would have to be hand rolled. That
+is a correctness risk this package should not take for the bytes it would buy.
+
+### `WriteRaw` does not escape, so what reaches it is the whole argument
+
+Two things and nothing else: a cell reference, which is letters, digits and the absolute markers; and a
+number formatted with the invariant culture, which is digits, a sign, a point and an exponent. Every
+cell whose value is text still goes through `WriteString`. `TryFormatNumber` names the types it will
+spell and answers false for everything else, which falls back to the string path.
+
+**That `TryFormat` spells a number the way `ToString(InvariantCulture)` did is not read off the
+documentation.** `SpanFormatAgreement.cs` asks it of sixty values a fixture would never carry - negative
+zero, denormals, `1e21`, `9007199254740993.0`, `int.MinValue`, both decimal extremes - and they agree.
+A disagreement would have changed a saved file silently, which is the one failure the suite cannot see.
+
+### The bound that was one character short
+
+The review found it, and the first test written for it did not: `CellRef.MaxLength` was
+`2 + 7 + 10`, on the reasoning that a row is at most ten digits. The row is written as `Row + 1` in
+**signed** arithmetic, so the last row wraps to `int.MinValue` and takes **eleven** characters. At the
+old bound `TryFormat` returns false, the length is zero, and `ToString` silently drops the row.
+
+**The first test for it passed against the broken bound.** It used `new CellRef(int.MaxValue, 0)` -
+one column letter, no absolute markers, twelve characters, nowhere near the limit. The real worst case
+needs all three at once: both markers, a column that takes every letter, and the wrapping row. Written
+that way it fails at the old bound and passes at the new one. **A gate aimed at the wrong extreme is
+not a gate**, and the only way to find that out was to break the code deliberately and watch the test
+not notice - which is §46's rule arriving for the third time in this work.
+
+### Against ClosedXML, and a hypothesis that got its answer
+
+| the save alone | allocated | time |
+| --- | --- | --- |
+| this package | **25.7 MB** | 267 ms |
+| ClosedXML 0.104.2 | 278.7 MB | 475 ms |
+
+**Ten times less than ClosedXML, and now faster as well.** §47 wrote down a hypothesis for why this
+package allocated less but ran slower - *"a retained XElement graph against transient buffers"* - and
+noted no GC time had been measured. It is still not measured, but the prediction it implies has come
+true: removing the graph reversed the ranking. That is evidence for the hypothesis and not proof of it,
+and the time figures stay where §42 put them, below the allocation ones.
+
+### What is left
+
+The floor, and it is not the writer's to spend: deflate buffers, the shared string dictionary's growth,
+and the `List<Cell>` the sort needs. The dictionary is the only one with an obvious lever - pre-sizing
+it, which is the single line §42 found was the whole of `SetValues`' saving - and it is worth one
+measurement rather than one reading.
