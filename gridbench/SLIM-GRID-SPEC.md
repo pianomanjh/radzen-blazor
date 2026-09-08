@@ -11495,3 +11495,70 @@ The floor, and it is not the writer's to spend: deflate buffers, the shared stri
 and the `List<Cell>` the sort needs. The dictionary is the only one with an obvious lever - pre-sizing
 it, which is the single line §42 found was the whole of `SetValues`' saving - and it is worth one
 measurement rather than one reading.
+
+## 49. 25.8 MB was not the floor, and a third of it was the harness
+
+§48 closed on *"the floor, and it is not the writer's to spend"*, and named the deflate buffers, the
+shared string dictionary and the sort list. Asked whether that was really the floor, the answer is no,
+and the first correction is to the instrument rather than to the writer.
+
+**Eight of the 25.8 MB is the harness's own `MemoryStream` growing by doubling.** The save writes 2.8 MB
+and a `MemoryStream` reaches that through a chain of doublings, all of it charged to the save. Writing
+to `Stream.Null` instead reports **17.7 MB**, and a `MemoryStream` handed its capacity up front reports
+the same. Every rung of §46 to §48's ladder carried this, and every *delta* in it is untouched - the
+sink is identical in both arms of every pair, because both write the same 2.8 MB - but the absolute
+figures were the writer plus a sink, and only the writer's half is the writer's.
+
+### Two levers, both real, measured by ablation
+
+| | writer's own allocation |
+| --- | --- |
+| §48's tip | 17.7 MB |
+| the sort array rented rather than allocated | 13.5 MB |
+| the shared string table sized rather than grown | 13.8 MB |
+| both | **9.6 MB** |
+
+Additive to the tenth of a megabyte, and each figure identical across three passes and two runs.
+
+The table is sized by **the string cells a sheet holds, not the distinct strings among them**, which is
+the one case where this can cost rather than save. Asked of the extreme - every string cell carrying the
+same text, so the table holds one entry - it is 8.5 MB against 12.7. That extreme is not a real sheet,
+and the case that is was measured too: a column distinct per row, a column of five statuses, and a
+constant column reports the same **3.9 MB saving**, because the distinct column is what the sizing is
+driven by. The sizing follows the shape `CellStore.SetValues` already uses upstream,
+`EnsureCapacity(Count + incoming)`.
+
+### Pooling was already happening, in the runtime rather than in this package
+
+`System.IO.Compression` rents its deflate buffers from `ArrayPool`, which is why no `byte[]` appears in
+the histogram of a save into `Stream.Null` at all. Nothing in `Radzen.Blazor` pooled anything; the sort
+array is the first thing that does, rented and returned in a `finally`.
+
+### BenchmarkDotNet, asked directly
+
+The question was whether this work should have used it. Half of it should, and now does -
+`benchmarks/Spreadsheet` on the review branch runs the ClosedXML comparison under `[MemoryDiagnoser]`:
+
+| | Mean | Allocated | Alloc ratio | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| this package | 707.7 ms ± 979.3 | **17.67 MB** | 1.00 | – | – | – |
+| ClosedXML 0.104.2 | 774.7 ms ± 164.0 | 278.71 MB | 15.78 | 21000 | 1000 | 1000 |
+
+Three things come out of it. **It confirms the console harness to two decimal places** - 17.67 MB
+against 17.7, and 278.71 against 278.7 - which is two instruments agreeing rather than one being
+trusted. **It answers §47's hypothesis with data neither section had**: the save now causes *no
+collection of any generation*, where ClosedXML causes twenty-one thousand gen-0 collections per thousand
+operations. §47 guessed at a retained graph against transient buffers and said no GC time had been
+measured; the collection counts are that measurement, and they say the guess was right. And **it shows
+why time is not quoted here**: 707.7 ms with an error of 979.3 ms is the instrument saying it cannot
+resolve the question, from the tool whose whole purpose is resolving it.
+
+**The other half of the work it cannot do, which is the part that found everything.** The ladder across
+commits compares two builds of `Radzen.Blazor`, and one process cannot hold both - that is why the
+harnesses are console programs whose project reference is repointed at each checkout. And every finding
+in §46 to §48 came from a histogram of allocation *by type*: a `Format` per cell, an `Action` per cell,
+a tree node per cell, an `XElement` per cell. BenchmarkDotNet reports a total, and a total names nothing.
+
+**So the answer is not "use BenchmarkDotNet instead" but "use it for the comparison it is right for".**
+It is right for two libraries in one build with a claim about time. It is wrong for a ladder across
+commits and blind to which object the bytes went to.
