@@ -667,13 +667,23 @@ static class XlsxReader
         }
         else if (valueElem is not null)
         {
-            var value = cellType switch
+            // ECMA-376 part 1, 18.18.11: t="b" is a boolean. Its <v> is ST_Xstring, so a producer may
+            // write the word rather than 1 or 0.
+            if (cellType == "b")
             {
-                "s" => sharedStrings[Convert.ToInt32(valueElem!.Value, CultureInfo.InvariantCulture)],
-                _ => valueElem!.Value
-            };
+                sheet.Cells[address.Row, address.Column].Value =
+                    valueElem.Value is "1" || bool.TryParse(valueElem.Value, out var flag) && flag;
+            }
+            else
+            {
+                var value = cellType switch
+                {
+                    "s" => sharedStrings[Convert.ToInt32(valueElem!.Value, CultureInfo.InvariantCulture)],
+                    _ => valueElem!.Value
+                };
 
-            sheet.Cells[address.Row, address.Column].SetValueInvariant(value);
+                sheet.Cells[address.Row, address.Column].SetValueInvariant(value);
+            }
         }
 
         ApplyCellStyle(cellElem, sheet, address, styleInfo);
