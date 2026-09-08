@@ -10660,7 +10660,9 @@ about **1.7 s** at 50,000 rows, not four.
 
 §38 surveyed a consuming application's 463-line ClosedXML package and §40 built a replacement without
 ever running the two side by side. Asked directly whether the application's version is more efficient,
-the answer is **yes, about twice over**, and finding that out corrected something else on the way.
+the answer at the time was **yes, about twice over** - and that answer did not survive either the
+harness being rebuilt or `SetValues` existing. It is corrected below; finding it out corrected something
+else on the way.
 
 ### The timings in §40 and §41 were taken under load
 
@@ -10693,6 +10695,33 @@ cell by cell, the application's through `InsertData` with formats applied per co
 **About half the allocation and, warm, about two-fifths of the time.** The allocation ratio is the
 trustworthy one - stable at 1.9-2.0x across passes - while the time ratio ranged 1.4x to 2.4x depending
 on warmth.
+
+**That table put this package's slowest path against ClosedXML's fastest, and the comparison it was
+being used for is a different one.** *"Both engines filled the way their own consumer fills them"* is a
+fair description of the two consumers and an unfair one of the two libraries: cell-by-cell against
+`InsertData` measures whether a bulk entrance exists, which is what §41's upstream branch then went and
+added. Re-run once it did, on the harness that is now kept, six arms interleaved in one process,
+medians of three passes, ClosedXML 0.104.2:
+
+| | this package | ClosedXML |
+| --- | --- | --- |
+| a cell at a time | 113.7 MB | **344.8 MB** |
+| bulk - `SetValues` against `InsertData` | 94.0 MB | **75.1 MB** |
+| fill and save | 536.0 MB | **353.8 MB** |
+
+**Like for like the gap is much smaller than the first table said, and one of the two comparisons runs
+the other way.** Bulk against bulk is **1.25x**. Cell against cell this package is **three times
+cheaper**, because ClosedXML's per-cell path is the expensive one - which is the part the original table
+could not see, having never run it.
+
+**What is left is the writer.** Subtracting the fill, the save alone is **442 MB against 279 MB**: four
+fifths of this package's export allocation and nine tenths of its time. On the whole export the ratio is
+**1.51x**, down from the 1.94x the first table reported. So the honest form of §38's question - *is the
+application's exporter more efficient?* - is now: its fill is 25% cheaper, its per-cell path is three
+times dearer, and its writer is the reason it still wins overall.
+
+That last point is the one worth acting on. Every improvement in §41's branch was to the *model*, and
+the model was never where the export's cost was. `XlsxWriter` is.
 
 Three reasons, in the order they matter:
 
@@ -10793,15 +10822,15 @@ and not what the strings do. The new harness is kept, in `gridbench/spreadsheet/
 correction: a number nobody can reproduce is not a measurement, and §42 of all sections should not have
 had one.
 
-The ratio against ClosedXML is **not restated**. ClosedXML's 67 MB was taken with the old harness and
-comparing it to the new ladder would be the same fault one step further out; it needs measuring again on
-the harness that is kept, and has not been.
+**"The rest of that gap is the model, not the API" was written one measurement too early, and it is
+about the fill rather than the export.** It was said before the shared `CellData`, which was worth
+another 13%. Within the fill it is now true: 94.0 MB over 550,000 cells is 179 bytes each, and the `Cell`
+object is most of that - ten fields and a 24-byte `CellRef`, one object per cell. Getting under it means
+cells that are not objects, which is a different library.
 
-**"The rest of that gap is the model, not the API" was written one measurement too early.** It was said
-before the shared `CellData`, which was worth another 13%. What is left really is the model: 94.0 MB over
-550,000 cells is 179 bytes each, and the `Cell` object is most of that - ten fields and a 24-byte
-`CellRef`, one object per cell. Getting under it means cells that are not objects, which is a different
-library.
+**Within the export it is not true, and the ClosedXML re-run above is what says so.** The fill is 94 MB
+of a 536 MB export. Whatever is left of the model is 17% of the problem, and `XlsxWriter` is the other
+83%.
 
 ### The saving is the pre-sizing, and the first account of it was wrong
 
