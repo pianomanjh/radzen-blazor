@@ -11690,3 +11690,54 @@ There is no ClosedXML row beside the save-only figure. `XLWorkbook.SaveAs` **clo
 given and keeps hold of it**, so a second save of the same workbook throws `ObjectDisposedException`. It
 cannot be filled once and saved repeatedly. An arm that throws is not an arm that is slow, and the
 difference is worth stating rather than leaving as an `NA` in a table.
+
+## 52. The collections left in the export are the fill's, and the fill is the model
+
+§51 published collection counts for the whole export and left an apparent contradiction standing: the
+save is said to cause none, and the export's row shows ten thousand gen-0 per thousand operations. Both
+are true and they are different arms. Measured apart:
+
+| | allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- |
+| fill only, `CellStore.SetValues` | 93.97 MB | 10667 | 5667 | 1000 |
+| fill and save | 111.64 MB | 10000 | 5000 | 1000 |
+| **save only** | **17.67 MB** | **none** | **none** | **none** |
+| ClosedXML, save only | 278.70 MB | 21000 | 1000 | 1000 |
+
+**Filling and then saving collects what filling alone collects.** The save adds 17.67 MB and no
+collection of any generation, so nothing in the export's GC figures is the writer's. That is what makes
+the save-only pair the table that describes this work, and §51 should have shown it rather than the
+export's.
+
+**The save-only pair is also the only one that means the same thing on every build**, because before this
+work's first commit a save mutated the workbook it was given: the first save gave every cell a format
+object, so a second save of the same workbook allocated 119 MB less - 448.4 then 329.1. Both arms build a
+workbook per invocation for that reason, and it is why the comparison could be made at all.
+
+### Asked whether the fill's collections can go too
+
+By type, the fill's 94 MB over 550,000 cells is:
+
+| type | est MB | per object | per cell |
+| --- | --- | --- | --- |
+| `Cell` | 68.5 | 112 B | 131 B |
+| `CellData` | 20.5 | 32 B | 39 B |
+| boxed `Double` | 4.1 | 24 B | 8 B |
+
+One object per cell, and a second for every cell that holds anything. The boxed double is
+`CellData.cs:150` - `Value = (Type == CellDataType.Number) ? Convert.ToDouble(data, InvariantCulture) :
+data` - which re-boxes a number that arrived boxed, deliberately, because a spreadsheet number is a
+double.
+
+**These allocations survive.** The workbook is the point of the fill and is kept, so what a gen-1 and
+gen-2 count reports here is promotion rather than garbage - the collector walking a large live graph, not
+sweeping up after a wasteful one. A save's allocations were garbage and could go to zero; a fill's are the
+object graph the caller asked for, and the only way to collect less is to allocate fewer or smaller
+objects per cell.
+
+That is a change to `CellStore` and to the public `Cell`, not to the writer, and §42 already reached it
+from the other side: *"getting under it means cells that are not objects, which is a different library."*
+Two contained things would reduce it without redesigning anything - folding `CellData` into `Cell` to
+save a header and a reference per cell, and skipping the re-box when the value is already a double -
+and neither removes a collection, they only make the graph smaller. **The writer's side of the export is
+finished; the model's side is a different piece of work and is not started here.**
