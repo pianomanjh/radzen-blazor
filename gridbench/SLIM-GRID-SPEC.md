@@ -9666,9 +9666,13 @@ as a specification of what a grid is missing, it names four things:
 | # | What the wrapper built | Here |
 | --- | --- | --- |
 | 1 | A lookup column: id in the row, name in the cell, checklist off the dictionary | **built**, §14 |
-| 2 | Settings persisted to `localStorage` under a key | not built - §39 |
-| 3 | A control to put the layout back | not built - §39 |
-| 4 | Excel export, with a per-column override | not built - §40 |
+| 2 | Settings persisted to `localStorage` under a key | **built**, §39 |
+| 3 | A control to put the layout back | **built**, §39 - the band menu's *Reset layout* |
+| 4 | Excel export, with a per-column override | **built**, §40-§43 - its own package |
+
+**All four are built as of §43, and the list is closed.** What is below was written while three of them
+were still designs; it is left as it was, because the survey's value is the reading rather than the
+score. What a migration now meets is at the end of this section.
 
 **The first one is the finding, and it is a negative result about this section's own usefulness.** The
 wrapper's `RadzenDataGridLookupColumn<TItem>` takes an `IReadOnlyDictionary<int, string>` and assembles
@@ -9708,6 +9712,30 @@ about this component. Nothing below depends on the answer.
 It does not treat the wrapper as a requirements document. A wrapper is a record of what one team needed
 under one grid's constraints, and two of its four features exist partly to work around
 `RadzenDataGrid`'s own behaviour - §39 has the clearest case. Read for the gap, not for the solution.
+
+### What a migration still meets, now that all four are built
+
+None of these is a missing feature. Each is a place this component deliberately answers differently from
+the wrapper, and every one of them is something the application sees on the day it migrates rather than
+later:
+
+- **A null key and a missing key stop being the same thing.** The wrapper draws `(unknown)` for both.
+  §14 draws an empty cell for a null key and offers it in the filter as *(none)*, and draws the raw id
+  for a key with no entry and never offers it. Cells that read `(unknown)` today will read two different
+  things, and that is the point of the divergence.
+- **`StorageKey` is required and has no default**, which is 91 grids to name. The wrapper defaults to
+  `typeof(T).Name`, so a list page and a picker over one `Order` share a blob and restore each other's
+  columns - a live fault, and the reason the default is refused rather than copied.
+- **An enum exports `ToString()`, not its `[Display]` name.** §42: the export says what the cell said,
+  and §36's `[Display]` name is the *filter* vocabulary. The wrapper's ClosedXML path exported the
+  display name, so an exported column changes wording.
+- **`RadzenDataGridDropDownLookupColumn` and its four call sites are deletions rather than ports.** Both
+  of its workarounds - `dynamic` columns and `Type ??= typeof(int)` - have nothing to work around under
+  `RadzenFastDropDownDataGrid`, which is typed `<TValue, TItem>` and takes ordinary `ColumnBase<TItem>`
+  children.
+- **The one grouped grid out of 91 has no path here.** Grouping is §1's exclusion and stays one.
+- **511 string property names against a column model of expressions**, still unpriced, still a question
+  about the application. Nothing above depends on the answer.
 
 ---
 
