@@ -10161,6 +10161,17 @@ than no test, and the only way to know which kind you have written is to break t
 
 **Nothing here is built when this section lands.**
 
+**Four of the claims below were overturned by what came after, and the section reads as settled without
+them.** Each is corrected where it stands, and they are gathered here so this section cannot be read
+alone and believed:
+
+| What §40 says | What is true |
+| --- | --- |
+| a `bool` is a deliberate demotion, because the file cannot keep one | §42: the file was always right - `XlsxWriter` writes ECMA-376's `t="b"` and `XlsxReader` drops it. Booleans are typed. |
+| a column's `Format` is not mapped, on §39's refusal of a settings-blob converter | §43: the analogy does not hold - that one was bidirectional persistence, this is one-way and allowed to give up. `ExportFormat` maps it. |
+| a download is the application's to own | §41: `AddRadzenFastGridExport()` downloads the file, because a menu entry that produces nothing a reader can open is not a feature. `OnExport` is where an application takes it back. |
+| the seconds in the measurement table | §42: taken with the playground and a browser running, about 2.4x too high. The allocation figures were always right. |
+
 §38's ④. The application exports a grid to `.xlsx` through a 463-line package over ClosedXML. The
 survey's finding is not that the feature is wanted - it obviously is - but that **the writer for it is
 already inside this component's own dependency.**
@@ -10282,6 +10293,10 @@ the assembly whose argument is what it does not draw.
 
 - **A download.** Bytes to a browser is `IJSRuntime` and a data URL or a stream reference, it differs
   between Server and WebAssembly, and it is the application's to own. `ToWorkbook` stops at the model.
+  **§41 reverses this.** `ToWorkbook` still stops at the model; the *service* registered beside it
+  downloads, because the menu entry §39 asked for has to produce something a reader can open. The half
+  of the reason that survives is that the Server/WebAssembly difference is handled once, by
+  `Radzen.downloadFile`, rather than by every application.
 - **A button.** §39's menu is where an export entry would live, and it should be argued there, once
   there is a menu to put it in.
 - **CSV.** `Workbook.SaveAsCsv` exists and costs nothing to reach through the same `Workbook`. There is
@@ -10384,6 +10399,10 @@ accepts a bool and the *file* cannot keep one. Written and read back, `true` is 
 format, so Excel shows a column of ones. §38's application is explicit about keeping bools typed so Excel
 sorts them; this writer cannot, so the column's own word wins.
 
+**That is wrong, and §42 has the bytes.** The file carries `<c r="A1" t="b"><v>1</v></c>`, which is
+ECMA-376's boolean; `XlsxReader` is what drops the attribute. Booleans are typed, and the demotion this
+paragraph argues for was made for a fault that was never in the file.
+
 **And text has to be insisted on, which is the finding a user would have made rather than a test.** Handed
 a string, `CellData` runs `TryConvertFromString` and keeps whatever it infers - so the text a column drew
 does not survive being written. It was found by a test expecting *True* from a bool column and getting
@@ -10461,6 +10480,9 @@ Both axes read the built package against the section. Nine findings; the three t
   other half in the language the file speaks. Both are pinned, because exporting the formatted text
   instead is a one-line change that would look like an improvement and would quietly make the column
   unsummable.
+  **§43 closes this**: the argument was borrowed rather than applied, the mapper is 62 lines, and
+  `ExportFormat.ToNumberFormat` now carries the column's `Format` into the file - answering null, and
+  falling back to the column's text, where there is no honest equivalent.
 - **Every table was called `Export`.** Nothing in the model objects - `AddTable` checks uniqueness within
   one worksheet, and two sheets each carrying an `Export` save and load without complaint, which is
   measured - but Excel wants the name unique across the workbook, and putting two exported grids in one
@@ -10656,7 +10678,8 @@ Three reasons, in the order they matter:
   gap rather than a decision.
 - **A `bool` stays a bool.** ClosedXML writes a real boolean cell; this writer stores the number 1 with
   no format, which is why booleans are demoted to text here. That is the writer's limit, not the
-  consumer's choice.
+  consumer's choice. **Wrong, and corrected below**: the number 1 is what the *reader* answers, and the
+  file carries a real boolean cell.
 - **An enum exports its `[Display]` name.** This package exports `ToString()`, on the rule that the
   export says what the cell said. Defensible either way, and a difference anyone migrating will see.
 
