@@ -36,6 +36,12 @@ namespace Radzen.FastGrid.Export
         /// <summary>Writes a value into a cell in the closest form the writer will keep.</summary>
         /// <remarks>
         /// <para>
+        /// <strong>Text has to be insisted on, because <c>Cell.Value</c> re-reads it.</strong> Handed a
+        /// string, <c>CellData</c> runs <c>TryConvertFromString</c> and keeps whatever that infers - so
+        /// the text a column drew does not survive being written, and a product code <c>"007"</c> is
+        /// stored as the number 7.
+        /// </para>
+        /// <para>
         /// <c>SetValue</c> with a leading apostrophe is the writer's own answer, and its comment names
         /// this exact case: <em>"the quote prefix means literal text, so the string must not go through
         /// type inference ('0123 stays "0123")"</em>. It sets Excel's <c>quotePrefix</c> flag, which is

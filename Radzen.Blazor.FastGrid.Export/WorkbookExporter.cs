@@ -34,6 +34,8 @@ namespace Radzen.FastGrid.Export
         {
             ArgumentNullException.ThrowIfNull(grid);
 
+            // Built here, on the renderer's thread, and that is not incidental: ToWorkbook reads
+            // FilteredRows and VisibleColumns, which are the grid's own state and change under a render.
             var workbook = grid.ToWorkbook(new FastGridExportOptions<TItem>
             {
                 SheetName = options.SheetName,
@@ -58,8 +60,11 @@ namespace Radzen.FastGrid.Export
         /// </summary>
         /// <remarks>
         /// <para>
-        /// <strong>One thing about upstream's is worth knowing and is not this package's to fix here.</strong>
-        /// It calls <c>URL.revokeObjectURL</c> in the same tick as the anchor's click. A browser that has
+        /// <strong>The bytes go to the browser through upstream's <c>Radzen.downloadFile</c></strong>,
+        /// which already unwraps a <c>DotNetStreamReference</c> and already handles the difference
+        /// between Server and WebAssembly - so this package needs no <c>wwwroot</c>, no module and no
+        /// Razor SDK. One thing about it is worth knowing and is not this package's to fix here: it
+        /// calls <c>URL.revokeObjectURL</c> in the same tick as the anchor's click. A browser that has
         /// not finished reading the blob by then loses the file, and this is the one caller that
         /// routinely produces megabytes - 2.5 MB at 50,000 rows, measured. It is offered upstream on its
         /// own branch, which is what this branch did with #2696, #2702 and #2705.
@@ -88,6 +93,9 @@ namespace Radzen.FastGrid.Export
                 return;
             }
 
+            // await using, so the stream is released on the throwing paths too. DotNetStreamReference
+            // disposes it as well; disposing a MemoryStream twice is a no-op, and one of the two has to
+            // be the one that always runs.
             await using var stream = new MemoryStream();
 
             await Task.Run(() => workbook.SaveToStream(stream));

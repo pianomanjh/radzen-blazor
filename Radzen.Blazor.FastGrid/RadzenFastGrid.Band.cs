@@ -48,8 +48,12 @@ namespace Radzen.FastGrid
         // data load and has a state machine around it that an export has no business entering.
         bool exporting;
 
+        /// <summary>The panel's element id, so the trigger can name it in <c>aria-controls</c>.</summary>
+        /// <remarks>
+        /// §35's reason: <c>Radzen.setPopupAriaExpanded</c> looks the anchor up <em>by</em>
+        /// <c>aria-controls</c> and silently does nothing when it is missing.
+        /// </remarks>
         internal string GridMenuElementId => ElementId + "-grid-menu";
-
 
         // One panel for the grid, null until the first open builds it - §29's reason, and the same
         // shape the filter menu above uses.
@@ -225,9 +229,16 @@ namespace Radzen.FastGrid
 
             await popup.ToggleAsync(gridMenuElement);
 
+            // The trigger's aria-expanded is rendered from C# and opening the panel changes nothing the
+            // grid has rendered, so without this it stays "false" for as long as the menu is open.
             StateHasChanged();
         }
 
+        /// <summary>The panel, rendered once the first open has asked for one and never removed after.</summary>
+        /// <remarks>
+        /// Never removed once it is here, for §35's reason: <c>Radzen.openPopup</c> reparents the panel
+        /// to <c>document.body</c>, and Blazor resolves a removal against the logical parent it recorded.
+        /// </remarks>
         void RenderGridMenu(RenderTreeBuilder builder)
         {
             if (!gridMenuBuilt)
@@ -242,6 +253,12 @@ namespace Radzen.FastGrid
                 captureGridMenuPopup ??= reference => gridMenuPopup = (RadzenPopup)reference);
         }
 
+        /// <summary>Redraws the trigger's <c>aria-expanded</c>, once the popup has closed itself.</summary>
+        /// <remarks>
+        /// <c>RadzenPopup</c>'s <c>OnClose</c> updates its own <c>IsOpen</c> and nothing redraws the
+        /// grid, so without this a menu closed by a click outside leaves <c>aria-expanded="true"</c> in
+        /// the render tree until something else happens to render. See <c>RenderOverlayMenu</c>.
+        /// </remarks>
         void OnGridMenuClosed() => StateHasChanged();
 
         /// <summary>
