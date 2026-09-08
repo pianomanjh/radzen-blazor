@@ -450,4 +450,21 @@ public class Cell
         Address = address;
         Worksheet = sheet;
     }
+
+    // Adopts what a slot was holding before anything asked for a cell here. The value and type are
+    // taken as they are: re-inferring them would rebuild "0123" as a number.
+    internal Cell(Worksheet sheet, CellRef address, object? value, CellDataType type, bool quotePrefix)
+    {
+        Address = address;
+        Worksheet = sheet;
+        this.value = value;
+        this.type = type;
+        QuotePrefix = quotePrefix;
+    }
+
+    // What a cell holds when nothing but its value has been asked for, so the writer can read a
+    // cell that was never materialised.
+    internal object? StoredValue => value;
+
+    internal CellDataType StoredType => type;
 }

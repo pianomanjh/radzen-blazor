@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace Radzen.Documents.Spreadsheet;
 
@@ -17,9 +18,36 @@ public class CellStore(Worksheet sheet)
     public Worksheet Worksheet { get; } = sheet;
 
     /// <summary>
+    /// What is stored at one address: a value, or the cell object that has taken over from it.
+    /// </summary>
+    /// <remarks>
+    /// A bulk fill writes values and never builds a cell. A cell is built the first time anything
+    /// asks for one and is kept, so <see cref="this[int, int]"/> returns the same instance every
+    /// time and everything that compares cells by reference is unaffected.
+    /// </remarks>
+    internal struct CellSlot
+    {
+        // The value, or the cell that has taken over from it. A cell value is never a Cell, so the
+        // one reference answers both questions and the slot stays two words.
+        public object? Content;
+        public CellDataType Type;
+        public bool QuotePrefix;
+
+        public readonly Cell? Cell => Content as Cell;
+
+        public readonly object? Value => Content is Cell cell ? cell.StoredValue : Content;
+
+        public readonly CellDataType ValueType => Content is Cell cell ? cell.StoredType : Type;
+
+        public readonly bool IsEmpty => Content is Cell cell
+            ? cell.IsEmpty
+            : Content is null && !QuotePrefix;
+    }
+
+    /// <summary>
     /// Stores the cells in a dictionary, where the key is a tuple of (row, column).
     /// </summary>
-    protected readonly Dictionary<(int row, int column), Cell> data = [];
+    private readonly Dictionary<(int row, int column), CellSlot> data = [];
 
     /// <summary>
     /// Gets a cell at the specified row and column.
@@ -48,7 +76,7 @@ public class CellStore(Worksheet sheet)
         {
             EnsureWithinBounds(row, column);
 
-            data[(row, column)] = value;
+            data[(row, column)] = new CellSlot { Content = value };
         }
     }
 
@@ -98,8 +126,10 @@ public class CellStore(Worksheet sheet)
     /// <returns>True if the cell exists in the store; otherwise, false.</returns>
     public bool TryGet(int row, int column, out Cell cell)
     {
-        if (InBounds(row, column) && data.TryGetValue((row, column), out cell!))
+        if (InBounds(row, column) && data.ContainsKey((row, column)))
         {
+            cell = GetOrAdd(row, column);
+
             return true;
         }
 
@@ -108,7 +138,15 @@ public class CellStore(Worksheet sheet)
         return false;
     }
 
-    internal IEnumerable<Cell> GetPopulatedCells() => data.Values;
+    internal IEnumerable<Cell> GetPopulatedCells()
+    {
+        foreach (var key in keysBuffer())
+        {
+            yield return GetOrAdd(key.row, key.column);
+        }
+
+        List<(int row, int column)> keysBuffer() => [.. data.Keys];
+    }
 
     internal int Compact()
     {
@@ -134,35 +172,36 @@ public class CellStore(Worksheet sheet)
 
     internal bool HasCell(int row, int column) => data.ContainsKey((row, column));
 
-    private static void UpdateCellAddress((int row, int column) oldKey, (int row, int column) newKey, Cell cell)
+    // Only a cell that exists has an address to correct; a slot's address is its key.
+    private static void UpdateCellAddress((int row, int column) oldKey, (int row, int column) newKey, CellSlot slot)
     {
-        if (oldKey != newKey)
+        if (oldKey != newKey && slot.Cell is { } cell)
         {
             cell.Address = new CellRef(newKey.row, newKey.column);
         }
     }
 
     internal void ShiftRowsUp(int deletedRow) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), CellSlot>(data, k =>
             k.row < deletedRow ? k :
             k.row == deletedRow ? null :
             (k.row - 1, k.column),
             UpdateCellAddress);
 
     internal void ShiftRowsDown(int fromRow, int count) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), CellSlot>(data, k =>
             k.row < fromRow ? k : (k.row + count, k.column),
             UpdateCellAddress);
 
     internal void ShiftColumnsLeft(int deletedColumn) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), CellSlot>(data, k =>
             k.column < deletedColumn ? k :
             k.column == deletedColumn ? null :
             (k.row, k.column - 1),
             UpdateCellAddress);
 
     internal void ShiftColumnsRight(int fromColumn, int count) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), CellSlot>(data, k =>
             k.column < fromColumn ? k : (k.row, k.column + count),
             UpdateCellAddress);
 
@@ -283,20 +322,41 @@ public class CellStore(Worksheet sheet)
 
             for (var c = 0; c < line.Count; c++)
             {
-                var cell = GetOrAdd(row + r, column + c);
+                ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(data, (row + r, column + c), out _);
 
-                cell.Formula = null;
-                cell.Value = line[c];
+                if (slot.Cell is { } cell)
+                {
+                    cell.Formula = null;
+                    cell.Value = line[c];
+                    continue;
+                }
+
+                // Nothing has asked for a cell here, so nothing holds a reference to one and no
+                // formula names it - a formula reference materialises the cell it names. There is
+                // no dependent to recalculate and no subscriber to notify.
+                CellData.Infer(line[c], Worksheet.Culture, out slot.Content, out slot.Type);
+                slot.QuotePrefix = false;
             }
         }
     }
 
     private Cell GetOrAdd(int row, int column)
     {
-        if (!data.TryGetValue((row, column), out var cell))
+        ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(data, (row, column), out var existed);
+
+        if (!existed)
         {
-            this[row, column] = cell = new Cell(Worksheet, new CellRef(row, column));
+            slot.Type = CellDataType.Empty;
         }
+
+        if (slot.Content is Cell existing)
+        {
+            return existing;
+        }
+
+        var cell = new Cell(Worksheet, new CellRef(row, column), slot.Content, slot.Type, slot.QuotePrefix);
+
+        slot.Content = cell;
 
         return cell;
     }
