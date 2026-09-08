@@ -102,9 +102,9 @@ its filter buttons, and the columns are sized to their contents.
 
 Two of those are worth stating plainly because they are not obvious:
 
-- **A `bool` exports as `True`/`False`, not as a checkbox or a 1.** The file format stores a bool as the
-  number 1 with no formatting, so a typed export would give you a column of ones. Ask for
-  `ExportValue = o => o.IsPaid` if you want the number.
+- **A `bool` exports as a real boolean**, which Excel shows as TRUE/FALSE and can filter as a boolean.
+  Loading the file back through `Workbook.LoadFromStream` currently answers `1`, because the reader drops
+  the type — the file itself is correct, and a fix is offered upstream.
 - **A `TemplateColumn` exports blank** unless you say otherwise. Its cell is a render fragment, and the
   only way to text would be a renderer pass per cell.
 

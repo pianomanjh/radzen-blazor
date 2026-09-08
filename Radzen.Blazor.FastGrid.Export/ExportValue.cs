@@ -31,11 +31,12 @@ namespace Radzen.FastGrid.Export
     /// reader was looking at on screen.
     /// </para>
     /// <para>
-    /// <strong>A <c>bool</c> is the one deliberate demotion.</strong> It is accepted by
-    /// <c>Cell.Value</c>, and the file cannot keep it: measured through a round trip, <c>true</c> is
-    /// written as the number <c>1</c> with no format, so Excel shows a column of 1s and 0s. The column's
-    /// own text says <em>True</em> and <em>False</em>, which is what the grid drew, so text it is - and
-    /// an application that wants the number back has <see cref="IFastGridExportColumn{TItem}.ExportValue" />.
+    /// <strong>A <c>bool</c> was demoted to text here, and that was wrong.</strong> A round trip showed
+    /// <c>true</c> coming back as the number <c>1</c> with no format, which read as the file being
+    /// unable to keep a boolean. Reading the bytes instead showed <c>&lt;c r="A1" t="b"&gt;&lt;v&gt;1&lt;/v&gt;&lt;/c&gt;</c> -
+    /// ECMA-376's boolean, exactly what Excel shows as TRUE. The fault was in <c>XlsxReader</c>, which
+    /// dropped the attribute; the file was always right. Booleans are typed again, which is what lets
+    /// Excel filter the column as a boolean rather than as two words.
     /// </para>
     /// </remarks>
     static class ExportValue
@@ -100,9 +101,15 @@ namespace Radzen.FastGrid.Export
             DateOnly date => date.ToDateTime(TimeOnly.MinValue),
             DateTimeOffset offset => offset.DateTime,
 
-            // Everything else, and a bool is deliberately here rather than above: an enum, a Guid, a
-            // TimeOnly, a TimeSpan and an application's own type would all throw, and a bool would be
-            // written as 1. The column's text is what the reader was looking at.
+            // A bool stays a bool. It was text here until the file was read rather than the round trip:
+            // XlsxWriter writes t="b", which is ECMA-376's boolean and what Excel shows as TRUE, and it
+            // was XlsxReader dropping the attribute that made a round trip answer with the number 1. The
+            // file was always right, so exporting the word instead was a demotion made for a fault that
+            // was never in the file - and typed is what lets Excel filter the column as a boolean.
+            bool => value,
+
+            // Everything else: an enum, a Guid, a TimeOnly, a TimeSpan and an application's own type
+            // would all throw out of Cell.Value. The column's text is what the reader was looking at.
             _ => text ?? value.ToString(),
         };
     }

@@ -10679,3 +10679,37 @@ not be paid.
 If the export ever has to be cheaper, the lever is not this package: it is a bulk path on `CellStore`,
 which is upstream's to add and would take the 418 bytes per cell down to something nearer ClosedXML's
 140.
+
+### The bool was demoted for a fault that was never in the file
+
+§40 recorded *"a `bool` is the one deliberate demotion"* on the evidence of a round trip: written and
+read back, `true` came back as the number 1 with no format. Reading the **bytes** instead says
+`<c r="A1" t="b"><v>1</v></c>` - ECMA-376's boolean, exactly what Excel shows as TRUE.
+
+**`XlsxWriter` was always right and `XlsxReader` drops the attribute**: every cell type but a shared
+string falls through to `SetValueInvariant`, which re-infers from the text. So the demotion was made for
+a reader bug, and the export was writing words where it could have written booleans Excel can filter.
+Booleans are typed again, the test reads the workbook and the file rather than the reader that loses the
+answer, and the reader is fixed on the upstream branch below.
+
+The lesson is the one §37b keeps teaching in a different costume: **a round trip through your own code
+tests your code, not the format.** Two writers agreeing is not evidence, and neither is one writer and
+one reader agreeing to be wrong together.
+
+### Offered upstream
+
+Branch `upstream/spreadsheet-bulk-and-bool`, four commits, 5,128 tests green:
+
+- **Read a boolean cell back as a boolean.** The above.
+- **Do not walk the dependency graph for a cell nothing depends on.**
+  `Worksheet.OnCellValueChanged` runs per write and asks for dependents; the walk allocates a `HashSet`,
+  a `List` and a `Stack` before it can say there are none. `HasDependents` answers off the dictionary.
+  **217 MB to 150 MB** over 550,000 cells, no API change, and callers already batching are unaffected.
+- **`CellStore.SetValues`, a bulk entrance.** One bounds check, one dictionary sizing, one lookup per
+  cell and one update batch. **150 MB and 190 ms to 130 MB and 156 ms.** What is left is the `Cell` and
+  its `CellData`, one object graph per cell.
+- **Do not revoke a download's object URL in the same tick as the click.** Timed at 0.1 ms; the anchor is
+  also put in the document for the click, which Firefox needs.
+
+Together the first two take a 50,000-row fill from **217 MB to 130 MB, 40% less**, against ClosedXML's
+67 MB. The rest of that gap is the model, not the API.

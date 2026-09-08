@@ -312,24 +312,44 @@ namespace Radzen.FastGrid.Tests
         }
 
         /// <summary>
-        /// A bool exports as the word the grid drew, not as the number the file would keep.
+        /// A bool exports as a bool, and the file says so.
         /// </summary>
         /// <remarks>
-        /// The one deliberate demotion. <c>Cell.Value</c> accepts a bool; the file does not keep it -
-        /// measured through this same round trip, <c>true</c> comes back as the number 1 with no format,
-        /// so Excel shows a column of 1s. The column's text is what the reader saw.
+        /// <para>
+        /// <strong>This asserted the opposite until the file was read rather than the round trip.</strong>
+        /// Loading the saved workbook back gives the number 1, which read as the format being unable to
+        /// keep a boolean, so the export demoted bools to the column's text. The bytes say otherwise:
+        /// <c>&lt;c r="A1" t="b"&gt;&lt;v&gt;1&lt;/v&gt;&lt;/c&gt;</c> is ECMA-376's boolean and is what
+        /// Excel shows as TRUE. The fault is in <c>XlsxReader</c>, which drops the attribute - fixed on
+        /// a branch offered upstream.
+        /// </para>
+        /// <para>
+        /// So this reads the workbook before it is saved, and the saved bytes, rather than going through
+        /// the reader that loses the answer. It goes back to the round trip when upstream takes the fix.
+        /// </para>
         /// </remarks>
         [Fact]
-        public void ABoolColumnExportsItsWordRatherThanOne()
+        public void ABoolColumnExportsATypedBoolean()
         {
             using var ctx = Context();
 
             var cut = Render(ctx, Columns.Of(
                 Columns.Property<Person, bool>(p => p.Remote, title: "Remote")));
 
-            var sheet = RoundTrip(cut.Instance.ToWorkbook());
+            var sheet = cut.Instance.ToWorkbook().Sheets[0];
 
-            Assert.Equal("True", sheet.Cells[1, 0].GetDisplayText());
+            Assert.Equal(CellDataType.Boolean, sheet.Cells[1, 0].ValueType);
+            Assert.Equal(true, sheet.Cells[1, 0].Value);
+
+            // And in the file, which is what Excel opens.
+            using var stream = new MemoryStream();
+            cut.Instance.ToWorkbook().SaveToStream(stream);
+            stream.Position = 0;
+
+            using var zip = new System.IO.Compression.ZipArchive(stream);
+            using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+
+            Assert.Contains("t=\"b\"", reader.ReadToEnd());
         }
 
         /// <summary>
