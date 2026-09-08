@@ -87,7 +87,7 @@ static class TypeExtensions
 /// Represents a value of a spreadsheet cell along with its type.
 /// </summary>
 [SuppressMessage("Design", "CA1036:Override methods on comparable types", Justification = "Comparison operators are intentionally omitted; use explicit comparison helpers.")]
-public class CellData : IComparable, IComparable<CellData>
+public class CellData : IComparable, IComparable<CellData>, IEquatable<CellData>
 {
     /// <summary>
     /// Returns the data contained in the cell.
@@ -598,6 +598,18 @@ public class CellData : IComparable, IComparable<CellData>
         var compareResult = CompareValues(Value, other.Value);
         return compareResult >= 0;
     }
+
+    /// <summary>
+    /// Determines whether this instance holds the same value and type as another.
+    /// </summary>
+    /// <remarks>
+    /// A cell builds its <see cref="Cell.Data"/> when asked rather than holding one, so two reads of
+    /// an unchanged cell are two instances. They compare equal, and hash alike.
+    /// </remarks>
+    public bool Equals(CellData? other) => other is not null && Type == other.Type && Equals(Value, other.Value);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as CellData);
 
     /// <inheritdoc />
     public override int GetHashCode()
