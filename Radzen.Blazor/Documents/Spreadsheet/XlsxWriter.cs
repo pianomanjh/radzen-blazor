@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -1340,23 +1341,39 @@ class XlsxWriter(Workbook sourceWorkbook)
     {
         var sharedFormulas = BuildSharedFormulaGroups(sheet);
 
-        // GetPopulatedCells enumerates a dictionary, so that order is recovered by sorting.
-        var cells = new List<Cell>(sheet.Cells.PopulatedCount);
+        var cells = ArrayPool<Cell>.Shared.Rent(sheet.Cells.PopulatedCount);
+
+        try
+        {
+            WriteRows(writer, sheet, cells, styleTracker, sharedStrings, sharedFormulas);
+        }
+        finally
+        {
+            ArrayPool<Cell>.Shared.Return(cells, clearArray: true);
+        }
+    }
+
+    private void WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    {
+        var count = 0;
+        var interned = 0;
 
         foreach (var cell in sheet.Cells.GetPopulatedCells())
         {
             if (IsWritten(cell))
             {
-                cells.Add(cell);
+                cells[count++] = cell;
+
+                if (cell.ValueType == CellDataType.String && string.IsNullOrEmpty(cell.Formula))
+                {
+                    interned++;
+                }
             }
         }
 
-        cells.Sort(static (left, right) =>
-        {
-            var byRow = left.Address.Row.CompareTo(right.Address.Row);
+        sharedStrings.EnsureCapacity(sharedStrings.Count + interned);
 
-            return byRow != 0 ? byRow : left.Address.Column.CompareTo(right.Address.Column);
-        });
+        Array.Sort(cells, 0, count, CellOrder.Instance);
 
         var placeholders = CreateMergePlaceholders(sheet, styleTracker);
         var styledRows = CollectStyledRowIndices(sheet);
@@ -1365,11 +1382,11 @@ class XlsxWriter(Workbook sourceWorkbook)
         var placeholderIndex = 0;
         var styledRowIndex = 0;
 
-        while (cellIndex < cells.Count || placeholderIndex < placeholders.Count || styledRowIndex < styledRows.Count)
+        while (cellIndex < count || placeholderIndex < placeholders.Count || styledRowIndex < styledRows.Count)
         {
             var row = int.MaxValue;
 
-            if (cellIndex < cells.Count)
+            if (cellIndex < count)
             {
                 row = Math.Min(row, cells[cellIndex].Address.Row);
             }
@@ -1387,7 +1404,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             var firstColumn = -1;
             var lastColumn = -1;
 
-            for (var i = cellIndex; i < cells.Count && cells[i].Address.Row == row; i++)
+            for (var i = cellIndex; i < count && cells[i].Address.Row == row; i++)
             {
                 var column = cells[i].Address.Column;
 
@@ -1417,7 +1434,7 @@ class XlsxWriter(Workbook sourceWorkbook)
 
             while (true)
             {
-                var cellColumn = cellIndex < cells.Count && cells[cellIndex].Address.Row == row
+                var cellColumn = cellIndex < count && cells[cellIndex].Address.Row == row
                     ? cells[cellIndex].Address.Column
                     : int.MaxValue;
 
@@ -1706,6 +1723,18 @@ class XlsxWriter(Workbook sourceWorkbook)
             .OrderBy(placeholder => placeholder.Address.Row)
             .ThenBy(placeholder => placeholder.Address.Column)
             .ToList();
+    }
+
+    private sealed class CellOrder : IComparer<Cell>
+    {
+        public static readonly CellOrder Instance = new();
+
+        public int Compare(Cell? left, Cell? right)
+        {
+            var byRow = left!.Address.Row.CompareTo(right!.Address.Row);
+
+            return byRow != 0 ? byRow : left.Address.Column.CompareTo(right.Address.Column);
+        }
     }
 
     private static bool IsWritten(Cell cell) => cell.Value is not null || cell.Formula is not null;
