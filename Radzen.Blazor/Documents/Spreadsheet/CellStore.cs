@@ -285,8 +285,6 @@ public class CellStore(Worksheet sheet)
             {
                 var cell = GetOrAdd(row + r, column + c);
 
-                // The value setter leaves Formula alone, so without this the formula stays and is
-                // evaluated back over what was just written.
                 cell.Formula = null;
                 cell.Value = line[c];
             }

@@ -25,7 +25,6 @@ public class CellStoreSetValuesTests
         Assert.Equal("b", sheet.Cells[3, 1].Value);
         Assert.Equal(2d, sheet.Cells[3, 2].Value);
 
-        // Nothing outside the block was touched.
         Assert.True(sheet.Cells[2, 0].IsEmpty);
         Assert.True(sheet.Cells[4, 1].IsEmpty);
     }
@@ -73,8 +72,6 @@ public class CellStoreSetValuesTests
 
         Assert.Equal("new", sheet.Cells[0, 0].Value);
 
-        // The cell object is reused, so anything else on it survives - which is what assigning through
-        // the indexer does too.
         Assert.True(sheet.Cells[0, 0].Format.Bold);
     }
 
@@ -110,8 +107,6 @@ public class CellStoreSetValuesTests
         Assert.Throws<ArgumentNullException>(() =>
             new Workbook().AddSheet("Sheet1", 4, 4).Cells.SetValues(0, 0, null!));
 
-    // The bounds check is done once for the block rather than per cell, so it has to be done against
-    // the far corner - a block that starts inside the sheet and runs off it must still throw.
     [Theory]
     [InlineData(0, 0, 5, 2)]
     [InlineData(0, 0, 2, 5)]
@@ -130,7 +125,6 @@ public class CellStoreSetValuesTests
         Assert.Throws<ArgumentOutOfRangeException>(() => sheet.Cells.SetValues(row, column, rows));
     }
 
-    // A formula over the block is correct when the call returns.
     [Fact]
     public void FormulasOverTheBlockAreEvaluatedAfterIt()
     {
@@ -143,8 +137,6 @@ public class CellStoreSetValuesTests
         Assert.Equal(6d, sheet.Cells[4, 0].Value);
     }
 
-    // A value written over a formula replaces it. Cell.Value leaves Formula alone, so without clearing
-    // it the value is written and then evaluated back over by the formula that is still there.
     [Fact]
     public void AFormulaInsideTheBlockIsReplacedByTheValueWrittenOverIt()
     {
@@ -161,7 +153,6 @@ public class CellStoreSetValuesTests
         Assert.Null(sheet.Cells[0, 0].Formula);
     }
 
-    // And a formula outside the block still sees the write, which is what the batch is for.
     [Fact]
     public void AFormulaOverAReplacedFormulaIsEvaluatedAgainstTheValue()
     {

@@ -18,7 +18,6 @@ internal class CellDependencyGraph
         return [];
     }
 
-    // Whether anything depends on this cell, without building the walk to find out.
     public bool HasDependents(Cell cell) => dependents.TryGetValue(cell, out var cells) && cells.Count > 0;
 
     public IEnumerable<Cell> GetTopologicallySortedDependencies(Cell cell) => GetTopologicallySortedDependencies(GetDependentCells(cell));

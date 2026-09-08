@@ -41,8 +41,6 @@ public class BooleanRoundTripTests
         Assert.Equal(false, loaded.Cells[1, 0].Value);
     }
 
-    // ECMA-376 types <v> as ST_Xstring, so a producer may write the word. This writer writes 1 and 0,
-    // which is why the file has to be edited to produce the case at all.
     [Theory]
     [InlineData("true", true)]
     [InlineData("TRUE", true)]
@@ -70,8 +68,6 @@ public class BooleanRoundTripTests
         Assert.Equal(expected, loaded.Cells[0, 0].Value);
     }
 
-    // Numbers keep the branch they always took: the boolean is chosen by t="b" and not by what the
-    // text happens to say, so a cell holding 1 is still the number 1.
     [Fact]
     public void NumbersAreUnaffected()
     {

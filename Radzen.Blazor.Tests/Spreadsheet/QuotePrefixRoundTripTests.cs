@@ -41,7 +41,6 @@ public class QuotePrefixRoundTripTests
         Assert.True(loaded.Cells[0, 0].QuotePrefix);
     }
 
-    // Text without the marker is still inferred, which is what a cell typed as a number relies on.
     [Fact]
     public void TextWithoutTheMarkerIsStillInferred()
     {
@@ -56,9 +55,6 @@ public class QuotePrefixRoundTripTests
         Assert.False(loaded.Cells[0, 0].QuotePrefix);
     }
 
-    // The flag lives on the cell format and the format is shared by key, so a number or a date can
-    // carry it without ever having been text. Only a text cell is read back as text; the others keep
-    // the type they were written with, or a SUM over the range silently drops them.
     [Fact]
     public void ATypedCellCarryingTheFlagKeepsItsType()
     {
@@ -79,9 +75,6 @@ public class QuotePrefixRoundTripTests
         Assert.Equal(CellDataType.Number, loaded.Cells[0, 0].ValueType);
         Assert.Equal(5d, loaded.Cells[0, 0].Value);
 
-        // A number rather than a date: QuotePrefix is part of the style key, so a cell carrying it does
-        // not share the format that makes a serial read as a date. That is the writer's, it predates
-        // this, and it still sums - which a string would not.
         Assert.Equal(CellDataType.Number, loaded.Cells[1, 0].ValueType);
         Assert.Equal(43894d, loaded.Cells[1, 0].Value);
 

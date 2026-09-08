@@ -198,8 +198,6 @@ public class Cell
     internal void SetText(string value)
     {
         Formula = null;
-        // Bypass the Value setter: the quote prefix means literal text, so the
-        // string must not go through type inference ('0123 stays "0123").
         Data = CellData.FromString(value);
         QuotePrefix = true;
 

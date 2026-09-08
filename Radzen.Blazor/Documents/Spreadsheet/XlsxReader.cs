@@ -6,8 +6,6 @@ using System.IO.Compression;
 using System.Linq;
 using System.Xml.Linq;
 
-// The cell format record ParseCellStyles builds, named so that it can be resolved once per cell and
-// handed on rather than looked up again by everything that reads it.
 using CellXf = (int FontId, int FillId, int BorderId, Radzen.TextAlign? TextAlign,
     Radzen.VerticalAlign? VerticalAlign, bool WrapText, int NumFmtId, bool? Locked, bool? FormulaHidden,
     bool QuotePrefix);
@@ -676,8 +674,7 @@ static class XlsxReader
         }
         else if (valueElem is not null)
         {
-            // ECMA-376 part 1, 18.18.11: t="b" is a boolean. Its <v> is ST_Xstring, so a producer may
-            // write the word rather than 1 or 0.
+            // ECMA-376 part 1, 18.18.11 (t="b"), 22.9.2.19 (ST_Xstring)
             if (cellType == "b")
             {
                 sheet.Cells[address.Row, address.Column].Value =
@@ -691,9 +688,7 @@ static class XlsxReader
                     _ => valueElem!.Value
                 };
 
-                // ECMA-376 part 1, 18.8.45: quotePrefix on the cell's format marks a value entered as
-                // literal text, and only a text cell can have been. SetValueInvariant infers a type
-                // from the text, which turns "007" into 7 and "1E3" into 1000.
+                // ECMA-376 part 1, 18.8.45 (quotePrefix)
                 if (style is { QuotePrefix: true } && cellType is "s" or "str" or "inlineStr")
                 {
                     sheet.Cells[address.Row, address.Column].SetText(value);
