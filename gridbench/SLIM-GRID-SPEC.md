@@ -11628,3 +11628,65 @@ so the megabyte figures beside the percentages are worth reading as the estimate
 sink is twenty-five times less, against ClosedXML's 278.7, and BenchmarkDotNet's independent 17.67 MB
 agrees with the corrected figure rather than the published one - which it did all along, and which
 should have been the tell.
+
+## 51. Runtime, and the control that said the two runs were not comparable
+
+§42 put time below allocation and §47 to §50 kept it there. Asked directly for it, and with the
+benchmark now configured for it, here it is - along with the reason it took a control to get it.
+
+**The first BenchmarkDotNet run was configured wrongly for time.** `[IterationSetup]` pins
+`InvocationCount` to 1, so each measured invocation carried the whole per-iteration overhead: it reported
+the save at **707.7 ms with an error of 979.3 ms**, an interval wide enough to contain both engines and
+settle nothing. That is not the machine being noisy, it is the harness asking the wrong thing.
+
+A workbook can be filled once in `[GlobalSetup]` and saved many times **only because the writer leaves
+it alone**, which is what the first commit of this work made true. Before it the first save gave every
+cell a format object, and a second save of the same workbook allocated **119 MB less than the first** -
+448.4 MB then 329.1 - so a benchmark that filled once would have measured a re-save and understated
+`master` by a quarter. The bug fixed for allocation is what makes the timing honest.
+
+### Two runs, one control
+
+One process cannot hold two builds of `Radzen.Blazor`, so the comparison is two runs of the whole export
+with **ClosedXML as the control**: the same code in both, so what it does between them says whether the
+machine held still.
+
+| run | | Mean | Allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| on `upstream/master` | this package | 1,396.0 ms | 535.99 MB | 65000 | 33000 | 3000 |
+| on `upstream/master` | ClosedXML *(control)* | 630.8 ms | 353.81 MB | 29000 | 6000 | 3000 |
+| on the branch | this package | 556.2 ms | 111.65 MB | 10000 | 5000 | 1000 |
+| on the branch | ClosedXML *(control)* | 783.8 ms | 353.81 MB | 29000 | 6000 | 3000 |
+
+**The control did not hold still.** Its allocation is identical to the hundredth of a megabyte in both
+runs, as identical code must be - and its *time* moved 630.8 ms to 783.8 ms, a factor of **1.24** between
+runs. Had the two Radzen figures been read against each other directly they would have said 2.51x
+faster; against the control in each run they say:
+
+| | export time as a multiple of ClosedXML measured beside it |
+| --- | --- |
+| `upstream/master` | **2.21x** |
+| the branch | **0.71x** |
+
+**About three times quicker relative to the control, and a reversal**: the export was slower than
+ClosedXML's and is now faster than it. The 2.51x that ignoring the control would have produced is not far
+from the 3.1x that respecting it produces - which is the trap, because a wrong number close to the right
+one is the one nobody checks.
+
+### Collections need no normalising
+
+They are counts, not times. On `master` the export causes 65,000 gen-0, 33,000 gen-1 and 3,000 gen-2
+collections per thousand operations; on the branch, 10,000, 5,000 and 1,000. And the save measured on its
+own - 316.0 ms, error 6.24, against the 707.7 ± 979.3 the misconfigured run gave for the same thing -
+**causes no collection of any generation at all**.
+
+That is the answer §47 guessed at and §48 said was still a guess. It wrote *"a retained XElement graph
+against transient buffers"* and admitted no GC time had been measured. The collection counts are that
+measurement, and they say the guess was right.
+
+### One thing that could not be measured, and why it is worth knowing
+
+There is no ClosedXML row beside the save-only figure. `XLWorkbook.SaveAs` **closes the stream it is
+given and keeps hold of it**, so a second save of the same workbook throws `ObjectDisposedException`. It
+cannot be filled once and saved repeatedly. An arm that throws is not an arm that is slow, and the
+difference is worth stating rather than leaving as an `NA` in a table.
