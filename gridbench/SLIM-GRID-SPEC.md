@@ -10705,11 +10705,20 @@ Branch `upstream/spreadsheet-bulk-and-bool`, four commits, 5,128 tests green:
   `Worksheet.OnCellValueChanged` runs per write and asks for dependents; the walk allocates a `HashSet`,
   a `List` and a `Stack` before it can say there are none. `HasDependents` answers off the dictionary.
   **217 MB to 150 MB** over 550,000 cells, no API change, and callers already batching are unaffected.
+- **Share one `CellData` for every empty cell.** `Cell` initialised its `Data` with a
+  `new CellData(null)`, so constructing a cell allocated an object to represent nothing - and a cell
+  then given a value threw it away and allocated a second. `CellData` has no setters, so one instance
+  does. **150 MB to 133 MB**, again with no API change.
 - **`CellStore.SetValues`, a bulk entrance.** One bounds check, one dictionary sizing, one lookup per
-  cell and one update batch. **150 MB and 190 ms to 130 MB and 156 ms.** What is left is the `Cell` and
-  its `CellData`, one object graph per cell.
+  cell and one update batch. **133 MB and 167 ms to 114 MB and 140 ms.**
 - **Do not revoke a download's object URL in the same tick as the click.** Timed at 0.1 ms; the anchor is
   also put in the document for the click, which Firefox needs.
 
-Together the first two take a 50,000-row fill from **217 MB to 130 MB, 40% less**, against ClosedXML's
-67 MB. The rest of that gap is the model, not the API.
+**217 MB to 114 MB over 550,000 cells - 47% less** - and 133 MB of that arrives without any caller
+changing a line. Against ClosedXML's 67 MB the remaining ratio is **1.7x**, down from 1.9x.
+
+**"The rest of that gap is the model, not the API" was written one measurement too early.** It was said
+with 130 MB in hand and the shared `CellData` still in it, worth another 12%. What is left now really is
+the model: 114 MB over 550,000 cells is 217 bytes each, and the `Cell` object is about 150 of them - ten
+fields and a 24-byte `CellRef`, one object per cell. Getting under that means cells that are not objects,
+which is a different library.
