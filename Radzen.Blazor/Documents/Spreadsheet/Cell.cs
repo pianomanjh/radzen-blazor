@@ -17,7 +17,34 @@ public class Cell
     /// </summary>
     public Worksheet Worksheet { get; private set; }
 
-    private Format? format;
+    // Most cells carry a value and nothing else. The six things only some of them have live here, so
+    // a cell that has none of them costs one reference rather than six.
+    private sealed class Extras
+    {
+        public Format? Format;
+        public Hyperlink? Hyperlink;
+        public string? Formula;
+        public FormulaSyntaxTree? FormulaSyntaxTree;
+        public IReadOnlyList<string>? ValidationErrors;
+        public Action<Cell>? Changed;
+    }
+
+    private Extras? extras;
+
+    private Extras Rare => extras ??= new Extras();
+
+    private Format? format
+    {
+        get => extras?.Format;
+        set
+        {
+            if (value is null && extras is null)
+            {
+                return;
+            }
+            Rare.Format = value;
+        }
+    }
 
     /// <summary>
     /// Gets or sets the format of the cell. Setting null clears the format.
@@ -27,25 +54,30 @@ public class Cell
     {
         get
         {
-            if (format is null)
+            var current = extras?.Format;
+
+            if (current is null)
             {
-                format = new Format();
-                format.Changed += OnFormatChanged;
+                current = new Format();
+                current.Changed += OnFormatChanged;
+                Rare.Format = current;
             }
-            return format;
+            return current;
         }
 
         set
         {
-            if (ReferenceEquals(format, value))
+            var current = extras?.Format;
+
+            if (ReferenceEquals(current, value))
             {
                 return;
             }
-            format?.Changed -= OnFormatChanged;
+            current?.Changed -= OnFormatChanged;
 
             format = value;
 
-            format?.Changed += OnFormatChanged;
+            value?.Changed += OnFormatChanged;
 
             OnFormatChanged();
         }
@@ -97,7 +129,7 @@ public class Cell
 
         Hyperlink = other.Hyperlink?.Clone();
 
-        Changed?.Invoke(this);
+        extras?.Changed?.Invoke(this);
     }
 
     // Excel's full clear: contents, format, quote prefix and hyperlink. Clear Contents
@@ -111,7 +143,7 @@ public class Cell
         OnChanged();
     }
 
-    internal Format? FormatOrNull => format;
+    internal Format? FormatOrNull => extras?.Format;
 
     /// <summary>
     /// Gets the text displayed in the cell: the number format applied to the value, or the value as a string.
@@ -144,18 +176,42 @@ public class Cell
 
     private void OnFormatChanged()
     {
-        Changed?.Invoke(this);
+        extras?.Changed?.Invoke(this);
     }
 
     /// <summary>
     /// Gets or sets the hyperlink associated with this cell.
     /// </summary>
-    public Hyperlink? Hyperlink { get; set; }
+    public Hyperlink? Hyperlink
+    {
+        get => extras?.Hyperlink;
+        set
+        {
+            if (value is null && extras is null)
+            {
+                return;
+            }
+            Rare.Hyperlink = value;
+        }
+    }
+
+    private object? value;
+
+    private CellDataType type = CellDataType.Empty;
 
     /// <summary>
     /// Gets the current value and its type as a CellData object.
     /// </summary>
-    public CellData Data { get; internal set; } = CellData.Empty;
+    public CellData Data
+    {
+        get => value is null ? CellData.Empty : new CellData(value, type);
+
+        internal set
+        {
+            this.value = value.Value;
+            type = value.Type;
+        }
+    }
 
 
     /// <summary>
@@ -163,14 +219,18 @@ public class Cell
     /// </summary>
     public object? Value
     {
-        get => Data.Value;
+        get => value;
         set
         {
-            if (Equals(Data.Value, value) && !QuotePrefix)
+            if (Equals(this.value, value) && !QuotePrefix)
             {
                 return;
             }
-            Data = new CellData(value, Culture);
+
+            CellData.Infer(value, Culture, out var inferred, out var inferredType);
+
+            this.value = inferred;
+            type = inferredType;
             QuotePrefix = false;
 
             Worksheet.OnCellValueChanged(this);
@@ -263,17 +323,38 @@ public class Cell
 
     internal void OnChanged()
     {
-        Changed?.Invoke(this);
+        extras?.Changed?.Invoke(this);
     }
 
-    internal event Action<Cell>? Changed;
+    internal event Action<Cell>? Changed
+    {
+        add => Rare.Changed += value;
+        remove
+        {
+            if (extras is not null)
+            {
+                extras.Changed -= value;
+            }
+        }
+    }
 
     /// <summary>
     /// Gets the type of value contained in the cell.
     /// </summary>
-    public CellDataType ValueType => Data.Type;
+    public CellDataType ValueType => type;
 
-    internal FormulaSyntaxTree? FormulaSyntaxTree { get; private set; }
+    internal FormulaSyntaxTree? FormulaSyntaxTree
+    {
+        get => extras?.FormulaSyntaxTree;
+        private set
+        {
+            if (value is null && extras is null)
+            {
+                return;
+            }
+            Rare.FormulaSyntaxTree = value;
+        }
+    }
 
     /// <summary>
     /// Gets or sets a value indicating whether the cell value was entered with
@@ -282,7 +363,18 @@ public class Cell
     /// </summary>
     public bool QuotePrefix { get; set; }
 
-    private string? formula;
+    private string? formula
+    {
+        get => extras?.Formula;
+        set
+        {
+            if (value is null && extras is null)
+            {
+                return;
+            }
+            Rare.Formula = value;
+        }
+    }
 
     /// <summary>
     /// Gets or sets the formula of the cell.
@@ -309,7 +401,8 @@ public class Cell
     /// <summary>
     /// Gets a value indicating whether this cell has no meaningful content (no value, formula, format, or hyperlink).
     /// </summary>
-    public bool IsEmpty => Value is null && Formula is null && format is null && Hyperlink is null && !QuotePrefix;
+    public bool IsEmpty => value is null && extras?.Formula is null && extras?.Format is null &&
+        extras?.Hyperlink is null && !QuotePrefix;
 
     /// <summary>
     /// Gets the address of the cell.
@@ -333,11 +426,25 @@ public class Cell
     /// <summary>
     /// Gets the validation errors for the cell.
     /// </summary>
-    public IReadOnlyList<string> ValidationErrors { get; private set; } = [];
+    public IReadOnlyList<string> ValidationErrors
+    {
+        get => extras?.ValidationErrors ?? [];
+        private set
+        {
+            if (value.Count == 0 && extras is null)
+            {
+                return;
+            }
+            Rare.ValidationErrors = value;
+        }
+    }
 
     internal void ClearValidationErrors()
     {
-        ValidationErrors = [];
+        if (extras is not null)
+        {
+            extras.ValidationErrors = null;
+        }
     }
 
     internal Cell(Worksheet sheet, CellRef address)
