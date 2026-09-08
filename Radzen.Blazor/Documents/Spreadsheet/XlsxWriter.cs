@@ -26,12 +26,11 @@ class XlsxWriter(Workbook sourceWorkbook)
         var styleTracker = CreateStylesDocument();
 
         var sharedStrings = new Dictionary<string, int>();
-        var sharedStringsDoc = CreateSharedStringsDocument(sharedStrings);
 
         var totalTables = 0;
-        SaveSheets(archive, styleTracker, sharedStrings, sharedStringsDoc, ref totalTables);
+        SaveSheets(archive, styleTracker, sharedStrings, ref totalTables);
         SaveStyles(archive, styleTracker);
-        UpdateAndSaveSharedStrings(archive, sharedStrings, sharedStringsDoc);
+        SaveSharedStrings(archive, sharedStrings);
         SaveWorkbook(archive);
         SaveTheme(archive);
         SaveDocPropsCore(archive);
@@ -759,14 +758,6 @@ class XlsxWriter(Workbook sourceWorkbook)
         rels.Save(entry);
     }
 
-    private static XDocument CreateSharedStringsDocument(Dictionary<string, int> sharedStrings)
-    {
-        return new XDocument(
-            new XElement(XName.Get("sst", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
-                new XAttribute("count", "0"),
-                new XAttribute("uniqueCount", "0")));
-    }
-
     private static void SaveStyles(ZipArchive archive, StyleTracker styleTracker)
     {
         using var entry = archive.CreateEntry("xl/styles.xml").Open();
@@ -872,7 +863,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                 new XAttribute("builtinId", "0")));
     }
 
-    private void SaveSheets(ZipArchive archive, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, XDocument sharedStringsDoc, ref int globalTableIndex)
+    private void SaveSheets(ZipArchive archive, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, ref int globalTableIndex)
     {
         var workbookRels = CreateWorkbookRelationships();
         var workbookRelsElement = workbookRels.Root!;
@@ -900,7 +891,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                 new XAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"),
                 new XAttribute("Target", $"worksheets/{sheetName}")));
 
-            SaveSheet(archive, sheet, sheetName, sheetId, relId, styleTracker, sharedStrings, sharedStringsDoc, mediaMap, ref globalMediaIndex, ref globalTableIndex);
+            SaveSheet(archive, sheet, sheetName, sheetId, relId, styleTracker, sharedStrings, mediaMap, ref globalMediaIndex, ref globalTableIndex);
         }
 
         workbookRelsElement.Add(new XElement(XName.Get("Relationship", pkgNs),
@@ -927,7 +918,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XElement(XName.Get("Relationships", "http://schemas.openxmlformats.org/package/2006/relationships")));
     }
 
-    private void SaveSheet(ZipArchive archive, Worksheet sheet, string sheetName, int sheetId, string relId, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, XDocument sharedStringsDoc, Dictionary<string, string> mediaMap, ref int globalMediaIndex, ref int globalTableIndex)
+    private void SaveSheet(ZipArchive archive, Worksheet sheet, string sheetName, int sheetId, string relId, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, Dictionary<string, string> mediaMap, ref int globalMediaIndex, ref int globalTableIndex)
     {
         var sheetDoc = CreateSheetDocument(sheet, sheetId, relId);
 
@@ -998,7 +989,7 @@ class XlsxWriter(Workbook sourceWorkbook)
 
         using (var entry = archive.CreateEntry($"xl/worksheets/{sheetName}").Open())
         {
-            WriteSheetXml(entry, sheetDoc, sheet, styleTracker, sharedStrings, sharedStringsDoc);
+            WriteSheetXml(entry, sheetDoc, sheet, styleTracker, sharedStrings);
         }
 
         if (sheetRelEntries.Count > 0)
@@ -1305,17 +1296,15 @@ class XlsxWriter(Workbook sourceWorkbook)
         return groups;
     }
 
-    // Indent alone, so the byte order mark, the indent string and the newline stay whatever
-    // XDocument.Save would have written - the newline among them is the platform's.
-    private static readonly XmlWriterSettings SheetXmlSettings = new() { Indent = true };
+    private static readonly XmlWriterSettings PartXmlSettings = new() { Indent = true };
 
     private static readonly XName SheetDataElement = XName.Get("sheetData", Main);
 
-    private void WriteSheetXml(Stream stream, XDocument sheetDoc, Worksheet sheet, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, XDocument sharedStringsDoc)
+    private void WriteSheetXml(Stream stream, XDocument sheetDoc, Worksheet sheet, StyleTracker styleTracker, Dictionary<string, int> sharedStrings)
     {
         var root = sheetDoc.Root!;
 
-        using var writer = XmlWriter.Create(stream, SheetXmlSettings);
+        using var writer = XmlWriter.Create(stream, PartXmlSettings);
 
         writer.WriteStartDocument();
         writer.WriteStartElement(root.Name.LocalName, root.Name.NamespaceName);
@@ -1330,7 +1319,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             if (element.Name == SheetDataElement)
             {
                 writer.WriteStartElement(SheetDataElement.LocalName, Main);
-                WriteSheetData(writer, sheet, styleTracker, sharedStrings, sharedStringsDoc);
+                WriteSheetData(writer, sheet, styleTracker, sharedStrings);
                 writer.WriteEndElement();
             }
             else
@@ -1343,7 +1332,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteEndDocument();
     }
 
-    private void WriteSheetData(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, XDocument sharedStringsDoc)
+    private void WriteSheetData(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker, Dictionary<string, int> sharedStrings)
     {
         var sharedFormulas = BuildSharedFormulaGroups(sheet);
 
@@ -1440,7 +1429,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                 if (cellColumn <= placeholderColumn)
                 {
                     writtenColumn = cellColumn;
-                    WriteCell(writer, cells[cellIndex++], styleTracker, sharedStrings, sharedStringsDoc, sharedFormulas);
+                    WriteCell(writer, cells[cellIndex++], styleTracker, sharedStrings, sharedFormulas);
                 }
                 else
                 {
@@ -1499,7 +1488,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteEndElement();
     }
 
-    private void WriteCell(XmlWriter writer, Cell cell, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, XDocument sharedStringsDoc, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private void WriteCell(XmlWriter writer, Cell cell, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var isFormula = !string.IsNullOrEmpty(cell.Formula);
 
@@ -1531,7 +1520,6 @@ class XlsxWriter(Workbook sourceWorkbook)
             {
                 index = sharedStrings.Count;
                 sharedStrings[text] = index;
-                sharedStringsDoc.Root!.Add(new XElement(SiElement, new XElement(TElement, text)));
             }
 
             WriteValue(writer, XmlConvert.ToString(index));
@@ -1990,9 +1978,6 @@ class XlsxWriter(Workbook sourceWorkbook)
     }
 
     private const string Main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-
-    private static readonly XName SiElement = XName.Get("si", Main);
-    private static readonly XName TElement = XName.Get("t", Main);
 
     private static string CellErrorToString(CellError error) => error switch
     {
@@ -2572,7 +2557,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         _ => DynamicFilterType.Today,
     };
 
-    private static void UpdateAndSaveSharedStrings(ZipArchive archive, Dictionary<string, int> sharedStrings, XDocument sharedStringsDoc)
+    private static void SaveSharedStrings(ZipArchive archive, Dictionary<string, int> sharedStrings)
     {
         if (sharedStrings.Count == 0)
         {
@@ -2581,12 +2566,34 @@ class XlsxWriter(Workbook sourceWorkbook)
             return;
         }
 
-        var sstElement = sharedStringsDoc.Root!;
-        sstElement.Attribute("count")!.Value = sharedStrings.Count.ToString(CultureInfo.InvariantCulture);
-        sstElement.Attribute("uniqueCount")!.Value = sharedStrings.Count.ToString(CultureInfo.InvariantCulture);
+        var strings = new string[sharedStrings.Count];
+
+        foreach (var (text, index) in sharedStrings)
+        {
+            strings[index] = text;
+        }
+
+        var count = sharedStrings.Count.ToString(CultureInfo.InvariantCulture);
 
         using var entry = archive.CreateEntry("xl/sharedStrings.xml").Open();
-        sharedStringsDoc.Save(entry);
+        using var writer = XmlWriter.Create(entry, PartXmlSettings);
+
+        writer.WriteStartDocument();
+        writer.WriteStartElement("sst", Main);
+        writer.WriteAttributeString("count", count);
+        writer.WriteAttributeString("uniqueCount", count);
+
+        foreach (var text in strings)
+        {
+            writer.WriteStartElement("si", Main);
+            writer.WriteStartElement("t", Main);
+            writer.WriteString(text);
+            writer.WriteFullEndElement();
+            writer.WriteEndElement();
+        }
+
+        writer.WriteEndElement();
+        writer.WriteEndDocument();
     }
 
     private void SaveWorkbook(ZipArchive archive)
