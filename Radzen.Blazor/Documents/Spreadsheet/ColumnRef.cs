@@ -1,5 +1,4 @@
 using System;
-using System.Text;
 
 namespace Radzen.Documents.Spreadsheet;
 
@@ -42,26 +41,35 @@ public readonly struct ColumnRef(int column) : IEquatable<ColumnRef>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when the column index is negative.</exception>
     public static string ToString(int column)
     {
+        Span<char> letters = stackalloc char[MaxLetters];
+
+        return new string(letters[..Format(letters, column)]);
+    }
+
+    internal const int MaxLetters = 7;
+
+    internal static int Format(Span<char> destination, int column)
+    {
         if (column < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(column), "Column index must be non-negative.");
         }
 
-        var sb = StringBuilderCache.Acquire();
-        var start = sb.Length;
+        var length = 0;
         column++;
         while (column > 0)
         {
             column--;
-            sb.Append((char)('A' + column % 26));
+            destination[length++] = (char)('A' + column % 26);
             column /= 26;
         }
-        // Digits were appended least-significant first; reverse in place.
-        for (int i = start, j = sb.Length - 1; i < j; i++, j--)
+        // Digits were written least-significant first; reverse in place.
+        for (int i = 0, j = length - 1; i < j; i++, j--)
         {
-            (sb[i], sb[j]) = (sb[j], sb[i]);
+            (destination[i], destination[j]) = (destination[j], destination[i]);
         }
-        return StringBuilderCache.GetStringAndRelease(sb);
+
+        return length;
     }
 
     /// <inheritdoc/>
