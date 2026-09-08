@@ -11976,3 +11976,55 @@ the same fill is 18% of 536 MB and this work would be noise. #2708 also rewrites
 read path, which is the exact code a slot-reading writer would change again. **The model work is
 downstream of the writer work in both senses**, and nothing here should reach a pull request until
 #2708 is reviewed.
+
+## 56. The dependency graph can be rekeyed, and doing it moves the cost onto the editor
+
+§55 named this the piece that decides whether the model change is viable. It was built and run rather
+than argued: `CellDependencyGraph` keyed on `CellKey(Worksheet, CellRef)` instead of on `Cell`, with the
+four shift sites in `Worksheet` remapping it through the `DictionaryShift.Remap` the store already uses.
+The worksheet is part of the key because a formula can name another sheet.
+
+**It works.** 5,169 tests pass. **And the suite can see it**: with the remap disabled, ten fail -
+
+| |
+| --- |
+| `InsertRow_ShiftsReferencesAndValues`, `InsertColumn_ShiftsReferencesAndValues` |
+| `InsertRow_AdjustsFormulaReferences`, `InsertColumn_AdjustsFormulaReferences` |
+| `DeleteRow_InvalidatesFormulasReferencingDeletedRow`, and the column twin |
+| `DeleteRow_DoesNotAdjustFormulas_RefsBecomeError`, and the column twin |
+| `InsertRowBeforeCommand_ExecuteAndUndo_RestoresState`, and the column twin |
+
+All four directions and the undo path. **This is not a change that could have passed by being unreached.**
+
+### What it costs, and it is the wrong pocket
+
+A row insert on 10,000 range formulas over 100,000 edges, control carried in both builds:
+
+| row insert | baseline | rekeyed | |
+| --- | --- | --- | --- |
+| at the top, every formula rewritten | 63.28 MB / 91.6 ms | 80.52 MB / 97.3 ms | +17.2 MB, +6% |
+| **at the bottom, no formula changes** | **14.91 MB / 17.8 ms** | **26.27 MB / 26.1 ms** | **+11.4 MB, +76% alloc** |
+| no formulas - the control | 0.23 MB / 0.5 ms | 0.23 MB / 0.3 ms | unchanged |
+
+About 120-170 bytes per edge, every shift. The bottom row is the one that matters: today a shift that
+changes no formula text costs the graph **nothing**, because the objects move themselves and the graph
+never learns of it. Keyed on an address it pays for every edge whether or not anything it names moved.
+
+**So the trade is 103.6 → ~33 MB on an export the user runs occasionally, against 14.9 → 26.3 MB on a
+row insert the user runs while typing.** That is precisely the shape of change the maintainer objects to
+by habit, and he would be right to.
+
+### The way out is a stable id, and it is not free either
+
+The remap exists only because an address is not a stable name for a cell. Give the slot a 4-byte id and
+key the graph on that, and a shift needs **no graph work at all** - ids do not move, and the store's own
+address index is remapped exactly as it is today. The cost moves to storage: an id per slot plus an
+id-to-slot dictionary is roughly another 28 bytes a cell, which takes the fill from 23.5 MB back toward
+~40. Still far under 94, and with no editor regression.
+
+A second option is to stop expanding a range into one edge per cell. `DependencyVisitor.VisitRange`
+turns `SUM(A1:A10000)` into 10,000 edges today, which is a scalability problem that exists **without**
+any of this work and is what makes the remap expensive.
+
+**Neither is measured.** What is measured is that the rekey is correct, is guarded, and is a regression
+where it hurts most. The spike is on `spike/graph-rekey`, one commit, not pushed.
