@@ -87,7 +87,7 @@ static class TypeExtensions
 /// Represents a value of a spreadsheet cell along with its type.
 /// </summary>
 [SuppressMessage("Design", "CA1036:Override methods on comparable types", Justification = "Comparison operators are intentionally omitted; use explicit comparison helpers.")]
-public class CellData : IComparable, IComparable<CellData>
+public class CellData : IComparable, IComparable<CellData>, IEquatable<CellData>
 {
     /// <summary>
     /// Returns the data contained in the cell.
@@ -119,10 +119,22 @@ public class CellData : IComparable, IComparable<CellData>
 
     internal CellData(object? data, CultureInfo culture)
     {
+        Infer(data, culture, out var inferred, out var inferredType);
+
+        Value = inferred;
+        Type = inferredType;
+    }
+
+    /// <summary>
+    /// Infers a value and its type without constructing a <see cref="CellData"/>, so a caller that
+    /// stores the two separately does not allocate one to unpack it.
+    /// </summary>
+    internal static void Infer(object? data, CultureInfo culture, out object? value, out CellDataType type)
+    {
         if (data is null)
         {
-            Value = null;
-            Type = CellDataType.Empty;
+            value = null;
+            type = CellDataType.Empty;
             return;
         }
 
@@ -135,19 +147,19 @@ public class CellData : IComparable, IComparable<CellData>
             var converted = TryConvertFromString(data.ToString(), culture, out var convertedData, out var valueType);
             if (converted)
             {
-                Value = convertedData;
-                Type = valueType!.Value;
+                value = convertedData;
+                type = valueType!.Value;
             }
             else
             {
-                Value = data;
-                Type = CellDataType.String;
+                value = data;
+                type = CellDataType.String;
             }
         }
         else
         {
-            Type = GetValueType(data, valType, isNullable, nullableType);
-            Value = (Type == CellDataType.Number && data is not double)
+            type = GetValueType(data, valType, isNullable, nullableType);
+            value = (type == CellDataType.Number && data is not double)
                 ? Convert.ToDouble(data, CultureInfo.InvariantCulture)
                 : data;
         }
@@ -586,6 +598,18 @@ public class CellData : IComparable, IComparable<CellData>
         var compareResult = CompareValues(Value, other.Value);
         return compareResult >= 0;
     }
+
+    /// <summary>
+    /// Determines whether this instance holds the same value and type as another.
+    /// </summary>
+    /// <remarks>
+    /// A cell builds its <see cref="Cell.Data"/> when asked rather than holding one, so two reads of
+    /// an unchanged cell are two instances. They compare equal, and hash alike.
+    /// </remarks>
+    public bool Equals(CellData? other) => other is not null && Type == other.Type && Equals(Value, other.Value);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => Equals(obj as CellData);
 
     /// <inheritdoc />
     public override int GetHashCode()
