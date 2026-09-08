@@ -11306,3 +11306,39 @@ A merge anchor that carries formatting but no value gets no `<c>` at all, so its
 placeholders inside the range are written, the anchor is not. It is on `upstream/master`, it is
 unchanged by any of these three commits, and it is unrelated to them, which is why it is recorded here
 rather than folded in.
+
+### It is not, any more - and the gap that is left is the fill
+
+The section above stopped one measurement short of the question §38 asked and §42 answered twice.
+`gridbench/spreadsheet/SaveVersusClosedXml.cs` arms the window on each engine's *write* with the fill
+done and paid for outside it, so neither number is a difference of two larger ones - which is what
+§42's 279 MB for ClosedXML was. Interleaved, medians of three:
+
+| | fill | save | export |
+| --- | --- | --- | --- |
+| this package, `upstream/master` + the three writer commits | 197.6 MB | **215.4 MB** | 413.0 MB |
+| the same, with §41's model commits merged in as well | **94.0 MB** | **215.4 MB** | **309.4 MB** |
+| ClosedXML 0.104.2 | 75.1 MB | 278.7 MB | 353.8 MB |
+
+**On the save this package is now cheaper than ClosedXML, 215 against 279.** §42 measured that pair at
+442 against 279 and concluded *"its writer is the reason it still wins overall"*. That is no longer
+true, and the three commits are the whole of the difference.
+
+Three checks that these are the same quantities §42 was talking about: the indexer fill reads 197.6 MB
+on master and 113.7 MB with the model commits, which are §42's own ladder rungs to the tenth; the
+`SetValues` fill reads 94.0 MB, likewise; and ClosedXML's fill-and-save reads 353.8 MB, which is §42's
+figure exactly. The export rows are measured in their own arms rather than added up.
+
+**Whole export, both branches landed: 309.4 MB against 353.8 - 1.14x the other way, having been
+1.51x.** So §38's question now answers: the fill is dearer, the writer is cheaper, and the export is
+cheaper overall.
+
+**What is still ClosedXML's is the fill and the clock.** 75.1 MB against 94.0 is a bulk entrance that
+copies a jagged array into a range against one that fills a `Dictionary` of `Cell` objects, and §42
+already said where the floor on that is - *"getting under it means cells that are not objects, which is
+a different library"*. The clock is the more interesting one, and it runs the opposite way to the
+allocation: ClosedXML saves in 460 ms against 653, and exports in 629 against 785, while allocating
+more. **The obvious reading is that its allocation is transient and this one is not** - 215 MB of
+`XElement` and `XAttribute` is a graph that has to live until the document is serialised, where a
+streaming writer's buffers die in gen0 - but that is a hypothesis about a collection cost, and nothing
+here has measured GC time. It is written down as one.
