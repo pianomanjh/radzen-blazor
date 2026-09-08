@@ -11812,9 +11812,20 @@ the fourth member of the enum - so the fold implies reordering a public enum.
 
 | | before | after | |
 | --- | --- | --- | --- |
-| re-box skipped, caller passes `double` | 103.1 MB | **90.5 MB** | −12.6 MB |
-| re-box skipped, caller passes `int` | 103.1 MB | 103.1 MB | unchanged, and the control |
+| **re-box, the mixed block this ladder is built on** | **94.0 MB** | **94.0 MB** | **nothing** |
+| re-box, a block of all `double` | 103.1 MB | 90.5 MB | −12.6 MB |
+| re-box, a block of all `int` | 103.1 MB | 103.1 MB | unchanged, and the control |
 | `CellData` folded into `Cell` (calibration graph) | 82.1 MB | **65.3 MB** | −16.8 MB |
+
+The first row is the one to quote. **The re-box fix is worth nothing on the canonical block**, whose
+numeric column is `int`, and 12.6 MB on a block of `double`; neither figure is a property of the change,
+both are properties of what the caller passes. It reaches only `double` and `double?` - `int`, `long`,
+`decimal`, `float`, `short` and `byte` all still allocate a box, because widening them produces a
+different value. A grid exporting `decimal` money columns gets nothing.
+
+The two baselines differ because of the boxing itself and reconcile to within half a megabyte: the mixed
+block boxes 150,000 ints (3.6 MB), an all-numeric block boxes 550,000 (13.2 MB), and 94.0 − 3.6 + 13.2 =
+103.6 against 103.1 measured, 103.1 − 13.2 = 89.9 against 90.5.
 
 The re-box is `data is not double` at `CellData.cs:150`; the suite passes 5,144 with it and **fails 64
 with the condition inverted**, so the semantics are guarded. It is worth nothing at all to a caller
@@ -11843,3 +11854,58 @@ note applies: the honest answer to "what failure does this prevent" is still non
 
 The re-box fix is the one piece that is contained, measured, guarded by the suite, and invisible in the
 public API. It is on `spike/cellstore-model` off `upstream/master` and is not pushed anywhere.
+
+## 54. The storage change that breaks nothing public, and what it costs instead
+
+§53 priced two designs and both are public breaks. A third is not: **keep `Cell` a class and keep every
+signature, but stop storing one per cell.** The store holds slots; `Cells[r, c]` materialises a `Cell`
+that holds only where the cell is and reads through to the slot. No `CS1612`, no `CellData` struct, no
+reordered enum, no change to `TryGet`, `Clone` or `CopyFrom`.
+
+What the save pays to see 550,000 cells, over stores built outside every window:
+
+| reading the cells back | allocated | B / cell | Gen0 | Gen1 | ms |
+| --- | --- | --- | --- | --- | --- |
+| `Cell` objects, as today | none | 0 | none | none | 12 |
+| materialised façades | 16.8 MB | 32 | 2 | 1 | 57 |
+| slots read in place | none | 0 | none | none | 11 |
+
+A façade is 32 bytes, not the 112 a `Cell` is, because all of its state has moved to the store. So the
+worst case is not that the fill's 94 MB reappears in the writer - it is that 16.8 MB does, along with the
+collections and a **5x slower read**, every property being a dictionary lookup.
+
+Composed from parts measured separately, not measured end to end:
+
+| | fill | read | write | export |
+| --- | --- | --- | --- | --- |
+| today | 94.0 | none | 17.7 | **111.6 MB** |
+| façades, writer untouched | 23.5 | 16.8 | 17.7 | ~58 MB |
+| slots, writer taught to read them | 23.5 | none | 17.7 | **~41 MB** |
+
+**Both beat what exists**, so the writer can be taught slots second rather than first.
+
+### What it costs is internal, and two things are not optional
+
+`GetPopulatedCells` has ten call sites - the writer four, the CSV writer, three row and column commands,
+and two in `RadzenSpreadsheet` - and each either materialises or learns to read slots. That is the work.
+Two others are correctness rather than effort:
+
+- **`Cell` must gain value equality on worksheet and address.** `CellDependencyGraph` keys
+  `Dictionary<Cell, HashSet<Cell>>` on cells and `FormulaEvaluator` holds a `HashSet<Cell>`; a
+  per-access instance would never match an entry and every lookup would silently miss. Equality by
+  address is **behaviour-preserving rather than a break**, because today one address is one object, so
+  reference equality already answers what address equality would - provided `==` is overloaded too, and
+  provided the worksheet is part of it so two sheets' A1 stay distinct.
+- **`Cell.Changed` must move from the instance to the store**, keyed by address, since a façade cannot
+  carry subscriptions. `FormulaEditor` subscribes to a bound cell. The event is `internal`, so this is
+  allowed.
+
+`Clone()` still has to hand back something detached, which a façade is not.
+
+### Where that leaves it
+
+The break in §53 was in the storage design, not in the goal. **A cell that is not an object is reachable
+without breaking a public signature**, for 111.6 → ~41 MB and every collection the export causes, at the
+price of ten internal call sites, value equality on `Cell`, and moving one internal event. That is a
+proposal that answers "existing patterns and existing API" rather than one that argues with it - and the
+answer to "what failure does this prevent" is still none, which is the sentence it has to lead with.
