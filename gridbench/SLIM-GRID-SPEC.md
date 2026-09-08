@@ -10602,13 +10602,21 @@ SDK, a module import, a module reference, an `IAsyncDisposable` and the synchron
 rather than written silently, and there was no argument written. All of it is gone; the exporter is a
 constructor, one method and a `Task.Run`.
 
-**One thing about upstream's is worth knowing, and it is measured rather than asserted.** It calls
-`URL.revokeObjectURL` in the same tick as the anchor's click - timed in the playground at **0.1 ms after
-the click**. A browser that has not finished reading the blob by then loses the file, and this is the one
-caller that routinely produces megabytes: 2.5 MB at 50,000 rows. It works today in Chromium, verified end
-to end - a real click producing a 37,301-byte file with the right name and a valid `PK` header - and the
-margin is a tenth of a millisecond. **Offered upstream on its own branch** is the answer, which is what
-this branch did with #2696, #2702 and #2705, rather than forking a module over a one-line timing bug.
+**One thing about upstream's looked worth fixing and was not.** It calls `URL.revokeObjectURL` in the
+same tick as the anchor's click - timed in the playground at **0.1 ms after the click** - and a browser
+that had not finished reading the blob by then would lose the file, on the one caller that routinely
+produces megabytes: 2.5 MB at 50,000 rows. It was offered upstream on its own branch with #2696, #2702
+and #2705, rather than forking a module over a one-line timing bug.
+
+**It is withdrawn, and the reason it should not have been sent is written into it above.** The
+measurement said the export *works today in Chromium, verified end to end* - a real click producing a
+37,301-byte file with the right name and a valid `PK` header. That is a run in which nothing failed. The
+0.1 ms was offered as the margin by which it nearly did, and a margin is not a failure; the review on
+#2706 asked the question the section never asked itself - *in which browser did you see a download
+fail?* - and the answer is none. The bugs that made an immediate revoke lose a download were fixed in
+Firefox 50 and in WebKit in 2020, and the anchor-not-in-the-document bug in Firefox 70. **This is §42's
+lesson in a third costume**: a round trip through your own code tests your code, a timing gap beside
+working code tests nothing at all, and both read as evidence until someone asks what failed.
 
 ### What the review found besides
 
@@ -10765,8 +10773,9 @@ Branch `upstream/spreadsheet-bulk-and-bool`, six commits, 5,135 tests green:
   does. **150 MB to 133 MB**, again with no API change.
 - **`CellStore.SetValues`, a bulk entrance.** One bounds check, one dictionary sizing, one lookup per
   cell and one update batch. **133 MB and 167 ms to 114 MB and 140 ms.**
-- **Do not revoke a download's object URL in the same tick as the click.** Timed at 0.1 ms; the anchor is
-  also put in the document for the click, which Firefox needs.
+- ~~**Do not revoke a download's object URL in the same tick as the click.**~~ Timed at 0.1 ms and
+  **withdrawn on review**: the browser bugs it guards against were fixed in Firefox 50, Firefox 70 and
+  WebKit in 2020, and no download was ever observed to fail. See the paragraph in §41.
 - **Keep a quote-prefixed cell as text when reading.** §43's finding, added after this list was first
   written: the `quotePrefix` flag was written and not honoured on read, so `4.00E+003` came back as the
   number 4000. Same root as the boolean.

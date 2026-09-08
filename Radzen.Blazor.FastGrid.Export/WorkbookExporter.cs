@@ -63,11 +63,11 @@ namespace Radzen.FastGrid.Export
         /// <strong>The bytes go to the browser through upstream's <c>Radzen.downloadFile</c></strong>,
         /// which already unwraps a <c>DotNetStreamReference</c> and already handles the difference
         /// between Server and WebAssembly - so this package needs no <c>wwwroot</c>, no module and no
-        /// Razor SDK. One thing about it is worth knowing and is not this package's to fix here: it
-        /// calls <c>URL.revokeObjectURL</c> in the same tick as the anchor's click. A browser that has
-        /// not finished reading the blob by then loses the file, and this is the one caller that
-        /// routinely produces megabytes - 2.5 MB at 50,000 rows, measured. It is offered upstream on its
-        /// own branch, which is what this branch did with #2696, #2702 and #2705.
+        /// Razor SDK. It revokes the object URL in the same tick as the anchor's click, which this
+        /// branch offered upstream as a fault and withdrew: the browser bugs that made an immediate
+        /// revoke lose a download were fixed in Firefox 50 and WebKit in 2020, and no download here was
+        /// ever seen to fail. The blobs are large - 2.5 MB at 50,000 rows, measured - and that is a
+        /// reason to keep an eye on it rather than a reproduction.
         /// </para>
         /// <para>
         /// <strong>The write is off the renderer's thread and the hand-off is back on it</strong>, which
