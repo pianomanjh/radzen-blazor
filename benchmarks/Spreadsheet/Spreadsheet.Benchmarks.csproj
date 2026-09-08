@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CA1515;CA1002;CA1062;CA1024;CS1591</NoWarn>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <RunAnalyzers>false</RunAnalyzers>
+  </PropertyGroup>
+  <ItemGroup Label="The harnesses are standalone dotnet run programs, one entry point each">
+    <Compile Remove="harnesses\**" />
+    <None Include="harnesses\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+    <PackageReference Include="ClosedXML" Version="0.104.2" />
+    <ProjectReference Include="..\..\Radzen.Blazor\Radzen.Blazor.csproj" />
+  </ItemGroup>
+</Project>
