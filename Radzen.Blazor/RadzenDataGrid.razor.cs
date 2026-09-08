@@ -4701,7 +4701,7 @@ namespace Radzen.Blazor
                         CurrentPage = 0;
                         skip = 0;
                         Reset(true);
-                        columns = allColumns.Where(c => c.Parent == null).ToList();
+                        UpdateColumnsOrder();
                         InvokeAsync(Reload);
 
                         canSaveSettings = true;
