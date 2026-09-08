@@ -261,6 +261,16 @@ namespace Radzen.FastGrid
         /// <summary>Shown in the popup when there are no rows.</summary>
         [Parameter] public RenderFragment? EmptyTemplate { get; set; }
 
+        /// <summary>
+        /// Said in the popup when there are no rows, where <see cref="EmptyTemplate" /> says nothing.
+        /// </summary>
+        /// <remarks>
+        /// Null forwards null, which is what leaves the inner grid on its own localized default - the
+        /// same shape every other string on that grid has. It is a parameter here so that a drop-down
+        /// that wants different words, or none, can say so without reaching through.
+        /// </remarks>
+        [Parameter] public string? EmptyText { get; set; }
+
         /// <summary>Whether the popup is open.</summary>
         public bool Open { get; private set; }
 

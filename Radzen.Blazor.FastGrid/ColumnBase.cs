@@ -62,6 +62,13 @@ namespace Radzen.FastGrid
         /// <summary>Additional CSS class for the column's cells.</summary>
         [Parameter] public string? CssClass { get; set; }
 
+        /// <summary>Additional CSS class for the column's header cell.</summary>
+        /// <remarks>
+        /// The header's counterpart to <see cref="CssClass" /> and <see cref="FooterCssClass" />, which
+        /// is what makes the three sections say the same thing three ways rather than two.
+        /// </remarks>
+        [Parameter] public string? HeaderCssClass { get; set; }
+
         /// <summary>Whether the column is drawn. A hidden column keeps any filter it carries.</summary>
         [Parameter] public bool Visible { get; set; } = true;
 
@@ -356,7 +363,8 @@ namespace Radzen.FastGrid
         // A column is drawn in four sections, and each of them asks for a class and a style. The table:
         //
         //   section   class                        style              what the class folds over
-        //   header    HeaderCellClass(headerClass) HeaderCellStyle    the grid's sortable/resizable set
+        //   header    HeaderCellClass(headerClass) HeaderCellStyle    HeaderCssClass, over the grid's
+        //                                                              sortable/resizable set
         //   filter    FilterCellClass              FilterCellStyle    one constant
         //   body      BodyCellClass                BodyCellStyle      CssClass
         //   footer    FooterCellClass              FooterCellStyle    FooterCssClass
@@ -428,8 +436,14 @@ namespace Radzen.FastGrid
         /// pass in rather than this column's to work out.
         /// </summary>
         /// <param name="headerClass">The header class the grid composed for this column.</param>
-        internal string HeaderCellClass(string headerClass) =>
-            frozenClass is null ? headerClass : headerClass + " " + frozenClass;
+        internal string HeaderCellClass(string headerClass)
+        {
+            var declared = string.IsNullOrEmpty(HeaderCssClass)
+                ? headerClass
+                : headerClass + " " + HeaderCssClass;
+
+            return frozenClass is null ? declared : declared + " " + frozenClass;
+        }
 
         const string FilterCellBaseClass = "rz-unselectable-text";
 

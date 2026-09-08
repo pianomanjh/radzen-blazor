@@ -10918,7 +10918,7 @@ they are not the same feature:
 The first is what the application already relies on. The second is what §37 would have wanted if the
 question had come up. **§45 takes the second.**
 
-**② An application-driven loading state.** 39 of 91 grids set `IsLoading`. Here `IsLoading` is
+**② An application-driven loading state.** *(§45 builds it.)* 39 of 91 grids set `IsLoading`. Here `IsLoading` is
 `{ get; private set; }` and only ever true on the grid's own asynchronous path, on the argument that
 *"there is nothing to pass, and nothing to forget to reset on the failure path"* - which is a good
 argument for not *requiring* it and not an argument against allowing it. A page that fetches its own
@@ -10926,13 +10926,13 @@ rows and assigns `Data` has no way to raise the scrim it can see the grid alread
 second source for exactly this shape: the scrim reads `IsLoading || exporting`, and this is a third
 term on the same expression.
 
-**③ An empty message.** `RenderEmpty` returns without writing anything when `EmptyTemplate` is null, so
+**③ An empty message.** *(§45 builds it.)* `RenderEmpty` returns without writing anything when `EmptyTemplate` is null, so
 a grid with no rows renders an empty table body and no explanation. `RadzenDataGrid` writes *"No records
 to display."* by default and takes `EmptyText` to change it; 19 grids here change it, and the other 72
 are relying on the default they would silently lose. A localized `EmptyText` beside the existing
 template - template wins, text is the default - is the whole feature.
 
-### Smaller, and real
+### Smaller, and real - all three built in §45
 
 - **`HeaderCssClass`**, 3 columns. There is `CssClass` and `FooterCssClass` and no header one.
 - **Row hover without selection.** `rz-selectable` is bound to `ShowsSelection`, so a grid that only
@@ -10999,8 +10999,62 @@ The review's own finding that is **not** acted on: *Clear all filters* is a bare
 `role="list"` that holds the pills, which is §37's and not this section's. It is real and it is recorded
 here rather than fixed in a change about something else.
 
+**Measured in the playground**, which is where §37 and §39 took the numbers this has to not move: pills
+on, menu on, a filter on *Name*, then *Name* hidden through the picker. The band is **67px** with the
+notice element present and empty, which is §39's figure unchanged; clicking the pill takes it to
+**122px**, the notice on a line of its own below the pills, and `aria-expanded` flips to true. No console
+errors, and the only server-log entries are the three prerender `DisposeAsync` throws
+`RadzenFastDropDownDataGrid` has always made, one per page load.
+
+### ② The application's own loading state
+
+`IsLoading` was `{ get; private set; }` on the argument that *"there is nothing to pass, and nothing to
+forget to reset on the failure path"* - which is a good argument for not **requiring** it and not an
+argument against allowing it. A page that awaits its own fetch and then assigns `Data` does the loading
+outside the grid entirely, and 39 of §38's 91 grids do exactly that.
+
+`Loading` is the parameter, `loadingRows` is what the grid's own asynchronous paths set, and `IsLoading`
+is the two of them together - `Visible`/`pickedVisible`'s shape, for `Visible`'s reason: a component must
+not assign to its own parameter. Everything that asks whether the grid is busy asks `IsLoading`, so the
+scrim and the keyboard guard both honour it without either learning a second question. `ShowLoadingIndicator`
+still turns the scrim off, which a second way to raise it must not be a way around.
+
+### ③ The empty message
+
+`RenderEmpty` wrote nothing without an `EmptyTemplate`, so a grid with no rows drew a header over an empty
+body - which reads as a grid that has not finished loading, the one thing it is not. `EmptyText` carries
+`RadzenDataGrid`'s own key and therefore its five translations; the template still wins where there is
+one, and the empty string is how a grid asks for neither.
+
+`HasEmptyMessage` is one rule in one place because two things read it - the row `RenderEmpty` writes and
+the `EmptyContent` handed to `Virtualize`. §10b is what happens when those two disagree, and they did:
+the guard on the virtualized path asked only about the template.
+
+The row now carries upstream's `rz-datatable-emptymessage-row`, which it did not and which is §7's
+default. That is also what let the six tests this broke be fixed honestly rather than worked around: each
+was counting `tbody tr` where it meant rows of data, and each now says `tbody tr.rz-data-row`.
+
+`RadzenFastDropDownDataGrid` forwards it. Null forwards null, which leaves the inner grid on its own
+default.
+
+### The smaller three
+
+- **`HeaderCssClass`**, folded between the grid's base class and the frozen class, which is where
+  `CssClass` and `FooterCssClass` put theirs. The header was the one section of four with no way to say
+  this.
+- **`ShowRowHover`.** The themes nest their row-hover rules inside `rz-selectable` along with their
+  selected-row rules, so a grid that selects nothing gets neither. §38's application works around exactly
+  this by assigning an empty `ValueChanged`. `Selectable` is the class's two reasons; nothing is
+  highlighted by it, because nothing is selected.
+- **`RowExpandable`.** A row that answers false keeps its cell in the toggle column - so the columns
+  beside it do not shift by one on those rows - and draws no button in it. The keyboard is gated with it,
+  or Enter on that cell would expand a row through a control no pointer can reach. `ToggleRow` is not
+  gated: a caller that expands a row itself has said what it means more directly than a predicate can
+  contradict.
+
 ### Verified
 
-1300 green, fifteen of them new. Five mutations, five caught - the band asking only the drawn columns,
-the hidden pill's name losing its sentence, every key toggling the notice, the notice drawn regardless of
-state, and hidden columns never pilled at all.
+1308 green, twenty-three of them new. Twelve mutations, twelve caught - the five on the pill, plus the
+scrim ignoring the application's word, the empty message needing a template, the text winning over the
+template, hover not reaching the class, the predicate inverted, the keyboard toggling a row with no
+toggle, and the header taking no class of its own.

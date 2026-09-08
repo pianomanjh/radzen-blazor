@@ -175,6 +175,31 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void TheHeaderTakesAClassOfItsOwn()
+        {
+            // Its counterpart on the other two sections is CssClass and FooterCssClass. Folded between
+            // the grid's base and the frozen class, which is where the other two put theirs.
+            var column = new PropertyColumn<Person, string> { HeaderCssClass = "header-mine" };
+
+            Assert.Equal("rz-sortable-column header-mine", column.HeaderCellClass("rz-sortable-column"));
+
+            column.SetFrozen("rz-frozen-cell rz-frozen-cell-left", "inset-inline-start:0");
+
+            Assert.Equal("rz-sortable-column header-mine rz-frozen-cell rz-frozen-cell-left",
+                column.HeaderCellClass("rz-sortable-column"));
+        }
+
+        [Fact]
+        public void AHeaderWithNoClassOfItsOwnIsUnchanged()
+        {
+            // The counterweight: without it, always appending would pass the test above and would put a
+            // trailing space on every header cell in every grid that declares nothing.
+            var column = new PropertyColumn<Person, string>();
+
+            Assert.Equal("rz-sortable-column", column.HeaderCellClass("rz-sortable-column"));
+        }
+
+        [Fact]
         public void ASectionWithNothingOfItsOwnCarriesTheFrozenClassAlone()
         {
             var column = new PropertyColumn<Person, string>();

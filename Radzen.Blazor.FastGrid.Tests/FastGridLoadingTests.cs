@@ -11,13 +11,15 @@ using Xunit;
 namespace Radzen.FastGrid.Tests
 {
     /// <summary>
-    /// The loading indicator, drawn from the grid's own <c>IsLoading</c> rather than from a parameter
-    /// the application has to keep in step.
+    /// The loading indicator, drawn from the grid's own state rather than from a parameter the
+    /// application has to keep in step - and from <c>Loading</c> where the application does the loading.
     /// </summary>
     /// <remarks>
     /// RadzenDataGrid needs <c>IsLoading=@isLoading</c> passed in and reset on every path, including the
     /// failing one. This grid already knows, because it owns the load - so the indicator has nothing to
-    /// wire up and nothing to leave stuck on.
+    /// wire up and nothing to leave stuck on. §44 is the case that is not covered by that: a page that
+    /// awaits its own fetch and then assigns <c>Data</c> does the loading outside the grid entirely, and
+    /// <c>Loading</c> is where it says so.
     /// </remarks>
     public class FastGridLoadingTests
     {
@@ -44,6 +46,41 @@ namespace Radzen.FastGrid.Tests
             ctx.Services.AddSingleton<IFastGridQueryExecutor>(executor);
 
             return (Render(ctx, People.Many(6).AsQueryable(), extra), executor);
+        }
+
+        [Fact]
+        public void TheApplicationCanSayItIsLoading()
+        {
+            // §44: 39 of the surveyed application's 91 grids pass an IsLoading of their own, because
+            // they fetch their rows and then hand them over. Nothing here was reading that.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Many(3), p => p.Add(g => g.Loading, true));
+
+            Assert.True(cut.Instance.IsLoading);
+            Assert.Single(cut.FindAll(".rz-datatable-loading"));
+
+            cut.SetParametersAndRender(p => p.Add(g => g.Loading, false));
+
+            Assert.False(cut.Instance.IsLoading);
+            Assert.Empty(cut.FindAll(".rz-datatable-loading"));
+        }
+
+        [Fact]
+        public void TheApplicationsWordIsStillSubjectToShowLoadingIndicator()
+        {
+            // The counterweight: a second way to raise the scrim must not be a way around the switch
+            // that turns it off.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, People.Many(3), p =>
+            {
+                p.Add(g => g.Loading, true);
+                p.Add(g => g.ShowLoadingIndicator, false);
+            });
+
+            Assert.True(cut.Instance.IsLoading);
+            Assert.Empty(cut.FindAll(".rz-datatable-loading"));
         }
 
         // An in-memory grid never loads asynchronously, so it never covers itself.

@@ -315,6 +315,26 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void EnterOnTheToggleCellOfARowThatOffersNoneDoesNothing()
+        {
+            // §44's RowExpandable takes the button out of the cell, and the cell stays so the columns
+            // beside it do not shift. Without this the keyboard would still expand the row through a
+            // control no pointer can reach - §31's mouse-only fault with the two halves swapped.
+            using var ctx = new TestContext();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.Template,
+                    (RenderFragment<Person>)(person => b => b.AddContent(0, person.First)));
+                p.Add(g => g.RowExpandable, (Func<Person, bool>)(_ => false));
+            });
+
+            Press(cut, "Enter");
+
+            Assert.Empty(cut.FindAll("tr.rz-expanded-row-content"));
+        }
+
+        [Fact]
         public void TheToggleColumnIsOneMoreCellToCross()
         {
             using var ctx = new TestContext();

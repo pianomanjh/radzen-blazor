@@ -280,8 +280,35 @@ namespace Radzen.FastGrid
         /// <summary>The underlying Virtualize component, or null when virtualization is off.</summary>
         public Virtualize<TItem>? Virtualize => AllowVirtualization ? virtualize : null;
 
-        /// <summary>Whether a load is in flight. Only ever true on an asynchronous path.</summary>
-        public bool IsLoading { get; private set; }
+        /// <summary>
+        /// Whether the application says it is fetching rows of its own, which raises the same scrim the
+        /// grid raises for its own loads.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>A parameter beside the grid's own state rather than instead of it</strong>, which is
+        /// <see cref="ColumnBase{TItem}.Visible" />'s shape: a component must not assign to its own
+        /// parameter, so the runtime's answer lives beside the markup's word and
+        /// <see cref="IsLoading" /> is the two of them together.
+        /// </para>
+        /// <para>
+        /// <strong>Nothing here has to be passed and this is the exception.</strong> A grid handed an
+        /// <c>IQueryable</c> or a <c>LoadData</c> raises and lowers the scrim itself, with nothing to
+        /// forget to reset on the failure path - which is why <see cref="IsLoading" /> is read-only. A
+        /// page that awaits its own fetch and then assigns <c>Data</c> does the loading outside the grid
+        /// entirely, and had no way to say so. §38's application says it on 39 of its 91 grids.
+        /// </para>
+        /// </remarks>
+        [Parameter] public bool Loading { get; set; }
+
+        // Whether one of the grid's own asynchronous loads is in flight. IsLoading is this or the
+        // application's word, and everything that asks whether the grid is busy asks that one.
+        bool loadingRows;
+
+        /// <summary>
+        /// Whether a load is in flight - the grid's own, or one <see cref="Loading" /> declares.
+        /// </summary>
+        public bool IsLoading => loadingRows || Loading;
 
         /// <summary>The zero-based current page.</summary>
         public int CurrentPage => pageSize > 0 ? skip / pageSize : 0;
@@ -1993,8 +2020,8 @@ namespace Radzen.FastGrid
                 virtualTotal = null;
 
                 // Nothing below this branch lowers the scrim, and a deferral may have raised one: the
-                // provider owns fetching from here and never touches IsLoading.
-                IsLoading = false;
+                // provider owns fetching from here and never touches loadingRows.
+                loadingRows = false;
 
                 // Virtualize holds its own copy of the window, so a sort or filter that only re-renders
                 // redraws the same rows: the refetch is what makes the provider compose the new query.
@@ -2019,7 +2046,7 @@ namespace Radzen.FastGrid
             // that has since stopped being loadable.
             loaded = null;
             loadedCount = null;
-            IsLoading = false;
+            loadingRows = false;
 
             StateHasChanged();
 
@@ -2106,7 +2133,7 @@ namespace Radzen.FastGrid
             CancelLoad();
 
             loadOwed = true;
-            IsLoading = true;
+            loadingRows = true;
         }
 
         async Task RefreshVirtualizedAsync()
@@ -2126,7 +2153,7 @@ namespace Radzen.FastGrid
             var ordered = Composition.Sort(sorts, filtered);
             var paged = Paging ? ordered.Skip(skip).Take(pageSize) : ordered;
 
-            IsLoading = true;
+            loadingRows = true;
             StateHasChanged();
 
             try
@@ -2155,7 +2182,7 @@ namespace Radzen.FastGrid
             {
                 if (!token.IsCancellationRequested)
                 {
-                    IsLoading = false;
+                    loadingRows = false;
                 }
             }
 
@@ -2183,7 +2210,7 @@ namespace Radzen.FastGrid
 
             args.Filter = FilterString(filters);
 
-            IsLoading = true;
+            loadingRows = true;
 
             try
             {
@@ -2191,7 +2218,7 @@ namespace Radzen.FastGrid
             }
             finally
             {
-                IsLoading = false;
+                loadingRows = false;
             }
 
             // The handler assigned Data; the grid renders it verbatim, already sorted and paged.

@@ -34,7 +34,8 @@ namespace Radzen.FastGrid.Tests
         }
 
         static string[] CellsOfColumn(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
-            cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[index].TextContent).ToArray();
+            cut.FindAll("tbody tr.rz-data-row")
+                .Select(row => row.QuerySelectorAll("td")[index].TextContent).ToArray();
 
         /// <summary>
         /// The members the list offers. §36's review settled that a collection column offers no blank -

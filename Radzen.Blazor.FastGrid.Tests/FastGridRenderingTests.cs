@@ -201,8 +201,10 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
-        public void NoEmptyTemplate_RendersAnEmptyBody()
+        public void NoEmptyTemplate_SaysSoInWords()
         {
+            // §44: a header over an empty body reads as a grid that has not finished loading. The
+            // template is the richer answer and this is what the other 72 of 91 surveyed grids relied on.
             using var ctx = Context();
 
             var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
@@ -211,8 +213,46 @@ namespace Radzen.FastGrid.Tests
                 p.Add(g => g.ChildContent, ThreeColumns);
             });
 
+            Assert.Empty(cut.FindAll("tbody tr.rz-data-row"));
+            Assert.Equal(cut.Instance.EmptyText,
+                cut.Find("tbody .rz-datatable-emptymessage").TextContent);
+            Assert.Equal(3, cut.FindAll("thead th").Count);
+        }
+
+        [Fact]
+        public void NoEmptyTextAndNoTemplateIsStillAnEmptyBody()
+        {
+            // The way back to what this grid did before it had a default: the empty string, which is the
+            // one value that means neither. Without this, the message could not be turned off at all.
+            using var ctx = Context();
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, new List<Person>());
+                p.Add(g => g.ChildContent, ThreeColumns);
+                p.Add(g => g.EmptyText, "");
+            });
+
             Assert.Empty(cut.FindAll("tbody tr"));
             Assert.Equal(3, cut.FindAll("thead th").Count);
+        }
+
+        [Fact]
+        public void AnEmptyTemplateWinsOverTheText()
+        {
+            using var ctx = Context();
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, new List<Person>());
+                p.Add(g => g.ChildContent, ThreeColumns);
+                p.Add(g => g.EmptyTemplate, (RenderFragment)(b => b.AddMarkupContent(0, "<em>none</em>")));
+            });
+
+            var message = cut.Find("tbody .rz-datatable-emptymessage");
+
+            Assert.Equal("none", message.TextContent);
+            Assert.DoesNotContain(cut.Instance.EmptyText, message.InnerHtml);
         }
 
         // --- selection -------------------------------------------------------------------------

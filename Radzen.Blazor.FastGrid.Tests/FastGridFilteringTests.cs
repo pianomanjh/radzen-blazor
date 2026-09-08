@@ -30,7 +30,8 @@ namespace Radzen.FastGrid.Tests
             Columns.Property<Person, int>(x => x.Id));
 
         static string[] FirstNames(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
-            cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[0].TextContent).ToArray();
+            cut.FindAll("tbody tr.rz-data-row")
+                .Select(row => row.QuerySelectorAll("td")[0].TextContent).ToArray();
 
         [Fact]
         public void NoFilterRowUnlessFilteringIsAllowed()

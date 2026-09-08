@@ -79,6 +79,29 @@ namespace Radzen.FastGrid
         // overridden one of them for RadzenDataGrid gets the same override here for free.
 #pragma warning disable BL0007
 
+        string? emptyText;
+
+        /// <summary>What the grid says in place of rows when there are none.</summary>
+        /// <remarks>
+        /// <para>
+        /// <c>RadzenDataGrid</c>'s own key and therefore its own translations. Drawn only where
+        /// <see cref="EmptyTemplate" /> is not - the template is the richer answer and wins - and set to
+        /// the empty string to have neither, which is what this grid did before it had this.
+        /// </para>
+        /// <para>
+        /// Its own row rather than nothing at all: a table body with a header over it and no
+        /// explanation reads as a grid that has not finished loading, which is the one thing it is not.
+        /// §44 found 19 of the surveyed application's 91 grids setting this and the other 72 relying on
+        /// the default they would have lost.
+        /// </para>
+        /// </remarks>
+        [Parameter]
+        public string EmptyText
+        {
+            get => emptyText ?? Localize(nameof(Blazor.RadzenStrings.DataGrid_EmptyText));
+            set => emptyText = value;
+        }
+
         string? clearFilterText;
 
         /// <summary>The clear button's accessible name, on a column that carries a filter.</summary>

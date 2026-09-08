@@ -117,6 +117,28 @@ namespace Radzen.FastGrid.Tests
             Assert.Contains("mine", className);
         }
 
+        [Fact]
+        public void AReadOnlyGridCanStillLightUpUnderThePointer()
+        {
+            // §44: the themes nest their row-hover rules inside .rz-selectable along with their
+            // selected-row rules, so a grid that selects nothing gets neither. §38's application works
+            // around exactly this by assigning an empty ValueChanged.
+            using var ctx = Context();
+
+            var without = Render(ctx).Find("div.rz-data-grid").ClassName;
+
+            Assert.DoesNotContain("rz-selectable", without);
+
+            var with = Render(ctx, p => p.Add(g => g.ShowRowHover, true))
+                .Find("div.rz-data-grid").ClassName;
+
+            Assert.Contains("rz-selectable", with);
+
+            // And nothing is highlighted by it, because nothing is selected.
+            Assert.Empty(Render(ctx, p => p.Add(g => g.ShowRowHover, true))
+                .FindAll("tr.rz-state-highlight"));
+        }
+
         // The title a narrow-screen theme shows once the table is stacked into cards.
         [Fact]
         public void ResponsiveRepeatsTheColumnTitleInEachCell()

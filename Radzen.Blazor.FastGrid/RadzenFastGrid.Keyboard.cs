@@ -511,8 +511,9 @@ namespace Radzen.FastGrid
 
             selectionAnchor = row;
 
-            // The toggle cell activates the toggle, which is what is in it.
-            if (ExpandColumn && cell == 0)
+            // The toggle cell activates the toggle, which is what is in it - and on a row that offers
+            // none, there is nothing in it to activate.
+            if (ExpandColumn && cell == 0 && CanExpand(item))
             {
                 await ToggleRow(item).ConfigureAwait(false);
             }

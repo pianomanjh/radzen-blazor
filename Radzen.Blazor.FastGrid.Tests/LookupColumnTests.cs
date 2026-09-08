@@ -42,7 +42,8 @@ namespace Radzen.FastGrid.Tests
             }, data);
 
         static string[] Cells(IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
-            cut.FindAll("tbody tr").Select(row => row.QuerySelectorAll("td")[index].TextContent).ToArray();
+            cut.FindAll("tbody tr.rz-data-row")
+                .Select(row => row.QuerySelectorAll("td")[index].TextContent).ToArray();
 
         static RadzenDropDown<System.Collections.IEnumerable> Picker(
             IRenderedComponent<RadzenFastGrid<Person>> cut, int index) =>
@@ -410,7 +411,7 @@ namespace Radzen.FastGrid.Tests
 
             cut.FindAll("thead tr")[1].QuerySelectorAll("input")[0].Change("bl");
 
-            Assert.Empty(cut.FindAll("tbody tr td"));
+            Assert.Empty(cut.FindAll("tbody tr.rz-data-row td"));
         }
 
         [Fact]

@@ -67,7 +67,7 @@ namespace Radzen.FastGrid.Tests
             cut.FindComponents<PropertyColumn<Person, DateTime>>().Single().Instance;
 
         static string[] Names(IRenderedComponent<RadzenFastGrid<Person>> cut) =>
-            cut.FindAll("tbody tr")
+            cut.FindAll("tbody tr.rz-data-row")
                 .Where(row => row.QuerySelectorAll("td").Length > 0)
                 .Select(row => row.QuerySelectorAll("td")[0].TextContent)
                 .ToArray();

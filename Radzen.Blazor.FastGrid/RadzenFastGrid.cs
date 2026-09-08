@@ -177,6 +177,27 @@ namespace Radzen.FastGrid
         /// </summary>
         bool ShowsSelection => SelectsOnRowClick || Selection is not null;
 
+        /// <summary>
+        /// Whether rows light up under the pointer on a grid that has no selection to show.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <c>rz-selectable</c> is what the themes nest both their selected-row and their row-hover
+        /// rules under, so a grid that selects nothing gets neither. That coupling is upstream's and it
+        /// is worth loosening rather than copying: §38's application carries a <c>ShowRowHover</c>
+        /// parameter whose whole implementation is to assign an empty <c>ValueChanged</c>, which is a
+        /// wrapper working around exactly this from the outside.
+        /// </para>
+        /// <para>
+        /// The class alone is what it adds. No row on a grid with nothing selected carries
+        /// <c>rz-state-highlight</c>, so the selected-row rules the class also unlocks match nothing.
+        /// </para>
+        /// </remarks>
+        [Parameter] public bool ShowRowHover { get; set; }
+
+        // The class the themes hang both sets of rules on, and the two reasons to write it.
+        bool Selectable => ShowsSelection || ShowRowHover;
+
         /// <summary>Extra CSS class for the grid element.</summary>
         [Parameter] public string? CssClass { get; set; }
 
@@ -230,6 +251,34 @@ namespace Radzen.FastGrid
 
         /// <summary>Whether the toggle column is drawn. Without it, expand rows through the API.</summary>
         [Parameter] public bool ShowExpandColumn { get; set; } = true;
+
+        /// <summary>
+        /// Which rows can be expanded, when only some of them can. Null - the default - means all of
+        /// them.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A row that answers false keeps its cell in the toggle column, so the columns beside it stay
+        /// where they are, and draws no button in it. §38's application asks this of one grid, where the
+        /// detail is a list of validation failures and a row that passed has none:
+        /// <c>args.Expandable = args.Data.ValidationFailed</c>.
+        /// </para>
+        /// <para>
+        /// <strong>A delegate per row, and only for a grid that sets it.</strong> §3's third rule is
+        /// that a feature costs nothing while it is off, and this one is null until someone writes it -
+        /// at which point the grid is already paying for row detail, which is the one feature here whose
+        /// use is not cheap.
+        /// </para>
+        /// <para>
+        /// <see cref="ToggleRow" /> is not gated on it. This says which rows offer the control, and a
+        /// caller that expands a row itself has said what it means more directly than a predicate can
+        /// contradict.
+        /// </para>
+        /// </remarks>
+        [Parameter] public Func<TItem, bool>? RowExpandable { get; set; }
+
+        /// <summary>Whether this row offers a toggle, which is every row until something says otherwise.</summary>
+        internal bool CanExpand(TItem item) => RowExpandable is null || RowExpandable(item);
 
         /// <summary>Whether expanding a row collapses the last one.</summary>
         [Parameter] public DataGridExpandMode ExpandMode { get; set; } = DataGridExpandMode.Single;
@@ -943,7 +992,7 @@ namespace Radzen.FastGrid
             // Written out per arm rather than concatenated, so a grid that declares no CssClass still
             // takes a literal and allocates nothing, which is what this switch is for.
             builder.AddAttribute(1, "class",
-                (string.IsNullOrEmpty(CssClass), ShowsSelection, Responsive) switch
+                (string.IsNullOrEmpty(CssClass), Selectable, Responsive) switch
                 {
                     (true, false, false) => "rz-data-grid rz-datatable",
                     (true, true, false) => "rz-data-grid rz-datatable rz-selectable",
@@ -2159,33 +2208,40 @@ namespace Radzen.FastGrid
                 {
                     builder.AddAttribute(307, "aria-colindex", AriaToggleColIndex);
                 }
-                builder.OpenElement(135, "button");
-                builder.AddAttribute(136, "type", "button");
-                builder.AddAttribute(137, "tabindex", "-1");
-                builder.AddAttribute(138, "aria-expanded", expanded ? "true" : "false");
-                builder.AddAttribute(139, "aria-label", togglerLabel);
-                builder.AddAttribute(140, "class",
-                    "rz-button rz-button-sm rz-button-icon-only rz-variant-text rz-base rz-shade-default");
-                if (delegated)
+
+                // The cell stays and the control goes, so every column after it keeps its position and
+                // the row is still as wide as the header says.
+                if (CanExpand(item))
                 {
-                    // What the listener recognises the toggle by, and what makes it swallow the click
-                    // the way stopPropagation did. One constant attribute per row rather than a
-                    // delegate per row, which is what row detail used to cost to have.
-                    builder.AddAttribute(150, "data-toggle", "");
-                }
-                else
-                {
-                    builder.AddAttribute(141, "onclick", ToggleHandler(item));
-                    builder.AddEventStopPropagationAttribute(142, "onclick", true);
+                    builder.OpenElement(135, "button");
+                    builder.AddAttribute(136, "type", "button");
+                    builder.AddAttribute(137, "tabindex", "-1");
+                    builder.AddAttribute(138, "aria-expanded", expanded ? "true" : "false");
+                    builder.AddAttribute(139, "aria-label", togglerLabel);
+                    builder.AddAttribute(140, "class",
+                        "rz-button rz-button-sm rz-button-icon-only rz-variant-text rz-base rz-shade-default");
+                    if (delegated)
+                    {
+                        // What the listener recognises the toggle by, and what makes it swallow the click
+                        // the way stopPropagation did. One constant attribute per row rather than a
+                        // delegate per row, which is what row detail used to cost to have.
+                        builder.AddAttribute(150, "data-toggle", "");
+                    }
+                    else
+                    {
+                        builder.AddAttribute(141, "onclick", ToggleHandler(item));
+                        builder.AddEventStopPropagationAttribute(142, "onclick", true);
+                    }
+
+                    builder.OpenElement(143, "span");
+                    builder.AddAttribute(144, "class", expanded
+                        ? "notranslate rz-row-toggler rzi-chevron-circle-down"
+                        : "rz-row-toggler rzi-chevron-circle-right");
+                    builder.CloseElement();
+
+                    builder.CloseElement();
                 }
 
-                builder.OpenElement(143, "span");
-                builder.AddAttribute(144, "class", expanded
-                    ? "notranslate rz-row-toggler rzi-chevron-circle-down"
-                    : "rz-row-toggler rzi-chevron-circle-right");
-                builder.CloseElement();
-
-                builder.CloseElement();
                 builder.CloseElement();
             }
 
@@ -2477,18 +2533,47 @@ namespace Radzen.FastGrid
             }
         }
 
+        /// <summary>Whether there is anything to say in place of rows.</summary>
+        /// <remarks>
+        /// One rule in one place, because two things read it: the row <c>RenderEmpty</c> writes, and the
+        /// <c>EmptyContent</c> the virtualized path hands <c>Virtualize</c>. §10b's finding is what
+        /// happens when those two disagree - here, an empty virtualized grid drawing a header over
+        /// nothing while the inline one explained itself.
+        /// </remarks>
+        bool HasEmptyMessage => EmptyTemplate is not null || !string.IsNullOrEmpty(EmptyText);
+
         void RenderEmpty(RenderTreeBuilder builder)
         {
-            if (EmptyTemplate is null)
+            if (!HasEmptyMessage)
             {
                 return;
             }
 
             builder.OpenElement(140, "tr");
+
+            // Upstream's name for this row, which it has and this grid did not - and which is what lets
+            // anything reading the body tell a message from a row of data.
+            builder.AddAttribute(148, "class", "rz-datatable-emptymessage-row");
+
             builder.OpenElement(141, "td");
             builder.AddAttribute(142, "class", "rz-datatable-emptymessage");
             builder.AddAttribute(143, "colspan", visibleColumns.Count + (ExpandColumn ? 1 : 0));
-            builder.AddContent(144, EmptyTemplate);
+
+            if (EmptyTemplate is not null)
+            {
+                builder.AddContent(144, EmptyTemplate);
+            }
+            else
+            {
+                // Upstream's own markup for the text, span and inline style both: the themes give
+                // .rz-datatable-emptymessage a white-space it has to be let out of, and this is the one
+                // place RadzenDataGrid writes a style attribute rather than a class.
+                builder.OpenElement(145, "span");
+                builder.AddAttribute(146, "style", "white-space: normal");
+                builder.AddContent(147, EmptyText);
+                builder.CloseElement();
+            }
+
             builder.CloseElement();
             builder.CloseElement();
         }
@@ -2516,7 +2601,7 @@ namespace Radzen.FastGrid
 
             // Virtualize owns the body while it is on, so the empty row the inline path writes is
             // unreachable - without this an empty virtualized grid showed a header over nothing.
-            if (EmptyTemplate is not null)
+            if (HasEmptyMessage)
             {
                 builder.AddAttribute(117, nameof(Virtualize<TItem>.EmptyContent),
                     virtualEmpty ??= RenderEmpty);

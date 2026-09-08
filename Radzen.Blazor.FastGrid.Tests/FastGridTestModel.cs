@@ -163,6 +163,7 @@ namespace Radzen.FastGrid.Tests
             RenderFragment<ColumnBase<TItem>> headerTemplate = null,
             RenderFragment<ColumnBase<TItem>> footerTemplate = null,
             string footerCssClass = null,
+            string headerCssClass = null,
             bool pickable = true,
             bool resizable = true,
             bool reorderable = true,
@@ -336,6 +337,11 @@ namespace Radzen.FastGrid.Tests
             if (footerCssClass is not null)
             {
                 builder.AddAttribute(seq + 26, nameof(PropertyColumn<TItem, TProp>.FooterCssClass), footerCssClass);
+            }
+
+            if (headerCssClass is not null)
+            {
+                builder.AddAttribute(seq + 91, nameof(PropertyColumn<TItem, TProp>.HeaderCssClass), headerCssClass);
             }
 
             if (!pickable)

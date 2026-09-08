@@ -39,6 +39,46 @@ namespace Radzen.FastGrid.Tests
         static RenderFragment<Person> Detail =>
             person => builder => builder.AddContent(0, "detail for " + person.First);
 
+        [Fact]
+        public void ARowThatCannotExpandKeepsItsCellAndLosesItsButton()
+        {
+            // §44: one grid in the surveyed application writes args.Expandable = args.Data.
+            // ValidationFailed, because the detail is a list of failures and a row that passed has none.
+            // The cell stays so the columns beside it do not shift by one on those rows.
+            using var ctx = Context();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.Template, Detail);
+                p.Add(g => g.RowExpandable, (Func<Person, bool>)(person => person.Id % 2 == 0));
+            });
+
+            var rows = cut.FindAll("tbody tr.rz-data-row");
+
+            Assert.NotEmpty(rows);
+
+            // Every row still has the toggle cell, and only the even ids have the control in it.
+            Assert.All(rows, row => Assert.Single(row.QuerySelectorAll("td.rz-col-icon")));
+
+            var withButton = rows.Count(row => row.QuerySelectorAll("td.rz-col-icon button").Length == 1);
+
+            Assert.Equal(People.Sample().Count(person => person.Id % 2 == 0), withButton);
+            Assert.NotEqual(rows.Count, withButton);
+        }
+
+        [Fact]
+        public void EveryRowExpandsWhileNothingSaysOtherwise()
+        {
+            // The counterweight: null is all of them, which is what every grid that does not set it gets.
+            using var ctx = Context();
+
+            var cut = Render(ctx, p => p.Add(g => g.Template, Detail));
+
+            var rows = cut.FindAll("tbody tr.rz-data-row");
+
+            Assert.All(rows, row => Assert.Single(row.QuerySelectorAll("td.rz-col-icon button")));
+        }
+
         // The whole point of the design: no Template, nothing to pay for.
         [Fact]
         public void WithNoTemplateThereIsNoTogglerAnywhere()
