@@ -16,6 +16,7 @@ running the same program against it.
 | `SaveVersusClosedXml.cs` | The save alone against ClosedXML's, both filled outside the armed window, plus each engine's fill and whole export. Needs the ClosedXML package reference. |
 | `SavedParts.cs` | Every part of a workbook using every worksheet feature, unpacked for byte comparison between two checkouts. Pair with `compare-parts.py`. |
 | `SpanFormatAgreement.cs` | Whether `TryFormat` spells a number the way `ToString(InvariantCulture)` and `XmlConvert.ToString` do, over the values a fixture would not carry. |
+| `SaveFloor.cs` | What is left in the save and who pays for it - the sink against the writer, and a distinct against a repeated string table. |
 
 ## What `SetValues` actually saves
 
