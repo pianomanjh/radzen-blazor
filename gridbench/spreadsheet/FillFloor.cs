@@ -112,6 +112,7 @@ static long Populated(object store) => store switch
     IXLWorksheet ws => ws.CellsUsed().Count(),
     Dictionary<(int, int), Mimic> m => m.Count,
     Dictionary<(int, int), FoldedMimic> f => f.Count,
+    Dictionary<(int, int), SlimMimic> l => l.Count,
     int n => n,
     HandleStore h => h.Count,
     IdStore i => i.Count,
@@ -321,6 +322,24 @@ object CalibrationFolded()
         for (var c = 0; c < Cols; c++)
         {
             store[(r, c)] = new FoldedMimic();
+        }
+    }
+
+    return store;
+}
+
+// The same graph with the six rare fields moved to side tables keyed on the cell itself: a cell keeps
+// only its worksheet, value, type, address and quote flag. Identity is unchanged, so nothing that
+// keys on a cell has to move.
+object CalibrationSlim()
+{
+    var store = new Dictionary<(int, int), SlimMimic>(Rows * Cols);
+
+    for (var r = 0; r < Rows; r++)
+    {
+        for (var c = 0; c < Cols; c++)
+        {
+            store[(r, c)] = new SlimMimic();
         }
     }
 
@@ -547,6 +566,7 @@ var dense = new (string Name, Func<object> Fill)[]
     ("columnar arrays", ColumnarDense),
     ("calibration, 152 B", Calibration),
     ("calibration, folded", CalibrationFolded),
+    ("calibration, slim", CalibrationSlim),
 };
 
 // The re-box arms, run as their own report so the mixed block above is not disturbed.
@@ -650,6 +670,16 @@ sealed class Mimic
 sealed class FoldedMimic
 {
     public object? Worksheet, Format, Hyperlink, Formula, SyntaxTree, ValidationErrors, Changed;
+    public object? Value;
+    public (int Row, int Column) Address;
+    public SlotType Type;
+    public bool QuotePrefix;
+}
+
+// Worksheet, value, type, address, quote flag. Everything else is in a side table.
+sealed class SlimMimic
+{
+    public object? Worksheet;
     public object? Value;
     public (int Row, int Column) Address;
     public SlotType Type;

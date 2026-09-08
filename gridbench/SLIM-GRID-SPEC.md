@@ -12085,3 +12085,48 @@ Nothing else here is new risk, and the 61 bytes are not tight - the slot's `Row`
 **This is the design to put to akorchev as a question**, and the sentence it leads with is unchanged
 from §52: it prevents no failure. It makes an export of 550,000 cells cost 41 MB instead of 104 and
 collect nothing, and it does it without changing a public signature or making any other operation worse.
+
+## 58. What was built, and why it is not §57
+
+§57's stable id measured 31.8 MB and needed the indexer to stop returning a live object. What went into
+`pianomanjh/radzen-blazor#13`, stacked on #12, is the shape that gets most of it and breaks nothing:
+**a cell keeps its value and type inline and its six rare fields behind one reference**, allocated only
+when a cell first has one of them. `CellData.Infer` exposes the inference the constructor already ran,
+so an assignment no longer builds a `CellData` to unpack and discard.
+
+| | allocated | B / cell | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- |
+| `SetValues`, before | 94.0 MB | 179 | 10 | 5 | 1 |
+| `SetValues`, after | **56.2 MB** | 107 | 6 | 3 | 1 |
+| a cell at a time, before | 113.7 MB | 217 | 10 | 5 | 1 |
+| a cell at a time, after | 75.9 MB | 145 | 6 | 3 | 1 |
+| export, before / after | 103.6 → **65.8 MB** | | | | |
+
+The save's share is 9.6 MB on both sides, so nothing here is the writer's. Sparse improves in the same
+proportion as dense. BenchmarkDotNet read the fill at **56.21 MB** against the harness's 56.2, and
+ClosedXML's bulk fill at 75.10 against its historical 75.1 - **two instruments and two builds agreeing
+to the hundredth of a megabyte**, which is the strongest cross-check this work has had.
+
+### Why not the stable id
+
+| | fill | needs |
+| --- | --- | --- |
+| shipped | 56.2 MB | nothing public |
+| slim calibration predicted | ~46 MB | - |
+| stable id (§57) | 31.8 MB | façades, `Clone` redesign, graph rekey, writer change |
+
+The remaining 24 MB is behind `Cells[r, c]` no longer returning a live object. §55 and §56 priced that:
+`Clone` has no detached backing once a cell is a façade, and a per-access instance has no stable
+identity, which is what `CellDependencyGraph` keys on. **It is a public change and a large one, and it
+belongs in a question to akorchev rather than in a branch stacked on an unreviewed PR.**
+
+### One test was restated rather than deleted
+
+`Cell.Data` is built on demand, so two reads are no longer the same instance.
+`HyperlinkCommand_UndoRestoresExactCellData` asserted that identity with `Assert.Same`; it now asserts
+the value and the type, which is what it was written to protect. **Verified by breaking the undo path to
+rebuild from text and watching it fail**, rather than by assuming the weaker assertion still bites.
+
+5,169 pass, at each of the three commits on its own. No `Claude-Session` trailer and no reference to
+Claude in the branch or the PR, following the convention #2708 and #12 set, since this is stacked on
+them and aimed the same way.
