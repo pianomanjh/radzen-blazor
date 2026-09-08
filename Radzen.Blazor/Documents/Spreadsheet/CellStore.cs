@@ -138,6 +138,24 @@ public class CellStore(Worksheet sheet)
         return false;
     }
 
+    // Every populated cell as the writer sees it, materialising none of them.
+    internal IEnumerable<CellView> GetPopulatedViews()
+    {
+        foreach (var entry in data)
+        {
+            var address = new CellRef(entry.Key.row, entry.Key.column);
+
+            yield return entry.Value.Cell is { } cell
+                ? new CellView(cell)
+                : new CellView(address, entry.Value.Content, entry.Value.Type, entry.Value.QuotePrefix);
+        }
+    }
+
+    // Whether an address holds anything the writer would write, without building a cell to ask.
+    internal bool IsWrittenAt(int row, int column) =>
+        data.TryGetValue((row, column), out var slot) &&
+        (slot.Value is not null || slot.Cell?.Formula is not null);
+
     internal IEnumerable<Cell> GetPopulatedCells()
     {
         foreach (var key in keysBuffer())

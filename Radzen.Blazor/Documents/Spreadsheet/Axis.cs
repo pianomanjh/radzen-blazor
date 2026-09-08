@@ -150,6 +150,8 @@ public class Axis(double size, int count)
         return autoFit.Contains(index);
     }
 
+    internal bool HasAutoFit => autoFit.Count > 0;
+
     // No change event: the flag has no visual effect, it only feeds the XLSX writer.
     internal void SetAutoFit(int index)
     {
