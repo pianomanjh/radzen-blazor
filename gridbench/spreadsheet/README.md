@@ -13,6 +13,7 @@ running the same program against it.
 | `BatchOnAFormulaSheet.cs` | What wrapping a small `SetValues` in `Worksheet.Batch` costs on a sheet carrying formulas that do not read the block. |
 | `VersusClosedXml.cs` | The same fill, and a fill-and-save, against ClosedXML. Needs `<PackageReference Include="ClosedXML" Version="0.104.2" />` beside the project reference. |
 | `SaveTypes.cs` | What `SaveToStream` allocates and, by `GCAllocationTick`, which types it goes to. The fill is outside the armed window, so nothing is subtracted. |
+| `SaveVersusClosedXml.cs` | The save alone against ClosedXML's, both filled outside the armed window, plus each engine's fill and whole export. Needs the ClosedXML package reference. |
 
 ## What `SetValues` actually saves
 
