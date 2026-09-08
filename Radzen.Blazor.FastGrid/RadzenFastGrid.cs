@@ -138,9 +138,9 @@ namespace Radzen.FastGrid
         [Parameter] public Action<FastGridCellRenderEventArgs<TItem>>? FooterCellRender { get; set; }
 
         /// <summary>
-        /// Whether the grid covers itself with a loading indicator while one of its own asynchronous
-        /// loads is in flight. Nothing to wire up: the grid already knows, through
-        /// <see cref="IsLoading" />.
+        /// Whether the grid covers itself with a loading indicator while a load is in flight - one of
+        /// its own, which it needs telling nothing about, or one <see cref="Loading" /> declares. Both
+        /// reach it through <see cref="IsLoading" />, and this turns off either.
         /// </summary>
         [Parameter] public bool ShowLoadingIndicator { get; set; } = true;
 
@@ -979,10 +979,11 @@ namespace Radzen.FastGrid
             // row-hover rules inside it - `.rz-selectable tbody tr.rz-data-row.rz-state-highlight > td`
             // - so without it a clicked row carries rz-state-highlight and nothing paints it.
             //
-            // Bound to whether the grid *shows* a selection rather than whether it makes one. A caller
-            // can hand over a Selection and own the clicking itself - which is exactly what the
-            // drop-down does, and it spent this branch's life displaying a chosen row that nothing
-            // painted, ten lines from this comment.
+            // Bound to Selectable, which is either reason to want the class. One is that the grid
+            // *shows* a selection rather than that it makes one: a caller can hand over a Selection and
+            // own the clicking itself, which is exactly what the drop-down does, and it spent this
+            // branch's life displaying a chosen row that nothing painted, ten lines from this comment.
+            // The other is ShowRowHover, which wants the hover half and has no selection at all.
             // rz-datatable-reflow is Responsive, as far as the theme is concerned: both the rule that
             // hides the per-cell title above the breakpoint and the media block that stacks the rows
             // into cards below it are nested under this class. The titles alone do nothing - they show
@@ -1140,9 +1141,10 @@ namespace Radzen.FastGrid
         // Both are positioned against the nearest positioned ancestor, which in both grids is the outer
         // .rz-datatable - so this covers the pagers as well as the table, exactly as it does there.
         //
-        // Drawn from IsLoading, which the grid maintains for its own asynchronous loads, rather than
-        // from a parameter the application has to keep in step. RadzenDataGrid needs IsLoading passed
-        // in; here there is nothing to pass, and nothing to forget to reset on the failure path.
+        // Drawn from IsLoading, which is the grid's own asynchronous loads or the Loading a page
+        // declares for a fetch it runs itself. RadzenDataGrid needs IsLoading passed in on every grid;
+        // here it is passed only by the pages that load their own rows, and a grid handed an IQueryable
+        // or a LoadData has nothing to pass and nothing to forget to reset on the failing path.
         void RenderLoading(RenderTreeBuilder builder)
         {
             builder.OpenElement(210, "div");
@@ -2211,6 +2213,12 @@ namespace Radzen.FastGrid
 
                 // The cell stays and the control goes, so every column after it keeps its position and
                 // the row is still as wide as the header says.
+                //
+                // Upstream keeps the button and hides its icon - getExpandIconStyle writes
+                // visibility:hidden - which leaves a focusable, labelled, aria-expanded control that
+                // does nothing on the rows that cannot expand. That is §27's affordance fault with the
+                // paint taken off rather than the control, and §12 would have to name it anyway. The
+                // divergence is the whole button.
                 if (CanExpand(item))
                 {
                     builder.OpenElement(135, "button");
@@ -2540,7 +2548,10 @@ namespace Radzen.FastGrid
         /// happens when those two disagree - here, an empty virtualized grid drawing a header over
         /// nothing while the inline one explained itself.
         /// </remarks>
-        bool HasEmptyMessage => EmptyTemplate is not null || !string.IsNullOrEmpty(EmptyText);
+        // Reads the field rather than EmptyText, so a virtualized grid does not walk the localizer on
+        // every render to answer a question only an explicit empty string changes: unset means the
+        // localized default, which is a message.
+        bool HasEmptyMessage => EmptyTemplate is not null || emptyText is not { Length: 0 };
 
         void RenderEmpty(RenderTreeBuilder builder)
         {
@@ -2552,25 +2563,33 @@ namespace Radzen.FastGrid
             builder.OpenElement(140, "tr");
 
             // Upstream's name for this row, which it has and this grid did not - and which is what lets
-            // anything reading the body tell a message from a row of data.
-            builder.AddAttribute(148, "class", "rz-datatable-emptymessage-row");
+            // anything reading the body tell a message from a row of data. The roles come with it: this
+            // is inside role="grid", where a row without role="row" and a cell without role="gridcell"
+            // is a hole in the table a screen reader walks.
+            builder.AddAttribute(141, "role", "row");
+            builder.AddAttribute(142, "class", "rz-datatable-emptymessage-row");
 
-            builder.OpenElement(141, "td");
-            builder.AddAttribute(142, "class", "rz-datatable-emptymessage");
-            builder.AddAttribute(143, "colspan", visibleColumns.Count + (ExpandColumn ? 1 : 0));
+            // Upstream also swallows keydown on this row and this does not, which is a divergence
+            // rather than an oversight: its handler is on the row, and this grid's keyboard is one
+            // handler on the scroll container reading a cursor that cannot be on a row that is not
+            // there. There is nothing here for a key to reach.
+            builder.OpenElement(143, "td");
+            builder.AddAttribute(144, "role", "gridcell");
+            builder.AddAttribute(145, "class", "rz-datatable-emptymessage");
+            builder.AddAttribute(146, "colspan", visibleColumns.Count + (ExpandColumn ? 1 : 0));
 
             if (EmptyTemplate is not null)
             {
-                builder.AddContent(144, EmptyTemplate);
+                builder.AddContent(147, EmptyTemplate);
             }
             else
             {
                 // Upstream's own markup for the text, span and inline style both: the themes give
                 // .rz-datatable-emptymessage a white-space it has to be let out of, and this is the one
                 // place RadzenDataGrid writes a style attribute rather than a class.
-                builder.OpenElement(145, "span");
-                builder.AddAttribute(146, "style", "white-space: normal");
-                builder.AddContent(147, EmptyText);
+                builder.OpenElement(148, "span");
+                builder.AddAttribute(149, "style", "white-space: normal");
+                builder.AddContent(150, EmptyText);
                 builder.CloseElement();
             }
 

@@ -286,10 +286,11 @@ namespace Radzen.FastGrid
         /// </summary>
         /// <remarks>
         /// <para>
-        /// <strong>A parameter beside the grid's own state rather than instead of it</strong>, which is
-        /// <see cref="ColumnBase{TItem}.Visible" />'s shape: a component must not assign to its own
-        /// parameter, so the runtime's answer lives beside the markup's word and
-        /// <see cref="IsLoading" /> is the two of them together.
+        /// <strong>A parameter beside the grid's own state rather than instead of it</strong>, for
+        /// <see cref="ColumnBase{TItem}.Visible" />'s reason: a component must not assign to its own
+        /// parameter, so the runtime's answer lives beside the markup's word. The two are combined
+        /// differently, though - a picked visibility <em>overrides</em> the declared one, and these two
+        /// are an <c>or</c>, because either party being busy is the grid being busy.
         /// </para>
         /// <para>
         /// <strong>Nothing here has to be passed and this is the exception.</strong> A grid handed an

@@ -335,6 +335,30 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void EnterOnAToggleCellWithNoToggleActivatesTheRow()
+        {
+            // What it does instead, which is what the pointer does: with no button in the cell, a click
+            // there reaches the row. Enter has to agree with that rather than fall silent, or the
+            // keyboard would be the one input that cannot activate that cell at all.
+            using var ctx = new TestContext();
+
+            var clicked = new List<Person>();
+
+            var cut = Render(ctx, p =>
+            {
+                p.Add(g => g.Template,
+                    (RenderFragment<Person>)(person => b => b.AddContent(0, person.First)));
+                p.Add(g => g.RowExpandable, (Func<Person, bool>)(_ => false));
+                p.Add(g => g.RowClick, (Person person) => clicked.Add(person));
+            });
+
+            Press(cut, "Enter");
+
+            Assert.Empty(cut.FindAll("tr.rz-expanded-row-content"));
+            Assert.Single(clicked);
+        }
+
+        [Fact]
         public void TheToggleColumnIsOneMoreCellToCross()
         {
             using var ctx = new TestContext();

@@ -190,6 +190,31 @@ namespace Radzen.FastGrid.Tests
         }
 
         [Fact]
+        public void TheHeaderCellItselfCarriesIt()
+        {
+            // The fold is unit-tested above and a fold nothing calls is a fold nobody gets: the header
+            // is the one section of four whose class the grid composes, so the th is where it has to
+            // show up.
+            using var ctx = new TestContext();
+
+            ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, People.Sample());
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, title: "First",
+                        headerCssClass: "header-mine"),
+                    Columns.Property<Person, string>(x => x.Last, title: "Last")));
+            });
+
+            var headers = cut.FindAll("thead th");
+
+            Assert.Contains("header-mine", headers[0].ClassName);
+            Assert.DoesNotContain("header-mine", headers[1].ClassName);
+        }
+
+        [Fact]
         public void AHeaderWithNoClassOfItsOwnIsUnchanged()
         {
             // The counterweight: without it, always appending would pass the test above and would put a

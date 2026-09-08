@@ -11030,9 +11030,19 @@ one, and the empty string is how a grid asks for neither.
 the `EmptyContent` handed to `Virtualize`. §10b is what happens when those two disagree, and they did:
 the guard on the virtualized path asked only about the template.
 
-The row now carries upstream's `rz-datatable-emptymessage-row`, which it did not and which is §7's
-default. That is also what let the six tests this broke be fixed honestly rather than worked around: each
-was counting `tbody tr` where it meant rows of data, and each now says `tbody tr.rz-data-row`.
+The row now carries upstream's `rz-datatable-emptymessage-row`, `role="row"` and `role="gridcell"`, none
+of which it had - a row and a cell without their roles inside `role="grid"` is a hole a screen reader
+walks. The one thing of upstream's not taken is its `@onkeydown:stopPropagation`, and that is argued
+rather than dropped: its handler is on the row, and this grid's keyboard is one handler on the scroll
+container reading a cursor that cannot be on a row that is not there.
+
+The class is also what let the six tests this broke be fixed honestly rather than worked around: each was
+counting `tbody tr` where it meant rows of data, and each now says `tbody tr.rz-data-row`.
+
+**It draws under the scrim while an asynchronous grid is loading**, because `RenderEmpty` asks only
+whether anything was rendered. That is upstream's behaviour and it is why `MarkLoading` raises the scrim
+before the deferred load rather than when the load starts - the message is covered rather than
+suppressed, and the paragraph in `Data.cs` that explains the ordering is the one that keeps it covered.
 
 `RadzenFastDropDownDataGrid` forwards it. Null forwards null, which leaves the inner grid on its own
 default.
@@ -11047,14 +11057,22 @@ default.
   this by assigning an empty `ValueChanged`. `Selectable` is the class's two reasons; nothing is
   highlighted by it, because nothing is selected.
 - **`RowExpandable`.** A row that answers false keeps its cell in the toggle column - so the columns
-  beside it do not shift by one on those rows - and draws no button in it. The keyboard is gated with it,
-  or Enter on that cell would expand a row through a control no pointer can reach. `ToggleRow` is not
-  gated: a caller that expands a row itself has said what it means more directly than a predicate can
-  contradict.
+  beside it do not shift by one on those rows - and draws no button in it. Upstream keeps the button and
+  writes `visibility:hidden` on its icon, which leaves a focusable, labelled, `aria-expanded` control
+  that does nothing; the divergence is the whole button. The keyboard is gated with it, or Enter on that
+  cell would expand a row through a control no pointer can reach - and what it does instead is activate
+  the row, which is what a pointer click on that cell now does too. `ToggleRow` is not gated: a caller
+  that expands a row itself has said what it means more directly than a predicate can contradict.
 
 ### Verified
 
-1308 green, twenty-three of them new. Twelve mutations, twelve caught - the five on the pill, plus the
+1310 green, twenty-five of them new. Twelve mutations, twelve caught - the five on the pill, plus the
 scrim ignoring the application's word, the empty message needing a template, the text winning over the
 template, hover not reaching the class, the predicate inverted, the keyboard toggling a row with no
 toggle, and the header taking no class of its own.
+
+The review found three comments that had come to say the opposite of the code - `ShowLoadingIndicator`'s
+summary, `RenderLoading`'s, and the README's *"there is no flag to forget to clear"* - which is what
+`Loading` now is for the pages that pass it. It also found `HeaderCssClass` proved only through the fold
+and never through a `th`, and a helper parameter added for a render test that was never written; that
+test exists now. The stray playground screenshot committed with the previous change is gone.

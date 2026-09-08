@@ -1536,9 +1536,13 @@ for something that depends on the column. Neither is per cell.
 `ShowLoadingIndicator` covers the grid with RadzenDataGrid's own scrim and spinner while an asynchronous
 load is in flight, and `LoadingTemplate` replaces the spinner with something of your own.
 
-There is nothing to wire up. RadzenDataGrid needs `IsLoading=@isLoading` passed in and reset on every
-path the load can leave by, including the one that throws; this grid owns the load, so it already knows,
-and the indicator reads the same `IsLoading` the component exposes. There is no flag to forget to clear.
+A grid that owns its load has nothing to wire up. RadzenDataGrid needs `IsLoading=@isLoading` passed in
+and reset on every path the load can leave by, including the one that throws; a grid handed an
+`IQueryable` or a `LoadData` already knows, and there is no flag to forget to clear.
+
+A page that fetches its own rows and then assigns `Data` is doing the loading outside the grid, and says
+so with `Loading`. `IsLoading` is the two together, so the scrim and the keyboard read one question
+whichever of them is true.
 
 It costs one branch per render when nothing is loading, and two elements when something is. The rows stay
 in the tree underneath rather than being replaced, so a reload does not blank the grid it is reloading.
