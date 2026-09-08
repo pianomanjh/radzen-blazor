@@ -30,29 +30,11 @@ namespace Radzen.FastGrid.Export
     /// the writer refuses becomes the column's own text, which is §40's fallback rule and is what the
     /// reader was looking at on screen.
     /// </para>
-    /// <para>
-    /// <strong>A <c>bool</c> was demoted to text here, and that was wrong.</strong> A round trip showed
-    /// <c>true</c> coming back as the number <c>1</c> with no format, which read as the file being
-    /// unable to keep a boolean. Reading the bytes instead showed <c>&lt;c r="A1" t="b"&gt;&lt;v&gt;1&lt;/v&gt;&lt;/c&gt;</c> -
-    /// ECMA-376's boolean, exactly what Excel shows as TRUE. The fault was in <c>XlsxReader</c>, which
-    /// dropped the attribute; the file was always right. Booleans are typed again, which is what lets
-    /// Excel filter the column as a boolean rather than as two words.
-    /// </para>
     /// </remarks>
     static class ExportValue
     {
         /// <summary>Writes a value into a cell in the closest form the writer will keep.</summary>
         /// <remarks>
-        /// <para>
-        /// <strong>Text has to be insisted on, because <c>Cell.Value</c> re-reads it.</strong> Handed a
-        /// string, <c>CellData</c> runs <c>TryConvertFromString</c> and keeps whatever that infers - so
-        /// the text a column drew does not survive being written. Found by a test expecting
-        /// <em>True</em> from a bool column and getting <strong>1</strong>: the coercion below had
-        /// already turned the bool into the word, and the writer turned the word back into a number.
-        /// <c>"02:00:00"</c> comes back a <c>DateTime</c> the same way, and the case that would have
-        /// been found by a user rather than a test is a product code - <c>"007"</c> stored as the
-        /// number 7.
-        /// </para>
         /// <para>
         /// <c>SetValue</c> with a leading apostrophe is the writer's own answer, and its comment names
         /// this exact case: <em>"the quote prefix means literal text, so the string must not go through

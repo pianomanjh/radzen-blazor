@@ -7,14 +7,6 @@ namespace Radzen.FastGrid
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <strong>This interface is the answer to a problem §39 and §40 made between them.</strong> §40 said
-    /// an export entry belongs in §39's band menu <em>"once there is a menu to put it in"</em>. There is
-    /// one, and the entry could not be built: the menu is drawn here, <c>ToWorkbook</c> lives in
-    /// <c>Radzen.Blazor.FastGrid.Export</c>, and that package references this one - so this one cannot
-    /// reference it back without rooting <c>XlsxWriter</c> in every consumer, measured at 400 KB over the
-    /// wire on a trimmed WebAssembly build.
-    /// </para>
-    /// <para>
     /// So the dependency stays one way and the <em>service provider</em> carries the export across.
     /// <c>AddRadzenFastGridExport()</c> registers an implementation; a grid with
     /// <see cref="RadzenFastGrid{TItem}.ShowGridMenu" /> on then offers the entry. An application that
@@ -25,16 +17,6 @@ namespace Radzen.FastGrid
     /// to keep it that way. That refusal was of <em>"an application that wants its own actions in the
     /// band"</em> - a list of arbitrary items, which is the toolbar question again. This is one verb,
     /// named by the grid.
-    /// </para>
-    /// <para>
-    /// <strong>The first draft let the implementation name the entry, and the review was right that this
-    /// crossed the line.</strong> A <c>Text</c> property here means a registration can label the entry
-    /// anything - <em>Send to SAP</em> - and then the interface is a one-slot menu extension point with
-    /// a suggestive name rather than one verb. It is gone. The entry says whatever
-    /// <c>RadzenFastGrid.ExportText</c> says, which is a parameter on the grid, localized through the
-    /// same resources as every other word it draws, and settable per grid by whoever declares it. An
-    /// application that wants a differently named <em>action</em> is asking for §39's extension point,
-    /// and should be made to ask for it.
     /// </para>
     /// <para>
     /// The resolution is <see cref="IFastGridQueryExecutor" />'s, which is the pattern this grid already

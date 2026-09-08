@@ -8,15 +8,6 @@ namespace Radzen.FastGrid.Export
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <strong>§40 declined to write this and the reasoning did not survive comparison.</strong> The
-    /// section justified exporting a bare <c>4000</c> from a column drawing <em>$4,000.00</em> by
-    /// analogy to §39's refusal of a settings-blob converter - <em>"a second format vocabulary to keep
-    /// correct forever"</em>. The consuming application §38 surveyed had already written one in 62
-    /// lines, and the analogy is wrong in the way that matters: that converter had to be
-    /// <em>bidirectional and lossless forever</em> because it was persistence, and this is one-way,
-    /// best-effort, and allowed to give up.
-    /// </para>
-    /// <para>
     /// <strong>Giving up is the design.</strong> Where there is no safe equivalent this answers null,
     /// and the caller exports the text the column drew instead of a number wearing the wrong format.
     /// That is fidelity chosen over typing, deliberately and only where typing cannot be kept honest -

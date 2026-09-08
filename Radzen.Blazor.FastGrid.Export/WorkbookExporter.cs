@@ -34,9 +34,6 @@ namespace Radzen.FastGrid.Export
         {
             ArgumentNullException.ThrowIfNull(grid);
 
-            // Built here, on the renderer's thread, and that is not incidental: ToWorkbook reads
-            // FilteredRows and VisibleColumns, which are the grid's own state and change under a render.
-            // Measured at about 210 ms for 50,000 rows - the cheap seventh of the whole export.
             var workbook = grid.ToWorkbook(new FastGridExportOptions<TItem>
             {
                 SheetName = options.SheetName,
@@ -60,17 +57,6 @@ namespace Radzen.FastGrid.Export
         /// Writes the workbook and hands it to the browser to save.
         /// </summary>
         /// <remarks>
-        /// <para>
-        /// <strong><c>Radzen.downloadFile</c> rather than a module of this package's own, and the review
-        /// is what found it.</strong> The first draft shipped an <c>export.js</c> doing exactly this, and
-        /// §7's rule is that upstream's is the default and a divergence has to be argued rather than
-        /// written silently. <c>Radzen.Blazor.js</c> already carries <c>downloadFile(fileName, data,
-        /// mimeType)</c>, it already unwraps a <c>DotNetStreamReference</c> through <c>arrayBuffer()</c>,
-        /// and this grid already calls <c>Radzen.*</c> globals from C# - <c>Radzen.startColumnResize</c>
-        /// and <c>Radzen.startColumnReorder</c>. Reusing it took a <c>wwwroot</c>, a Razor SDK, a module
-        /// import, a module reference, an <c>IAsyncDisposable</c> and its synchronous counterpart out of
-        /// this package.
-        /// </para>
         /// <para>
         /// <strong>One thing about upstream's is worth knowing and is not this package's to fix here.</strong>
         /// It calls <c>URL.revokeObjectURL</c> in the same tick as the anchor's click. A browser that has
@@ -102,9 +88,6 @@ namespace Radzen.FastGrid.Export
                 return;
             }
 
-            // await using, so the stream is released on the throwing paths too - which the review found
-            // the first draft leaking. DotNetStreamReference disposes it as well; disposing a
-            // MemoryStream twice is a no-op, and one of the two has to be the one that always runs.
             await using var stream = new MemoryStream();
 
             await Task.Run(() => workbook.SaveToStream(stream));

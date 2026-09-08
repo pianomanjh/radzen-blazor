@@ -36,12 +36,6 @@ namespace Radzen.FastGrid.Export
         /// </summary>
         /// <remarks>
         /// <para>
-        /// <strong>It is handed the grid because two grids on one page would otherwise download two
-        /// files with the same name</strong> - the review found that, and found the first draft's own
-        /// remark claiming the per-grid case was what <see cref="OnExport" /> was for, when
-        /// <c>OnExport</c> could not see the grid either.
-        /// </para>
-        /// <para>
         /// Typed as <c>object</c>, which is not pretty and is honest: these options are shared by every
         /// grid in an application and those grids have different row types, so there is no one
         /// <c>RadzenFastGrid&lt;TItem&gt;</c> to name here. Cast it if the name depends on which grid,
@@ -61,12 +55,6 @@ namespace Radzen.FastGrid.Export
         /// here, deliberately, because a menu entry that produces nothing a user can open is not a
         /// feature. What the section got right is that some applications want the bytes to go somewhere
         /// else, and this is where they say so.
-        /// </para>
-        /// <para>
-        /// The two halves of §40's reason survive: the difference between Server and WebAssembly is
-        /// handled once, by <c>Radzen.downloadFile</c>, rather than by every application; and an
-        /// application that wants to own it still can. The second argument is the grid, for
-        /// <see cref="FileName" />'s reason.
         /// </para>
         /// </remarks>
         public Func<Workbook, object, Task>? OnExport { get; set; }

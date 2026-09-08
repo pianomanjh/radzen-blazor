@@ -60,11 +60,6 @@ namespace Radzen.FastGrid.Export
         /// implements the interface wins over an entry here, because the type is the more specific
         /// statement.
         /// </para>
-        /// <para>
-        /// Unsealing the columns was the alternative and is refused: sealed is what lets the JIT
-        /// devirtualise <c>CellTextOf</c> on the render path, which is §3's argument, and an export is
-        /// not a reason to spend it.
-        /// </para>
         /// </remarks>
         public IDictionary<string, FastGridExportColumn<TItem>> Columns { get; } =
             new Dictionary<string, FastGridExportColumn<TItem>>(StringComparer.Ordinal);

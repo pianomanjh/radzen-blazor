@@ -20,14 +20,6 @@ namespace Radzen.FastGrid.Export
         /// builder.Services.AddRadzenFastGridExport();
         /// </code>
         /// <para>
-        /// <strong>Registration is what enables it, and referencing the package is what makes
-        /// registration possible.</strong> That is the whole mechanism: the grid asks its service
-        /// provider for an <see cref="IFastGridExporter" /> once and draws the entry only if it gets
-        /// one, so an application that does not reference this package draws a menu with one entry and
-        /// pays nothing - measured at zero bytes for the seam and 400 KB over the wire for the writer it
-        /// keeps out.
-        /// </para>
-        /// <para>
         /// Named for <c>AddRadzenCookieThemeService</c> in <c>Radzen.Blazor</c>, which is the shape a
         /// consumer of these packages has already met.
         /// </para>

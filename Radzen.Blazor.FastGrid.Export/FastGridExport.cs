@@ -71,10 +71,6 @@ namespace Radzen.FastGrid.Export
             // The longest text seen per column, so the widths below cost no second pass over the data.
             var widest = options.AutoFitColumns ? new int[columns.Count] : null;
 
-            // Resolved once per column rather than once per cell. The review found the first draft
-            // asking Declared - a type test and a dictionary lookup - inside the row loop, for a
-            // property that cannot change between rows: 550,000 of them on the 50,000-row grid the
-            // measurement above is taken on.
             var formats = new string?[columns.Count];
 
             // A column whose declared Format cannot be said in the file's language exports its text
@@ -104,12 +100,6 @@ namespace Radzen.FastGrid.Export
                 }
             }
 
-            // Inside one batch, and it is worth 31% of the allocation - measured at 217 MB against
-            // 150 MB over 50,000 rows and eleven columns. Every write to Cells.Value calls
-            // Worksheet.OnCellValueChanged, which asks the dependency graph for the cells that depend on
-            // the one just written; that walk allocates a HashSet, a List and a Stack whether or not the
-            // sheet has a single formula in it, and an exported sheet never does. BeginUpdate skips it
-            // and EndUpdate does the walk once at the end, over nothing.
             sheet.Batch(() => Fill(sheet, columns, declared, formats, rows, header, asText, widest));
 
             if (options.FreezeHeader && options.IncludeHeader)
@@ -238,13 +228,6 @@ namespace Radzen.FastGrid.Export
         /// </summary>
         /// <remarks>
         /// <para>
-        /// <strong>A template column exports blank without an <c>ExportValue</c>, and §40 corrected
-        /// itself about this before the build.</strong> An earlier draft claimed the grid could offer a
-        /// template column's rendered text. It cannot: <c>TemplateColumn</c> does not override
-        /// <c>CellTextOf</c> - it draws a <c>RenderFragment</c>, and the only route to text is a
-        /// renderer pass per cell outside the one Blazor is running.
-        /// </para>
-        /// <para>
         /// So the improvement over the resolver §38 surveyed is narrower than the survey claimed: it
         /// removes the reflection and it covers every bound column properly, and a template column needs
         /// the same declaration it always needed.
@@ -290,16 +273,6 @@ namespace Radzen.FastGrid.Export
         /// </remarks>
         static double WidthFor(int characters) => Math.Clamp(characters * 7 + 16, 48, 520);
 
-        /// <summary>
-        /// A table name taken from the sheet's, because a workbook may hold two of these.
-        /// </summary>
-        /// <remarks>
-        /// The first draft named every table <c>Export</c>. Nothing here objects - <c>AddTable</c>
-        /// checks uniqueness within one worksheet, and two sheets each carrying an <c>Export</c> save
-        /// and load without complaint - but Excel wants a table name unique across the workbook, and
-        /// putting two exported grids in one file is the thing the README shows first. Excel also
-        /// refuses spaces and a leading digit in a table name, hence the rest.
-        /// </remarks>
         static string TableName(string sheet)
         {
             var name = new System.Text.StringBuilder(sheet.Length + 1);
