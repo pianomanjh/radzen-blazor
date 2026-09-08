@@ -84,6 +84,18 @@ public class SaveBenchmarks
         return book.Sheets.Count;
     }
 
+    // ClosedXML's bulk entrance beside ours. Bulk against bulk is the honest fill comparison: measured
+    // against its cell-at-a-time path instead, this library looks three times cheaper than it is.
+    [Benchmark(Description = "ClosedXML, fill only")]
+    public int ClosedXmlFill()
+    {
+        using var book = new XLWorkbook();
+
+        book.AddWorksheet("Sheet1").Cell(1, 1).InsertData(block);
+
+        return book.Worksheets.Count;
+    }
+
     // A first save of a workbook nothing has saved before, which is the only save-only arm that means
     // the same thing on every build: before this branch's first commit a save mutated the workbook, so
     // a second one costs less. IterationSetup pins InvocationCount to 1 and the time column with it -
