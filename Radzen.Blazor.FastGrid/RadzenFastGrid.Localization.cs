@@ -610,6 +610,23 @@ namespace Radzen.FastGrid
             set => resetLayoutText = value;
         }
 
+        string? exportText;
+
+        /// <summary>The band menu's export entry, when something is registered to export with.</summary>
+        /// <remarks>
+        /// <strong>The only thing that names that entry, and deliberately.</strong>
+        /// <see cref="IFastGridExporter" /> had a <c>Text</c> of its own in the first draft, which let a
+        /// registration label the entry anything and made the interface the general menu extension point
+        /// §39 refused. Naming it here keeps it one verb, localized like every other word the grid
+        /// draws, and settable by whoever declares the grid rather than by whoever registered a service.
+        /// </remarks>
+        [Parameter]
+        public string ExportText
+        {
+            get => exportText ?? Localize("DataGrid_ExportText", "Export");
+            set => exportText = value;
+        }
+
         string? selectVisibleColumnsAriaLabel;
 
         /// <summary>The column picker's accessible name.</summary>

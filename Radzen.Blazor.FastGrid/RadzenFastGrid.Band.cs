@@ -61,6 +61,7 @@ namespace Radzen.FastGrid
         /// </remarks>
         internal string GridMenuElementId => ElementId + "-grid-menu";
 
+
         // One panel for the grid, null until the first open builds it - §29's reason, and the same
         // shape the filter menu above uses.
         RadzenPopup? gridMenuPopup;
@@ -77,6 +78,33 @@ namespace Radzen.FastGrid
 
         // Whether the panel has ever been opened, which is what says the body has something to draw.
         bool gridMenuBuilt;
+
+        IFastGridExporter? exporter;
+        bool exporterResolved;
+
+        /// <summary>
+        /// What will export this grid, if the application registered anything - and null if not.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="IFastGridQueryExecutor" />'s resolution, for its reason: asked of the service
+        /// provider once and cached, with null an ordinary answer rather than a fault. There is no
+        /// built-in fallback here, which is the difference - an unregistered executor still has an
+        /// answer, and an unregistered exporter means the entry is simply not offered. See
+        /// <see cref="IFastGridExporter" /> for why it arrives this way rather than by reference.
+        /// </remarks>
+        IFastGridExporter? Exporter
+        {
+            get
+            {
+                if (!exporterResolved)
+                {
+                    exporterResolved = true;
+                    exporter = Services?.GetService(typeof(IFastGridExporter)) as IFastGridExporter;
+                }
+
+                return exporter;
+            }
+        }
 
         /// <summary>
         /// The band, above the scroll container and below the top pager.
@@ -313,31 +341,65 @@ namespace Radzen.FastGrid
             builder.OpenElement(0, "ul");
             builder.AddAttribute(1, "class", "rz-menu-list");
 
-            builder.OpenElement(2, "li");
-            builder.AddAttribute(3, "class", "rz-menuitem");
-            builder.AddAttribute(4, "role", "presentation");
+            RenderGridMenuItem(builder, 2, "settings_backup_restore", ResetLayoutText, ResetLayoutAsync);
 
-            builder.OpenElement(5, "button");
-            builder.AddAttribute(6, "type", "button");
-            builder.AddAttribute(7, "role", "menuitem");
-            builder.AddAttribute(8, "class", "rz-menuitem-link rz-filter-menu-item");
-            builder.AddAttribute(9, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
-                this, _ => ResetLayoutAsync()));
-
-            builder.OpenElement(10, "span");
-            builder.AddAttribute(11, "class", "rz-menuitem-icon notranslate rzi");
-            builder.AddAttribute(12, "aria-hidden", "true");
-            builder.AddContent(13, "settings_backup_restore");
-            builder.CloseElement();
-
-            builder.OpenElement(14, "span");
-            builder.AddAttribute(15, "class", "rz-menuitem-text");
-            builder.AddContent(16, ResetLayoutText);
-            builder.CloseElement();
+            // Only when something is registered to do it. An application that does not reference the
+            // export package resolves nothing here and gets a menu with one entry, unchanged.
+            if (Exporter is { } registered)
+            {
+                RenderGridMenuItem(builder, 20, "download", ExportText, () => ExportAsync(registered));
+            }
 
             builder.CloseElement();
+        }
+
+        /// <summary>One entry: an icon, a word, and a verb about the whole grid.</summary>
+        void RenderGridMenuItem(RenderTreeBuilder builder, int sequence, string icon, string text,
+            Func<Task> invoke)
+        {
+            builder.OpenElement(sequence, "li");
+            builder.AddAttribute(sequence + 1, "class", "rz-menuitem");
+            builder.AddAttribute(sequence + 2, "role", "presentation");
+
+            builder.OpenElement(sequence + 3, "button");
+            builder.AddAttribute(sequence + 4, "type", "button");
+            builder.AddAttribute(sequence + 5, "role", "menuitem");
+
+            // rz-filter-menu-item is upstream's reset for a button wearing rz-menuitem-link, which on
+            // its own leaves the user agent's own control showing. §39's third finding.
+            builder.AddAttribute(sequence + 6, "class", "rz-menuitem-link rz-filter-menu-item");
+            builder.AddAttribute(sequence + 7, "onclick", EventCallback.Factory.Create<MouseEventArgs>(
+                this, _ => invoke()));
+
+            builder.OpenElement(sequence + 8, "span");
+            builder.AddAttribute(sequence + 9, "class", "rz-menuitem-icon notranslate rzi");
+            builder.AddAttribute(sequence + 10, "aria-hidden", "true");
+            builder.AddContent(sequence + 11, icon);
+            builder.CloseElement();
+
+            builder.OpenElement(sequence + 12, "span");
+            builder.AddAttribute(sequence + 13, "class", "rz-menuitem-text");
+            builder.AddContent(sequence + 14, text);
+            builder.CloseElement();
+
             builder.CloseElement();
             builder.CloseElement();
+        }
+
+        /// <summary>Closes the menu, then hands the grid to whatever is registered to export it.</summary>
+        /// <remarks>
+        /// The close is first for <see cref="ResetLayoutAsync" />'s reason and one of its own: an export
+        /// of any size blocks, and a menu left open over a frozen page is worse than a menu that shut
+        /// before the wait started.
+        /// </remarks>
+        async Task ExportAsync(IFastGridExporter registered)
+        {
+            if (gridMenuPopup is { } popup)
+            {
+                await popup.CloseAsync();
+            }
+
+            await registered.ExportAsync(this);
         }
 
         /// <summary>Resets the layout and closes the menu it was invoked from.</summary>

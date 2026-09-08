@@ -1669,10 +1669,18 @@ reflective code. Everything above is the shape that requirement forces.
 `Radzen.Blazor.FastGrid.Export` is a separate package that turns the grid into a `Workbook`:
 
 ```csharp
+builder.Services.AddRadzenFastGridExport();     // an Export entry in every grid menu
+```
+
+```csharp
 using Radzen.FastGrid.Export;
 
-Workbook workbook = grid.ToWorkbook();
+Workbook workbook = grid.ToWorkbook();          // or call it yourself
 ```
+
+Registering the package puts an **Export** entry in the band menu of every grid with `ShowGridMenu`, and
+clicking it saves an `.xlsx` file. A grid whose application never referenced the package draws a menu
+with one entry, and pays nothing for the one it does not have.
 
 It exports every row the filters and the sort produce, and the columns the reader is looking at in the
 order they arranged them. See that package's own README for what it does with each type, and for how a

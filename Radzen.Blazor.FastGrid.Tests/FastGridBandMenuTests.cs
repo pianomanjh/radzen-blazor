@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Radzen.FastGrid.Tests
@@ -250,6 +251,13 @@ namespace Radzen.FastGrid.Tests
             Assert.Single(cut.FindAll("#" + cut.Instance.GridMenuElementId));
         }
 
+        /// <summary>
+        /// With nothing registered to export, the menu holds one entry.
+        /// </summary>
+        /// <remarks>
+        /// The half of the export seam that costs an application nothing: a grid whose host never
+        /// referenced the export package resolves no <c>IFastGridExporter</c> and draws no entry for it.
+        /// </remarks>
         [Fact]
         public void TheMenuOffersResettingTheLayoutAndNothingElse()
         {
@@ -262,6 +270,137 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Single(items);
             Assert.Contains(cut.Instance.ResetLayoutText, items[0].TextContent);
+        }
+
+        /// <summary>
+        /// An exporter in the service provider puts a second entry in the menu.
+        /// </summary>
+        /// <remarks>
+        /// <strong>This is how §39's menu and §40's package are reconciled.</strong> They could not both
+        /// have what they asked for: the menu is drawn by the core package, <c>ToWorkbook</c> lives in
+        /// the export package, and the export package references the core rather than the other way
+        /// round - because reversing that roots <c>XlsxWriter</c> in every consumer, measured at 400 KB
+        /// over the wire. The service provider carries it across instead, and the seam itself costs
+        /// nothing: publishing the trim test with and without <c>IFastGridExporter</c> in the core gave
+        /// byte-identical output.
+        /// </remarks>
+        [Fact]
+        public void ARegisteredExporterAddsAnEntry()
+        {
+            using var ctx = new TestContext();
+
+            ctx.Services.AddSingleton<IFastGridExporter>(new Exporter());
+
+            var cut = Render(ctx);
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+
+            var items = cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]");
+
+            Assert.Equal(2, items.Count);
+            Assert.Contains(cut.Instance.ResetLayoutText, items[0].TextContent);
+            Assert.Contains(cut.Instance.ExportText, items[1].TextContent);
+        }
+
+        [Fact]
+        public void TheEntryIsClickedAndTheExporterIsHandedTheGrid()
+        {
+            using var ctx = new TestContext();
+
+            var exporter = new Exporter();
+
+            ctx.Services.AddSingleton<IFastGridExporter>(exporter);
+
+            var cut = Render(ctx);
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+
+            cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]")[1].Click();
+
+            Assert.Same(cut.Instance, exporter.Exported);
+        }
+
+        /// <summary>
+        /// The grid names the entry, and whatever is registered cannot.
+        /// </summary>
+        /// <remarks>
+        /// <strong>This is the line §39 drew, and the first draft crossed it.</strong>
+        /// <c>IFastGridExporter</c> had a <c>Text</c> of its own, which meant a registration could label
+        /// the entry anything - <em>Send to SAP</em> - and at that point the interface is a one-slot
+        /// menu extension point wearing a suggestive name, which is what §39 refused: <em>"an
+        /// application that wants its own actions in the band is asking for a HeaderTemplate"</em>. The
+        /// property is gone. What remains is one verb the grid names, through a parameter that is
+        /// localized like every other word it draws and settable per grid.
+        /// </remarks>
+        [Fact]
+        public void TheGridNamesTheEntryAndTheExporterCannot()
+        {
+            using var ctx = new TestContext();
+
+            ctx.Services.AddSingleton<IFastGridExporter>(new Exporter());
+
+            var cut = Render(ctx, extra: p => p.Add(g => g.ExportText, "Save as a spreadsheet"));
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+
+            var items = cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]");
+
+            Assert.Contains("Save as a spreadsheet", items[1].TextContent);
+
+            // And there is nowhere on the interface to say otherwise.
+            Assert.Empty(typeof(IFastGridExporter).GetProperties());
+        }
+
+        /// <summary>
+        /// The menu is told to shut before the export starts, not after it finishes.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// An export of any size blocks - measured at about four seconds for 50,000 rows - and a menu
+        /// left open over a frozen page is worse than one that shut before the wait began. Asserted from
+        /// inside the exporter, because reading it afterwards cannot tell "closed first" from "closed
+        /// eventually".
+        /// </para>
+        /// <para>
+        /// <strong>It counts the call to <c>Radzen.closePopup</c> rather than reading the popup's own
+        /// <c>IsOpen</c>, and the first draft did the latter and could not fail.</strong>
+        /// <c>RadzenPopup.CloseAsync</c> only asks JavaScript to close; <c>IsOpen</c> flips when
+        /// JavaScript invokes <c>OnClose</c> back. Nothing here runs upstream's JavaScript, so the flag
+        /// stays true through a close that did happen - which is the doubled-module blindness §39 met
+        /// from the other direction.
+        /// </para>
+        /// </remarks>
+        [Fact]
+        public void TheMenuIsToldToShutBeforeTheExportRuns()
+        {
+            using var ctx = new TestContext();
+
+            var closedWhenCalled = -1;
+
+            ctx.Services.AddSingleton<IFastGridExporter>(new Exporter
+            {
+                OnExport = () => closedWhenCalled = ctx.JSInterop.Invocations["Radzen.closePopup"].Count,
+            });
+
+            var cut = Render(ctx);
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+
+            cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]")[1].Click();
+
+            Assert.True(closedWhenCalled > 0,
+                $"the popup had been asked to close {closedWhenCalled} times when the export ran");
+        }
+
+        sealed class Exporter : IFastGridExporter
+        {
+            public object Exported { get; private set; }
+
+            public Action OnExport { get; set; }
+
+            public Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid)
+            {
+                Exported = grid;
+                OnExport?.Invoke();
+
+                return Task.CompletedTask;
+            }
         }
 
         /// <summary>

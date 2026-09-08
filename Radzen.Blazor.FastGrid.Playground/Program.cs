@@ -1,9 +1,18 @@
+using Radzen.FastGrid.Export;
 using Radzen;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddRadzenComponents();
+
+// §40's export, enabled the way an application enables it: reference the package, register it once.
+// Every grid with ShowGridMenu then offers an Export entry.
+builder.Services.AddRadzenFastGridExport(o =>
+{
+    o.SheetName = "People";
+    o.FileName = _ => $"people-{DateTime.Now:yyyyMMdd-HHmmss}.xlsx";
+});
 
 var app = builder.Build();
 

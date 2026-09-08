@@ -3,6 +3,41 @@
 Turns a `RadzenFastGrid<TItem>` into a spreadsheet, using the workbook writer that already ships inside
 `Radzen.Blazor`.
 
+## Put an Export entry in every grid's menu
+
+Reference this package, register it once, and every grid showing the band menu offers **Export**.
+Clicking it saves an `.xlsx` file.
+
+```csharp
+builder.Services.AddRadzenFastGridExport();
+```
+
+```razor
+<RadzenFastGrid TItem="Order" Data="@orders" ShowGridMenu="true" />
+```
+
+Name the file, or take the export over entirely:
+
+```csharp
+builder.Services.AddRadzenFastGridExport(o =>
+{
+    o.SheetName = "Orders";
+    o.FileName  = _ => $"orders-{DateTime.Today:yyyy-MM-dd}.xlsx";
+});
+
+// or send the bytes somewhere other than the browser
+builder.Services.AddRadzenFastGridExport(o =>
+{
+    o.OnExport = (workbook, grid) => archive.StoreAsync(workbook);
+});
+```
+
+**Registration is the switch.** The grid asks its service provider for an exporter once, and draws the
+entry only if it gets one. An application that does not reference this package registers nothing,
+resolves nothing, and draws a menu with one entry.
+
+## Or call it yourself
+
 ```csharp
 using Radzen.FastGrid.Export;
 
@@ -107,10 +142,26 @@ unsealing it would cost the render path more than an export is worth.
 | `AutoFitColumns` | `true` |
 | `Columns` | per-column settings, by `UniqueID` |
 
-## Not in the box
+## Registration options
 
-**A download.** Bytes to a browser is `IJSRuntime` and a stream reference, it differs between Server and
-WebAssembly, and it is your application's to own.
+These are for `AddRadzenFastGridExport`, and apply to every grid in the application.
+
+| | |
+| --- | --- |
+| `SheetName` | `"Sheet1"` |
+| `IncludeHeader`, `FreezeHeader`, `AddTable`, `AutoFitColumns` | as above, applied to every grid |
+| `FileName` | `_ => "export.xlsx"`. Given the grid, so two grids on one page do not save the same name. |
+| `OnExport` | takes the workbook and the grid, instead of the browser. Null means download. |
+
+The menu entry is worded by the grid's own `ExportText` parameter, not from here — so it is localized
+like every other word the grid draws, and a single grid can be given a different word without changing
+what every other grid says.
+
+**Where the time goes.** The workbook is built on the renderer's thread, because it reads the grid's
+rows and columns — about 610 ms at 50,000 rows. Writing the file is moved off that thread, because it is
+the slow half at about 3.6 s, and holding a Blazor Server circuit for it would freeze the page.
+
+## Not in the box
 
 **Styling to match the grid.** Colours, borders and conditional formats are all on `Format`, and you have
 the workbook.

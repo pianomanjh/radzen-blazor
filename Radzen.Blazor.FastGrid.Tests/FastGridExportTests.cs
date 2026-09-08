@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Radzen.Documents.Spreadsheet;
 using Radzen.FastGrid.Export;
 using Xunit;
@@ -722,6 +723,245 @@ namespace Radzen.FastGrid.Tests
 
             Assert.Equal("Carol", sheet.Cells[0, 0].GetDisplayText());
             Assert.Equal(0, sheet.Rows.Frozen);
+        }
+
+        // --- the registered service, which is what puts the entry in the band menu ----------------
+
+        /// <summary>
+        /// One line of registration, and the grid resolves something to export with.
+        /// </summary>
+        /// <remarks>
+        /// The application-facing half of the seam. Scoped rather than singleton because the
+        /// implementation holds a JavaScript module reference, which belongs to one circuit on Blazor
+        /// Server.
+        /// </remarks>
+        [Fact]
+        public void RegisteringTheExportMakesItResolvable()
+        {
+            var services = new ServiceCollection();
+
+            services.AddRadzenFastGridExport();
+
+            using var provider = services.BuildServiceProvider();
+            using var scope = provider.CreateScope();
+
+            Assert.NotNull(scope.ServiceProvider.GetService<IFastGridExporter>());
+        }
+
+        /// <summary>
+        /// A handler takes the workbook instead of the browser, and gets what the grid holds.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// §40 refused a download outright - <em>"bytes to a browser is <c>IJSRuntime</c> and a data URL
+        /// or a stream reference, it differs between Server and WebAssembly, and it is the application's
+        /// to own"</em>. That refusal is reversed for the default, because a menu entry producing
+        /// nothing a user can open is not a feature; what the section got right is that some
+        /// applications want the bytes elsewhere, and this is the way out.
+        /// </para>
+        /// <para>
+        /// The workbook is asserted rather than the call, because a handler that runs and is handed an
+        /// empty workbook is the failure this is guarding against.
+        /// </para>
+        /// </remarks>
+        [Fact]
+        public async Task AHandlerTakesTheWorkbookInsteadOfTheBrowser()
+        {
+            using var ctx = Context();
+
+            Workbook handed = null;
+
+            ctx.Services.AddRadzenFastGridExport(o =>
+            {
+                o.SheetName = "People";
+                o.OnExport = (workbook, _) =>
+                {
+                    handed = workbook;
+
+                    return Task.CompletedTask;
+                };
+            });
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(p => p.First, title: "First")),
+                extra: p => p.Add(g => g.ShowGridMenu, true));
+
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+            await cut.InvokeAsync(() =>
+                cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]")[1].Click());
+
+            Assert.NotNull(handed);
+
+            var sheet = handed.GetSheet("People");
+
+            Assert.NotNull(sheet);
+            Assert.Equal("First", sheet.Cells[0, 0].GetDisplayText());
+            Assert.Equal("Carol", sheet.Cells[1, 0].GetDisplayText());
+        }
+
+        /// <summary>
+        /// With no JavaScript runtime the export builds the workbook and saves nothing.
+        /// </summary>
+        /// <remarks>
+        /// A prerendering pass has no runtime, and so does a test host. Throwing there would make a
+        /// rendering test of a grid carrying the entry fail for a reason that has nothing to do with the
+        /// grid - so the workbook is built, there is nowhere to put it, and that is the end of it.
+        /// <para>
+        /// <strong>The first draft of this asserted nothing at all</strong> - its body was a bare call
+        /// with a comment saying the assertion was that it returned, which the review pointed out would
+        /// pass with the whole save deleted. It goes through the handler now, so it can say the workbook
+        /// was built and that nothing was asked of the browser.
+        /// </para>
+        /// </remarks>
+        [Fact]
+        public async Task WithNoBrowserTheExportStillBuildsTheWorkbook()
+        {
+            using var ctx = Context();
+
+            Workbook built = null;
+
+            ctx.Services.AddRadzenFastGridExport(o => o.OnExport = (workbook, _) =>
+            {
+                built = workbook;
+
+                return Task.CompletedTask;
+            });
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(p => p.First, title: "First")),
+                extra: p => p.Add(g => g.ShowGridMenu, true));
+
+            var exporter = ctx.Services.GetRequiredService<IFastGridExporter>();
+
+            await cut.InvokeAsync(() => exporter.ExportAsync(cut.Instance));
+
+            Assert.NotNull(built);
+            Assert.Equal("Carol", built.Sheets[0].Cells[1, 0].GetDisplayText());
+
+            // And nothing was asked of the browser: the download is upstream's Radzen.downloadFile, and
+            // a test host has no runtime to call it with.
+            Assert.DoesNotContain(ctx.JSInterop.Invocations,
+                i => i.Identifier.Contains("download", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Two grids on one page do not download two files with the same name.
+        /// </summary>
+        /// <remarks>
+        /// The review's finding, and the reason <see cref="FastGridExportServiceOptions.FileName" /> is
+        /// handed the grid at all: registration is application-wide, so without an argument every grid
+        /// in the application names its file identically. The first draft's own remark claimed the
+        /// per-grid case was what <c>OnExport</c> was for, and <c>OnExport</c> could not see the grid
+        /// either.
+        /// </remarks>
+        [Fact]
+        public async Task TwoGridsCanNameTheirFilesDifferently()
+        {
+            using var ctx = Context();
+
+            var names = new List<string>();
+
+            ctx.Services.AddRadzenFastGridExport(o =>
+            {
+                o.FileName = grid => $"{((RadzenFastGrid<Person>)grid).CssClass}.xlsx";
+                o.OnExport = (_, grid) =>
+                {
+                    names.Add(o.FileName(grid));
+
+                    return Task.CompletedTask;
+                };
+            });
+
+            var exporter = ctx.Services.GetRequiredService<IFastGridExporter>();
+
+            foreach (var which in new[] { "open", "closed" })
+            {
+                var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(p => p.First, title: "First")),
+                    extra: p =>
+                    {
+                        p.Add(g => g.ShowGridMenu, true);
+                        p.Add(g => g.CssClass, which);
+                    });
+
+                await cut.InvokeAsync(() => exporter.ExportAsync(cut.Instance));
+            }
+
+            Assert.Equal(new[] { "open.xlsx", "closed.xlsx" }, names);
+        }
+
+        /// <summary>
+        /// The name the browser is actually told, on the path that tells it.
+        /// </summary>
+        /// <remarks>
+        /// <strong>The sweep found the test above proving nothing about the exporter.</strong> It calls
+        /// <c>FileName</c> itself from inside <c>OnExport</c>, so it exercises the option and not the
+        /// line that uses it - and making <c>WorkbookExporter</c> ignore the grid entirely left it
+        /// passing. This reads the argument handed to <c>Radzen.downloadFile</c>, which is the only
+        /// place the name is really used.
+        /// </remarks>
+        [Fact]
+        public async Task TheBrowserIsToldTheNameTheGridEarned()
+        {
+            using var ctx = Context();
+
+            ctx.Services.AddRadzenFastGridExport(o =>
+                o.FileName = grid => $"{((RadzenFastGrid<Person>)grid).CssClass}.xlsx");
+
+            var exporter = ctx.Services.GetRequiredService<IFastGridExporter>();
+
+            foreach (var which in new[] { "open", "closed" })
+            {
+                var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(p => p.First, title: "First")),
+                    extra: p =>
+                    {
+                        p.Add(g => g.ShowGridMenu, true);
+                        p.Add(g => g.CssClass, which);
+                    });
+
+                await cut.InvokeAsync(() => exporter.ExportAsync(cut.Instance));
+            }
+
+            var told = ctx.JSInterop.Invocations["Radzen.downloadFile"]
+                .Select(i => i.Arguments[0]).ToArray();
+
+            Assert.Equal(new object[] { "open.xlsx", "closed.xlsx" }, told);
+        }
+
+        /// <summary>The registration's sheet and table settings reach the workbook.</summary>
+        /// <remarks>
+        /// The review found only <c>SheetName</c> being forwarded, which left an application registering
+        /// globally unable to turn off the table or the header it can turn off when calling
+        /// <c>ToWorkbook</c> directly.
+        /// </remarks>
+        [Fact]
+        public async Task TheRegistrationsSettingsReachTheWorkbook()
+        {
+            using var ctx = Context();
+
+            Workbook built = null;
+
+            ctx.Services.AddRadzenFastGridExport(o =>
+            {
+                o.SheetName = "People";
+                o.AddTable = false;
+                o.IncludeHeader = false;
+                o.OnExport = (workbook, _) =>
+                {
+                    built = workbook;
+
+                    return Task.CompletedTask;
+                };
+            });
+
+            var cut = Render(ctx, Columns.Of(Columns.Property<Person, string>(p => p.First, title: "First")),
+                extra: p => p.Add(g => g.ShowGridMenu, true));
+
+            await cut.InvokeAsync(() =>
+                ctx.Services.GetRequiredService<IFastGridExporter>().ExportAsync(cut.Instance));
+
+            var sheet = built.GetSheet("People");
+
+            Assert.NotNull(sheet);
+            Assert.Empty(sheet.Tables);
+            Assert.Equal("Carol", sheet.Cells[0, 0].GetDisplayText());
         }
 
         /// <summary>

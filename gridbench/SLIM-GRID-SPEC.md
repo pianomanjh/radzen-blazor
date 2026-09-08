@@ -10495,10 +10495,96 @@ measured at 400 KB over the wire. So the core cannot call `ToWorkbook`, and:
   is asking for a `HeaderTemplate`, and that is the two-band question again with a different sponsor"*.
 - **§40 requires the separate package**, and a core that referenced it would undo the 400 KB.
 
-**Both decisions are individually right and jointly unsatisfiable.** Recorded rather than resolved,
-because resolving it means reopening one of them and that is a decision with a sponsor, not a build
-detail. The three shapes it could take, in the order they look least bad: an extension point on the menu
-narrower than a `HeaderTemplate` - a list of items an application adds, which is the thing §39 argued
-should be argued when someone needs it, and someone now does; a `ToWorkbook` entry the application wires
-to `ClearSettings`'s neighbour by handing the grid a callback; or the export moving into the core behind
-a feature switch, which trades a measured 400 KB for a convenience and is the one to refuse first.
+**Both decisions are individually right and jointly unsatisfiable.** The three shapes it could take, in
+the order they look least bad: an extension point on the menu narrower than a `HeaderTemplate` - a list
+of items an application adds, which is the thing §39 argued should be argued when someone needs it, and
+someone now does; a `ToWorkbook` entry the application wires to `ClearSettings`'s neighbour by handing
+the grid a callback; or the export moving into the core behind a feature switch, which trades a measured
+400 KB for a convenience and is the one to refuse first.
+
+---
+
+## 41. The deadlock, decided - and the seam that costs nothing
+
+**Sponsored, which the section above said it needed.** The instruction was to enable the export entry
+globally *by depending on the package*, with the download as the default and an override available. So
+§40's refusal of a download is reversed on purpose, and the first of the three shapes is the one taken -
+narrowed as far as it will go.
+
+### One slot, not a list, and the difference is one property
+
+The shape is §40's ① with the list reduced to a single slot, and the slot filled from the service
+provider rather than declared per grid. `IFastGridExporter` lives in the core, `AddRadzenFastGridExport`
+in the export package registers an implementation, and the grid asks its service provider once - which is
+`IFastGridQueryExecutor`'s resolution, the pattern this grid already had for a capability that may or may
+not be registered. An application that never references the export package resolves nothing and draws a
+menu with one entry.
+
+**The first draft crossed §39's line and the review caught it.** The interface had a `Text` property, so
+the implementation could name the entry. That sounds like courtesy and is not: a registration could then
+label the entry *Send to SAP*, and at that point this is a one-slot menu extension point wearing a
+suggestive name, which is exactly the thing §39 refused - *"an application that wants its own actions in
+the band is asking for a `HeaderTemplate`"*. The property is gone. `IFastGridExporter` now has **one
+member and no properties**, and a test asserts that. The entry is named by `RadzenFastGrid.ExportText`,
+a parameter on the grid, localized like every other word it draws and settable per grid.
+
+### The seam costs nothing, measured
+
+The whole reason the deadlock existed is that the core must not root `XlsxWriter`. So the question the
+seam has to answer is what *it* costs. Published trimmed, before and after adding `IFastGridExporter` to
+the core: **9,764 KB raw and 3,172 KB brotli, both times, byte for byte, with no compression or XML
+assembly present.** An interface with a generic method and no implementation roots nothing.
+
+### §7 deleted the module this section first shipped
+
+The download was written as an `export.js` of this package's own - which meant a `wwwroot`, the Razor
+SDK, a module import, a module reference, an `IAsyncDisposable` and the synchronous `Dispose` that an
+`IAsyncDisposable`-only service needs to keep a container from throwing on it.
+
+**None of that was necessary.** `Radzen.Blazor.js` already carries
+`downloadFile(fileName, data, mimeType)`; it already unwraps a `DotNetStreamReference` through
+`arrayBuffer()`; and this grid already calls `Radzen.*` globals from C# - `Radzen.startColumnResize` and
+`Radzen.startColumnReorder`. §7's rule is that upstream's is the default and a divergence is argued
+rather than written silently, and there was no argument written. All of it is gone; the exporter is a
+constructor, one method and a `Task.Run`.
+
+**One thing about upstream's is worth knowing, and it is measured rather than asserted.** It calls
+`URL.revokeObjectURL` in the same tick as the anchor's click - timed in the playground at **0.1 ms after
+the click**. A browser that has not finished reading the blob by then loses the file, and this is the one
+caller that routinely produces megabytes: 2.5 MB at 50,000 rows. It works today in Chromium, verified end
+to end - a real click producing a 37,301-byte file with the right name and a valid `PK` header - and the
+margin is a tenth of a millisecond. **Offered upstream on its own branch** is the answer, which is what
+this branch did with #2696, #2702 and #2705, rather than forking a module over a one-line timing bug.
+
+### What the review found besides
+
+- **Two grids on one page downloaded two files with the same name.** Registration is application-wide, so
+  a `FileName` taking no arguments has nothing to distinguish them by - and the first draft's own remark
+  claimed the per-grid case was what `OnExport` was for, when `OnExport` could not see the grid either.
+  Both take the grid now, typed `object`, because these options are shared by grids of every row type and
+  there is no one `RadzenFastGrid<TItem>` to name.
+- **Only `SheetName` reached the workbook.** An application registering globally could not turn off the
+  table or the header that it can turn off when calling `ToWorkbook` directly. All five are forwarded.
+- **The stream leaked on the throwing paths**, and a stale comment above `using var reference` described
+  the opposite of the code beneath it.
+- **Two tests asserted nothing.** One had a comment saying so - *"the assertion is that this returns"* -
+  and would have passed with the whole save deleted.
+
+### What the sweep found that the review did not
+
+**`TheBrowserIsToldTheNameTheGridEarned` exists because the test written for the same rule proved
+nothing.** `TwoGridsCanNameTheirFilesDifferently` calls `FileName` itself from inside `OnExport`, so it
+exercises the option rather than the line that uses it - and making the exporter ignore the grid entirely
+left it green. The replacement reads the argument handed to `Radzen.downloadFile`, which is the only
+place the name is really used. Nine mutations, nine caught.
+
+### Still open
+
+- **No busy state.** The export blocks for about four seconds at 50,000 rows and the page looks idle
+  throughout. The grid has `IsLoading` and this does not use it.
+- **No opt-out per grid.** A grid can decline the entry only by declining `ShowGridMenu`, which takes
+  *Reset layout* with it.
+- **An export that throws takes the circuit down**, as any unhandled exception in a Blazor event handler
+  does. `JSDisconnectedException` is caught because a four-second window makes a lost circuit ordinary;
+  nothing else is, deliberately, because swallowing a failed export would leave a user waiting for a file
+  that is never coming.
