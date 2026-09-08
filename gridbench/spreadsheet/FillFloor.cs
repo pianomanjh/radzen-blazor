@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Buffers;
 using System.Runtime.CompilerServices;
@@ -223,6 +224,20 @@ object RefReturn()
     }
 
     return store;
+}
+
+// The whole export, into Stream.Null so the sink is not charged to the writer. Only meaningful on a
+// branch that carries the writer work; on master the save is still 442 MB.
+object RadzenExport()
+{
+    var workbook = new Workbook();
+    var sheet = workbook.AddSheet("Sheet1", Rows, Cols);
+
+    sheet.Cells.SetValues(0, 0, block);
+
+    workbook.SaveToStream(Stream.Null);
+
+    return sheet;
 }
 
 object ClosedXmlInsertData()
@@ -450,6 +465,12 @@ object ReadSlotsInPlace()
     return seen;
 }
 
+var export = new (string Name, Func<object> Fill)[]
+{
+    ("fill only", RadzenBulk),
+    ("fill and save", RadzenExport),
+};
+
 var reads = new (string Name, Func<object> Fill)[]
 {
     ("Cell objects, today", ReadRadzenCells),
@@ -535,6 +556,7 @@ Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
     $"sizeof(CellSlot) = {Unsafe.SizeOf<CellSlot>()} bytes"));
 
 Report("dense: 550,000 cells in a 50,000 x 11 block", dense, Rows * Cols);
+Report("export: fill against fill and save, into Stream.Null", export, Rows * Cols);
 Report("read back: what the save pays to see 550,000 cells", reads, Rows * Cols);
 Report("re-box: 550,000 cells of one numeric type", boxing, Rows * Cols);
 Report(string.Create(CultureInfo.InvariantCulture,
