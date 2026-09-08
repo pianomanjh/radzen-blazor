@@ -632,6 +632,68 @@ Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
     $"sizeof(CellSlot) = {Unsafe.SizeOf<CellSlot>()} bytes"));
 
 Report("dense: 550,000 cells in a 50,000 x 11 block", dense, Rows * Cols);
+// Where an object per cell starts collecting, and whether a store of values ever does.
+Console.WriteLine();
+Console.WriteLine("threshold: the same fill at four sizes");
+Console.WriteLine("     cells    Cell objects: MB  gen0 gen1 gen2     stable id: MB  gen0 gen1 gen2");
+Console.WriteLine("  --------  ------------------  ---- ---- ----  ----------------  ---- ---- ----");
+
+foreach (var n in new[] { 50_000, 137_500, 275_000, 550_000 })
+{
+    var rows = n / Cols;
+
+    object FillCells()
+    {
+        var sheet = new Workbook().AddSheet("Sheet1", Math.Max(rows, 1), Cols);
+
+        for (var r = 0; r < rows; r++)
+        {
+            for (var c = 0; c < Cols; c++)
+            {
+                sheet.Cells[r, c].Value = block[r][c];
+            }
+        }
+
+        return sheet;
+    }
+
+    object FillIds()
+    {
+        var store = new IdStore(n);
+
+        for (var r = 0; r < rows; r++)
+        {
+            for (var c = 0; c < Cols; c++)
+            {
+                store.Set(r, c, block[r][c]);
+            }
+        }
+
+        return store;
+    }
+
+    var cells = new List<Run>();
+    var ids = new List<Run>();
+
+    Measure(FillCells, null);
+    Measure(FillIds, null);
+
+    for (var pass = 0; pass < 3; pass++)
+    {
+        Measure(FillCells, cells);
+        Measure(FillIds, ids);
+    }
+
+    cells.Sort((a, b) => a.Mb.CompareTo(b.Mb));
+    ids.Sort((a, b) => a.Mb.CompareTo(b.Mb));
+
+    var a1 = cells[1];
+    var b1 = ids[1];
+
+    Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+        $"  {rows * Cols,8:N0}  {a1.Mb,18:0.0}  {a1.Gen0,4} {a1.Gen1,4} {a1.Gen2,4}  {b1.Mb,16:0.0}  {b1.Gen0,4} {b1.Gen1,4} {b1.Gen2,4}"));
+}
+
 Report("export: fill against fill and save, into Stream.Null", export, Rows * Cols);
 Report("read back: what the save pays to see 550,000 cells", reads, Rows * Cols);
 Report("re-box: 550,000 cells of one numeric type", boxing, Rows * Cols);

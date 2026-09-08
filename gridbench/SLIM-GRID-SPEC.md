@@ -12130,3 +12130,45 @@ rebuild from text and watching it fail**, rather than by assuming the weaker ass
 5,169 pass, at each of the three commits on its own. No `Claude-Session` trailer and no reference to
 Claude in the branch or the PR, following the convention #2708 and #12 set, since this is stacked on
 them and aimed the same way.
+
+## 59. Zero collections is a count of objects, not a count of bytes
+
+The goal for the fill is what the save reached: no collection of any generation. #13 does not get there
+and no amount of further slimming will.
+
+| cells | `Cell` objects | Gen0 | Gen1 | Gen2 | stable id | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 49,995 | 7.7 MB | none | none | none | 2.9 MB | none | none | none |
+| 137,500 | 18.4 MB | **1** | none | none | 8.4 MB | none | none | none |
+| 275,000 | 37.4 MB | **2** | **1** | none | 17.1 MB | none | none | none |
+| 550,000 | 75.9 MB | **5** | **2** | none | 31.8 MB | **none** | **none** | **none** |
+
+**Bytes are not what decides it.** The struct-dictionary arm allocates 54.5 MB, within 2 MB of what #13's
+fill allocates, and collects nothing - because those bytes are a few large arrays and #13's are 550,000
+small objects that all survive. An object per cell crosses the gen-0 budget between 50,000 and 137,500
+cells and the count scales from there.
+
+Staying under a budget of ~8-16 MB at 550,000 cells means **under 15 to 30 bytes a cell including its
+dictionary entry**, which is less than an object header and an entry. **No cell that is an object can be
+zero-GC at this scale.** #13 moved the threshold; only a store of values removes it.
+
+### The shape that reaches zero without a public break
+
+§55 and §56 rejected the façade because a per-access instance has no stable identity, which is what
+`CellDependencyGraph`, `Clone` and reference-comparing callers rely on. **Caching the façade removes
+that objection**: the slot holds the `Cell` once anything asks for it, so `Cells[r, c]` returns the same
+object every time, identity is stable, and nothing that keys on a cell has to change.
+
+| path | what it touches | cost |
+| --- | --- | --- |
+| `SetValues` | slots only, no `Cell` ever built | 31.8 MB, **no collections** |
+| the save | slots, once the writer's ten sites read them | adds nothing |
+| the editor | materialises only the cells a user touches | one 48-byte object each |
+
+The fill is zero-GC because a bulk fill never asks for a cell. The 16.8 MB of §54 was the cost of
+materialising **every** cell for the save; reading slots there costs nothing, and that is an `internal`
+change.
+
+What is left to solve is `Clone`, which returns a detached cell that has no slot to point at - answered
+by letting a `Cell` carry its own inline slot when it has no store. **Nothing in this needs a public
+signature to change.**
