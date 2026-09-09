@@ -11,8 +11,8 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>blazor;radzen;datagrid;grid;export;xlsx;excel</PackageTags>
     <Version>11.2.8</Version>
-    <Copyright>Radzen Ltd.</Copyright>
-    <Authors>Radzen Ltd.</Authors>
+    <Copyright>InventiveCoders, LLC</Copyright>
+    <Authors>InventiveCoders, LLC</Authors>
     <Company>InventiveCoders, LLC</Company>
     <PackageProjectUrl>https://www.radzen.com</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
