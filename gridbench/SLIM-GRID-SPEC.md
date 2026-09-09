@@ -12499,9 +12499,22 @@ half owns none of the spreadsheet.
 
 | arm | 10k | 50k | 200k | gen1/gen2 at 200k |
 | --- | ---: | ---: | ---: | --- |
-| streamed, nothing boxed | 152 KB | 160 KB | 182 KB | none, and no gen0 either |
+| streamed, nothing boxed | 141 KB | 149 KB | 172 KB | none, and no gen0 either |
 | streamed | 2.7 MB | 12.8 MB | 50.5 MB | none |
-| built, then saved | 23.6 MB | 103.3 MB | 441.0 MB | 3000 gen1, 1000 gen2 |
+| built, then saved | 22.8 MB | 99.1 MB | 423.0 MB | 3000 gen1, 1000 gen2 |
+
+**No single run is the arm's shape, and this section learned that the hard way.** The table first read
+152 / 160 / 182 KB from one run, and this section explained the rise as the shared string table filling
+to its hundred entries — an explanation fitted to two points and wrong. Re-running the same arm gave
+182 / 182 / 183 KB: the spread appears between two runs at one row count as readily as across three row
+counts. Over four runs it reads between 141 and 183 KB with no relation to the size, so quote it as
+about 140–185 KB whatever the row count and read no slope into it.
+
+The figures above are the run against `master` with #12 merged. **Both the flat arm and the built arm
+came down when it landed** — the shared string table is rented arrays there rather than a dictionary,
+and the built path got the rest of #12's writer work — so the ratio narrowed and nothing about the
+shape moved. The export's own marginal cost did not change at all: 104 bytes a row before and after,
+because a box per cell is not something a string table can help with.
 
 **The obvious arm is not flat.** A column is a `Func<TItem, object?>`, so every non-string cell arrives
 in a box: about 0.26 KB a row, allocated and dead in gen0 before the next row is read. Measured alone
