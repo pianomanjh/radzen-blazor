@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Http;
+using System.Linq;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting;
 using System;
@@ -16,6 +17,12 @@ namespace RadzenBlazorDemos
         {
             this.environment = environment;
         }
+
+        // SVG is excluded because it can carry script.
+        static readonly string[] AllowedImageExtensions =
+        {
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+        };
 
         [HttpPut("api/upload/stream")]
         public async Task<IActionResult> Stream()
@@ -60,7 +67,14 @@ namespace RadzenBlazorDemos
                 // Used for demo purposes only
                 DeleteOldFiles();
 
-                var fileName = $"upload-{DateTime.Today.ToString("yyyy-MM-dd")}-{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
+                var extension = Path.GetExtension(file.FileName);
+
+                if (!AllowedImageExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                {
+                    return BadRequest("Only image files can be uploaded.");
+                }
+
+                var fileName = $"upload-{DateTime.Today.ToString("yyyy-MM-dd")}-{Guid.NewGuid()}{extension}";
 
                 using (var stream = new FileStream(Path.Combine(environment.WebRootPath, fileName), FileMode.Create))
                 {
