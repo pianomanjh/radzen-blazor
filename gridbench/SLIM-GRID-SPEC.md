@@ -12580,6 +12580,39 @@ Neither was visible until a streamed export was compared against a built one cel
 Both are the same shape: the writer's rule was right for the writer and wrong for a caller who brought
 its own answer. Neither would have been found by a round trip, only by the comparison.
 
+### The reader already sized the columns, which is simpler than measuring them
+
+`WidthMode` exists because `<cols>` precedes the rows, and `Sampled` buffers a prefix to have something
+to measure. **A grid does not need to measure anything.** Its columns carry
+`EffectiveWidth` — what a drag settled on, else what the grid's own auto-fit measured, else what the
+markup declared — and that is the width the reader is looking at. Exporting it is the rule the columns'
+order and visibility already follow.
+
+`UseGridColumnWidths` does that, in both paths so the files still agree. Where every exported column
+has a pixel width the streamed sheet is written in `Declared` mode and **nothing is buffered at all**,
+not even the first two hundred rows: the sample only ever existed to measure a width against. A column
+with nothing to copy — unset, a percentage, an `em` — is measured as before, and the two rules sit
+side by side in one sheet.
+
+It is not the default, because the two answers differ: a column sized to fit a table on a screen is not
+a column sized to fit its content on a page, and a grid whose columns are all `1fr` has nothing worth
+copying. The default still measures.
+
+### One query, not one per page
+
+The question a paged grid over a large table raises is whether exporting it is a query per page, and
+`FastGridStreamedExportQueryTests` answers it against real SQLite through a command interceptor rather
+than against the fake executor, which never issues one.
+
+**One command, with no `LIMIT` in it**, for every row — 200 of 200 with the grid drawing a page of five.
+Drawing that page costs two, the window and the count, which is what an export going page by page would
+repeat and what this does not do. The provider streams the one result set; `AsAsyncEnumerable` is the
+seam, EF translates the composed expression once, and the rows arrive over an open reader.
+
+So paging is the grid's concern and not the export's, in the file as well as in the wire: what comes
+out is every row the filters and the sort produce, which is what §40 said an export means and what only
+the caller could get before §65.
+
 ### The `Task.Run` went with the workbook, and that is not a regression
 
 §41 moved `SaveToStream` off the renderer's thread because it is about 1.5 s at 50,000 rows and a built
