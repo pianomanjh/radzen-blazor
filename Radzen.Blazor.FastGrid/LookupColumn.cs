@@ -96,12 +96,12 @@ namespace Radzen.FastGrid
         {
             if (Template is null)
             {
-                builder.AddContent(sequence, Template(item));
+                base.RenderCell(builder, sequence, item);
 
                 return;
             }
 
-            base.RenderCell(builder, sequence, item);
+            builder.AddContent(sequence, Template(item));
         }
 
         /// <inheritdoc />
