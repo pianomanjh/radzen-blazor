@@ -341,7 +341,8 @@ public class SpreadsheetCultureTests
 
         command.Unexecute();
 
-        Assert.Same(before, sheet.Cells["A1"].Data);
+        Assert.Equal(before.Type, sheet.Cells["A1"].Data.Type);
+        Assert.Equal(before.Value, sheet.Cells["A1"].Data.Value);
         Assert.Equal(CellDataType.String, sheet.Cells["A1"].ValueType);
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace Radzen.Documents.Spreadsheet;
 
@@ -16,10 +17,21 @@ public class CellStore(Worksheet sheet)
     /// </summary>
     public Worksheet Worksheet { get; } = sheet;
 
-    /// <summary>
-    /// Stores the cells in a dictionary, where the key is a tuple of (row, column).
-    /// </summary>
-    protected readonly Dictionary<(int row, int column), Cell> data = [];
+    private readonly Dictionary<(int row, int column), object?> data = [];
+
+    internal static CellDataType TypeOf(object? value) => value switch
+    {
+        null => CellDataType.Empty,
+        string => CellDataType.String,
+        double => CellDataType.Number,
+        bool => CellDataType.Boolean,
+        DateTime => CellDataType.Date,
+        CellError => CellDataType.Error,
+        _ => CellDataType.String,
+    };
+
+    private static Cell Materialise(Worksheet sheet, int row, int column, object? content) =>
+        new(sheet, new CellRef(row, column), content, TypeOf(content), quotePrefix: false);
 
     /// <summary>
     /// Gets a cell at the specified row and column.
@@ -103,7 +115,31 @@ public class CellStore(Worksheet sheet)
         return cell is not null;
     }
 
-    internal IEnumerable<Cell> GetPopulatedCells() => data.Values;
+    internal IEnumerable<CellView> GetPopulatedViews()
+    {
+        foreach (var entry in data)
+        {
+            var address = new CellRef(entry.Key.row, entry.Key.column);
+
+            yield return entry.Value is Cell cell
+                ? new CellView(cell)
+                : new CellView(address, entry.Value, TypeOf(entry.Value), quotePrefix: false);
+        }
+    }
+
+    internal bool IsWrittenAt(int row, int column) =>
+        data.TryGetValue((row, column), out var content) &&
+        (content is Cell cell ? cell.Value is not null || cell.Formula is not null : content is not null);
+
+    internal IEnumerable<Cell> GetPopulatedCells()
+    {
+        foreach (var key in keysBuffer())
+        {
+            yield return Adopt(key.row, key.column);
+        }
+
+        List<(int row, int column)> keysBuffer() => [.. data.Keys];
+    }
 
     internal int Compact()
     {
@@ -111,7 +147,7 @@ public class CellStore(Worksheet sheet)
 
         foreach (var kvp in data)
         {
-            if (kvp.Value.IsEmpty)
+            if (kvp.Value is Cell cell ? cell.IsEmpty : kvp.Value is null)
             {
                 keysToRemove.Add(kvp.Key);
             }
@@ -127,39 +163,39 @@ public class CellStore(Worksheet sheet)
 
     internal int PopulatedCount => data.Count;
 
-    internal bool HasCell(int row, int column) => Find(row, column) is not null;
+    internal bool HasCell(int row, int column) => data.ContainsKey((row, column));
 
-    internal Cell? Find(int row, int column) => data.TryGetValue((row, column), out var cell) ? cell : null;
+    internal Cell? Find(int row, int column) => data.ContainsKey((row, column)) ? Adopt(row, column) : null;
 
-    private static void UpdateCellAddress((int row, int column) oldKey, (int row, int column) newKey, Cell cell)
+    private static void UpdateCellAddress((int row, int column) oldKey, (int row, int column) newKey, object? content)
     {
-        if (oldKey != newKey)
+        if (oldKey != newKey && content is Cell cell)
         {
             cell.Address = new CellRef(newKey.row, newKey.column);
         }
     }
 
     internal void ShiftRowsUp(int deletedRow) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.row < deletedRow ? k :
             k.row == deletedRow ? null :
             (k.row - 1, k.column),
             UpdateCellAddress);
 
     internal void ShiftRowsDown(int fromRow, int count) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.row < fromRow ? k : (k.row + count, k.column),
             UpdateCellAddress);
 
     internal void ShiftColumnsLeft(int deletedColumn) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.column < deletedColumn ? k :
             k.column == deletedColumn ? null :
             (k.row, k.column - 1),
             UpdateCellAddress);
 
     internal void ShiftColumnsRight(int fromColumn, int count) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.column < fromColumn ? k : (k.row, k.column + count),
             UpdateCellAddress);
 
@@ -271,6 +307,8 @@ public class CellStore(Worksheet sheet)
 
         data.EnsureCapacity(data.Count + total);
 
+        var derived = GetType() != typeof(CellStore);
+
         for (var r = 0; r < values.Count; r++)
         {
             if (values[r] is not { } line)
@@ -280,20 +318,57 @@ public class CellStore(Worksheet sheet)
 
             for (var c = 0; c < line.Count; c++)
             {
-                var cell = GetOrAdd(row + r, column + c);
+                if (derived)
+                {
+                    var dispatched = GetOrAdd(row + r, column + c);
 
-                cell.Formula = null;
-                cell.Value = line[c];
+                    dispatched.Formula = null;
+                    dispatched.Value = line[c];
+                    continue;
+                }
+
+                ref var content = ref CollectionsMarshal.GetValueRefOrAddDefault(data, (row + r, column + c), out _);
+
+                if (content is Cell cell)
+                {
+                    cell.Formula = null;
+                    cell.Value = line[c];
+                    continue;
+                }
+
+                CellData.Infer(line[c], Worksheet.Culture, out content, out _);
             }
         }
     }
 
     private Cell GetOrAdd(int row, int column)
     {
-        if (!data.TryGetValue((row, column), out var cell))
+        data.TryGetValue((row, column), out var content);
+
+        if (content is Cell existing)
         {
-            this[row, column] = cell = new Cell(Worksheet, new CellRef(row, column));
+            return existing;
         }
+
+        var cell = Materialise(Worksheet, row, column, content);
+
+        this[row, column] = cell;
+
+        return cell;
+    }
+
+    private Cell Adopt(int row, int column)
+    {
+        ref var content = ref CollectionsMarshal.GetValueRefOrAddDefault(data, (row, column), out _);
+
+        if (content is Cell existing)
+        {
+            return existing;
+        }
+
+        var cell = Materialise(Worksheet, row, column, content);
+
+        content = cell;
 
         return cell;
     }
