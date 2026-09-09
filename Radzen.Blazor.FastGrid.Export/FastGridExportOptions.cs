@@ -37,6 +37,24 @@ namespace Radzen.FastGrid.Export
         /// </remarks>
         public IEnumerable<TItem>? Rows { get; set; }
 
+        /// <summary>
+        /// The rows to stream, or null to take them from the grid.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Read only by the streaming export, and first when it is: a caller who owns the query outranks
+        /// the executor the grid would otherwise run over
+        /// <see cref="RadzenFastGrid{TItem}.FilteredQuery" />, for the reason <see cref="Rows" /> gives -
+        /// the application owns that query and handing the result over is one property.
+        /// </para>
+        /// <para>
+        /// Everything <see cref="Rows" /> says about what is not re-filtered and not re-sorted holds
+        /// here too, and holds harder: these rows are written as they arrive and are never held, so
+        /// nothing downstream is in a position to notice.
+        /// </para>
+        /// </remarks>
+        public IAsyncEnumerable<TItem>? RowsAsync { get; set; }
+
         /// <summary>Whether the header row is written at all.</summary>
         public bool IncludeHeader { get; set; } = true;
 

@@ -308,7 +308,7 @@ partial class XlsxWriter
         CancellationToken cancellationToken)
     {
         var columns = spec.ColumnCount;
-        var styles = new Dictionary<(int Column, CellDataType Type), int?>();
+        var styles = new Dictionary<(int Column, CellDataType Type, bool Quoted), int?>();
         var row = 0;
 
         if (spec.IncludeHeader)
@@ -393,7 +393,7 @@ partial class XlsxWriter
         Worksheet sheet,
         StyleTracker styleTracker,
         SharedStringTable sharedStrings,
-        Dictionary<(int Column, CellDataType Type), int?> styles,
+        Dictionary<(int Column, CellDataType Type, bool Quoted), int?> styles,
         object?[] line,
         int row,
         int columns)
@@ -430,14 +430,25 @@ partial class XlsxWriter
                 continue;
             }
 
-            var key = (column, type);
+            // The column has already decided the value is text and the inference disagreed, which is the
+            // only case the flag applies to: an ordinary word infers as a string and carries none.
+            var quoted = false;
+
+            if (spec.PreserveTextAt(column) && type != CellDataType.String && line[column] is string literal)
+            {
+                content = literal;
+                type = CellDataType.String;
+                quoted = true;
+            }
+
+            var key = (column, type, quoted);
 
             if (!styles.TryGetValue(key, out var style))
             {
                 var format = spec.FormatAt(column);
 
-                style = format?.IsDefault == false || type == CellDataType.Date
-                    ? GetOrCreateCellStyle(format ?? DefaultFormat, type, quotePrefix: false, styleTracker)
+                style = quoted || format?.IsDefault == false || type == CellDataType.Date
+                    ? GetOrCreateCellStyle(format ?? DefaultFormat, type, quoted, styleTracker)
                     : null;
 
                 styles[key] = style;
@@ -526,11 +537,17 @@ partial class XlsxWriter
             }
 
             var format = spec.FormatAt(column);
-            var widest = sheet.Columns[column];
+            var measure = spec.MeasureAt(column);
+
+            // The sheet's default width is a floor for the writer's own metrics, the way the built
+            // path's auto fit never shrinks a column below it. It is not a floor for a caller's
+            // measurement: a caller that brought a width function brought the answer with it, and
+            // flooring that at the default would silently widen every column narrower than one.
+            var widest = spec.WidthAt(column) ?? (measure is null ? sheet.Columns[column] : 0);
 
             if (spec.IncludeHeader)
             {
-                widest = Math.Max(widest, MeasureStreamed(spec.TitleAt(column), spec.HeaderFormat));
+                widest = Math.Max(widest, Measure(measure, spec.TitleAt(column), spec.HeaderFormat));
             }
 
             foreach (var line in buffered)
@@ -548,21 +565,30 @@ partial class XlsxWriter
                 {
                     CellData.Infer(value, sheet.Workbook!.Culture, out var content, out var type);
 
-                    text = NumberFormat.Apply(format?.NumberFormat, content, type, CultureInfo.InvariantCulture)
-                        ?? Cell.FormatValue(content, CultureInfo.InvariantCulture);
+                    // Invariant for the writer's own metrics, so the `cols` element a workbook saves does
+                    // not depend on the machine that saved it. A caller's measurement is the other case: it
+                    // is sizing a column against what a reader will see, and a reader sees the culture's
+                    // own date - which is two characters wider in en-US than the invariant form.
+                    var culture = measure is null ? CultureInfo.InvariantCulture : sheet.Workbook!.Culture;
+
+                    text = NumberFormat.Apply(format?.NumberFormat, content, type, culture)
+                        ?? Cell.FormatValue(content, culture);
                 }
                 catch (ArgumentOutOfRangeException)
                 {
                     continue;
                 }
 
-                widest = Math.Max(widest, MeasureStreamed(text, format));
+                widest = Math.Max(widest, Measure(measure, text, format));
             }
 
             sheet.Columns[column] = Math.Min(widest, ColumnWidthConversion.MaxWidthInPixels);
             sheet.Columns.SetAutoFit(column);
         }
     }
+
+    private static double Measure(Func<string, double>? measure, string? text, Format? format) =>
+        measure is null ? MeasureStreamed(text, format) : string.IsNullOrEmpty(text) ? 0 : measure(text);
 
     private static double MeasureStreamed(string? text, Format? format)
     {

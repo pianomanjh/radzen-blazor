@@ -30,6 +30,27 @@ namespace Radzen.FastGrid
 
         /// <summary>Asynchronously materializes <paramref name="queryable" /> into a list.</summary>
         Task<List<T>> ToListAsync<T>(IQueryable<T> queryable, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// The query as a sequence that can be read one row at a time, or null when this executor cannot
+        /// offer one. Nothing in the grid calls this: it exists for a caller that wants the rows without
+        /// a list to hold them, which is what a streamed export is.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A default member rather than a new one, and that is the whole reason it can exist:
+        /// <see cref="IsSupported{T}" /> is already the same cast, so every implementation an
+        /// application has already written keeps compiling and answers correctly without being touched.
+        /// </para>
+        /// <para>
+        /// <strong>The enumeration owns the provider for as long as it runs.</strong> Unlike
+        /// <see cref="ToListAsync{T}" /> this takes no gate, because a gate held across a caller's
+        /// <c>await foreach</c> is a gate held for as long as the caller cares to take, and an Entity
+        /// Framework <c>DbContext</c> deadlocked behind one is worse than the concurrent use it would
+        /// prevent. Read it to the end, and do not read it while the grid is loading.
+        /// </para>
+        /// </remarks>
+        IAsyncEnumerable<T>? AsAsyncEnumerable<T>(IQueryable<T> queryable) => queryable as IAsyncEnumerable<T>;
     }
 
     /// <summary>

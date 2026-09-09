@@ -2435,6 +2435,39 @@ namespace Radzen.FastGrid
         public IEnumerable<TItem> FilteredRows => Composed(out _);
 
         /// <summary>
+        /// The filtered, sorted, unpaged query - composed and handed over, never run here.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>The grid does not enumerate this.</strong> Enumerating it runs an unpaged query, and
+        /// that is the caller's act: over a database source it is a round trip for every matching row.
+        /// The same rule <see cref="FilteredRows" /> states, said again because this one is easier to
+        /// hold on to.
+        /// </para>
+        /// <para>
+        /// Null on a <c>LoadData</c> grid, whose handler has already sorted and paged, and null over any
+        /// source that is not a queryable or whose composition fell back to LINQ to Objects - in each of
+        /// those cases there is no query left to hand over and <see cref="FilteredRows" /> is the answer.
+        /// </para>
+        /// <para>
+        /// This is not <see cref="FilteredRows" /> and cannot be made from it: on the asynchronous
+        /// executor's path <c>Composed</c> deliberately answers nothing, because composing there would
+        /// enumerate an unpaged query on the render thread for rows the awaited load is about to
+        /// replace. What this hands out is the composition that path declined to run.
+        /// </para>
+        /// </remarks>
+        public IQueryable<TItem>? FilteredQuery =>
+            !LoadData.HasDelegate && Data is IQueryable<TItem> queryable
+                ? Compose(queryable) as IQueryable<TItem>
+                : null;
+
+        /// <summary>
+        /// What would execute a bound queryable asynchronously, for a caller holding
+        /// <see cref="FilteredQuery" /> and wanting to read it without blocking.
+        /// </summary>
+        public IFastGridQueryExecutor? QueryExecutor => Executor;
+
+        /// <summary>
         /// One page of a sequence. Composed onto the provider when the source is a queryable, so a
         /// database source is asked for the page - the alternative is streaming every filtered row
         /// across the wire and skipping to page three in memory. Filtering and sorting already compose;

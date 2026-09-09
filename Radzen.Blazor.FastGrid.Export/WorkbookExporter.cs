@@ -34,25 +34,41 @@ namespace Radzen.FastGrid.Export
         {
             ArgumentNullException.ThrowIfNull(grid);
 
-            // Built here, on the renderer's thread, and that is not incidental: ToWorkbook reads
-            // FilteredRows and VisibleColumns, which are the grid's own state and change under a render.
-            var workbook = grid.ToWorkbook(new FastGridExportOptions<TItem>
+            var exported = new FastGridExportOptions<TItem>
             {
                 SheetName = options.SheetName,
                 IncludeHeader = options.IncludeHeader,
                 FreezeHeader = options.FreezeHeader,
                 AddTable = options.AddTable,
                 AutoFitColumns = options.AutoFitColumns,
-            });
+            };
 
+            // A handler that asked for the workbook asked for the model, and building it is the only way
+            // to answer that. Built here, on the renderer's thread, and that is not incidental:
+            // ToWorkbook reads FilteredRows and VisibleColumns, which are the grid's own state and
+            // change under a render.
             if (options.OnExport is { } handler)
             {
-                await handler(workbook, grid);
+                await handler(grid.ToWorkbook(exported), grid);
 
                 return;
             }
 
-            await SaveAsync(workbook, grid);
+            // §65: no workbook, so nothing holds a cell per value. The grid's state is read here, before
+            // the first row is asked for, for the same reason the workbook was built here.
+            if (options.Destination is { } sink)
+            {
+                var destination = await sink(grid);
+
+                await using (destination)
+                {
+                    await grid.SaveToStreamAsync(destination, exported);
+                }
+
+                return;
+            }
+
+            await SaveAsync(grid, exported);
         }
 
         /// <summary>
@@ -70,10 +86,15 @@ namespace Radzen.FastGrid.Export
         /// reason to keep an eye on it rather than a reproduction.
         /// </para>
         /// <para>
-        /// <strong>The write is off the renderer's thread and the hand-off is back on it</strong>, which
-        /// is the split the measurement asks for: <c>SaveToStream</c> is about 1.5 s at 50,000 rows and
-        /// would hold a Blazor Server circuit for all of it, and by then the workbook is a detached
-        /// object no render can touch, so moving it is safe. The grid's own state was read before this.
+        /// <strong>The write is on the renderer's thread, and the <c>Task.Run</c> that used to move it
+        /// went with the workbook.</strong> That split was safe because a built workbook is a detached
+        /// object no render can touch; a streamed write is not detached - it calls
+        /// <c>CellTextOf</c> per cell and pulls rows from a composition over the grid's own source, so
+        /// running it on a pool thread would read grid state while a render writes it. Correctness over
+        /// latency, and the latency is better anyway: what a circuit used to hold for one 1.5 s block it
+        /// now holds in slices, and every await in an asynchronous row source is a point the circuit
+        /// gets back. An application that wants it off the circuit entirely sets <c>Destination</c> and
+        /// owns where the bytes go.
         /// </para>
         /// <para>
         /// <strong>No <c>ConfigureAwait(false)</c>, and §39 is why.</strong> The continuation calls into
@@ -83,7 +104,7 @@ namespace Radzen.FastGrid.Export
         /// never suspends.
         /// </para>
         /// </remarks>
-        async Task SaveAsync(Workbook workbook, object grid)
+        async Task SaveAsync<TItem>(RadzenFastGrid<TItem> grid, FastGridExportOptions<TItem> exported)
         {
             if (runtime is null)
             {
@@ -98,7 +119,11 @@ namespace Radzen.FastGrid.Export
             // be the one that always runs.
             await using var stream = new MemoryStream();
 
-            await Task.Run(() => workbook.SaveToStream(stream));
+            // The buffer the browser needs is the last O(rows) thing here, and §65 says so rather than
+            // hiding it: streaming into a MemoryStream caps the win at the buffer. What it removes is
+            // the workbook in front of it, which was the larger half. An application that wants the
+            // buffer gone too sets Destination.
+            await grid.SaveToStreamAsync(stream, exported);
 
             stream.Position = 0;
 

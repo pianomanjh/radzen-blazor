@@ -92,6 +92,29 @@ public sealed class StreamedColumn<T>
     public double? Width { get; set; }
 
     /// <summary>
+    /// Keeps a string value as text when the writer's own inference would read it as something else -
+    /// a product code <c>"007"</c> stays <c>007</c> rather than becoming the number 7.
+    /// </summary>
+    /// <remarks>
+    /// Written with Excel's <c>quotePrefix</c>, which is what Excel itself writes for text that looks
+    /// like a number, and applied only where the inference actually bit, so an ordinary word carries no
+    /// flag. Off by default: a value assigned to a cell is inferred, and this column is saying it has
+    /// already decided.
+    /// </remarks>
+    public bool PreserveText { get; set; }
+
+    /// <summary>
+    /// Measures the width in pixels of one cell's display text, in place of the writer's own metrics.
+    /// </summary>
+    /// <remarks>
+    /// Only read for an <see cref="AutoFit"/> column under <see cref="ColumnWidthMode.Sampled"/>. It
+    /// exists so a caller that already has a width function - one whose built sheets are sized by it -
+    /// gets the same widths from a streamed sheet, rather than two files that differ only in how their
+    /// columns were measured.
+    /// </remarks>
+    public Func<string, double>? MeasureWidth { get; set; }
+
+    /// <summary>
     /// Whether the column is measured from its content under <see cref="ColumnWidthMode.Sampled"/>,
     /// and persisted as <c>bestFit</c>. Ignored under <see cref="ColumnWidthMode.Declared"/>.
     /// </summary>
@@ -194,6 +217,10 @@ public abstract class StreamedSheet
 
     internal abstract bool AutoFitAt(int column);
 
+    internal abstract Func<string, double>? MeasureAt(int column);
+
+    internal abstract bool PreserveTextAt(int column);
+
     internal abstract IAsyncEnumerable<object?[]> Read(CancellationToken cancellationToken);
 }
 
@@ -230,6 +257,10 @@ public sealed class StreamedSheet<T> : StreamedSheet
     internal override double? WidthAt(int column) => Columns[column].Width;
 
     internal override bool AutoFitAt(int column) => Columns[column].AutoFit;
+
+    internal override Func<string, double>? MeasureAt(int column) => Columns[column].MeasureWidth;
+
+    internal override bool PreserveTextAt(int column) => Columns[column].PreserveText;
 
     internal override async IAsyncEnumerable<object?[]> Read(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)

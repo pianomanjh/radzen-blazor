@@ -15,7 +15,7 @@ namespace Radzen.FastGrid.Export
     /// enforces. A separate package keeps the claim true and makes the payload opt-in.
     /// </para>
     /// </remarks>
-    public static class FastGridExport
+    public static partial class FastGridExport
     {
         /// <summary>
         /// The grid's rows and columns, as a <see cref="Workbook" /> the caller then owns.
@@ -79,30 +79,7 @@ namespace Radzen.FastGrid.Export
 
             // A column whose declared Format cannot be said in the file's language exports its text
             // instead - see below.
-            var asText = new bool[columns.Count];
-
-            for (var c = 0; c < columns.Count; c++)
-            {
-                if (declared[c]?.ExportFormat is { Length: > 0 } asked)
-                {
-                    formats[c] = asked;
-
-                    continue;
-                }
-
-                // Nothing declared, so the column's own Format is what the reader is looking at. A
-                // column drawing $4,000.00 exported a bare 4000 until this: §40 called that a decision
-                // and comparing it against the exporter §38 surveyed showed it was a gap.
-                if (columns[c].CellFormat is { Length: > 0 } declaredFormat)
-                {
-                    formats[c] = ExportFormat.ToNumberFormat(declaredFormat);
-
-                    // The format is set and there is no honest equivalent, so the number would go in
-                    // wearing the wrong clothes or none. The text the column drew is what the reader
-                    // saw, and losing the sum is the smaller loss than showing the wrong figure.
-                    asText[c] = formats[c] is null;
-                }
-            }
+            var asText = Formats(columns, declared, formats);
 
             // Inside one batch, worth 31% of the allocation. Every write to Cells.Value calls
             // Worksheet.OnCellValueChanged, which asks the dependency graph for the cells that depend on
@@ -132,6 +109,45 @@ namespace Radzen.FastGrid.Export
             }
 
             return workbook;
+        }
+
+        /// <summary>
+        /// The number format each column exports under, and which columns cannot keep their value.
+        /// </summary>
+        /// <remarks>
+        /// Resolved once per column rather than once per cell: a column's declared format cannot change
+        /// between rows. Shared with the streaming export, which resolves the same columns the same way
+        /// and differs only in never holding a row.
+        /// </remarks>
+        static bool[] Formats<TItem>(List<ColumnBase<TItem>> columns,
+            IFastGridExportColumn<TItem>?[] declared, string?[] formats)
+        {
+            var asText = new bool[columns.Count];
+
+            for (var c = 0; c < columns.Count; c++)
+            {
+                if (declared[c]?.ExportFormat is { Length: > 0 } asked)
+                {
+                    formats[c] = asked;
+
+                    continue;
+                }
+
+                // Nothing declared, so the column's own Format is what the reader is looking at. A
+                // column drawing $4,000.00 exported a bare 4000 until this: §40 called that a decision
+                // and comparing it against the exporter §38 surveyed showed it was a gap.
+                if (columns[c].CellFormat is { Length: > 0 } declaredFormat)
+                {
+                    formats[c] = ExportFormat.ToNumberFormat(declaredFormat);
+
+                    // The format is set and there is no honest equivalent, so the number would go in
+                    // wearing the wrong clothes or none. The text the column drew is what the reader
+                    // saw, and losing the sum is the smaller loss than showing the wrong figure.
+                    asText[c] = formats[c] is null;
+                }
+            }
+
+            return asText;
         }
 
         /// <summary>The cells themselves, which is everything inside the batch.</summary>
