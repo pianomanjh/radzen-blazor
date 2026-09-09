@@ -886,7 +886,10 @@ namespace Radzen.Blazor.FastGrid.Tests
                 fit.ToString());
         }
 
-        [Fact]
+        // LocalOnlyFact, not Fact: a GitHub-hosted runner measures 2.54 on correct code, which sits
+        // between the correct band recorded below and the fault's. See LocalOnlyFactAttribute for why
+        // widening the budget instead would have been worse than skipping.
+        [LocalOnlyFact]
         public void The_pass_costs_about_what_its_own_layouts_cost()
         {
             var fit = Fitted();

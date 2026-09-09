@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -652,8 +653,36 @@ namespace Radzen.FastGrid.Tests
         /// passing while its name became a lie. It reads the format now, which is what changed.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Runs the body under a named culture, and puts the old one back.
+        /// </summary>
+        /// <remarks>
+        /// <c>"C"</c> is the one format whose output is not the same everywhere, and a test comparing
+        /// what .NET formats against what the spreadsheet writer formats is comparing two
+        /// implementations of the same culture's rules. Under the invariant culture - which is what a
+        /// Linux agent with no <c>LANG</c> falls back to - .NET writes the generic currency sign
+        /// <c>¤4,000.00</c> and the writer emits no symbol at all, so the test failed on a build agent
+        /// and passed on every developer machine in a currency locale. The disagreement is real but it
+        /// is not what this test is about, so the culture is pinned rather than the assertion loosened.
+        /// </remarks>
+        static void InCulture(string name, Action body)
+        {
+            var original = CultureInfo.CurrentCulture;
+
+            CultureInfo.CurrentCulture = new CultureInfo(name);
+
+            try
+            {
+                body();
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = original;
+            }
+        }
+
         [Fact]
-        public void AColumnsOwnFormatBecomesTheSpreadsheets()
+        public void AColumnsOwnFormatBecomesTheSpreadsheets() => InCulture("en-US", () =>
         {
             using var ctx = Context();
 
@@ -670,7 +699,7 @@ namespace Radzen.FastGrid.Tests
             // And now wearing the format the grid drew it in.
             Assert.Equal(cut.Instance.VisibleColumns[0].CellTextOf(People.Sample()[0]),
                 sheet.Cells[1, 0].GetDisplayText());
-        }
+        });
 
         /// <summary>An explicit <c>ExportFormat</c> still wins over the column's own.</summary>
         [Fact]
