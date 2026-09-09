@@ -77,6 +77,30 @@ namespace Radzen.FastGrid.Export
         public bool AutoFitColumns { get; set; } = true;
 
         /// <summary>
+        /// Sizes each column the way the reader sized it, rather than to what is in it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <c>RadzenFastGrid</c> columns carry a width - declared in the markup, measured by the grid's
+        /// own auto-fit, or settled on by a drag - and <see cref="ColumnBase{TItem}.EffectiveWidth" />
+        /// is the one the column is drawn at. This exports that, which is the same rule the columns'
+        /// order and visibility already follow: what comes out is what the reader arranged.
+        /// </para>
+        /// <para>
+        /// <strong>For a streamed export it is also the cheaper answer.</strong> A width is written
+        /// before any row is, so measuring one means buffering a sample of the rows to measure it
+        /// against; a width the grid already knows needs no rows at all. Where every exported column has
+        /// one the streaming path buffers nothing.
+        /// </para>
+        /// <para>
+        /// Only a width in pixels can be used - <c>"200px"</c>, which is what a drag and an auto-fit
+        /// both write. A column whose width is a percentage, an <c>em</c> or unset has nothing to copy
+        /// and falls back to <see cref="AutoFitColumns" />.
+        /// </para>
+        /// </remarks>
+        public bool UseGridColumnWidths { get; set; }
+
+        /// <summary>
         /// What a particular column should do, by the identity §27 gave it.
         /// </summary>
         /// <remarks>

@@ -573,7 +573,16 @@ namespace Radzen.FastGrid
         /// declared width - which is the ordinary Blazor rule about not treating a parameter as state,
         /// and here the symptom would be a resize that survives until the next unrelated re-render.
         /// </remarks>
-        internal string? EffectiveWidth => resizedWidth ?? autoFitWidth ?? Width;
+        /// <summary>
+        /// The width this column is drawn at: what a drag settled on, else what an auto-fit measured,
+        /// else what the markup declared. Null when the column takes the grid's default.
+        /// </summary>
+        /// <remarks>
+        /// A CSS length, because that is what it is written into the markup as - usually
+        /// <c>"200px"</c>, but whatever <see cref="Width" /> was given when neither of the other two has
+        /// happened. Public so that an export can size a column the way the reader sized it.
+        /// </remarks>
+        public string? EffectiveWidth => resizedWidth ?? autoFitWidth ?? Width;
 
         /// <summary>The width a drag settled on, or null when none has.</summary>
         internal string? ResizedWidth => resizedWidth;

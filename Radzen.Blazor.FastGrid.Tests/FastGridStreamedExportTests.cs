@@ -168,6 +168,111 @@ namespace Radzen.FastGrid.Tests
             Assert.Equal("Alice", sheet.Cells[2, 0].Value);
         }
 
+        // --- the widths -----------------------------------------------------------------------------
+
+        /// <summary>
+        /// The column is as wide as the reader made it, not as wide as what is in it.
+        /// </summary>
+        [Fact]
+        public async Task TheGridsOwnWidthIsWhatTheColumnGets()
+        {
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(p => p.First, title: "First", width: "240px"),
+                Columns.Property<Person, string>(p => p.Last, title: "Last", width: "60px")));
+
+            var sheet = await Streamed(cut.Instance,
+                new FastGridExportOptions<Person> { UseGridColumnWidths = true });
+
+            // To the pixel, not to the bit: a width is stored in the file's character units and comes
+            // back about half a pixel out.
+            Assert.Equal(240, sheet.Columns[0], 0);
+            Assert.Equal(60, sheet.Columns[1], 0);
+        }
+
+        /// <summary>
+        /// A width the grid knows is a width no row has to be read for, and a long value past the sample
+        /// cannot widen it - which is what says the sample was never taken.
+        /// </summary>
+        [Fact]
+        public async Task AKnownWidthIsNotWidenedByWhatIsInTheColumn()
+        {
+            using var ctx = Context();
+
+            var rows = new List<Person> { new() { Id = 1, First = new string('x', 300) } };
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, rows);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, title: "First", width: "90px")));
+            });
+
+            var sheet = await Streamed(cut.Instance,
+                new FastGridExportOptions<Person> { UseGridColumnWidths = true });
+
+            Assert.Equal(90, sheet.Columns[0], 0);
+        }
+
+        /// <summary>
+        /// A column the grid never sized has nothing to copy, so it is measured as before - and the two
+        /// rules live side by side in one sheet.
+        /// </summary>
+        [Fact]
+        public async Task AColumnWithNoWidthIsStillMeasured()
+        {
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(p => p.First, title: "First", width: "240px"),
+                Columns.Property<Person, string>(p => p.Last, title: "A much longer heading")));
+
+            var sheet = await Streamed(cut.Instance,
+                new FastGridExportOptions<Person> { UseGridColumnWidths = true });
+
+            Assert.Equal(240, sheet.Columns[0], 0);
+            Assert.True(sheet.Columns[1] > 100);
+        }
+
+        /// <summary>The builder follows the same rule, so the two files still agree.</summary>
+        [Fact]
+        public async Task StreamedAndBuiltAgreeOnTheGridsWidths()
+        {
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(p => p.First, title: "First", width: "240px"),
+                Columns.Property<Person, decimal>(p => p.Salary, title: "Salary", width: "75px"),
+                Columns.Property<Person, string>(p => p.Last, title: "Last")));
+
+            var options = new FastGridExportOptions<Person> { UseGridColumnWidths = true };
+
+            var built = Built(cut.Instance, options);
+            var streamed = await Streamed(cut.Instance, options);
+
+            for (var column = 0; column < built.ColumnCount; column++)
+            {
+                Assert.Equal(built.Columns[column], streamed.Columns[column], 3);
+            }
+        }
+
+        /// <summary>A percentage is of a viewport a spreadsheet has not got, so it is measured instead.</summary>
+        [Fact]
+        public async Task APercentageWidthIsNotCopied()
+        {
+            using var ctx = Context();
+
+            var cut = Render(ctx, Columns.Of(
+                Columns.Property<Person, string>(p => p.First, title: "First", width: "30%")));
+
+            var sheet = await Streamed(cut.Instance,
+                new FastGridExportOptions<Person> { UseGridColumnWidths = true });
+
+            // Measured from "First" and the names under it, which is nothing like 30 of anything.
+            Assert.True(sheet.Columns[0] >= 48);
+        }
+
         // --- where the rows come from -------------------------------------------------------------
 
         /// <summary>

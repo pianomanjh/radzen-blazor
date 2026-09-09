@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Collections.Generic;
 using Radzen.Documents.Spreadsheet;
 
@@ -100,9 +101,13 @@ namespace Radzen.FastGrid.Export
                     hasHeaders: options.IncludeHeader);
             }
 
-            if (widest is not null)
+            for (var c = 0; c < columns.Count; c++)
             {
-                for (var c = 0; c < columns.Count; c++)
+                if (GridWidth(grid, columns[c], options) is { } declaredWidth)
+                {
+                    sheet.Columns[c] = declaredWidth;
+                }
+                else if (widest is not null)
                 {
                     sheet.Columns[c] = WidthFor(widest[c]);
                 }
@@ -297,6 +302,35 @@ namespace Radzen.FastGrid.Export
         /// </para>
         /// </remarks>
         static double WidthFor(int characters) => Math.Clamp(characters * 7 + 16, 48, 520);
+
+        /// <summary>
+        /// The width the reader sized this column to, in pixels, or null when there is none to copy.
+        /// </summary>
+        /// <remarks>
+        /// A CSS length is whatever the markup said, so only <c>px</c> is taken: a percentage is of a
+        /// viewport a spreadsheet does not have, and <c>em</c> is of a font it does not share. Both fall
+        /// back to measuring, which is what the column had before this option existed.
+        /// </remarks>
+        internal static double? GridWidth<TItem>(RadzenFastGrid<TItem> grid, ColumnBase<TItem> column,
+            FastGridExportOptions<TItem> options)
+        {
+            if (!options.UseGridColumnWidths)
+            {
+                return null;
+            }
+
+            var css = column.EffectiveWidth ?? grid.ColumnWidth;
+
+            if (css is null || !css.EndsWith("px", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return double.TryParse(css[..^2], System.Globalization.NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var pixels) && pixels > 0
+                ? pixels
+                : null;
+        }
 
         static string TableName(string sheet)
         {

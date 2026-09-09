@@ -67,14 +67,35 @@ namespace Radzen.FastGrid.Export
             var formats = new string?[columns.Count];
             var asText = Formats(columns, declared, formats);
 
+            // The reader's own widths, where the option asks for them and the column has one. A column
+            // the grid never sized has nothing to copy and is measured instead.
+            var widths = new double?[columns.Count];
+            var measured = false;
+
+            for (var c = 0; c < columns.Count; c++)
+            {
+                widths[c] = GridWidth(grid, columns[c], options);
+                measured |= widths[c] is null;
+            }
+
+            var rows = Source(grid, options, out var known);
+
             var sheet = new StreamedSheet<TItem>
             {
                 Name = options.SheetName,
                 IncludeHeader = options.IncludeHeader,
                 FrozenRows = options.FreezeHeader && options.IncludeHeader ? 1 : 0,
-                WidthMode = options.AutoFitColumns ? ColumnWidthMode.Sampled() : ColumnWidthMode.Declared,
+
+                // Nothing left to measure means nothing to buffer: the sample exists only to measure a
+                // width against, so a sheet whose every column is already sized reads each row once and
+                // holds none of them, not even the first two hundred.
+                WidthMode = options.AutoFitColumns && measured
+                    ? ColumnWidthMode.Sampled()
+                    : ColumnWidthMode.Declared,
+
                 TableName = options.AddTable && columns.Count > 0 ? TableName(options.SheetName) : null,
-                Rows = Source(grid, options),
+                RowCount = known,
+                Rows = rows,
             };
 
             for (var c = 0; c < columns.Count; c++)
@@ -106,7 +127,8 @@ namespace Radzen.FastGrid.Export
                         return ExportValue.Coerce(value, column, item);
                     },
                     Format = format is null ? null : new Format { NumberFormat = format },
-                    AutoFit = options.AutoFitColumns,
+                    Width = widths[c],
+                    AutoFit = options.AutoFitColumns && widths[c] is null,
 
                     // §40's own width function, so a streamed file and a built one are sized the same
                     // way rather than by two sets of metrics that happen to be close.
@@ -120,10 +142,20 @@ namespace Radzen.FastGrid.Export
             return Workbook.SaveToStreamAsync(destination, sheet, cancellationToken);
         }
 
-        /// <summary>The rows, by the resolution the method above documents.</summary>
+        /// <summary>
+        /// The rows, by the resolution the method above documents - and how many there are when that is
+        /// known without asking.
+        /// </summary>
+        /// <remarks>
+        /// The count is only ever the one a collection already holds. Counting a query means a second
+        /// round trip, and counting a sequence means walking it twice; the <c>dimension</c> element is
+        /// the only thing that wants it and the file is valid without one.
+        /// </remarks>
         static IAsyncEnumerable<TItem> Source<TItem>(RadzenFastGrid<TItem> grid,
-            FastGridExportOptions<TItem> options)
+            FastGridExportOptions<TItem> options, out int? count)
         {
+            count = null;
+
             if (options.RowsAsync is { } asked)
             {
                 return asked;
@@ -136,7 +168,14 @@ namespace Radzen.FastGrid.Export
                 return streamed;
             }
 
-            return Walk(options.Rows ?? grid.FilteredRows);
+            var rows = options.Rows ?? grid.FilteredRows;
+
+            if (rows is IReadOnlyCollection<TItem> collection)
+            {
+                count = collection.Count;
+            }
+
+            return Walk(rows);
         }
 
         /// <summary>
