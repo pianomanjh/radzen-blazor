@@ -62,6 +62,48 @@ namespace Radzen.FastGrid
             base.OnDerive();
         }
 
+        /// <summary>
+        /// Draws the cell, in place of the name this column resolved.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// For a cell that is more than its name - a link to the row the id points at, a name coloured
+        /// by another property, an icon beside it. Without it such a column has to be a
+        /// <see cref="TemplateColumn{TItem}" />, and that trades away the reason to use this one: the
+        /// check-box list stops offering the lookup's <em>names</em> and offers the <em>ids</em> the row
+        /// carries, which no reader can use.
+        /// </para>
+        /// <para>
+        /// <strong>It replaces the cell's markup and nothing else.</strong> Filtering, sorting, the
+        /// list, the settings key and <see cref="CellTextOf" /> - so the export and the cell tooltip -
+        /// all still come from the lookup. That is what keeps this a lookup column rather than a
+        /// template column that happens to hold one.
+        /// </para>
+        /// <para>
+        /// It takes the row rather than the resolved name, because a template that wanted only the name
+        /// would not need a template; the ones that do need it are reaching for the row's other members.
+        /// The name is <see cref="CellTextOf" /> away for a template that wants both.
+        /// </para>
+        /// </remarks>
+        [Parameter] public RenderFragment<TItem>? Template { get; set; }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Costs a null check per cell when no template is given, and the base's own write otherwise -
+        /// so a column that does not use this pays for it once per cell and nothing more.
+        /// </remarks>
+        public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)
+        {
+            if (Template is null)
+            {
+                builder.AddContent(sequence, Template(item));
+
+                return;
+            }
+
+            base.RenderCell(builder, sequence, item);
+        }
+
         /// <inheritdoc />
         public override string? CellTextOf(TItem item) => key is null ? null : NameOf(key(item));
 

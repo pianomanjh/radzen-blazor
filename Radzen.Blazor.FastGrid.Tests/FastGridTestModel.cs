@@ -444,9 +444,15 @@ namespace Radzen.FastGrid.Tests
             System.Collections.IEnumerable filterLookupData = null,
             string width = null,
             bool autoFit = true,
+            RenderFragment<TItem> template = null,
             string uniqueId = null) => (builder, seq) =>
         {
             builder.OpenComponent<LookupColumn<TItem, TKey>>(seq);
+
+            if (template is not null)
+            {
+                builder.AddAttribute(seq + 89, nameof(LookupColumn<TItem, TKey>.Template), template);
+            }
 
             // §27: the one attribute that separates two columns a grid cannot otherwise tell apart.
             if (uniqueId is not null)

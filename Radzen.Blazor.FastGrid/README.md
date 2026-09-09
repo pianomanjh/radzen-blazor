@@ -76,7 +76,7 @@ Radzen needs one: `LoadDataArgs.OrderBy`, OData `$orderby`, and `FilterDescripto
 | --- | --- |
 | `PropertyColumn<TItem, TProp>` | One value per cell. `Property`, `Format`, `SortBy`, `FilterBy`, `Title`, `CssClass`, `Sortable`, `Filterable` |
 | `CollectionColumn<TItem, TElement>` | A collection per cell, listed. `Property`, `DisplayProperty`, `FilterProperty`, `Separator`, `SortBy` |
-| `LookupColumn<TItem, TKey>` | A name per cell, from an id the row carries. `Property`, `Lookup`, `SortBy` |
+| `LookupColumn<TItem, TKey>` | A name per cell, from an id the row carries. `Property`, `Lookup`, `SortBy`, `Template` |
 | `LookupCollectionColumn<TItem, TKey>` | Names per cell, from ids the row carries. `Property`, `Lookup`, `Separator`, `SortBy` |
 | `TemplateColumn<TItem>` | A template per cell. `Template`, `SortBy`, `SortProperty`, `FilterBy`, `Title` |
 | `TemplateColumn<TItem>` | Arbitrary content. `Template`, `SortProperty`. Costs ~94 B/cell more than a property column - use it where a cell is not just a value |
@@ -158,6 +158,30 @@ fetch that failed, and the id is the only thing that lets anyone diagnose it.
 **A nullable key types the lookup at the nullable key.** `Property="@(p => p.RegionId)"` over an `int?`
 makes `TKey` `int?`, so the lookup is a `FastGridLookup<int?>` - which `Items` and `Query` give you with
 a cast in the selector, `FastGridLookup.Items(regions, r => (int?)r.Id, r => r.Name)`.
+
+### Drawing one yourself
+
+A cell that is more than its name - a link to the row the id points at, a name coloured by another
+property, an icon beside it - takes a `Template`:
+
+```razor
+<LookupColumn Property="@(p => p.StageId)" Lookup="@stages" Title="Stage">
+    <Template>
+        <StageLabel Stage="@Stages.ById[context.StageId]" />
+    </Template>
+</LookupColumn>
+```
+
+**It replaces the cell's markup and nothing else.** Filtering, sorting, the check-box list, the settings
+key and the exported value still come from the lookup — which is the whole reason to reach for this
+rather than a `TemplateColumn`. Move such a column to a template column and its list stops offering the
+lookup's *names* and starts offering the *ids* the row carries, which no reader can use.
+
+The template is handed the row, not the resolved name: a template wanting only the name would not need
+a template at all, and the ones that do are reaching for the row's other members. `CellTextOf` gives the
+name to a template that wants both.
+
+Unset, it costs a null check per cell and allocates nothing — the cell is written exactly as it was.
 
 ### Sorting one
 

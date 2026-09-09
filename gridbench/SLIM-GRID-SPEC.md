@@ -12341,3 +12341,32 @@ Nothing is re-filtered or re-sorted: the rows are written as they arrive, in the
 through the same columns. Rows that do not match what the reader is looking at export something they did
 not ask for, and this will not notice — stated in the API docs rather than guarded, because guarding it
 would mean re-running the filter the caller just ran.
+
+## 64. A lookup column can draw its own cell
+
+`Template` on `LookupColumn`, added for the portal integration: **7 of its 21 lookup columns carry a
+`<Template>`**, which is a third of them and includes both browse pages.
+
+Without it those seven become `TemplateColumn`s, and that trades away the thing the lookup column is
+for. The check-box list stops offering the lookup's **names** and offers the **ids** the row carries -
+a list of integers where the reader expects stage names. Filtering, sorting and the settings key go the
+same way.
+
+So the template replaces the cell's markup **and nothing else**: `CellTextOf` still answers the resolved
+name, so the export and the cell tooltip are unchanged, and every filter and sort route is untouched.
+
+### Why a parameter rather than unsealing the column
+
+Unsealing `LookupColumn` and letting an application override `RenderCell` was the other option, and it
+was rejected on two counts. It would put seven new C# types in the consumer where seven markup templates
+do, and it would give up the devirtualized render path §8 sealed the built-in columns for. A parameter
+keeps both. Unsealing stays available for a case that needs *behaviour* rather than markup; none has
+appeared.
+
+The template takes the **row**, not the resolved name, which also makes it a copy-paste migration from
+`RadzenDataGridLookupColumn`'s own `<Template Context="data">`.
+
+### Cost
+
+A null check per cell when unset, and **nothing allocated** - the unset path calls the base's own write,
+unchanged. Not separately benchmarked, because there is no new allocation to measure.
