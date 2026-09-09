@@ -1375,7 +1375,7 @@ class XlsxWriter(Workbook sourceWorkbook)
 
         Array.Sort(cells, 0, count, CellOrder.Instance);
 
-        var placeholders = CreateMergePlaceholders(sheet, styleTracker);
+        var placeholders = CreateMergePlaceholders(sheet);
         var styledRows = CollectStyledRowIndices(sheet);
 
         var cellIndex = 0;
@@ -1454,12 +1454,12 @@ class XlsxWriter(Workbook sourceWorkbook)
                 }
                 else
                 {
-                    var (address, styleId) = placeholders[placeholderIndex++];
+                    var placeholder = placeholders[placeholderIndex++];
 
                     if (placeholderColumn > writtenColumn)
                     {
                         writtenColumn = placeholderColumn;
-                        WritePlaceholder(writer, address, styleId);
+                        WritePlaceholder(writer, placeholder.Address, GetPlaceholderStyle(placeholder.Anchor, styleTracker));
                     }
                 }
             }
@@ -1687,17 +1687,14 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteFullEndElement();
     }
 
-    private List<(CellRef Address, int? StyleId)> CreateMergePlaceholders(Worksheet sheet, StyleTracker styleTracker)
+    private static List<Placeholder> CreateMergePlaceholders(Worksheet sheet)
     {
-        var placeholders = new List<(CellRef Address, int? StyleId)>();
+        var placeholders = new List<Placeholder>();
 
         foreach (var range in sheet.MergedCells.Ranges)
         {
             var anchor = sheet.Cells.Find(range.Start.Row, range.Start.Column);
-
-            int? anchorStyleId = anchor is not null && HasCellFormatting(anchor)
-                ? GetOrCreateCellStyle(anchor, styleTracker)
-                : null;
+            var style = anchor is not null && HasCellFormatting(anchor) ? new MergeAnchor(anchor) : null;
 
             for (var r = range.Start.Row; r <= range.End.Row; r++)
             {
@@ -1715,15 +1712,48 @@ class XlsxWriter(Workbook sourceWorkbook)
                         continue;
                     }
 
-                    placeholders.Add((new CellRef(r, c), anchorStyleId));
+                    placeholders.Add(new Placeholder(new CellRef(r, c), placeholders.Count, style));
                 }
             }
         }
 
-        return placeholders
-            .OrderBy(placeholder => placeholder.Address.Row)
-            .ThenBy(placeholder => placeholder.Address.Column)
-            .ToList();
+        placeholders.Sort();
+
+        return placeholders;
+    }
+
+    private int? GetPlaceholderStyle(MergeAnchor? anchor, StyleTracker styleTracker)
+    {
+        if (anchor is null)
+        {
+            return null;
+        }
+
+        return anchor.StyleId ??= GetOrCreateCellStyle(anchor.Cell, styleTracker);
+    }
+
+    private sealed class MergeAnchor(Cell cell)
+    {
+        public Cell Cell => cell;
+
+        public int? StyleId;
+    }
+
+    private readonly record struct Placeholder(CellRef Address, int Order, MergeAnchor? Anchor) : IComparable<Placeholder>
+    {
+        public int CompareTo(Placeholder other)
+        {
+            var byRow = Address.Row.CompareTo(other.Address.Row);
+
+            if (byRow != 0)
+            {
+                return byRow;
+            }
+
+            var byColumn = Address.Column.CompareTo(other.Address.Column);
+
+            return byColumn != 0 ? byColumn : Order.CompareTo(other.Order);
+        }
     }
 
     private sealed class CellOrder : IComparer<Cell>

@@ -135,6 +135,46 @@ public class XlsxWriterSheetOrderTests
     }
 
     [Fact]
+    public void Save_NumbersAMergeAnchorsStyleWhereTheAnchorIsWritten()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 4, 4);
+
+        sheet.Cells[2, 0].Value = 3;
+        sheet.Cells[2, 0].Format.Italic = true;
+        sheet.MergedCells.Add(new RangeRef(new CellRef(2, 0), new CellRef(2, 1)));
+
+        sheet.Cells[0, 0].Value = 1;
+        sheet.Cells[0, 0].Format.Bold = true;
+
+        var cells = Part(workbook, "xl/worksheets/sheet1.xml").Descendants(Main + "c")
+            .ToDictionary(c => (string)c.Attribute("r")!, c => int.Parse((string)c.Attribute("s")!, CultureInfo.InvariantCulture));
+
+        Assert.True(cells["A1"] < cells["A3"]);
+        Assert.Equal(cells["A3"], cells["B3"]);
+    }
+
+    [Fact]
+    public void Save_NumbersAMergeAnchorsStyleWhereItsFirstPlaceholderIsWritten()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 4, 4);
+
+        sheet.Cells[2, 0].Format.Italic = true;
+        sheet.MergedCells.Add(new RangeRef(new CellRef(2, 0), new CellRef(2, 2)));
+
+        sheet.Cells[0, 0].Value = 1;
+        sheet.Cells[0, 0].Format.Bold = true;
+
+        var cells = Part(workbook, "xl/worksheets/sheet1.xml").Descendants(Main + "c")
+            .ToDictionary(c => (string)c.Attribute("r")!, c => int.Parse((string)c.Attribute("s")!, CultureInfo.InvariantCulture));
+
+        Assert.False(cells.ContainsKey("A3"));
+        Assert.True(cells["A1"] < cells["B3"]);
+        Assert.Equal(cells["B3"], cells["C3"]);
+    }
+
+    [Fact]
     public void Save_WritesAMergeThatReachesPastTheSheetBounds()
     {
         var workbook = new Workbook();
@@ -184,6 +224,35 @@ public class XlsxWriterSheetOrderTests
         Assert.NotNull(cells["A8"]);
         Assert.Equal(cells["A8"], cells["A9"]);
         Assert.Equal(cells["A8"], cells["A10"]);
+    }
+
+    [Fact]
+    public void Save_WritesAnAddressTwoMergesCoverOnceWithTheFirstMergesStyle()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 8, 24);
+
+        // Wide enough that the placeholder list is past the length List.Sort handles with a stable
+        // insertion sort, so the insertion index is what keeps the first merge's copy first.
+        sheet.Cells[0, 0].SetValue("first");
+        sheet.Cells[0, 0].Format.Bold = true;
+        sheet.MergedCells.Add(new RangeRef(new CellRef(0, 0), new CellRef(1, 20)));
+
+        sheet.Cells[1, 1].SetValue("second");
+        sheet.Cells[1, 1].Format.Italic = true;
+        sheet.MergedCells.Add(new RangeRef(new CellRef(1, 1), new CellRef(2, 3)));
+
+        var cells = Part(workbook, "xl/worksheets/sheet1.xml").Descendants(Main + "c").ToList();
+        var references = cells.Select(c => (string?)c.Attribute("r")).ToList();
+
+        Assert.Equal(references.Distinct().Count(), references.Count);
+
+        var styles = cells.ToDictionary(c => (string)c.Attribute("r")!, c => (string?)c.Attribute("s"));
+
+        Assert.Equal(styles["A1"], styles["C2"]);
+        Assert.Equal(styles["A1"], styles["D2"]);
+        Assert.Equal(styles["B2"], styles["C3"]);
+        Assert.NotEqual(styles["A1"], styles["B2"]);
     }
 
     [Fact]
