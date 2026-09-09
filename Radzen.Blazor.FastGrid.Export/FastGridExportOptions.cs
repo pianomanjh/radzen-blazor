@@ -18,6 +18,25 @@ namespace Radzen.FastGrid.Export
         /// <summary>The sheet's name.</summary>
         public string SheetName { get; set; } = "Sheet1";
 
+        /// <summary>
+        /// The rows to export, or null to export the grid's own.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A grid's own rows are its <c>FilteredRows</c>: everything the filters and the sort produce.
+        /// On a client-bound grid that is already every row there is, and this is not needed. On a
+        /// <c>LoadData</c> or async-executor grid the grid holds one page, because asking for more would
+        /// mean running a query neither of those ran - so an application wanting the whole filtered set
+        /// out of such a grid runs that query itself and hands the result over here.
+        /// </para>
+        /// <para>
+        /// <strong>Nothing is re-filtered or re-sorted.</strong> These rows are written as they arrive,
+        /// in the order they arrive, through the same columns. Handing over rows that do not match what
+        /// the reader is looking at exports something they did not ask for, and this will not notice.
+        /// </para>
+        /// </remarks>
+        public IEnumerable<TItem>? Rows { get; set; }
+
         /// <summary>Whether the header row is written at all.</summary>
         public bool IncludeHeader { get; set; } = true;
 

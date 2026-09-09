@@ -36,7 +36,9 @@ namespace Radzen.FastGrid.Export
         /// filters and the sort produce, not the page.</strong> On a <c>LoadData</c> or async-executor
         /// grid the grid holds one page and that is what comes out, because asking for more would mean
         /// running a query neither of those ran. §40 takes that as the answer rather than as a
-        /// limitation to work around, and says so here rather than in a footnote.
+        /// limitation to work around, and says so here rather than in a footnote - but the caller, who
+        /// can run that query, may hand the rows over through
+        /// <see cref="FastGridExportOptions{TItem}.Rows" />.
         /// </para>
         /// <para>
         /// The columns are the ones the reader is looking at, in the order they arranged them:
@@ -61,8 +63,8 @@ namespace Radzen.FastGrid.Export
             // Enumerated once, into a list, because the sheet has to be sized before a cell can be
             // written and FilteredRows composes onto the source rather than holding a copy - so
             // counting it and then walking it would run the query twice, which over a queryable is two
-            // round trips.
-            var rows = new List<TItem>(grid.FilteredRows);
+            // round trips. Rows given in the options are enumerated once for the same reason.
+            var rows = new List<TItem>(options.Rows ?? grid.FilteredRows);
 
             var header = options.IncludeHeader ? 1 : 0;
             var workbook = new Workbook();

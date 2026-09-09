@@ -93,7 +93,9 @@ none of it.
 
 **The rows are `FilteredRows`: everything the filters and the sort produce, not the page.** On a grid
 backed by `LoadData` or the asynchronous executor the grid only ever holds one page, and that is what you
-get — asking for more would mean running a query neither of those ran.
+get — asking for more would mean running a query neither of those ran. You can run it yourself and hand
+the result over as `Rows`, which is written instead: nothing is re-filtered or re-sorted, so what you
+pass is what comes out, through the same columns.
 
 **The columns are the ones on screen, in the order they are on screen.** A column the reader hid is
 absent; a column they dragged is where they dragged it.
@@ -139,6 +141,7 @@ unsealing it would cost the render path more than an export is worth.
 | | |
 | --- | --- |
 | `SheetName` | `"Sheet1"` |
+| `Rows` | `null` — the grid's own. Set it to export rows the grid does not hold, which is the `LoadData` case |
 | `IncludeHeader` | `true` |
 | `FreezeHeader` | `true` |
 | `AddTable` | `true` — Excel's filter buttons. A table is not quite `SetAutoFilter`: it also carries a name and a style, which matters if your readers open these somewhere other than Excel. |

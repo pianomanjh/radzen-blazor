@@ -1090,5 +1090,61 @@ namespace Radzen.FastGrid.Tests
             { new DateOnly(2020, 3, 4), new DateTime(2020, 3, 4) },
             { new DateTimeOffset(new DateTime(2020, 3, 4), TimeSpan.Zero), new DateTime(2020, 3, 4) },
         };
+        // --- rows the caller supplies -----------------------------------------------------------
+
+        /// <summary>
+        /// A grid holding one page can still export more, because the caller can hand over what it
+        /// fetched.
+        /// </summary>
+        /// <remarks>
+        /// The case is a <c>LoadData</c> grid: it only ever holds the page it was given, and the
+        /// exporter cannot ask for the rest without running a query the grid never ran. So the
+        /// application runs it and passes the result. Nothing is re-filtered or re-sorted here - these
+        /// rows are written as they arrive, through the same columns.
+        /// </remarks>
+        [Fact]
+        public void RowsGivenInTheOptionsAreWrittenInsteadOfTheGridsOwn()
+        {
+            using var ctx = Context();
+
+            var page = People.Sample().Take(2).ToList();
+            var everything = People.Sample();
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, page);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, title: "First")));
+            });
+
+            var sheet = RoundTrip(cut.Instance.ToWorkbook(new FastGridExportOptions<Person>
+            {
+                Rows = everything,
+            }));
+
+            Assert.Equal(new[] { "Carol", "Alice", "Dave", "Bob" },
+                Column(sheet, 0, everything.Count + 1).Skip(1).ToArray());
+        }
+
+        /// <summary>Null rows are the ordinary case, and mean the grid's own.</summary>
+        [Fact]
+        public void NoRowsInTheOptionsLeavesTheGridsOwnRows()
+        {
+            using var ctx = Context();
+
+            var page = People.Sample().Take(2).ToList();
+
+            var cut = ctx.RenderComponent<RadzenFastGrid<Person>>(p =>
+            {
+                p.Add(g => g.Data, page);
+                p.Add(g => g.ChildContent, Columns.Of(
+                    Columns.Property<Person, string>(x => x.First, title: "First")));
+            });
+
+            var sheet = RoundTrip(cut.Instance.ToWorkbook(new FastGridExportOptions<Person>()));
+
+            Assert.Equal(new[] { "Carol", "Alice" }, Column(sheet, 0, 3).Skip(1).ToArray());
+        }
+
     }
 }
