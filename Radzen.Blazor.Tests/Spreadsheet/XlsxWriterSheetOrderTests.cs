@@ -135,6 +135,58 @@ public class XlsxWriterSheetOrderTests
     }
 
     [Fact]
+    public void Save_WritesAMergeThatReachesPastTheSheetBounds()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 10, 1);
+
+        sheet.Cells[9, 0].SetValue("last");
+        sheet.MergedCells.Add(new RangeRef(new CellRef(0, 0), new CellRef(9, 0)));
+
+        sheet.Rows.Count = 5;
+
+        var references = Part(workbook, "xl/worksheets/sheet1.xml").Descendants(Main + "c")
+            .Select(c => (string?)c.Attribute("r"))
+            .ToList();
+
+        Assert.Equal(new[] { "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10" }, references);
+    }
+
+    [Fact]
+    public void Save_DoesNotAddACellForAnEmptyMergeAnchor()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 4, 4);
+
+        sheet.MergedCells.Add(new RangeRef(new CellRef(1, 1), new CellRef(2, 2)));
+
+        Part(workbook, "xl/worksheets/sheet1.xml");
+
+        Assert.Equal(0, sheet.Cells.PopulatedCount);
+    }
+
+    [Fact]
+    public void Save_StylesAMergeWhoseAnchorIsPastTheSheetBounds()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 10, 1);
+
+        sheet.Cells[7, 0].SetValue("anchor");
+        sheet.Cells[7, 0].Format.Bold = true;
+        sheet.MergedCells.Add(new RangeRef(new CellRef(7, 0), new CellRef(9, 0)));
+
+        sheet.Rows.Count = 5;
+
+        var cells = Part(workbook, "xl/worksheets/sheet1.xml").Descendants(Main + "c")
+            .ToDictionary(c => (string)c.Attribute("r")!, c => (string?)c.Attribute("s"));
+
+        Assert.Equal(new[] { "A8", "A9", "A10" }, cells.Keys);
+        Assert.NotNull(cells["A8"]);
+        Assert.Equal(cells["A8"], cells["A9"]);
+        Assert.Equal(cells["A8"], cells["A10"]);
+    }
+
+    [Fact]
     public void Save_IndexesSharedStringsInTheOrderTheCellsAreWritten()
     {
         var strings = Part(FilledBackwards(), "xl/sharedStrings.xml")

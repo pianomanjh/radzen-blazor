@@ -1693,9 +1693,9 @@ class XlsxWriter(Workbook sourceWorkbook)
 
         foreach (var range in sheet.MergedCells.Ranges)
         {
-            var anchor = sheet.Cells[range.Start];
+            var anchor = sheet.Cells.Find(range.Start.Row, range.Start.Column);
 
-            int? anchorStyleId = HasCellFormatting(anchor)
+            int? anchorStyleId = anchor is not null && HasCellFormatting(anchor)
                 ? GetOrCreateCellStyle(anchor, styleTracker)
                 : null;
 
@@ -1708,7 +1708,9 @@ class XlsxWriter(Workbook sourceWorkbook)
                         continue;
                     }
 
-                    if (sheet.Cells.HasCell(r, c) && IsWritten(sheet.Cells[r, c]))
+                    var cell = sheet.Cells.Find(r, c);
+
+                    if (cell is not null && IsWritten(cell))
                     {
                         continue;
                     }
