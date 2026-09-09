@@ -1,5 +1,5 @@
 using System;
-using System.Text;
+using System.Globalization;
 
 namespace Radzen.Documents.Spreadsheet;
 
@@ -71,23 +71,35 @@ public readonly struct CellRef(int row, int column) : IEquatable<CellRef>
     /// <returns></returns>
     public override string ToString()
     {
-        var sb = StringBuilderCache.Acquire();
+        Span<char> reference = stackalloc char[MaxLength];
+
+        return new string(reference[..Format(reference)]);
+    }
+
+    internal const int MaxLength = 2 + ColumnRef.MaxLetters + 11;
+
+    internal int Format(Span<char> destination)
+    {
+        var length = 0;
 
         if (IsColumnAbsolute)
         {
-            sb.Append('$');
+            destination[length++] = '$';
         }
 
-        sb.Append(ColumnRef.ToString(Column));
+        length += ColumnRef.Format(destination[length..], Column);
 
         if (IsRowAbsolute)
         {
-            sb.Append('$');
+            destination[length++] = '$';
         }
 
-        sb.Append(Row + 1);
+        if (!(Row + 1).TryFormat(destination[length..], out var digits, provider: CultureInfo.InvariantCulture))
+        {
+            throw new ArgumentException($"A reference needs up to {MaxLength} characters.", nameof(destination));
+        }
 
-        return StringBuilderCache.GetStringAndRelease(sb);
+        return length + digits;
     }
 
     /// <summary>
@@ -159,7 +171,6 @@ public readonly struct CellRef(int row, int column) : IEquatable<CellRef>
         var i = 0;
         var isColumnAbsolute = false;
         var isRowAbsolute = false;
-
 
         // Optional $ before column
         if (i < index.Length && index[i] == '$')

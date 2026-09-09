@@ -98,14 +98,9 @@ public class CellStore(Worksheet sheet)
     /// <returns>True if the cell exists in the store; otherwise, false.</returns>
     public bool TryGet(int row, int column, out Cell cell)
     {
-        if (InBounds(row, column) && data.TryGetValue((row, column), out cell!))
-        {
-            return true;
-        }
+        cell = (InBounds(row, column) ? Find(row, column) : null)!;
 
-        cell = null!;
-
-        return false;
+        return cell is not null;
     }
 
     internal IEnumerable<Cell> GetPopulatedCells() => data.Values;
@@ -132,7 +127,9 @@ public class CellStore(Worksheet sheet)
 
     internal int PopulatedCount => data.Count;
 
-    internal bool HasCell(int row, int column) => data.ContainsKey((row, column));
+    internal bool HasCell(int row, int column) => Find(row, column) is not null;
+
+    internal Cell? Find(int row, int column) => data.TryGetValue((row, column), out var cell) ? cell : null;
 
     private static void UpdateCellAddress((int row, int column) oldKey, (int row, int column) newKey, Cell cell)
     {
