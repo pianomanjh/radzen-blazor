@@ -256,6 +256,38 @@ public class XlsxWriterSheetOrderTests
     }
 
     [Fact]
+    public void Save_SpansARowFromAPlaceholderBeforeItsFirstCell()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 8, 8);
+
+        sheet.MergedCells.Add(new RangeRef(new CellRef(4, 0), new CellRef(4, 1)));
+        sheet.Cells[4, 3].SetValue("cell");
+
+        var row = Part(workbook, "xl/worksheets/sheet1.xml").Descendants(Main + "row").Single();
+
+        Assert.Equal("5", (string?)row.Attribute("r"));
+        Assert.Equal("2:4", (string?)row.Attribute("spans"));
+        Assert.Equal(new[] { "B5", "D5" }, row.Elements(Main + "c").Select(c => (string?)c.Attribute("r")));
+    }
+
+    [Fact]
+    public void Save_SpansARowThatHoldsOnlyPlaceholders()
+    {
+        var workbook = new Workbook();
+        var sheet = workbook.AddSheet("Sheet1", 8, 8);
+
+        sheet.MergedCells.Add(new RangeRef(new CellRef(0, 0), new CellRef(1, 2)));
+
+        var rows = Part(workbook, "xl/worksheets/sheet1.xml").Descendants(Main + "row").ToList();
+
+        Assert.Equal(new[] { "1", "2" }, rows.Select(r => (string?)r.Attribute("r")));
+        Assert.Equal("2:3", (string?)rows[0].Attribute("spans"));
+        Assert.Equal("1:3", (string?)rows[1].Attribute("spans"));
+        Assert.Equal(new[] { "A2", "B2", "C2" }, rows[1].Elements(Main + "c").Select(c => (string?)c.Attribute("r")));
+    }
+
+    [Fact]
     public void Save_IndexesSharedStringsInTheOrderTheCellsAreWritten()
     {
         var strings = Part(FilledBackwards(), "xl/sharedStrings.xml")

@@ -1393,51 +1393,49 @@ class XlsxWriter(Workbook sourceWorkbook)
                 row = Math.Min(row, styledRows[styledRowIndex]);
             }
 
+            var cellEnd = cellIndex;
+
+            while (cellEnd < count && cells[cellEnd].Address.Row == row)
+            {
+                cellEnd++;
+            }
+
+            var placeholderEnd = placeholderIndex;
+
+            while (placeholderEnd < placeholders.Count && placeholders[placeholderEnd].Address.Row == row)
+            {
+                placeholderEnd++;
+            }
+
             var firstColumn = -1;
             var lastColumn = -1;
 
-            for (var i = cellIndex; i < count && cells[i].Address.Row == row; i++)
+            if (cellEnd > cellIndex)
             {
-                var column = cells[i].Address.Column;
-
-                if (firstColumn < 0 || column < firstColumn)
-                {
-                    firstColumn = column;
-                }
-
-                lastColumn = Math.Max(lastColumn, column);
+                firstColumn = cells[cellIndex].Address.Column;
+                lastColumn = cells[cellEnd - 1].Address.Column;
             }
 
-            for (var i = placeholderIndex; i < placeholders.Count && placeholders[i].Address.Row == row; i++)
+            if (placeholderEnd > placeholderIndex)
             {
-                var column = placeholders[i].Address.Column;
+                var column = placeholders[placeholderIndex].Address.Column;
 
                 if (firstColumn < 0 || column < firstColumn)
                 {
                     firstColumn = column;
                 }
 
-                lastColumn = Math.Max(lastColumn, column);
+                lastColumn = Math.Max(lastColumn, placeholders[placeholderEnd - 1].Address.Column);
             }
 
             WriteRowStart(writer, sheet, row, firstColumn, lastColumn);
 
             var writtenColumn = -1;
 
-            while (true)
+            while (cellIndex < cellEnd || placeholderIndex < placeholderEnd)
             {
-                var cellColumn = cellIndex < count && cells[cellIndex].Address.Row == row
-                    ? cells[cellIndex].Address.Column
-                    : int.MaxValue;
-
-                var placeholderColumn = placeholderIndex < placeholders.Count && placeholders[placeholderIndex].Address.Row == row
-                    ? placeholders[placeholderIndex].Address.Column
-                    : int.MaxValue;
-
-                if (cellColumn == int.MaxValue && placeholderColumn == int.MaxValue)
-                {
-                    break;
-                }
+                var cellColumn = cellIndex < cellEnd ? cells[cellIndex].Address.Column : int.MaxValue;
+                var placeholderColumn = placeholderIndex < placeholderEnd ? placeholders[placeholderIndex].Address.Column : int.MaxValue;
 
                 if (cellColumn <= placeholderColumn)
                 {
