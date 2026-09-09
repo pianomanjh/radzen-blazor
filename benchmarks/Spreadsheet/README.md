@@ -23,6 +23,37 @@ exists beside it:
 **Read the run before believing the table.** BenchmarkDotNet takes space-separated `--filter` globs and
 **exits 0 having run nothing** when a filter matches none; check the `executed benchmarks:` line.
 
+## The streaming sweep
+
+`dotnet run -c Release -- --filter "*StreamBenchmarks*" --buildTimeout 900`
+
+`StreamBenchmarks` asks the one question `SaveBenchmarks` cannot: does the streamed write allocate the
+same whatever the row count is? A single arm cannot answer that, so the row count is the parameter and
+the built save is the arm beside it - the one known to grow, because it holds a value per cell. **If the
+sweep does not move the built arm the instrument is not resolving anything**, and neither arm's flatness
+means a thing.
+
+Three arms, 10,000 / 50,000 / 200,000 rows by eleven columns, on this machine:
+
+| Arm | 10k | 50k | 200k | Gen1/Gen2 at 200k |
+| --- | ---: | ---: | ---: | --- |
+| Streamed, nothing boxed | 152 KB | 160 KB | 182 KB | none, and no Gen0 either |
+| Streamed, no workbook | 2.7 MB | 12.8 MB | 50.5 MB | none |
+| Built, then saved | 23.6 MB | 103.3 MB | 441.0 MB | 3000 Gen1, 1000 Gen2 |
+
+**The flat arm is the claim.** 30 KB of drift across a 20x sweep is the shared string table filling to
+its hundred entries and the zip's buffers, not a cost per row. The same run writes a real file - 200,001
+rows and 2,200,011 cells, 133 MB of sheet XML compressed to 5.7 MB - which is worth checking before
+believing any figure taken against `Stream.Null`.
+
+**The middle arm is not the writer.** A column is a `Func<T, object?>`, so every non-string cell arrives
+in a box: about 0.26 KB per row here, allocated and dead in gen0 before the row after it is read. That
+is the accessor's cost and it is the caller's to remove, which is why the arm above it exists - what is
+left when nothing boxes is the writer alone.
+
+**The built arm is what was replaced.** It is the only one of the three that promotes anything out of
+gen0, and it is 2,400x the flat arm at 200,000 rows.
+
 ## Reading the numbers
 
 **Allocation is the figure to quote.** It repeats to a tenth of a megabyte across runs and machines.
