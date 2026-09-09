@@ -367,13 +367,22 @@ namespace Radzen.FastGrid
 
             try
             {
-                await registered.ExportAsync(this);
+                await registered.ExportAsync(this, Lifetime);
+            }
+            catch (OperationCanceledException)
+            {
+                // The grid went away while the file was being written. Nothing was saved and nothing
+                // is wrong: this is the token doing its job, and the scrim below belongs to a component
+                // that no longer exists.
             }
             finally
             {
-                exporting = false;
+                if (!disposed)
+                {
+                    exporting = false;
 
-                StateHasChanged();
+                    StateHasChanged();
+                }
             }
         }
 

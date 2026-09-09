@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.JSInterop;
 using Radzen.Documents.Spreadsheet;
@@ -30,7 +31,8 @@ namespace Radzen.FastGrid.Export
         }
 
         /// <inheritdoc />
-        public async Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid)
+        public async Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid,
+            CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(grid);
 
@@ -62,13 +64,13 @@ namespace Radzen.FastGrid.Export
 
                 await using (destination)
                 {
-                    await grid.SaveToStreamAsync(destination, exported);
+                    await grid.SaveToStreamAsync(destination, exported, cancellationToken);
                 }
 
                 return;
             }
 
-            await SaveAsync(grid, exported);
+            await SaveAsync(grid, exported, cancellationToken);
         }
 
         /// <summary>
@@ -104,7 +106,8 @@ namespace Radzen.FastGrid.Export
         /// never suspends.
         /// </para>
         /// </remarks>
-        async Task SaveAsync<TItem>(RadzenFastGrid<TItem> grid, FastGridExportOptions<TItem> exported)
+        async Task SaveAsync<TItem>(RadzenFastGrid<TItem> grid, FastGridExportOptions<TItem> exported,
+            CancellationToken cancellationToken)
         {
             if (runtime is null)
             {
@@ -123,9 +126,13 @@ namespace Radzen.FastGrid.Export
             // hiding it: streaming into a MemoryStream caps the win at the buffer. What it removes is
             // the workbook in front of it, which was the larger half. An application that wants the
             // buffer gone too sets Destination.
-            await grid.SaveToStreamAsync(stream, exported);
+            await grid.SaveToStreamAsync(stream, exported, cancellationToken);
 
             stream.Position = 0;
+
+            // Between the last row and the first byte handed over is one more place the grid can go
+            // away, and a download landing on a page nobody is on is the thing the token is for.
+            cancellationToken.ThrowIfCancellationRequested();
 
             using var reference = new DotNetStreamReference(stream);
 

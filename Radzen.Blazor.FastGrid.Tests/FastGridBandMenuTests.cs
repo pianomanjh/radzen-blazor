@@ -477,6 +477,31 @@ namespace Radzen.FastGrid.Tests
             Assert.Empty(cut.FindAll(".rz-datatable-loading"));
         }
 
+        /// <summary>
+        /// The token an exporter is handed is the grid's lifetime, so a reader who navigates away in
+        /// the middle of a large export stops it rather than being handed a file for a page they left.
+        /// </summary>
+        [Fact]
+        public void AnExportIsGivenTheGridsLifetime()
+        {
+            using var ctx = new TestContext();
+
+            var exporter = new Exporter();
+
+            ctx.Services.AddSingleton<IFastGridExporter>(exporter);
+
+            var cut = Render(ctx);
+            cut.Find(".rz-filter-pills .rz-menu-toggle").Click();
+            cut.FindAll("#" + cut.Instance.GridMenuElementId + " [role=menuitem]")[1].Click();
+
+            Assert.True(exporter.Token.CanBeCanceled);
+            Assert.False(exporter.Token.IsCancellationRequested);
+
+            cut.Instance.Dispose();
+
+            Assert.True(exporter.Token.IsCancellationRequested);
+        }
+
         sealed class Exporter : IFastGridExporter
         {
             public object Exported { get; private set; }
@@ -487,9 +512,13 @@ namespace Radzen.FastGrid.Tests
             // talks to the browser. Without the yield the await never suspends, the render queued by
             // the caller's StateHasChanged never runs, and anything asserted from in here sees the
             // state as it was before the click. §39's doubled-module blindness, one layer out.
-            public async Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid)
+            public System.Threading.CancellationToken Token { get; private set; }
+
+            public async Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid,
+                System.Threading.CancellationToken cancellationToken = default)
             {
                 Exported = grid;
+                Token = cancellationToken;
 
                 await Task.Yield();
 

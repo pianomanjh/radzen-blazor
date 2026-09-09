@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Radzen.FastGrid
@@ -32,8 +33,18 @@ namespace Radzen.FastGrid
     public interface IFastGridExporter
     {
         /// <summary>Exports the grid, however this implementation exports things.</summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>The token is the grid's own lifetime</strong>, so an export outlives the grid only
+        /// for as long as it takes to notice. A streamed export of a large grid runs for seconds and
+        /// reads the grid while it does; a reader who navigates away in the middle of one has stopped
+        /// wanting the file, and without this the write would run to the end and then hand a download to
+        /// a page nobody is on. Implementations that write in one step can ignore it.
+        /// </para>
+        /// </remarks>
         /// <typeparam name="TItem">The grid's row type.</typeparam>
         /// <param name="grid">The grid whose menu the entry was clicked in.</param>
-        Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid);
+        /// <param name="cancellationToken">Cancelled when the grid is disposed.</param>
+        Task ExportAsync<TItem>(RadzenFastGrid<TItem> grid, CancellationToken cancellationToken = default);
     }
 }
