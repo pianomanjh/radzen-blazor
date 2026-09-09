@@ -284,15 +284,17 @@ public class Cell
     /// </summary>
     public string? GetValueAsString() => FormatValue(Culture);
 
-    private string? FormatValue(CultureInfo culture)
+    private string? FormatValue(CultureInfo culture) => FormatValue(Value, culture);
+
+    internal static string? FormatValue(object? value, CultureInfo culture)
     {
-        return Value switch
+        return value switch
         {
             null => null,
             CellError error => error.ToString(),
             string str => str,
             IFormattable formattable => formattable.ToString(null, culture),
-            _ => Value.ToString()
+            _ => value.ToString()
         };
     }
 
@@ -450,4 +452,21 @@ public class Cell
         Address = address;
         Worksheet = sheet;
     }
+
+    // Adopts what a slot was holding before anything asked for a cell here. The value and type are
+    // taken as they are: re-inferring them would rebuild "0123" as a number.
+    internal Cell(Worksheet sheet, CellRef address, object? value, CellDataType type, bool quotePrefix)
+    {
+        Address = address;
+        Worksheet = sheet;
+        this.value = value;
+        this.type = type;
+        QuotePrefix = quotePrefix;
+    }
+
+    // What a cell holds when nothing but its value has been asked for, so the writer can read a
+    // cell that was never materialised.
+    internal object? StoredValue => value;
+
+    internal CellDataType StoredType => type;
 }
