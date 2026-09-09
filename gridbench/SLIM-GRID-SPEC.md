@@ -12613,6 +12613,31 @@ So paging is the grid's concern and not the export's, in the file as well as in 
 out is every row the filters and the sort produce, which is what §40 said an export means and what only
 the caller could get before §65.
 
+### One row at a time, in lockstep, and what that costs
+
+The one command and the writer are a pull pipeline with nothing between them: the writer asks for a
+row, the provider produces it, the writer writes it, and neither runs ahead of the other. A slow
+producer makes the write take longer and a slow writer makes the read take longer, because the two
+times add rather than overlap. There is no prefetch, no double buffer and no second thread.
+
+`StreamedSheetPipelineTests` asserts the ordering rather than the timing, by watching what the source
+has yielded when bytes first reach the destination: **row 41 with declared widths** — which is the
+deflate window filling, not anything here holding on — and **exactly row 200 under `Sampled(200)`**,
+the sample being the only thing in the path that reads ahead. Replacing the loop with one that drains
+the source first takes that figure to 20,000, which is the gate failing as it should.
+
+Two consequences worth stating, because lockstep is not free:
+
+- **The reader is open for the whole write.** The database connection, and any ambient transaction, are
+  held until the last row is written rather than until the last row is read. A destination that is slow
+  — a network sink, a disk under load — is now something the database is waiting on.
+- **The time is the sum.** Where the builder read every row, let go of the database, and then spent 1.5
+  seconds writing, this holds both open for the length of both. What it buys is that neither the rows
+  nor the cells are ever all in memory at once, which is the whole trade.
+
+An application that wants those uncoupled has the seam already: read into whatever it likes and hand it
+over as `RowsAsync`. That is §63's rule serving a purpose it was not written for.
+
 ### The `Task.Run` went with the workbook, and that is not a regression
 
 §41 moved `SaveToStream` off the renderer's thread because it is about 1.5 s at 50,000 rows and a built
