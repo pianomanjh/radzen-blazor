@@ -130,12 +130,15 @@ namespace Radzen.Blazor
             NavigatorSeries.Remove(series);
         }
 
-        internal void UpdateScales()
+        internal bool UpdateScales()
         {
             if (Width <= 0)
             {
-                return;
+                return false;
             }
+
+            var previousCategoryScale = CategoryScale;
+            var previousValueScale = ValueScale;
 
             CategoryScale = new LinearScale();
             ValueScale = new LinearScale();
@@ -163,7 +166,15 @@ namespace Radzen.Blazor
             ValueScale.Fit(10);
 
             UpdateJSLabelConfig();
+
+            return !SameDomain(previousCategoryScale, CategoryScale)
+                || !SameDomain(previousValueScale, ValueScale);
         }
+
+        private static bool SameDomain(ScaleBase left, ScaleBase right) =>
+            left.GetType() == right.GetType()
+            && left.Input.Start.Equals(right.Input.Start)
+            && left.Input.End.Equals(right.Input.End);
 
         internal IList<AxisTick> GetAxisTicks()
         {
@@ -370,6 +381,10 @@ namespace Radzen.Blazor
                         StateHasChanged();
                     }
                 }
+            }
+            else if (UpdateScales())
+            {
+                StateHasChanged();
             }
         }
 
