@@ -1659,17 +1659,14 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private bool TryFormatNumber(object? value, out int length)
     {
-        switch (value)
+        if (value is ISpanFormattable number)
         {
-            case double d: return d.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
-            case int i: return i.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
-            case long l: return l.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
-            case decimal m: return m.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
-            case float f: return f.TryFormat(scratch, out length, provider: CultureInfo.InvariantCulture);
-            default:
-                length = 0;
-                return false;
+            return number.TryFormat(scratch, out length, default, CultureInfo.InvariantCulture);
         }
+
+        length = 0;
+
+        return false;
     }
 
     private static void WriteValue(XmlWriter writer, string text)
