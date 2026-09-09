@@ -27,17 +27,26 @@ jobs:
             9.0.x
             10.0.x
 
-      # The suite is the gate. A package that ships a red build is worse than one that ships late.
+      # Chromium, because part of the suite measures rendered geometry through it - GeometryParityTests,
+      # PopupGeometryTests and some of FastGridAutoFitTests. Installed the way fastgrid-parity.yml
+      # installs it, globally, because the measurement script resolves Playwright from the global npm
+      # root.
       #
-      # Minus GeometryParityTests, which measure rendered geometry through Chromium: this job has no
-      # browser, and fastgrid-parity.yml - which does, and which runs on the same push - is where they
-      # belong. That workflow's own comment gives the rule this follows: a missing Chromium should not
-      # be able to fail a job that is not about the browser. Running them here without one failed all
-      # twenty on the first tag and published nothing, which is the gate working and the wrong gate.
-      - name: Test
+      # Filtering those classes out instead was tried and abandoned: the first tag failed on
+      # GeometryParityTests, the second on PopupGeometryTests, and there is no trait to filter on - so
+      # excluding them by name is a list that goes stale silently, which is worse than a slower job.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright and Chromium
         run: |
-          dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj -c Release \
-            --filter "FullyQualifiedName!~GeometryParityTests"
+          npm install -g playwright
+          playwright install --with-deps chromium
+
+      # The suite is the gate. A package that ships a red build is worse than one that ships late.
+      - name: Test
+        run: dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj -c Release
 
       - name: Pack
         run: |
