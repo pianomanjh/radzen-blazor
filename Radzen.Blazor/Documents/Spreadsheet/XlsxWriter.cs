@@ -30,7 +30,7 @@ class XlsxWriter(Workbook sourceWorkbook)
 
         var styleTracker = CreateStylesDocument();
 
-        var sharedStrings = new Dictionary<string, int>();
+        using var sharedStrings = new SharedStringTable();
 
         var totalTables = 0;
         SaveSheets(archive, styleTracker, sharedStrings, ref totalTables);
@@ -868,7 +868,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                 new XAttribute("builtinId", "0")));
     }
 
-    private void SaveSheets(ZipArchive archive, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, ref int globalTableIndex)
+    private void SaveSheets(ZipArchive archive, StyleTracker styleTracker, SharedStringTable sharedStrings, ref int globalTableIndex)
     {
         var workbookRels = CreateWorkbookRelationships();
         var workbookRelsElement = workbookRels.Root!;
@@ -923,7 +923,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XElement(XName.Get("Relationships", "http://schemas.openxmlformats.org/package/2006/relationships")));
     }
 
-    private void SaveSheet(ZipArchive archive, Worksheet sheet, string sheetName, int sheetId, string relId, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, Dictionary<string, string> mediaMap, ref int globalMediaIndex, ref int globalTableIndex)
+    private void SaveSheet(ZipArchive archive, Worksheet sheet, string sheetName, int sheetId, string relId, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<string, string> mediaMap, ref int globalMediaIndex, ref int globalTableIndex)
     {
         var sheetDoc = CreateSheetDocument(sheet, sheetId, relId);
 
@@ -1305,7 +1305,7 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private static readonly XName SheetDataElement = XName.Get("sheetData", Main);
 
-    private void WriteSheetXml(Stream stream, XDocument sheetDoc, Worksheet sheet, StyleTracker styleTracker, Dictionary<string, int> sharedStrings)
+    private void WriteSheetXml(Stream stream, XDocument sheetDoc, Worksheet sheet, StyleTracker styleTracker, SharedStringTable sharedStrings)
     {
         var root = sheetDoc.Root!;
 
@@ -1337,7 +1337,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteEndDocument();
     }
 
-    private void WriteSheetData(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker, Dictionary<string, int> sharedStrings)
+    private void WriteSheetData(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker, SharedStringTable sharedStrings)
     {
         var sharedFormulas = BuildSharedFormulaGroups(sheet);
 
@@ -1353,7 +1353,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         }
     }
 
-    private void WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private void WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var count = 0;
 
@@ -1536,7 +1536,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteEndElement();
     }
 
-    private void WriteCell(XmlWriter writer, Cell cell, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private void WriteCell(XmlWriter writer, Cell cell, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var isFormula = !string.IsNullOrEmpty(cell.Formula);
 
@@ -1562,15 +1562,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         }
         else if (cell.ValueType == CellDataType.String)
         {
-            var text = cell.Value as string ?? string.Empty;
-
-            if (!sharedStrings.TryGetValue(text, out var index))
-            {
-                index = sharedStrings.Count;
-                sharedStrings[text] = index;
-            }
-
-            WriteNumberValue(writer, index);
+            WriteNumberValue(writer, sharedStrings.GetOrAdd(cell.Value as string ?? string.Empty));
         }
         else
         {
@@ -2672,20 +2664,13 @@ class XlsxWriter(Workbook sourceWorkbook)
         _ => DynamicFilterType.Today,
     };
 
-    private static void SaveSharedStrings(ZipArchive archive, Dictionary<string, int> sharedStrings)
+    private static void SaveSharedStrings(ZipArchive archive, SharedStringTable sharedStrings)
     {
         if (sharedStrings.Count == 0)
         {
             // No string cells in the workbook; skip the part entirely. Its
             // relationship and Content_Types Override are also omitted.
             return;
-        }
-
-        var strings = new string[sharedStrings.Count];
-
-        foreach (var (text, index) in sharedStrings)
-        {
-            strings[index] = text;
         }
 
         var count = sharedStrings.Count.ToString(CultureInfo.InvariantCulture);
@@ -2698,7 +2683,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteAttributeString("count", count);
         writer.WriteAttributeString("uniqueCount", count);
 
-        foreach (var text in strings)
+        foreach (var text in sharedStrings.Strings)
         {
             writer.WriteStartElement("si", Main);
             writer.WriteStartElement("t", Main);
