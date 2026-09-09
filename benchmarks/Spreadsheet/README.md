@@ -37,14 +37,23 @@ Three arms, 10,000 / 50,000 / 200,000 rows by eleven columns, on this machine:
 
 | Arm | 10k | 50k | 200k | Gen1/Gen2 at 200k |
 | --- | ---: | ---: | ---: | --- |
-| Streamed, nothing boxed | 152 KB | 160 KB | 182 KB | none, and no Gen0 either |
+| Streamed, nothing boxed | 141 KB | 149 KB | 172 KB | none, and no Gen0 either |
 | Streamed, no workbook | 2.7 MB | 12.8 MB | 50.5 MB | none |
-| Built, then saved | 23.6 MB | 103.3 MB | 441.0 MB | 3000 Gen1, 1000 Gen2 |
+| Built, then saved | 22.8 MB | 99.1 MB | 423.0 MB | 3000 Gen1, 1000 Gen2 |
 
-**The flat arm is the claim.** 30 KB of drift across a 20x sweep is the shared string table filling to
-its hundred entries and the zip's buffers, not a cost per row. The same run writes a real file - 200,001
-rows and 2,200,011 cells, 133 MB of sheet XML compressed to 5.7 MB - which is worth checking before
-believing any figure taken against `Stream.Null`.
+**The flat arm is the claim, and no single run is its shape.** An earlier version of this table read
+152 / 160 / 182 KB and explained the rise as the shared string table filling to its hundred entries.
+**That explanation was a story fitted to two points.** Re-running the same arm gave 182 / 182 / 183 KB,
+and the spread turns up between two runs at one row count as readily as across three row counts: what
+varies is the run, not the rows. Over four runs the arm reads between 141 and 183 KB with no relation
+to the row count. Quote it as about 140-185 KB whatever the size, and do not read a slope into it.
+
+The figures in the table are the run against `master` with #12 merged, and both the flat and the built
+arm came down when it landed - the shared string table is rented arrays there rather than a dictionary,
+and the built path got the rest of #12's writer work. Nothing about the shape changed.
+
+The same run writes a real file - 200,001 rows and 2,200,011 cells, 133 MB of sheet XML compressed to
+5.7 MB - which is worth checking before believing any figure taken against `Stream.Null`.
 
 **The middle arm is not the writer.** A column is a `Func<T, object?>`, so every non-string cell arrives
 in a box: about 0.26 KB per row here, allocated and dead in gen0 before the row after it is read. That
@@ -52,7 +61,7 @@ is the accessor's cost and it is the caller's to remove, which is why the arm ab
 left when nothing boxes is the writer alone.
 
 **The built arm is what was replaced.** It is the only one of the three that promotes anything out of
-gen0, and it is 2,400x the flat arm at 200,000 rows.
+gen0, and it is 2,500x the flat arm at 200,000 rows.
 
 ## Reading the numbers
 
