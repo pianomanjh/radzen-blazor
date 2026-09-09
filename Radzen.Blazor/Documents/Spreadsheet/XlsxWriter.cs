@@ -1478,7 +1478,6 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteStartElement("row", Main);
         WriteNumberAttribute(writer, "r", row + 1);
 
-        // Only persist height if it differs from the default
         if (Math.Abs(sheet.Rows[row] - sheet.Rows.Size) > 1e-6)
         {
             writer.WriteAttributeString("ht", XmlConvert.ToString(sheet.Rows[row]));

@@ -63,7 +63,6 @@ public readonly struct ColumnRef(int column) : IEquatable<ColumnRef>
             destination[length++] = (char)('A' + column % 26);
             column /= 26;
         }
-        // Digits were written least-significant first; reverse in place.
         for (int i = 0, j = length - 1; i < j; i++, j--)
         {
             (destination[i], destination[j]) = (destination[j], destination[i]);
