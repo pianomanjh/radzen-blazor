@@ -1786,16 +1786,18 @@ class XlsxWriter(Workbook sourceWorkbook)
         return cell.FormatOrNull?.IsDefault == false || cell.ValueType == CellDataType.Date || cell.QuotePrefix;
     }
 
+    private static readonly Format DefaultFormat = new();
+
     private int GetOrCreateCellStyle(Cell cell, StyleTracker styleTracker)
     {
-        var format = cell.FormatOrNull;
+        var format = cell.FormatOrNull ?? DefaultFormat;
 
         var fontId = GetOrCreateFontStyle(format, styleTracker);
         var fillId = GetOrCreateFillStyle(format, styleTracker);
         var numFmtId = GetOrCreateNumberFormat(cell, format, styleTracker);
         var borderId = GetOrCreateBorderStyle(format, styleTracker);
 
-        var styleKey = new CellStyleKey(fontId, fillId, borderId, format?.TextAlign, format?.VerticalAlign, format?.WrapText == true, numFmtId, format?.Locked, format?.FormulaHidden, cell.QuotePrefix);
+        var styleKey = new CellStyleKey(fontId, fillId, borderId, format.TextAlign, format.VerticalAlign, format.WrapText, numFmtId, format.Locked, format.FormulaHidden, cell.QuotePrefix);
 
         if (!styleTracker.CellStyles.TryGetValue(styleKey, out int styleId))
         {
@@ -1807,9 +1809,9 @@ class XlsxWriter(Workbook sourceWorkbook)
         return styleId;
     }
 
-    private int GetOrCreateFontStyle(Format? format, StyleTracker styleTracker)
+    private int GetOrCreateFontStyle(Format format, StyleTracker styleTracker)
     {
-        var fontKey = new FontKey(format?.Color, format?.Bold == true, format?.Italic == true, format?.Underline == true, format?.Strikethrough == true, format?.FontFamily, format?.FontSize);
+        var fontKey = new FontKey(format.Color, format.Bold, format.Italic, format.Underline, format.Strikethrough, format.FontFamily, format.FontSize);
 
         if (!styleTracker.FontStyles.TryGetValue(fontKey, out int fontId))
         {
@@ -1821,9 +1823,9 @@ class XlsxWriter(Workbook sourceWorkbook)
         return fontId;
     }
 
-    private int GetOrCreateFillStyle(Format? format, StyleTracker styleTracker)
+    private int GetOrCreateFillStyle(Format format, StyleTracker styleTracker)
     {
-        var backgroundColor = format?.BackgroundColor;
+        var backgroundColor = format.BackgroundColor;
 
         if (backgroundColor is null)
         {
@@ -1840,12 +1842,12 @@ class XlsxWriter(Workbook sourceWorkbook)
         return fillId;
     }
 
-    private int GetOrCreateBorderStyle(Format? format, StyleTracker styleTracker)
+    private int GetOrCreateBorderStyle(Format format, StyleTracker styleTracker)
     {
-        var bt = format?.BorderTop;
-        var br = format?.BorderRight;
-        var bb = format?.BorderBottom;
-        var bl = format?.BorderLeft;
+        var bt = format.BorderTop;
+        var br = format.BorderRight;
+        var bb = format.BorderBottom;
+        var bl = format.BorderLeft;
 
         if (bt is null && br is null && bb is null && bl is null)
         {
@@ -1899,9 +1901,9 @@ class XlsxWriter(Workbook sourceWorkbook)
         borderElement.Add(sideElement);
     }
 
-    private static int GetOrCreateNumberFormat(Cell cell, Format? format, StyleTracker styleTracker)
+    private static int GetOrCreateNumberFormat(Cell cell, Format format, StyleTracker styleTracker)
     {
-        var formatCode = format?.NumberFormat;
+        var formatCode = format.NumberFormat;
 
         // Auto-apply default date format for date values without explicit format
         if (string.IsNullOrEmpty(formatCode) && cell.ValueType == CellDataType.Date)
@@ -1947,10 +1949,10 @@ class XlsxWriter(Workbook sourceWorkbook)
         return newId;
     }
 
-    private void CreateFontElement(Format? format, int fontId, StyleTracker styleTracker)
+    private void CreateFontElement(Format format, int fontId, StyleTracker styleTracker)
     {
-        var fontSize = format?.FontSize ?? 11;
-        var fontName = format?.FontFamily ?? "Aptos Narrow";
+        var fontSize = format.FontSize ?? 11;
+        var fontName = format.FontFamily ?? "Aptos Narrow";
 
         var fontElement = new XElement(XName.Get("font", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XElement(XName.Get("sz", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
@@ -1958,24 +1960,24 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XElement(XName.Get("name", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
                 new XAttribute("val", fontName)));
 
-        if (format?.Color is not null)
+        if (format.Color is not null)
         {
             fontElement.Add(new XElement(XName.Get("color", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
                 new XAttribute("rgb", format.Color.ToXLSXColor())));
         }
-        if (format?.Bold == true)
+        if (format.Bold)
         {
             fontElement.Add(new XElement(XName.Get("b", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
-        if (format?.Italic == true)
+        if (format.Italic)
         {
             fontElement.Add(new XElement(XName.Get("i", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
-        if (format?.Underline == true)
+        if (format.Underline)
         {
             fontElement.Add(new XElement(XName.Get("u", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
-        if (format?.Strikethrough == true)
+        if (format.Strikethrough)
         {
             fontElement.Add(new XElement(XName.Get("strike", "http://schemas.openxmlformats.org/spreadsheetml/2006/main")));
         }
@@ -1998,7 +2000,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         styleTracker.FillsElement.Attribute("count")!.Value = (styleTracker.FillStyles.Count + 2).ToString(CultureInfo.InvariantCulture);
     }
 
-    private void CreateCellStyleElement(Cell cell, Format? format, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
+    private void CreateCellStyleElement(Cell cell, Format format, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
     {
         var xfElement = new XElement(XName.Get("xf", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XAttribute("numFmtId", numFmtId.ToString(CultureInfo.InvariantCulture)),
@@ -2011,14 +2013,14 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XAttribute("applyNumberFormat", numFmtId > 0 ? "1" : "0"),
             new XAttribute("applyBorder", borderId > 0 ? "1" : "0"));
 
-        if (format is not null && (format.TextAlign is not null || format.VerticalAlign is not null || format.WrapText))
+        if (format.TextAlign is not null || format.VerticalAlign is not null || format.WrapText)
         {
             var alignmentElement = CreateAlignmentElement(format);
             xfElement.Add(alignmentElement);
             xfElement.Add(new XAttribute("applyAlignment", "1"));
         }
 
-        if (format?.Locked is not null || format?.FormulaHidden is not null)
+        if (format.Locked is not null || format.FormulaHidden is not null)
         {
             var protectionElement = new XElement(XName.Get("protection", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
             if (format.Locked is not null)
