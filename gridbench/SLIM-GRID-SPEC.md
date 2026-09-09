@@ -12258,3 +12258,86 @@ that fail if it goes back to references.
 
 A claim in a description is not a measurement, and this work has otherwise been careful to know the
 difference.
+
+## 62. A template column can be told how to filter, and the reason is the check-box list
+
+`FastGridFilterBy<TItem>` on `TemplateColumn`, built for the Jakks portal integration — where 67 of 512
+columns carry both a `Property` and a `<Template>`, a shape `RadzenDataGrid` allows and `PropertyColumn`
+does not, since it has no `Template`.
+
+### The claim that was wrong
+
+This section was written as *"a template column can never filter by construction: `CanFilter` reads
+`FilterPropertyPath`, and `TemplateColumn` never sets it."* It is false. `ColumnBase`'s default
+`FilterPropertyPath` is `SortPath`, so a template column given a `SortProperty` **has always filtered**,
+reflectively, by that path. Four tests said so within a minute of the override landing —
+`ATemplateColumnWithASortPropertyFiltersOnItsRealTypeToo` and three in `FilterCompositionTests`.
+
+The lesson is §9's, again, in a new place: **a claim about what a base class does is a claim to be
+traced, not inferred from the derived class's silence.** Reading `TemplateColumn` end to end and finding
+no `FilterPropertyPath` looked conclusive; it is exactly what inheriting the base's answer looks like.
+
+Consequence for the design: **`FilterBy` only ever adds.** Every override falls through to `base` when
+no carrier is given, and the reflective path route is untouched.
+
+### What it does buy
+
+- **The check-box list.** `ColumnBase.DistinctValues` answers null, so a path column offers nothing to
+  tick. Under `FilterMode.CheckBoxList` that is a column the reader cannot filter at all, whatever the
+  row filter would have done — and it is the portal's default mode, which is what made this decisive
+  rather than a refinement. A carrier composes `Queryable.Distinct(source.Select(key))`, so an EF source
+  runs one `SELECT DISTINCT` rather than pulling every row.
+- **A filter key that is not the sort path.** One path served sort, filter and settings identity
+  together, so a column ordering by `Customer.Name` could not filter by `Customer.Id`.
+- **A typed expression rather than a reflected one**, which is what a provider translates cleanly and
+  what AOT can emit.
+
+### The shape, and why it is the sort carrier's
+
+`FastGridSort<TItem>.By<TKey>` already solves the identical problem for ordering: capture `TKey` in a
+static generic factory, close the delegates over it, and expose a `Path`. `FastGridFilterBy<TItem>` is
+that, with three delegates instead of four — expression, in-memory predicate, distinct — and a
+`PropertyType` the sort carrier has no need of, because the filter editor and the operator list are
+chosen from it.
+
+A second type parameter on `TemplateColumn<TItem>` was the alternative and is worse: Razor infers a
+column's type parameters from its `Property`, and a template column has none to infer from, so every
+call site would write both out.
+
+### Boundaries, recorded
+
+- **A computed key does not filter.** `Path` is null for one, `CanFilter` reads the path. Stricter than
+  the sort carrier, where a computed key still sorts in memory — and deliberately: a filter has a menu
+  and a list to populate, both keyed by the path.
+- **`FilterPropertyType` falls back to the base's `object`**, which is what keeps a path column on the
+  route that discovers its real type by reflection.
+
+### Budget
+
+At 1000 rows over five columns, against a template column with no carrier: **174.96 KB vs 174.74 KB, and
+1.00x on time.** 0.22 KB, fixed, nothing per row. The selector is not compiled until the in-memory route
+asks, and no `DISTINCT` runs until a list is opened — so a declared carrier nobody has filtered by costs
+a reference. `gridbench` rows `+ template column` and `+ template column with an unused FilterBy`.
+
+### The test that was written twice
+
+The first `ApplyFilterInMemory` test asserted rendered rows, over a list. **Removing the override left it
+green**: `ComposeInMemory` returning null does not change the answer, it makes the caller fall back to
+the queryable route, and the same rows come out through `AsQueryable`. The discriminating assertion is
+`Composed.InMemory`, which `InMemoryCompositionTests.BothRoutesAgree` already returns — so the test moved
+there. **A route is not observable in its output when both routes are correct**; that is what the flag
+is for, and it is the second time on this branch that a green test over rendered rows proved nothing.
+
+## 63. An export can be handed its rows
+
+`FastGridExportOptions<TItem>.Rows`, null meaning the grid's own `FilteredRows`.
+
+§40 recorded "a `LoadData` grid exports its page" as the answer rather than a limitation, and that is
+still right for the *default*: the exporter cannot run a query the grid never ran. What it cannot claim
+is that the **caller** cannot — the application owns that query, and handing the result over is one
+property.
+
+Nothing is re-filtered or re-sorted: the rows are written as they arrive, in the order they arrive,
+through the same columns. Rows that do not match what the reader is looking at export something they did
+not ask for, and this will not notice — stated in the API docs rather than guarded, because guarding it
+would mean re-running the filter the caller just ran.
