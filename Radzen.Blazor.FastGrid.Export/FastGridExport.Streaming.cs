@@ -21,7 +21,7 @@ namespace Radzen.FastGrid.Export
         /// <see cref="ToWorkbook{TItem}" />.</strong> What differs is that no cell is built: §40's
         /// builder holds a value per cell before it writes one, which at eleven columns over a million
         /// rows is the larger half of the cost. The columns are resolved by the same code, the values go
-        /// through the same <see cref="ExportValue.Coerce" />, and the widths are measured by the same
+        /// through the same <c>ExportValue.Coerce</c>, and the widths are measured by the same
         /// <c>WidthFor</c> - over a bounded sample of the rows rather than all of them, because a width
         /// is written before the rows are.
         /// </para>
@@ -89,11 +89,21 @@ namespace Radzen.FastGrid.Export
                     Title = TitleOf(column, said),
                     Value = item =>
                     {
-                        // The column's own text, once: it is the fallback for a value the writer will
-                        // not take and it is what the width is measured from.
-                        var drawn = column.CellTextOf(item);
+                        // The text only where it is actually wanted. The builder draws it for every cell
+                        // because it measures the column width from it; this path measures from the
+                        // value the writer formats, so a bound column with a typed value never draws a
+                        // string it then throws away - which at five columns is most of the cost per
+                        // row.
+                        if (text)
+                        {
+                            return column.CellTextOf(item);
+                        }
 
-                        return text ? drawn : ExportValue.Coerce(ValueOf(column, item, drawn, said), drawn);
+                        var value = said is { ExportValue: { } declaredValue }
+                            ? declaredValue(item)
+                            : column.CellValueOf(item);
+
+                        return ExportValue.Coerce(value, column, item);
                     },
                     Format = format is null ? null : new Format { NumberFormat = format },
                     AutoFit = options.AutoFitColumns,
