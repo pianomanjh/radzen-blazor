@@ -359,6 +359,57 @@ public class FastGridFeatureBench
     [Benchmark(Baseline = true, Description = "bare")]
     public Task Bare() => Render(null);
 
+    // Four property columns and one template column, so the two rows below differ by exactly one
+    // parameter on one column. A template column is the control rather than the bare grid, because a
+    // FilterBy can only be declared on one - measuring it against five property columns would price the
+    // template as well as the carrier.
+    static RenderFragment TemplateColumns(FastGridFilterBy<Person> filterBy) => b =>
+    {
+        var s = 0;
+
+        void Column<TProp>(Expression<Func<Person, TProp>> property, string title)
+        {
+            b.OpenComponent<PropertyColumn<Person, TProp>>(s++);
+            b.AddAttribute(s++, "Property", property);
+            b.AddAttribute(s++, "Title", title);
+            b.CloseComponent();
+        }
+
+        Column<int>(x => x.Id, "Id");
+        Column<int>(x => x.Age, "Age");
+        Column<DateTime>(x => x.Hired, "Hired");
+        Column<decimal>(x => x.Salary, "Salary");
+
+        b.OpenComponent<TemplateColumn<Person>>(s++);
+        b.AddAttribute(s++, "Title", "Name");
+        b.AddAttribute(s++, "Template",
+            (RenderFragment<Person>)(person => tb => tb.AddContent(0, person.Name)));
+
+        if (filterBy is not null)
+        {
+            b.AddAttribute(s++, "FilterBy", filterBy);
+        }
+
+        b.CloseComponent();
+    };
+
+    static readonly RenderFragment PlainTemplate = TemplateColumns(null);
+
+    // Built once, outside the measured render, because a call site builds it once too - it is a field
+    // or a markup expression the compiler caches, not something composed per row or per render.
+    static readonly RenderFragment FilterableTemplate =
+        TemplateColumns(FastGridFilterBy<Person>.By(x => x.Name));
+
+    [Benchmark(Description = "+ template column")]
+    public Task TemplateColumn() => Render(null, PlainTemplate);
+
+    // The claim this row exists to check: a carrier a reader has not filtered by costs the render
+    // nothing. Nothing is compiled until the in-memory route asks, and no DISTINCT runs until a
+    // check-box list is opened - so the only thing a declared-but-unused FilterBy should add to a
+    // render is the reference itself.
+    [Benchmark(Description = "+ template column with an unused FilterBy")]
+    public Task TemplateColumnFilterBy() => Render(null, FilterableTemplate);
+
     // The two reference points, in the same table as the features rather than in a document beside it.
     // A feature's marginal cost says what it cost; only these say whether the grid is still worth using
     // once it is paid - and for row detail the answer differs depending on which one you ask.

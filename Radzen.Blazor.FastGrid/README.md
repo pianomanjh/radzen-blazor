@@ -78,7 +78,7 @@ Radzen needs one: `LoadDataArgs.OrderBy`, OData `$orderby`, and `FilterDescripto
 | `CollectionColumn<TItem, TElement>` | A collection per cell, listed. `Property`, `DisplayProperty`, `FilterProperty`, `Separator`, `SortBy` |
 | `LookupColumn<TItem, TKey>` | A name per cell, from an id the row carries. `Property`, `Lookup`, `SortBy` |
 | `LookupCollectionColumn<TItem, TKey>` | Names per cell, from ids the row carries. `Property`, `Lookup`, `Separator`, `SortBy` |
-| `TemplateColumn<TItem>` | A template per cell. `Template`, `SortBy`, `SortProperty`, `Title` |
+| `TemplateColumn<TItem>` | A template per cell. `Template`, `SortBy`, `SortProperty`, `FilterBy`, `Title` |
 | `TemplateColumn<TItem>` | Arbitrary content. `Template`, `SortProperty`. Costs ~94 B/cell more than a property column - use it where a cell is not just a value |
 
 Every column also takes the layout parameters, which are per column and cost nothing per row:
@@ -1694,6 +1694,42 @@ column says it wants something else.
 and rooting them costs a trimmed WebAssembly build **400 KB over the wire**. Nothing in this package
 touches the writer, so a grid that does not export pays none of it - which is the same argument as
 [Trimming and Native AOT](#trimming-and-native-aot) below, one package out.
+
+## Filtering a template column
+
+A template column has always filtered by its `SortProperty`, reflectively — one path serving the sort,
+the filter and the settings key together. `FilterBy` is the typed route, and it is what a check-box list
+needs:
+
+```razor
+<TemplateColumn TItem="Order" Title="Customer"
+                SortBy="@(FastGridSort<Order>.By(o => o.Customer.Name))"
+                FilterBy="@(FastGridFilterBy<Order>.By(o => o.Customer.Name))">
+    <Template>
+        <a href="/customers/@context.Customer.Id">@context.Customer.Name</a>
+    </Template>
+</TemplateColumn>
+```
+
+Three differences from the path, and the first is the one that decides it:
+
+- **The check-box list has something in it.** A path column offers no values — `DistinctValues` answers
+  null — so under `FilterMode.CheckBoxList` it is a column nobody can filter, whatever the row filter
+  would have done. A carrier composes `SELECT DISTINCT` over the key, so an Entity Framework source runs
+  one query rather than pulling every row across.
+- **The filter key need not be the sort path.** A column ordering by `Customer.Name` can filter by
+  `Customer.Id`.
+- **The predicate is a typed expression** rather than one reflected member-by-member, which is what a
+  provider translates cleanly and what an ahead-of-time compiler can emit.
+
+A computed key — `o => o.First + o.Last` — has no path, and the path is what `CanFilter` reads, so such a
+column does not filter. That is stricter than `FastGridSort`, where a computed key still sorts in memory,
+and deliberately: a filter has a menu and a check-box list to populate, both keyed by the path.
+
+**It costs nothing until it is used.** At 1000 rows over five columns, a template column with a
+`FilterBy` nobody has filtered by allocates **174.96 KB against 174.74 KB** for the same column without
+one — 0.22 KB, fixed, and 1.00x on time. The selector is not compiled until the in-memory route asks for
+it, and no `DISTINCT` runs until a list is opened.
 
 ## What it does not do
 
