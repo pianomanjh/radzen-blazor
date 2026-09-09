@@ -10,7 +10,7 @@
     <Description>Exports a RadzenFastGrid to a spreadsheet workbook, using the writer already inside Radzen.Blazor.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>blazor;radzen;datagrid;grid;export;xlsx;excel</PackageTags>
-    <Version>11.3.2-jakks.1</Version>
+    <Version>11.3.2-jakks.2</Version>
     <Copyright>InventiveCoders, LLC</Copyright>
     <Authors>InventiveCoders, LLC</Authors>
     <Company>InventiveCoders, LLC</Company>
