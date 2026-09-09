@@ -5,15 +5,6 @@ namespace Radzen.Documents.Spreadsheet;
 
 #nullable enable
 
-/// <summary>
-/// The shared string table a workbook is saved with: each distinct string once, at the index its cells are
-/// written with, over arrays rented from <see cref="ArrayPool{T}"/> and returned when the save is done.
-/// </summary>
-/// <remarks>
-/// A <see cref="System.Collections.Generic.Dictionary{TKey, TValue}"/> allocates its arrays anew on every
-/// save and doubles them as it grows. Renting them instead means a save after the first in a process pays
-/// nothing for the table however it grows, so it needs no hint about how many strings a sheet holds.
-/// </remarks>
 sealed class SharedStringTable : IDisposable
 {
     private const int InitialCapacity = 256;
@@ -24,19 +15,10 @@ sealed class SharedStringTable : IDisposable
     private int mask;
     private int count;
 
-    /// <summary>
-    /// The number of distinct strings in the table.
-    /// </summary>
     public int Count => count;
 
-    /// <summary>
-    /// The strings in the order of their indices.
-    /// </summary>
     public ReadOnlySpan<string> Strings => strings.AsSpan(0, count);
 
-    /// <summary>
-    /// Returns the index of <paramref name="text"/>, adding it at the next index if it is not in the table.
-    /// </summary>
     public int GetOrAdd(string text)
     {
         var slot = 0;
@@ -63,7 +45,6 @@ sealed class SharedStringTable : IDisposable
         return count++;
     }
 
-    // The index of text, or -1 with slot left at the empty bucket where it would go.
     private int IndexOf(string text, out int slot)
     {
         slot = text.GetHashCode(StringComparison.Ordinal) & mask;
@@ -98,8 +79,6 @@ sealed class SharedStringTable : IDisposable
         return slot;
     }
 
-    // The buckets hold an index plus one, so a rented bucket array cleared to zero is empty, and they stay
-    // at most half full so a probe is short.
     private void Grow()
     {
         var oldStrings = strings;
@@ -125,9 +104,6 @@ sealed class SharedStringTable : IDisposable
         }
     }
 
-    /// <summary>
-    /// Returns the arrays to the pool. The table is empty afterwards.
-    /// </summary>
     public void Dispose()
     {
         if (capacity > 0)

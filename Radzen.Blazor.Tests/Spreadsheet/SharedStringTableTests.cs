@@ -64,7 +64,6 @@ public class SharedStringTableTests
     {
         using var table = new SharedStringTable();
 
-        // 256 is the table's first capacity; a hit while it is full must not add or grow.
         for (var i = 0; i < 256; i++)
         {
             table.GetOrAdd(i.ToString(CultureInfo.InvariantCulture));

@@ -232,8 +232,6 @@ public class XlsxWriterSheetOrderTests
         var workbook = new Workbook();
         var sheet = workbook.AddSheet("Sheet1", 8, 24);
 
-        // Wide enough that the placeholder list is past the length List.Sort handles with a stable
-        // insertion sort, so the insertion index is what keeps the first merge's copy first.
         sheet.Cells[0, 0].SetValue("first");
         sheet.Cells[0, 0].Format.Bold = true;
         sheet.MergedCells.Add(new RangeRef(new CellRef(0, 0), new CellRef(1, 20)));
