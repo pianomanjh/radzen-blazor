@@ -84,14 +84,25 @@ namespace Radzen.FastGrid.Export
         /// </remarks>
         internal static object? Coerce<TItem>(object? value, ColumnBase<TItem> column, TItem item) => value switch
         {
+            // Not null, unlike the overload below: a column with no typed value for this row still drew
+            // something, and that text is what the builder writes through ValueOf's own `?? text`.
             null => column.CellTextOf(item),
+
+            // The writer's whole accepted set, kept as it is so Excel sorts and sums it.
             string => value,
             byte or sbyte or short or ushort or int or uint or long or ulong => value,
             float or double or decimal => value,
             DateTime => value,
+
+            // Dates the writer does not know are still dates, and a DateTimeOffset loses its offset
+            // here for the reason the overload below gives at length.
             DateOnly date => date.ToDateTime(TimeOnly.MinValue),
             DateTimeOffset offset => offset.DateTime,
+
             bool => value,
+
+            // An enum, a Guid, a TimeOnly, a TimeSpan, an application's own type: all of them throw out
+            // of Cell.Value, and the column's text is what the reader was looking at.
             _ => column.CellTextOf(item) ?? value.ToString(),
         };
 

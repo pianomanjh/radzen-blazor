@@ -7,9 +7,9 @@ using Radzen.Documents.Spreadsheet;
 
 namespace Radzen.FastGrid.Export
 {
-    /// <summary>
-    /// §65: the same export, without the workbook in the middle.
-    /// </summary>
+    // §65: the same export, without the workbook in the middle. The type's own documentation is on the
+    // other half of the partial, in FastGridExport.cs - two <summary> blocks on one type do not merge,
+    // one of them is simply discarded.
     public static partial class FastGridExport
     {
         /// <summary>
@@ -179,18 +179,50 @@ namespace Radzen.FastGrid.Export
         }
 
         /// <summary>
+        /// How many rows are written between one yield and the next.
+        /// </summary>
+        /// <remarks>
+        /// About 2.5 ms of work at the measured 5 microseconds a row, so the circuit is never held for
+        /// longer than a frame. Smaller buys nothing a reader can see and costs a continuation each
+        /// time; larger is a page that stutters.
+        /// </remarks>
+        const int YieldEvery = 500;
+
+        /// <summary>
         /// A synchronous sequence as an asynchronous one, for the two routes that have no query behind
         /// them. Nothing is buffered: the rows are pulled one at a time, which is what the caller of an
         /// in-memory sequence already had.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <strong>The yield is the point, not the shim.</strong> A streamed export runs on the
+        /// renderer's dispatcher - it reads the grid per cell, so it cannot run anywhere else - and a
+        /// source that never suspends holds the circuit for the whole write. A query source suspends on
+        /// its own I/O; a list does not, so this gives the circuit back on a schedule instead.
+        /// </para>
+        /// <para>
+        /// <strong>What that buys is also what it costs.</strong> Between two yields a render can run,
+        /// and a render that replaces the bound collection makes this enumerator throw - which a frozen
+        /// circuit could not have done, because nothing else ran. That is the trade taken deliberately:
+        /// a faulted export leaves nothing openable and says so, and a page frozen for seconds is the
+        /// symptom every reader notices.
+        /// </para>
+        /// </remarks>
         static async IAsyncEnumerable<TItem> Walk<TItem>(IEnumerable<TItem> rows)
         {
+            var since = 0;
+
             foreach (var row in rows)
             {
+                if (++since == YieldEvery)
+                {
+                    since = 0;
+
+                    await Task.Yield();
+                }
+
                 yield return row;
             }
-
-            await Task.CompletedTask;
         }
     }
 }

@@ -499,11 +499,11 @@ partial class XlsxWriter
         }
         else
         {
-            var type_ = CellTypeAttribute(type, isFormula: false);
+            var attribute = CellTypeAttribute(type, isFormula: false);
 
-            if (type_ is not null)
+            if (attribute is not null)
             {
-                writer.WriteAttributeString("t", type_);
+                writer.WriteAttributeString("t", attribute);
             }
 
             WriteTypedValue(writer, content, type);

@@ -12489,9 +12489,15 @@ section described them, and one of those is the claim it stands on.
 | the grid | `tech/fastgrid-streamed-export` | `FilteredQuery`, `AsAsyncEnumerable`, `RowsAsync`, `FastGridExport.SaveToStreamAsync` |
 
 The second branch is the first merged into `tech/radzen-datagrid-slim`, which is the merge §65 said had
-to happen before the export could land. **No file is touched by both lines**, so the merge is clean by
-construction rather than by luck — #12 and #13 own `XlsxWriter.cs` and `CellStore.cs`, and the grid
-half owns none of the spreadsheet.
+to happen before the export could land. **At the merge no file was touched by both lines** — #12 and
+#13 own `XlsxWriter.cs` and `CellStore.cs`, and the grid half owned none of the spreadsheet — so it was
+clean by construction rather than by luck.
+
+**That stopped being true immediately after.** The grid line has since edited `StreamedSheet.cs` and
+`XlsxWriter.Streaming.cs` — `MeasureWidth`, `PreserveText` and the two width rules all landed there,
+because the grid is what found them — so a further merge from the writer branch can conflict. The
+sentence above describes one merge rather than a property of the two lines, and the original wording
+claimed the latter.
 
 ### The flat claim needed a third arm
 
@@ -12575,8 +12581,14 @@ What is written instead:
 
 The cost of omitting it is one this repo's own reader shows: `XlsxReader` floors an absent dimension at
 100x100 before expanding from the rows it finds, so a streamed sheet of 20 rows written without a count
-reads back as a sheet of 100. **That is the only place a streamed file and a built one differ**, it only
-happens above the sample size, and it is the reason `RowCount` is on the type at all.
+reads back as a sheet of 100. **That is the only place a streamed file and a built one differ**, and it
+is the reason `RowCount` is on the type at all.
+
+It is not confined to sheets above the sample size, and an earlier version of this section said it was.
+`UseGridColumnWidths` removes the sample, and a query source is not a collection, so a twenty-row export
+of a database-backed grid with every column already sized has no count from any of the three routes and
+omits the element. Small in-memory exports keep theirs, because the row source is a collection and the
+count is free.
 
 ### Two things the measurement forced, both in the writer
 
@@ -12618,6 +12630,13 @@ The question a paged grid over a large table raises is whether exporting it is a
 than against the fake executor, which never issues one.
 
 **One command, with no `LIMIT` in it**, for every row — 200 of 200 with the grid drawing a page of five.
+
+A note on what the gates in this section pin, since the prose quotes numbers the tests do not.
+`FastGridExportCostTests` asserts a slope in `[0, 420]` bytes a row and that the builder's is at least
+four times it; `StreamedSheetPipelineTests` asserts the first write lands within the first quarter of
+the rows. The figures either side of those bounds — 104 and 1,084 bytes a row, row 41 — are
+measurements recorded in comments, deliberately not assertions, so that a gate does not fail on a
+slower machine. Read the bounds as the promise and the numbers as the observation.
 Drawing that page costs two, the window and the count, which is what an export going page by page would
 repeat and what this does not do. The provider streams the one result set; `AsAsyncEnumerable` is the
 seam, EF translates the composed expression once, and the rows arrive over an open reader.
@@ -12660,6 +12679,37 @@ would read grid state while a render writes it. The write stays on the dispatche
 used to hold for one 1.5 s block it now holds in slices with every await in the row source giving it
 back. `Destination` is where an application takes the bytes off the circuit and off the download
 buffer at once.
+
+**An earlier version of this section said "every await in an asynchronous row source is a point the
+circuit gets back" and left it there, which was true of the sentence and false of the feature.** The
+default path's source is a list, and `Walk` — the shim that made it asynchronous — never suspended, so
+an in-memory export held the circuit unbroken for the whole write. §40 records that the consuming
+application's exporting grids are in-memory, so that was the common case, and removing §41's
+`Task.Run` had made it worse rather than better.
+
+`Walk` now yields every 500 rows, about 2.5 ms of work at the measured five microseconds a row. The
+trade is stated where it lives: between two yields a render can run, and a render that replaces the
+bound collection makes the enumerator throw, which a frozen circuit could not have done. A faulted
+export leaves nothing openable and says so; a page frozen for seconds is the symptom every reader
+notices.
+
+### The export stops when the grid does
+
+Every level of the streamed write takes a `CancellationToken`, and `WorkbookExporter` — the one caller
+that most needs one — passed `default`, so an export begun from the band menu ran to the end whatever
+happened to the page: the whole file written against a disposed component, then a download handed to a
+page the reader had left.
+
+The signal already existed. `RadzenFastGrid.Lifetime` is cancelled in `Dispose` and by nothing else,
+and it is now what `IFastGridExporter.ExportAsync` is given — a defaulted parameter, source breaking for
+an implementer, on an interface that is new on this branch with one implementation. A cancelled export
+is not a fault: the call site swallows the exception, because the scrim it would clear belongs to a
+component that is gone, and the token is checked once more between the last row and the hand-off to the
+browser, which is the other window in which the grid can disappear.
+
+**This is a lifetime question and not a threading one**, which is worth separating because `Task.Run`
+looked like the culprit and was not: it moves the work off the dispatcher and does nothing about an
+export outliving its grid. Both designs would have handed over that late download.
 
 ### One fault found on the way
 

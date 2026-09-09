@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Bunit;
 using Radzen.Documents.Spreadsheet;
@@ -71,6 +73,48 @@ namespace Radzen.FastGrid.Tests
             });
 
         /// <summary>
+        /// Runs continuations on the thread that started them, the way a circuit's dispatcher does.
+        /// </summary>
+        /// <remarks>
+        /// Without this the export's own <c>Task.Yield</c> every 500 rows hands the rest of the write to
+        /// the thread pool, and a per-thread allocation counter stops seeing most of what it is meant to
+        /// measure. Pumping keeps the work on one thread, which is both what makes the counter valid and
+        /// what the export actually does in a Blazor Server circuit.
+        /// </remarks>
+        sealed class Pump : SynchronizationContext
+        {
+            readonly BlockingCollection<(SendOrPostCallback Callback, object State)> queue = new();
+
+            public override void Post(SendOrPostCallback d, object state) => queue.Add((d, state));
+
+            public void Run(Func<Task> work)
+            {
+                var previous = Current;
+
+                SetSynchronizationContext(this);
+
+                try
+                {
+                    var task = work();
+
+                    while (!task.IsCompleted)
+                    {
+                        if (queue.TryTake(out var item, 100))
+                        {
+                            item.Callback(item.State);
+                        }
+                    }
+
+                    task.GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    SetSynchronizationContext(previous);
+                }
+            }
+        }
+
+        /// <summary>
         /// Allocated bytes on this thread, which is the only counter this can use.
         /// </summary>
         /// <remarks>
@@ -78,8 +122,8 @@ namespace Radzen.FastGrid.Tests
         /// parallel</strong>, so the first version of this read 104 bytes a row on its own and 1,170
         /// inside the suite - the difference being every other test allocating while it counted. It
         /// passed in isolation and failed in the run that matters, which is the wrong way round for a
-        /// gate. The export is driven to completion on this thread here: the row source is a list, so
-        /// nothing in it suspends, and the awaits complete synchronously.
+        /// gate. Per-thread instead, with <see cref="Pump" /> keeping the export on one thread so the
+        /// counter sees all of it.
         /// </remarks>
         static long Measure(Action work)
         {
@@ -102,10 +146,12 @@ namespace Radzen.FastGrid.Tests
 
             var grid = Grid(ctx, Rows(count)).Instance;
 
-            // Warm, so what is measured is the export rather than the JIT reaching it.
-            grid.SaveToStreamAsync(Stream.Null).GetAwaiter().GetResult();
+            var pump = new Pump();
 
-            return Measure(() => grid.SaveToStreamAsync(Stream.Null).GetAwaiter().GetResult());
+            // Warm, so what is measured is the export rather than the JIT reaching it.
+            pump.Run(() => grid.SaveToStreamAsync(Stream.Null));
+
+            return Measure(() => pump.Run(() => grid.SaveToStreamAsync(Stream.Null)));
         }
 
         static long Built(int count)

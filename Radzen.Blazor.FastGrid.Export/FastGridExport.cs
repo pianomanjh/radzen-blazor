@@ -310,6 +310,11 @@ namespace Radzen.FastGrid.Export
         /// A CSS length is whatever the markup said, so only <c>px</c> is taken: a percentage is of a
         /// viewport a spreadsheet does not have, and <c>em</c> is of a font it does not share. Both fall
         /// back to measuring, which is what the column had before this option existed.
+        /// <para>
+        /// A column with no width of its own takes the grid's <c>ColumnWidth</c> before it falls back to
+        /// measuring, because that is the width such a column is drawn at - the whole point of the
+        /// option is to export what the reader sees, and what they see there is the grid's default.
+        /// </para>
         /// </remarks>
         internal static double? GridWidth<TItem>(RadzenFastGrid<TItem> grid, ColumnBase<TItem> column,
             FastGridExportOptions<TItem> options)
@@ -326,7 +331,7 @@ namespace Radzen.FastGrid.Export
                 return null;
             }
 
-            return double.TryParse(css[..^2], System.Globalization.NumberStyles.Float,
+            return double.TryParse(css[..^2], NumberStyles.Float,
                 CultureInfo.InvariantCulture, out var pixels) && pixels > 0
                 ? pixels
                 : null;
