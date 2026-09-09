@@ -12370,3 +12370,107 @@ The template takes the **row**, not the resolved name, which also makes it a cop
 
 A null check per cell when unset, and **nothing allocated** - the unset path calls the base's own write,
 unchanged. Not separately benchmarked, because there is no new allocation to measure.
+
+## 65. The export streams, and the three things written before the rows are why it is not free
+
+§61 took the export to 28.1 MB and no collection of any generation over 550,000 cells. That is
+`O(rows)` with a very small constant, not `O(1)`: the workbook is still the model, every cell still has
+an address, and eleven columns over a million rows is still about 370 MB of slots before a byte is
+written. §60's own table names the ceiling — *fill 22.7, save 9.6* — and the fill is the half that
+grows.
+
+This section removes the fill.
+
+### What the grid hands over, and why it cannot be `FilteredRows`
+
+`Composed()` answers `Array.Empty` on the `AsyncOwnsData` path, deliberately: composing there
+enumerates an unpaged query synchronously on the render thread, for rows the awaited load is about to
+replace. So `FilteredRows` is not the streaming source and cannot be made into one without undoing
+that.
+
+`RadzenFastGrid<TItem>.FilteredQuery` is: `Compose(Data)` where `Data is IQueryable<TItem>` and no
+`LoadData` handler is attached, and null otherwise. The same composition `FilteredRows` uses, handed
+out rather than walked — **the grid never enumerates it**. Enumerating it runs an unpaged query, which
+is the caller's act and is said in the API docs, exactly as `FilteredRows` already says it.
+
+That is the whole grid-side change. §63 said the exporter cannot run a query the grid never ran; this
+does not change that. It lets the *exporter* run the query the grid **composed** and then declined to
+run.
+
+### The row source, in order
+
+`IFastGridQueryExecutor` gains `AsAsyncEnumerable<T>(IQueryable<T>)` as a **default interface method**.
+Its `IsSupported` is already `queryable is IAsyncEnumerable<T>`, so the default body is that cast and
+no application implementation breaks — which is the whole reason it is a default method and not a new
+member.
+
+`FastGridExportOptions<TItem>.RowsAsync` is §63's `Rows` with an `await` in it. Resolution:
+
+| | source |
+| --- | --- |
+| 1 | `RowsAsync`, the caller's own |
+| 2 | the executor over `FilteredQuery` |
+| 3 | `Rows`, §63's |
+| 4 | `FilteredRows`, §40's |
+
+The executor is the default so the band-menu entry streams with no application code; the override is
+first so §63's rule — *the caller owns a query the grid never ran* — outranks it.
+
+### The streamed sheet, and the three elements written before `sheetData`
+
+`XlsxWriter` is `internal` and takes a built `Workbook`, so this lives in `Radzen.Blazor`. It reuses
+the shape `WriteSheetXml` already has — a skeleton document, `sheetData` streamed into an `XmlWriter`
+over the zip entry — and replaces the sorted `Cell[]` §60 called the blocker with a row source that is
+never retained. Entered through `Workbook.SaveToStreamAsync(Stream, StreamedSheet, CancellationToken)`,
+static, because there is no workbook.
+
+What is free, and it is more than expected: **the shared-string table and the table part are both
+written after the sheet**, so the table's range gets the final row count without a second pass, and
+freeze panes are static.
+
+What is not free is `<cols>` and `<dimension>`, which precede `sheetData` in the same entry. Two knobs,
+because the answer differs by grid:
+
+- **`WidthMode`** — `Declared` takes the caller's widths and is `O(1)`. `Sampled(n)` buffers the first
+  *n* rows (200 by default), measures, writes `<cols>`, replays the buffer and streams the rest. Bounded
+  by *n*, not by the data, so it is still a streaming mode. §40's `WidthFor` is the measurement either
+  way.
+- **`InlineStrings`** — off keeps the shared-string table, whose memory is `O(distinct strings)` and for
+  a grid is usually small. On writes `t="inlineStr"` and makes the whole write `O(1)` in rows, for a
+  larger file.
+
+**Defaults reproduce today's file**: shared strings, sampled widths. A streamed sheet and a built one
+differ because they were asked to, or not at all.
+
+### The download is the remaining `O(rows)` buffer
+
+`WorkbookExporter` writes into a `MemoryStream` for `DotNetStreamReference` — 2.5 MB at 50,000 rows,
+measured in §40. Streaming into that buffer caps the win at the buffer, so the streaming path also takes
+a caller-supplied destination stream. The consuming application already chose a file-backed sink for
+this reason (its PR review #2032), and `OnExport` is the seam that already exists for it.
+
+### What is claimed, and how it is held
+
+Round-trip through `XlsxReader`: cells, formats, widths, table range, freeze, and inline against shared
+strings. Cell-for-cell equivalence against §40's `ToWorkbook` + `SaveToStream` over the same rows, which
+is what makes "defaults reproduce today's file" a test rather than a sentence. A benchmark arm showing
+**allocation flat as rows grow** — the claim this section makes, in the form §59 through §61 made
+theirs. And a cancelled or faulting source leaving no zip that Excel will open.
+
+§61 closed by noting that a claim in a description is not a measurement. The flat-allocation arm is the
+measurement this one stands on, and nothing here quotes a number before it exists.
+
+### Sequencing, which is the awkward part
+
+The writer change stacks on `spreadsheet-cell-storage` (`pianomanjh#13`) — #12 and #13 own
+`XlsxWriter.cs` and `CellStore.cs`, and anything else conflicts. The grid and export changes are on this
+branch. So the streaming export cannot land here until #13 is in this branch's base, and the two halves
+are reviewable separately in the meantime: `FilteredQuery` and the row source are useful with §40's
+builder and no writer change at all.
+
+### One thing that does not check out
+
+`pianomanjh#7` is closed as *"a version of this was merged upstream"*. At `radzenhq/master`
+`c7d91536c` there is no `IAsyncQueryExecutor`, no async materialisation on `PagedDataBoundComponent`,
+and upstream issue #2688 is closed with nothing visible. Not a blocker — this grid carries its own
+executor and depends on nothing upstream — but recorded, because §61's rule cuts both ways.
