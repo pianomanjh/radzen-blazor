@@ -31,10 +31,10 @@ class CsvWriter(Worksheet sheet, CsvExportOptions options)
 
     private string BuildContent()
     {
-        var cells = new Dictionary<(int Row, int Column), Cell>();
+        var cells = new Dictionary<(int Row, int Column), CellView>();
         var maxRow = -1;
         var maxCol = -1;
-        foreach (var cell in sheet.Cells.GetPopulatedCells())
+        foreach (var cell in sheet.Cells.GetPopulatedViews())
         {
             if (cell.Value is null && string.IsNullOrEmpty(cell.Formula))
             {
@@ -78,7 +78,7 @@ class CsvWriter(Worksheet sheet, CsvExportOptions options)
         return StringBuilderCache.GetStringAndRelease(sb);
     }
 
-    private static string FormatCell(Cell cell)
+    private static string FormatCell(in CellView cell)
     {
         // Formula cells emit the cached evaluated value, never the formula text.
         // The XLSX writer applies the same rule.

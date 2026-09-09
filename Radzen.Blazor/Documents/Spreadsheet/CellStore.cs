@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace Radzen.Documents.Spreadsheet;
 
@@ -17,9 +18,34 @@ public class CellStore(Worksheet sheet)
     public Worksheet Worksheet { get; } = sheet;
 
     /// <summary>
-    /// Stores the cells in a dictionary, where the key is a tuple of (row, column).
+    /// Stores what is at each address: the value, or the cell that has taken over from it.
     /// </summary>
-    protected readonly Dictionary<(int row, int column), Cell> data = [];
+    /// <remarks>
+    /// A bulk fill writes values and never builds a cell. A cell is built the first time anything
+    /// asks for one and is kept, so <see cref="this[int, int]"/> returns the same instance every
+    /// time and everything that compares cells by reference is unaffected. A cell value is never a
+    /// <see cref="Cell"/>, so one reference answers both questions.
+    /// </remarks>
+    private readonly Dictionary<(int row, int column), object?> data = [];
+
+    // A stored value's type is its CLR type: the five ways to make a CellData each pair a value with
+    // the matching CellDataType, and inference produces the same pairs. CellDataTypeIsTheValuesType
+    // holds this to it.
+    internal static CellDataType TypeOf(object? value) => value switch
+    {
+        null => CellDataType.Empty,
+        string => CellDataType.String,
+        double => CellDataType.Number,
+        bool => CellDataType.Boolean,
+        DateTime => CellDataType.Date,
+        CellError => CellDataType.Error,
+        _ => CellDataType.String,
+    };
+
+    // Only a cell can be given a quote prefix - every setter of it is on Cell - so a value standing
+    // on its own never has one.
+    private static Cell Materialise(Worksheet sheet, int row, int column, object? content) =>
+        new(sheet, new CellRef(row, column), content, TypeOf(content), quotePrefix: false);
 
     /// <summary>
     /// Gets a cell at the specified row and column.
@@ -103,7 +129,33 @@ public class CellStore(Worksheet sheet)
         return cell is not null;
     }
 
-    internal IEnumerable<Cell> GetPopulatedCells() => data.Values;
+    // Every populated cell as the writer sees it, materialising none of them.
+    internal IEnumerable<CellView> GetPopulatedViews()
+    {
+        foreach (var entry in data)
+        {
+            var address = new CellRef(entry.Key.row, entry.Key.column);
+
+            yield return entry.Value is Cell cell
+                ? new CellView(cell)
+                : new CellView(address, entry.Value, TypeOf(entry.Value), quotePrefix: false);
+        }
+    }
+
+    // Whether an address holds anything the writer would write, without building a cell to ask.
+    internal bool IsWrittenAt(int row, int column) =>
+        data.TryGetValue((row, column), out var content) &&
+        (content is Cell cell ? cell.Value is not null || cell.Formula is not null : content is not null);
+
+    internal IEnumerable<Cell> GetPopulatedCells()
+    {
+        foreach (var key in keysBuffer())
+        {
+            yield return Adopt(key.row, key.column);
+        }
+
+        List<(int row, int column)> keysBuffer() => [.. data.Keys];
+    }
 
     internal int Compact()
     {
@@ -111,7 +163,7 @@ public class CellStore(Worksheet sheet)
 
         foreach (var kvp in data)
         {
-            if (kvp.Value.IsEmpty)
+            if (kvp.Value is Cell cell ? cell.IsEmpty : kvp.Value is null)
             {
                 keysToRemove.Add(kvp.Key);
             }
@@ -127,39 +179,45 @@ public class CellStore(Worksheet sheet)
 
     internal int PopulatedCount => data.Count;
 
-    internal bool HasCell(int row, int column) => Find(row, column) is not null;
+    // Not Find: asking whether a slot is populated must not build the cell that would answer it, which
+    // is the whole point of holding a value rather than a cell.
+    internal bool HasCell(int row, int column) => data.ContainsKey((row, column));
 
-    internal Cell? Find(int row, int column) => data.TryGetValue((row, column), out var cell) ? cell : null;
+    // The slot's cell, built from the stored value when the slot holds only a value. Adopting rather
+    // than answering null is what keeps every caller written before the value store working unchanged:
+    // they asked whether there is a cell here and meant whether there is anything here.
+    internal Cell? Find(int row, int column) => data.ContainsKey((row, column)) ? Adopt(row, column) : null;
 
-    private static void UpdateCellAddress((int row, int column) oldKey, (int row, int column) newKey, Cell cell)
+    // Only a cell that exists has an address to correct; a slot's address is its key.
+    private static void UpdateCellAddress((int row, int column) oldKey, (int row, int column) newKey, object? content)
     {
-        if (oldKey != newKey)
+        if (oldKey != newKey && content is Cell cell)
         {
             cell.Address = new CellRef(newKey.row, newKey.column);
         }
     }
 
     internal void ShiftRowsUp(int deletedRow) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.row < deletedRow ? k :
             k.row == deletedRow ? null :
             (k.row - 1, k.column),
             UpdateCellAddress);
 
     internal void ShiftRowsDown(int fromRow, int count) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.row < fromRow ? k : (k.row + count, k.column),
             UpdateCellAddress);
 
     internal void ShiftColumnsLeft(int deletedColumn) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.column < deletedColumn ? k :
             k.column == deletedColumn ? null :
             (k.row, k.column - 1),
             UpdateCellAddress);
 
     internal void ShiftColumnsRight(int fromColumn, int count) =>
-        DictionaryShift.Remap<(int row, int column), Cell>(data, k =>
+        DictionaryShift.Remap<(int row, int column), object?>(data, k =>
             k.column < fromColumn ? k : (k.row, k.column + count),
             UpdateCellAddress);
 
@@ -271,6 +329,10 @@ public class CellStore(Worksheet sheet)
 
         data.EnsureCapacity(data.Count + total);
 
+        // The fast path below writes values without building a cell, which a derived store's
+        // overridden indexer would never see. Only the base store takes it.
+        var derived = GetType() != typeof(CellStore);
+
         for (var r = 0; r < values.Count; r++)
         {
             if (values[r] is not { } line)
@@ -280,20 +342,67 @@ public class CellStore(Worksheet sheet)
 
             for (var c = 0; c < line.Count; c++)
             {
-                var cell = GetOrAdd(row + r, column + c);
+                if (derived)
+                {
+                    // GetOrAdd, not the indexer: it returns the stored cell and announces a new one
+                    // through the setter, where an overridden getter may hand back a snapshot that a
+                    // write would go into instead of the store.
+                    var dispatched = GetOrAdd(row + r, column + c);
 
-                cell.Formula = null;
-                cell.Value = line[c];
+                    dispatched.Formula = null;
+                    dispatched.Value = line[c];
+                    continue;
+                }
+
+                ref var content = ref CollectionsMarshal.GetValueRefOrAddDefault(data, (row + r, column + c), out _);
+
+                if (content is Cell cell)
+                {
+                    cell.Formula = null;
+                    cell.Value = line[c];
+                    continue;
+                }
+
+                // Nothing has asked for a cell here, so nothing holds a reference to one and no
+                // formula names it - a formula reference materialises the cell it names. There is
+                // no dependent to recalculate and no subscriber to notify.
+                CellData.Infer(line[c], Worksheet.Culture, out content, out _);
             }
         }
     }
 
+    // The indexer's path. A cell built here is assigned through the indexer, so a derived store that
+    // overrides the setter sees it, which is what reading a missing cell has always done.
     private Cell GetOrAdd(int row, int column)
     {
-        if (!data.TryGetValue((row, column), out var cell))
+        data.TryGetValue((row, column), out var content);
+
+        if (content is Cell existing)
         {
-            this[row, column] = cell = new Cell(Worksheet, new CellRef(row, column));
+            return existing;
         }
+
+        var cell = Materialise(Worksheet, row, column, content);
+
+        this[row, column] = cell;
+
+        return cell;
+    }
+
+    // The store's own path, for an address already in it. It takes no bounds check, because the
+    // store can outlive a shrunk sheet, and announces nothing, because nothing is being created.
+    private Cell Adopt(int row, int column)
+    {
+        ref var content = ref CollectionsMarshal.GetValueRefOrAddDefault(data, (row, column), out _);
+
+        if (content is Cell existing)
+        {
+            return existing;
+        }
+
+        var cell = Materialise(Worksheet, row, column, content);
+
+        content = cell;
 
         return cell;
     }

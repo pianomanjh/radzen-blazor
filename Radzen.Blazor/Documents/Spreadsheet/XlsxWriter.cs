@@ -1012,7 +1012,7 @@ class XlsxWriter(Workbook sourceWorkbook)
 
         XElement? hyperlinksElement = null;
 
-        foreach (var cell in sheet.Cells.GetPopulatedCells())
+        foreach (var cell in sheet.Cells.GetPopulatedViews())
         {
             if (cell.Hyperlink is not null)
             {
@@ -1184,20 +1184,36 @@ class XlsxWriter(Workbook sourceWorkbook)
     {
         var widths = new Dictionary<int, double>();
 
-        foreach (var cell in sheet.Cells.GetPopulatedCells().ToList())
+        if (!sheet.Columns.HasAutoFit)
         {
-            var col = cell.Address.Column;
+            return widths;
+        }
 
-            if (!sheet.Columns.IsAutoFit(col) || sheet.MergedCells.Contains(cell.Address))
+        // Addresses first, then the cells: measuring a width computes an effective format, which can
+        // populate the store, and only the cells in an auto-fit column are built at all.
+        var measured = new List<CellRef>();
+
+        foreach (var view in sheet.Cells.GetPopulatedViews())
+        {
+            if (sheet.Columns.IsAutoFit(view.Address.Column) && !sheet.MergedCells.Contains(view.Address))
             {
-                continue;
+                measured.Add(view.Address);
             }
+        }
+
+        foreach (var address in measured)
+        {
+            var col = address.Column;
 
             string? text;
             Format? format;
 
             try
             {
+                // Reading the cell is inside the handler too: the store can hold an address the sheet
+                // has since shrunk past, and asking for it is itself out of range.
+                var cell = sheet.Cells[address];
+
                 // Autofit widths must be culture-independent so saved <col> XML is deterministic.
                 text = cell.FormatDisplayText(CultureInfo.InvariantCulture);
                 format = cell.GetEffectiveFormat();
@@ -1231,7 +1247,7 @@ class XlsxWriter(Workbook sourceWorkbook)
     {
         var formulas = new Dictionary<CellRef, string>();
 
-        foreach (var cell in sheet.Cells.GetPopulatedCells())
+        foreach (var cell in sheet.Cells.GetPopulatedViews())
         {
             if (!string.IsNullOrEmpty(cell.Formula))
             {
@@ -1341,7 +1357,7 @@ class XlsxWriter(Workbook sourceWorkbook)
     {
         var sharedFormulas = BuildSharedFormulaGroups(sheet);
 
-        var cells = ArrayPool<Cell>.Shared.Rent(sheet.Cells.PopulatedCount);
+        var cells = ArrayPool<CellView>.Shared.Rent(sheet.Cells.PopulatedCount);
 
         try
         {
@@ -1349,15 +1365,15 @@ class XlsxWriter(Workbook sourceWorkbook)
         }
         finally
         {
-            ArrayPool<Cell>.Shared.Return(cells, clearArray: true);
+            ArrayPool<CellView>.Shared.Return(cells, clearArray: true);
         }
     }
 
-    private void WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private void WriteRows(XmlWriter writer, Worksheet sheet, CellView[] cells, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var count = 0;
 
-        foreach (var cell in sheet.Cells.GetPopulatedCells())
+        foreach (var cell in sheet.Cells.GetPopulatedViews())
         {
             if (IsWritten(cell))
             {
@@ -1536,7 +1552,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteEndElement();
     }
 
-    private void WriteCell(XmlWriter writer, Cell cell, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private void WriteCell(XmlWriter writer, in CellView cell, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var isFormula = !string.IsNullOrEmpty(cell.Formula);
 
@@ -1572,7 +1588,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteEndElement();
     }
 
-    private static string? CellTypeAttribute(Cell cell, bool isFormula) => cell.ValueType switch
+    private static string? CellTypeAttribute(in CellView cell, bool isFormula) => cell.ValueType switch
     {
         CellDataType.String => isFormula ? "str" : "s",
         CellDataType.Boolean => "b",
@@ -1580,7 +1596,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         _ => null,
     };
 
-    private void WriteFormula(XmlWriter writer, Cell cell, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private void WriteFormula(XmlWriter writer, in CellView cell, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var formula = cell.Formula!.StartsWith('=') ? cell.Formula![1..] : cell.Formula!;
 
@@ -1609,7 +1625,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteFullEndElement();
     }
 
-    private void WriteTypedValue(XmlWriter writer, Cell cell)
+    private void WriteTypedValue(XmlWriter writer, in CellView cell)
     {
         switch (cell.ValueType)
         {
@@ -1673,7 +1689,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         foreach (var range in sheet.MergedCells.Ranges)
         {
             var anchor = sheet.Cells.Find(range.Start.Row, range.Start.Column);
-            var style = anchor is not null && HasCellFormatting(anchor) ? new MergeAnchor(anchor) : null;
+            var style = anchor is not null && HasCellFormatting(new CellView(anchor)) ? new MergeAnchor(anchor) : null;
 
             for (var r = range.Start.Row; r <= range.End.Row; r++)
             {
@@ -1684,9 +1700,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                         continue;
                     }
 
-                    var cell = sheet.Cells.Find(r, c);
-
-                    if (cell is not null && IsWritten(cell))
+                    if (sheet.Cells.IsWrittenAt(r, c))
                     {
                         continue;
                     }
@@ -1708,7 +1722,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             return null;
         }
 
-        return anchor.StyleId ??= GetOrCreateCellStyle(anchor.Cell, styleTracker);
+        return anchor.StyleId ??= GetOrCreateCellStyle(new CellView(anchor.Cell), styleTracker);
     }
 
     private sealed class MergeAnchor(Cell cell)
@@ -1735,19 +1749,19 @@ class XlsxWriter(Workbook sourceWorkbook)
         }
     }
 
-    private sealed class CellOrder : IComparer<Cell>
+    private sealed class CellOrder : IComparer<CellView>
     {
         public static readonly CellOrder Instance = new();
 
-        public int Compare(Cell? left, Cell? right)
+        public int Compare(CellView left, CellView right)
         {
-            var byRow = left!.Address.Row.CompareTo(right!.Address.Row);
+            var byRow = left.Address.Row.CompareTo(right.Address.Row);
 
             return byRow != 0 ? byRow : left.Address.Column.CompareTo(right.Address.Column);
         }
     }
 
-    private static bool IsWritten(Cell cell) => cell.Value is not null || cell.Formula is not null;
+    private static bool IsWritten(in CellView cell) => cell.Value is not null || cell.Formula is not null;
 
     private static List<int> CollectStyledRowIndices(Worksheet sheet)
     {
@@ -1768,14 +1782,14 @@ class XlsxWriter(Workbook sourceWorkbook)
         return rows;
     }
 
-    private static bool HasCellFormatting(Cell cell)
+    private static bool HasCellFormatting(in CellView cell)
     {
         return cell.FormatOrNull?.IsDefault == false || cell.ValueType == CellDataType.Date || cell.QuotePrefix;
     }
 
     private static readonly Format DefaultFormat = new();
 
-    private int GetOrCreateCellStyle(Cell cell, StyleTracker styleTracker)
+    private int GetOrCreateCellStyle(in CellView cell, StyleTracker styleTracker)
     {
         var format = cell.FormatOrNull ?? DefaultFormat;
 
@@ -1888,7 +1902,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         borderElement.Add(sideElement);
     }
 
-    private static int GetOrCreateNumberFormat(Cell cell, Format format, StyleTracker styleTracker)
+    private static int GetOrCreateNumberFormat(in CellView cell, Format format, StyleTracker styleTracker)
     {
         var formatCode = format.NumberFormat;
 
@@ -1987,7 +2001,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         styleTracker.FillsElement.Attribute("count")!.Value = (styleTracker.FillStyles.Count + 2).ToString(CultureInfo.InvariantCulture);
     }
 
-    private void CreateCellStyleElement(Cell cell, Format format, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
+    private void CreateCellStyleElement(in CellView cell, Format format, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
     {
         var xfElement = new XElement(XName.Get("xf", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XAttribute("numFmtId", numFmtId.ToString(CultureInfo.InvariantCulture)),
