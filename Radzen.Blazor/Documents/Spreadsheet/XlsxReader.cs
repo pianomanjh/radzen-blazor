@@ -639,12 +639,24 @@ static class XlsxReader
         var valueElem = cellElem.Element(sNs + "v");
         var formulaElem = cellElem.Element(sNs + "f");
 
-        if (valueElem is null && formulaElem is null)
+        // ECMA-376 part 1, 18.3.1.53 (is): a cell that carries its own string has no <v>, and the text
+        // is under <is> - as one <t>, or as the <t> of each rich text run.
+        var inlineElem = cellElem.Element(sNs + "is");
+
+        if (valueElem is null && formulaElem is null && inlineElem is null)
         {
             return;
         }
 
         var cellType = (string?)cellElem.Attribute("t") ?? "n";
+
+        if (valueElem is null && inlineElem is not null)
+        {
+            var text = string.Concat(inlineElem.Descendants(sNs + "t").Select(static t => t.Value));
+
+            valueElem = new XElement(sNs + "v", text);
+            cellType = "inlineStr";
+        }
 
         var style = ResolveStyle(cellElem, styleInfo);
 
