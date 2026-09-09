@@ -12519,6 +12519,35 @@ resolves what it is being asked. And the flat arm was checked against a real fil
 believed: the same source written to disk is 200,001 rows and 2,200,011 cells, 133 MB of sheet XML
 compressed to 5.7 MB, at the allocation above.
 
+### What an export costs, which is not what the writer costs
+
+The table above is the writer. The export adds a column's accessors to every cell, and that is the
+figure an application feels — five columns, in-memory rows, allocated bytes for one export:
+
+| | 2,000 rows | 20,000 rows | marginal |
+| --- | ---: | ---: | ---: |
+| streamed | 0.30 MB | 2.09 MB | ~104 B/row |
+| built, then saved | 2.34 MB | 20.94 MB | ~1,084 B/row |
+
+**Ten times less per row, and the shape is the point rather than the ratio.** What remains is a box
+per typed cell and the characters written for it; what went is the cell object, its value and the
+sheet's slot for it. Nothing in either figure is retained — the export holds the sample buffer, the
+shared string table and the zip's own buffers, and no row outlives the cell it was written to.
+
+Two things found by measuring rather than by reasoning, both of which made the first version worse:
+
+- **The text was drawn for every cell and read by almost none.** `CellTextOf` is the fallback for a
+  value the writer refuses and it is what the builder measures its widths from; the streamed path
+  measures from the value instead, so a bound column with a typed value was formatting a string per
+  cell and discarding it. 214 B/row became 117.
+- **Passing that fallback as a `Func<string?>` cost three times what it saved** — 597 B/row — because a
+  closure over the column and the row is allocated per cell. The column and the row are parameters now.
+
+`FastGridExportCostTests` holds both figures, at two row counts so the slope is what is asserted, and
+fails when the export is swapped back for `ToWorkbook().SaveToStream()`. Its first version used
+`GC.GetTotalAllocatedBytes`, which is process-wide while xunit runs collections in parallel: it read
+104 B/row alone and 1,170 in the suite, passing in isolation and failing in the run that matters.
+
 ### `<dimension>` was not one of the two knobs
 
 §65 named `<cols>` and `<dimension>` as what precedes `sheetData`, then gave two knobs of which only one
