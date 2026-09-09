@@ -28,8 +28,16 @@ jobs:
             10.0.x
 
       # The suite is the gate. A package that ships a red build is worse than one that ships late.
+      #
+      # Minus GeometryParityTests, which measure rendered geometry through Chromium: this job has no
+      # browser, and fastgrid-parity.yml - which does, and which runs on the same push - is where they
+      # belong. That workflow's own comment gives the rule this follows: a missing Chromium should not
+      # be able to fail a job that is not about the browser. Running them here without one failed all
+      # twenty on the first tag and published nothing, which is the gate working and the wrong gate.
       - name: Test
-        run: dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj -c Release
+        run: |
+          dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj -c Release \
+            --filter "FullyQualifiedName!~GeometryParityTests"
 
       - name: Pack
         run: |
