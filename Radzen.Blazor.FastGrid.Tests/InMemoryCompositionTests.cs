@@ -64,6 +64,24 @@ namespace Radzen.FastGrid.Tests
                     p.Add(c => c.SortProperty, sortProperty);
                 }).Instance;
 
+            /// <summary>
+            /// A template column that filters, which it can only do through a carrier.
+            /// </summary>
+            internal TemplateColumn<Person> Template(FastGridFilterBy<Person> filterBy,
+                object filterValue, FilterOperator? filterOperator = null) =>
+                ctx.RenderComponent<TemplateColumn<Person>>(p =>
+                {
+                    p.AddCascadingValue(grid);
+                    p.Add(c => c.Template, person => builder => builder.AddContent(0, person.Id));
+                    p.Add(c => c.FilterBy, filterBy);
+                    p.Add(c => c.FilterValue, filterValue);
+
+                    if (filterOperator is { } op)
+                    {
+                        p.Add(c => c.FilterOperator, op);
+                    }
+                }).Instance;
+
             public void Dispose() => ctx.Dispose();
         }
 
@@ -344,6 +362,27 @@ namespace Radzen.FastGrid.Tests
             Assert.True(first.InMemory);
             Assert.Same(first.Rows, second.Rows);
             Assert.Equal(first.InMemory, second.InMemory);
+        }
+
+        /// <summary>
+        /// A template column filtering through a carrier takes the delegate route, like every other
+        /// column that composes its own filter.
+        /// </summary>
+        /// <remarks>
+        /// <strong>This is the only assertion that can see it.</strong> A column declining
+        /// <c>ApplyFilterInMemory</c> does not filter differently - <c>ComposeInMemory</c> returns null,
+        /// the caller falls back to the queryable route, and the same rows come out through
+        /// <c>AsQueryable</c>. So a test over rendered rows passes whether or not the delegate route
+        /// exists, and one was written that way first: removing the override left it green.
+        /// </remarks>
+        [Fact]
+        public void ATemplateColumnFilteringThroughACarrierTakesTheDelegateRoute()
+        {
+            using var bench = new Bench();
+
+            Assert.True(BothRoutesAgree(
+                Of(bench.Template(FastGridFilterBy<Person>.By(x => x.First), filterValue: "First1")),
+                Unsorted, Options()));
         }
     }
 }

@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+using System.Linq.Expressions;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 
@@ -57,6 +60,72 @@ namespace Radzen.FastGrid
 
         /// <inheritdoc />
         internal override FastGridSort<TItem>? SortSource => SortBy;
+
+        /// <summary>
+        /// How this column filters.
+        /// </summary>
+        /// <remarks>
+        /// <strong>A template column could already filter by its <see cref="SortProperty" /></strong>,
+        /// reflectively, and that still works - so this is not what makes it filter, and saying so was
+        /// wrong. What it changes is <em>how</em>, and one thing it makes possible at all:
+        /// <list type="bullet">
+        /// <item>the check-box list. <c>ColumnBase.DistinctValues</c> answers null, so a path column's
+        /// list is empty. A carrier composes <c>SELECT DISTINCT</c> over the key, which is the only
+        /// route to a populated list on a column drawing something other than what it filters;</item>
+        /// <item>a filter key that is not the sort path. One path serves sorting, filtering and the
+        /// settings key together, so a column sorting by <c>Customer.Name</c> could not filter by
+        /// <c>Customer.Id</c>;</item>
+        /// <item>a typed expression instead of a reflected one, which is what a provider translates
+        /// cleanly and what an ahead-of-time compiler can emit.</item>
+        /// </list>
+        /// </remarks>
+        [Parameter] public FastGridFilterBy<TItem>? FilterBy { get; set; }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// <strong><see cref="FilterBy" /> only ever adds.</strong> Without one this is the base's
+        /// answer, which is <see cref="SortPath" /> - and that is not a formality: a template column
+        /// given a <see cref="SortProperty" /> already filtered, reflectively, by that path. Returning
+        /// only the carrier's path here took that away, and four tests said so. What the carrier buys
+        /// is a filter key that need not be the sort path, on a column that need not have one at all,
+        /// composed through a typed expression rather than reflected member-by-member.
+        /// </remarks>
+        public override string? FilterPropertyPath => FilterBy?.Path ?? base.FilterPropertyPath;
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// The base answers <c>object</c>, which is what sends a path column down the reflective route
+        /// that discovers the real type from the path. A carrier knows the type outright.
+        /// </remarks>
+        public override Type FilterPropertyType => FilterBy?.PropertyType ?? base.FilterPropertyType;
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Declines without a carrier, which is what leaves a <see cref="SortProperty" /> column on the
+        /// reflective route it has always taken.
+        /// </remarks>
+        public override Expression<Func<TItem, bool>>? ApplyFilter(FilterCaseSensitivity caseSensitivity,
+            bool inMemory) =>
+            FilterBy is { } filterBy && ActiveFilter is { } filter
+                ? filterBy.Apply(filter, caseSensitivity, inMemory)
+                : base.ApplyFilter(caseSensitivity, inMemory);
+
+        /// <inheritdoc />
+        public override Func<TItem, bool>? ApplyFilterInMemory(FilterCaseSensitivity caseSensitivity) =>
+            FilterBy is { } filterBy && ActiveFilter is { } filter
+                ? filterBy.ApplyInMemory(filter, caseSensitivity)
+                : base.ApplyFilterInMemory(caseSensitivity);
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Composed rather than enumerated, so an Entity Framework source runs SELECT DISTINCT rather
+        /// than pulling every row across the wire - the same as
+        /// <see cref="PropertyColumn{TItem, TProp}" />. The values are the <em>key's</em>, not the cell's
+        /// text, which is the only thing that makes a check-box list usable on a column drawing
+        /// something else.
+        /// </remarks>
+        public override IQueryable? DistinctValues(IQueryable<TItem> source) =>
+            source is not null && FilterBy is { } filterBy ? filterBy.Distinct(source) : null;
 
         /// <inheritdoc />
         public override void RenderCell(RenderTreeBuilder builder, int sequence, TItem item)

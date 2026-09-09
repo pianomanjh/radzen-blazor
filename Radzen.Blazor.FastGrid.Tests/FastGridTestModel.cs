@@ -565,6 +565,7 @@ namespace Radzen.FastGrid.Tests
             string sortProperty = null,
             bool sortable = true,
             FastGridSort<TItem> sortBy = null,
+            FastGridFilterBy<TItem> filterBy = null,
             SortOrder? sortOrder = null,
             string uniqueId = null) => (builder, seq) =>
         {
@@ -599,6 +600,11 @@ namespace Radzen.FastGrid.Tests
             if (sortBy is not null)
             {
                 builder.AddAttribute(seq + 5, nameof(TemplateColumn<TItem>.SortBy), sortBy);
+            }
+
+            if (filterBy is not null)
+            {
+                builder.AddAttribute(seq + 6, nameof(TemplateColumn<TItem>.FilterBy), filterBy);
             }
 
             if (!sortable)
