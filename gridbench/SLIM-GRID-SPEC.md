@@ -12474,3 +12474,102 @@ builder and no writer change at all.
 `c7d91536c` there is no `IAsyncQueryExecutor`, no async materialisation on `PagedDataBoundComponent`,
 and upstream issue #2688 is closed with nothing visible. Not a blocker — this grid carries its own
 executor and depends on nothing upstream — but recorded, because §61's rule cuts both ways.
+
+## 66. The export streams, measured — and the flat claim needed a third arm to be true
+
+§65 was a design and closed by saying nothing in it quoted a number before that number existed. It is
+built now, on two branches, and the numbers exist. Four things came out differently from the way the
+section described them, and one of those is the claim it stands on.
+
+### What was built, and where
+
+| | branch | what |
+| --- | --- | --- |
+| the writer | `spreadsheet-streamed-sheet`, off `pianomanjh#13` | `Workbook.SaveToStreamAsync`, `StreamedSheet<T>`, `ColumnWidthMode` |
+| the grid | `tech/fastgrid-streamed-export` | `FilteredQuery`, `AsAsyncEnumerable`, `RowsAsync`, `FastGridExport.SaveToStreamAsync` |
+
+The second branch is the first merged into `tech/radzen-datagrid-slim`, which is the merge §65 said had
+to happen before the export could land. **No file is touched by both lines**, so the merge is clean by
+construction rather than by luck — #12 and #13 own `XlsxWriter.cs` and `CellStore.cs`, and the grid
+half owns none of the spreadsheet.
+
+### The flat claim needed a third arm
+
+`StreamBenchmarks`, 10,000 / 50,000 / 200,000 rows by eleven columns:
+
+| arm | 10k | 50k | 200k | gen1/gen2 at 200k |
+| --- | ---: | ---: | ---: | --- |
+| streamed, nothing boxed | 152 KB | 160 KB | 182 KB | none, and no gen0 either |
+| streamed | 2.7 MB | 12.8 MB | 50.5 MB | none |
+| built, then saved | 23.6 MB | 103.3 MB | 441.0 MB | 3000 gen1, 1000 gen2 |
+
+**The obvious arm is not flat.** A column is a `Func<TItem, object?>`, so every non-string cell arrives
+in a box: about 0.26 KB a row, allocated and dead in gen0 before the next row is read. Measured alone
+that arm says the section's claim is false. What is flat is the writer, and seeing it needs an arm
+whose columns box nothing — 30 KB of drift across a 20x sweep, which is the shared string table filling
+to its hundred entries and the zip's buffers, not a cost per row.
+
+So the honest form of §65's claim is **two** statements, not one: the writer's own allocation does not
+grow with the rows, and the export's does — by a box per cell that no generation ever sees. §59 already
+drew that line for objects and collections; this is the same line drawn for a claim about bytes.
+
+The built arm is there because a single figure is one a linear path would also produce. It moves 18x
+across the sweep and is the only one of the three that promotes anything out of gen0, so the instrument
+resolves what it is being asked. And the flat arm was checked against a real file before it was
+believed: the same source written to disk is 200,001 rows and 2,200,011 cells, 133 MB of sheet XML
+compressed to 5.7 MB, at the allocation above.
+
+### `<dimension>` was not one of the two knobs
+
+§65 named `<cols>` and `<dimension>` as what precedes `sheetData`, then gave two knobs of which only one
+is about either. `WidthMode` answers `<cols>`. Nothing answers `<dimension>`, because nothing can: it
+needs a row count, and a count is a second pass over the source or a second query.
+
+What is written instead:
+
+- exact when the caller declares `RowCount`;
+- exact for free when `Sampled(n)` buffered the whole source, which is every sheet under the sample;
+- omitted otherwise, which the schema allows.
+
+The cost of omitting it is one this repo's own reader shows: `XlsxReader` floors an absent dimension at
+100x100 before expanding from the rows it finds, so a streamed sheet of 20 rows written without a count
+reads back as a sheet of 100. **That is the only place a streamed file and a built one differ**, it only
+happens above the sample size, and it is the reason `RowCount` is on the type at all.
+
+### Two things the measurement forced, both in the writer
+
+Neither was visible until a streamed export was compared against a built one cell for cell:
+
+- **A caller's width function is the width.** The writer's own auto fit never shrinks a column below the
+  sheet's default, and the streamed path inherited that floor. §40's `WidthFor` clamps to `[48, 520]`
+  and assigns, so every column it sized below 100 px came out of the streamed path 100 px wide.
+- **A caller's width function measures in the reader's culture.** The writer measures invariant on
+  purpose, so a saved `cols` does not depend on the machine that saved it. A column being sized against
+  what a reader will see is the other case, and `11/30/2018 12:00:00 AM` is two characters wider than
+  its invariant form — 14 px, and a failing test.
+
+Both are the same shape: the writer's rule was right for the writer and wrong for a caller who brought
+its own answer. Neither would have been found by a round trip, only by the comparison.
+
+### The `Task.Run` went with the workbook, and that is not a regression
+
+§41 moved `SaveToStream` off the renderer's thread because it is about 1.5 s at 50,000 rows and a built
+workbook is a detached object no render can touch. **A streamed write is not detached**: it calls
+`CellTextOf` per cell and pulls rows from a composition over the grid's own source, so a pool thread
+would read grid state while a render writes it. The write stays on the dispatcher, and what a circuit
+used to hold for one 1.5 s block it now holds in slices with every await in the row source giving it
+back. `Destination` is where an application takes the bytes off the circuit and off the download
+buffer at once.
+
+### One fault found on the way
+
+`t="inlineStr"` puts a cell's text under `<is>` and writes no `<v>`, and `XlsxReader` dropped every such
+cell at its first guard — a silent empty cell. Nothing this library wrote produced one, which is why it
+had never been seen. `InlineStrings` writes nothing else.
+
+### What is still O(rows)
+
+The download. `Destination` removes it for an application that has somewhere to put the file, and the
+default is still a `MemoryStream` behind `DotNetStreamReference`, because a menu entry has to produce
+something a browser can save. §65 said this and it is unchanged; it is repeated here so the flat claim
+above is not read as covering the whole path.
