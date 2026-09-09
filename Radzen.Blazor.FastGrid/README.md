@@ -319,6 +319,34 @@ Two things follow from where the cost was rather than from the design:
 - **Turning a callback on after the first render keeps the handlers too.** The listener is attached
   once. That costs allocation, not correctness.
 
+### A control in a cell is its own click
+
+A button, a link or a check box in a cell does **not** also raise the row's click. The listener leaves
+interactive content alone - `button`, `a[href]`, `input`, `select`, `textarea`, `label`,
+`contenteditable`, and the ARIA roles that stand in for them - so a cell control behaves the way its
+reader expects without the grid being told anything.
+
+**`@onclick:stopPropagation` does not do this, and cannot.** Blazor enforces it from its own delegator,
+which is above this listener, so the row click has already been raised by the time Blazor could stop
+it. That is worth stating plainly because it is what an application moving from `RadzenDataGrid`
+already wrote, where the per-cell binding did honour it - and because **no bUnit test can see the
+difference**: a test host renders the per-cell handlers instead of attaching the listener, so
+`stopPropagation` works there and only there.
+
+For content that swallows a click without being interactive - a wrapper `div` around a control, which
+is what a template column tends to draw - say so:
+
+```razor
+<TemplateColumn TItem="Order">
+    <Template>
+        <div @attributes="FastGridCell.NoRowClick">...</div>
+    </Template>
+</TemplateColumn>
+```
+
+A grid that genuinely wants the row click as well reads the event itself rather than through
+`RowClick`.
+
 ### What each of these costs
 
 Two different questions, and the table below answers only the second.

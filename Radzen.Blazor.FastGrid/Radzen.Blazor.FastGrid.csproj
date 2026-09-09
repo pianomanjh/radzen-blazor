@@ -10,7 +10,7 @@
     <Description>A read-only, expression-typed data grid for Radzen.Blazor, built for large row counts.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>blazor;radzen;datagrid;grid;performance</PackageTags>
-    <Version>11.3.2-jakks.2</Version>
+    <Version>11.3.2-jakks.3</Version>
     <Copyright>InventiveCoders, LLC</Copyright>
     <Authors>InventiveCoders, LLC</Authors>
     <Company>InventiveCoders, LLC</Company>

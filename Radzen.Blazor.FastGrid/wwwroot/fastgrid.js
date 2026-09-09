@@ -6,6 +6,27 @@
 //
 // The grid falls back to per-cell handlers unless attach() returns true, so nothing here is required
 // for the feature to work - a missing or failed script degrades to the binding it replaced.
+// What owns its own click, so that a click landing inside it is not also the row's. The interactive
+// elements are here rather than in the consuming application because every application has the same
+// list, and an application that forgets one gets a bug it cannot see from its markup.
+const ownClick = [
+  'button',
+  'a[href]',
+  'input',
+  'select',
+  'textarea',
+  'label',
+  '[contenteditable=""]',
+  '[contenteditable="true"]',
+  '[role="button"]',
+  '[role="checkbox"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="switch"]',
+  '[role="tab"]',
+  '[data-no-row-click]',
+].join(',');
+
 export function attach(bodyId, dotNetRef, kinds) {
   const tbody = document.getElementById(bodyId);
 
@@ -64,6 +85,28 @@ export function attach(bodyId, dotNetRef, kinds) {
     if (kind === 'click' && event.target.closest('[data-toggle]')) {
       dotNetRef.invokeMethodAsync('RadzenFastGrid.OnDelegatedPointer', 'toggle', at.row, -1);
 
+      return;
+    }
+
+    // A control in a cell is its own click, not the row's.
+    //
+    // The binding this replaced let an application say so with @onclick:stopPropagation, and that no
+    // longer reaches: Blazor enforces it from its own delegator, which is above this tbody, so this
+    // listener has already run by the time Blazor could stop anything. An application that worked on
+    // RadzenDataGrid - a button, a checkbox, a link in a cell - therefore started raising the row
+    // click as well, in silence, and nothing under bUnit could see it because a test host renders the
+    // per-cell handlers instead of attaching this.
+    //
+    // So the rule moves here, where it can be honoured, and it is the default rather than something
+    // to opt into: a cell control that also fires the row is a bug in every application that has one,
+    // and the one that genuinely wants both can mark its rows and read the event itself.
+    // data-no-row-click covers the rest - a wrapper that is not itself interactive, which is what a
+    // template column usually draws.
+    //
+    // Only the click kinds. A context menu over a button still belongs to the grid: taking it away
+    // would leave the reader with no menu and raise nothing in its place, which is what the
+    // per-cell binding did not do either.
+    if ((kind === 'click' || kind === 'dblclick') && event.target.closest(ownClick)) {
       return;
     }
 

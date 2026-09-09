@@ -245,6 +245,16 @@ namespace Radzen.FastGrid
         /// <summary>Marks the row-detail toggle, whose clicks the delegating listener leaves alone.</summary>
         internal const string ToggleAttribute = "data-toggle";
 
+        /// <summary>
+        /// Marks content whose clicks belong to it rather than to the row it sits in.
+        /// </summary>
+        /// <remarks>
+        /// Only needed for something that is not already an interactive element - the listener knows
+        /// buttons, links, form controls and the ARIA roles for them. See
+        /// <see cref="FastGridCell.NoRowClick" />, which is the name an application writes.
+        /// </remarks>
+        internal const string NoRowClickAttribute = "data-no-row-click";
+
         /// <summary>A drawn data row. What the cursor counts when rows carry no index of their own.</summary>
         internal const string DataRowClass = "rz-data-row";
 

@@ -221,5 +221,52 @@ namespace Radzen.FastGrid.Tests
 
             Assert.NotEmpty(cut.FindAll($"tbody [{BrowserContract.ToggleAttribute}]"));
         }
+
+        /// <summary>
+        /// The listener leaves a cell's own controls alone, and the selector it does that with has to
+        /// keep naming them.
+        /// </summary>
+        /// <remarks>
+        /// This one is only assertable here. A cell control raising the row click as well is a browser
+        /// fault by construction: under bUnit the grid renders per-cell handlers instead of attaching
+        /// the listener, so <c>@onclick:stopPropagation</c> works in a test and nowhere else. Reading
+        /// the script is what turns a rename back into a failing test.
+        /// </remarks>
+        [Theory]
+        [InlineData("button")]
+        [InlineData("a[href]")]
+        [InlineData("input")]
+        [InlineData("select")]
+        [InlineData("textarea")]
+        [InlineData("[role=\"button\"]")]
+        [InlineData("[role=\"checkbox\"]")]
+        public void TheListenerLeavesAControlsOwnClickAlone(string selector)
+        {
+            Assert.Contains($"'{selector}'", OwnClickSelectors());
+        }
+
+        /// <summary>And the escape hatch for content that is not an interactive element itself.</summary>
+        [Fact]
+        public void ContentCanSayItsClicksAreNotTheRows()
+        {
+            Assert.Contains($"'[{BrowserContract.NoRowClickAttribute}]'", OwnClickSelectors());
+            Assert.Equal(BrowserContract.NoRowClickAttribute, FastGridCell.NoRowClickAttributeName);
+            Assert.True(FastGridCell.NoRowClick.ContainsKey(BrowserContract.NoRowClickAttribute));
+        }
+
+        /// <summary>The selector list the delegating listener tests a click's target against.</summary>
+        static string OwnClickSelectors()
+        {
+            var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fastgrid.js"));
+            var start = script.IndexOf("const ownClick = [", StringComparison.Ordinal);
+
+            Assert.True(start >= 0, "the script no longer lists what owns its own click");
+
+            var close = script.IndexOf("].join(',');", start, StringComparison.Ordinal);
+
+            Assert.True(close > start, "the ownClick list is no longer a joined array");
+
+            return script[start..close];
+        }
     }
 }
