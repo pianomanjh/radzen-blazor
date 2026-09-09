@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Radzen.Documents.Spreadsheet;
 
@@ -140,6 +142,34 @@ public class Workbook
     public void SaveToStream(Stream stream)
     {
         new XlsxWriter(this).Write(stream);
+    }
+
+    /// <summary>
+    /// Writes a single sheet to the specified stream in the Open XML Spreadsheet format (XLSX),
+    /// reading its rows once and retaining none of them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Static because there is no workbook: what a streamed sheet needs is its columns and a row
+    /// source, and building the cells to hold the rows is the cost this exists to avoid. The rows are
+    /// written in the order they arrive, through the columns given, and nothing is filtered, sorted or
+    /// counted on the way through.
+    /// </para>
+    /// <para>
+    /// The XML is written synchronously into the archive; what is awaited is the row source. A source
+    /// that faults or is cancelled leaves no readable file behind: the archive's central directory is
+    /// never written, and a seekable destination is truncated back to where it started.
+    /// </para>
+    /// </remarks>
+    /// <param name="stream">Destination stream.</param>
+    /// <param name="sheet">The sheet to write.</param>
+    /// <param name="cancellationToken">Cancels the write between rows.</param>
+    public static Task SaveToStreamAsync(Stream stream, StreamedSheet sheet, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(sheet);
+
+        return XlsxWriter.WriteStreamedAsync(stream, sheet, cancellationToken);
     }
 
     /// <summary>

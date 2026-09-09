@@ -11,7 +11,7 @@ namespace Radzen.Documents.Spreadsheet;
 
 #nullable enable
 
-class XlsxWriter(Workbook sourceWorkbook)
+partial class XlsxWriter(Workbook sourceWorkbook)
 {
     private const double EmuPerPixel = 9525.0;
 
@@ -1789,22 +1789,26 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private static readonly Format DefaultFormat = new();
 
-    private int GetOrCreateCellStyle(in CellView cell, StyleTracker styleTracker)
-    {
-        var format = cell.FormatOrNull ?? DefaultFormat;
+    private int GetOrCreateCellStyle(in CellView cell, StyleTracker styleTracker) =>
+        GetOrCreateCellStyle(cell.FormatOrNull ?? DefaultFormat, cell.ValueType, cell.QuotePrefix, styleTracker);
 
+    // A style is a format, the value type the number format falls back on, and a quote prefix. A cell
+    // is where the built path reads all three; a streamed column carries the format itself and has no
+    // cell to read, so the three are the parameters and the view is one caller of them.
+    private int GetOrCreateCellStyle(Format format, CellDataType valueType, bool quotePrefix, StyleTracker styleTracker)
+    {
         var fontId = GetOrCreateFontStyle(format, styleTracker);
         var fillId = GetOrCreateFillStyle(format, styleTracker);
-        var numFmtId = GetOrCreateNumberFormat(cell, format, styleTracker);
+        var numFmtId = GetOrCreateNumberFormat(valueType, format, styleTracker);
         var borderId = GetOrCreateBorderStyle(format, styleTracker);
 
-        var styleKey = new CellStyleKey(fontId, fillId, borderId, format.TextAlign, format.VerticalAlign, format.WrapText, numFmtId, format.Locked, format.FormulaHidden, cell.QuotePrefix);
+        var styleKey = new CellStyleKey(fontId, fillId, borderId, format.TextAlign, format.VerticalAlign, format.WrapText, numFmtId, format.Locked, format.FormulaHidden, quotePrefix);
 
         if (!styleTracker.CellStyles.TryGetValue(styleKey, out int styleId))
         {
             styleId = styleTracker.CellStyles.Count + 1;
             styleTracker.CellStyles[styleKey] = styleId;
-            CreateCellStyleElement(cell, format, fontId, fillId, borderId, numFmtId, styleTracker);
+            CreateCellStyleElement(format, fontId, fillId, borderId, numFmtId, quotePrefix, styleTracker);
         }
 
         return styleId;
@@ -1902,12 +1906,12 @@ class XlsxWriter(Workbook sourceWorkbook)
         borderElement.Add(sideElement);
     }
 
-    private static int GetOrCreateNumberFormat(in CellView cell, Format format, StyleTracker styleTracker)
+    private static int GetOrCreateNumberFormat(CellDataType valueType, Format format, StyleTracker styleTracker)
     {
         var formatCode = format.NumberFormat;
 
         // Auto-apply default date format for date values without explicit format
-        if (string.IsNullOrEmpty(formatCode) && cell.ValueType == CellDataType.Date)
+        if (string.IsNullOrEmpty(formatCode) && valueType == CellDataType.Date)
         {
             return 14; // mm/dd/yyyy
         }
@@ -2001,7 +2005,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         styleTracker.FillsElement.Attribute("count")!.Value = (styleTracker.FillStyles.Count + 2).ToString(CultureInfo.InvariantCulture);
     }
 
-    private void CreateCellStyleElement(in CellView cell, Format format, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
+    private void CreateCellStyleElement(Format format, int fontId, int fillId, int borderId, int numFmtId, bool quotePrefix, StyleTracker styleTracker)
     {
         var xfElement = new XElement(XName.Get("xf", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XAttribute("numFmtId", numFmtId.ToString(CultureInfo.InvariantCulture)),
@@ -2036,7 +2040,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             xfElement.Add(new XAttribute("applyProtection", "1"));
         }
 
-        if (cell.QuotePrefix)
+        if (quotePrefix)
         {
             xfElement.Add(new XAttribute("quotePrefix", "1"));
             xfElement.Add(new XAttribute("applyQuotePrefix", "1"));
