@@ -1356,22 +1356,14 @@ class XlsxWriter(Workbook sourceWorkbook)
     private void WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, Dictionary<string, int> sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var count = 0;
-        var interned = 0;
 
         foreach (var cell in sheet.Cells.GetPopulatedCells())
         {
             if (IsWritten(cell))
             {
                 cells[count++] = cell;
-
-                if (cell.ValueType == CellDataType.String && string.IsNullOrEmpty(cell.Formula))
-                {
-                    interned++;
-                }
             }
         }
-
-        sharedStrings.EnsureCapacity(sharedStrings.Count + interned);
 
         Array.Sort(cells, 0, count, CellOrder.Instance);
 
