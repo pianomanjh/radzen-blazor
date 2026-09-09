@@ -359,3 +359,6 @@ RadzenBlazorDemos.Host/wwwroot/robots.txt
 
 # Playwright MCP scratch snapshots
 .playwright-mcp/
+
+# Serena tooling config
+.serena/
