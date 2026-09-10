@@ -13028,14 +13028,16 @@ public bool SpillImages { get; set; }                 // StreamedSheet
   the wrong picture in the file without any error. The doc says the array must not change once it has
   been returned.
 - **An image column writes no `<c>`.** A cell under a picture holds nothing, so `Image` together with
-  a non-default `Value` throws at write time. `Value`'s default becomes a cached static delegate so
-  the check is a reference comparison. `Image` with `AutoFit` throws, since there is nothing to
-  measure. `Format` is ignored, since there is no cell to format.
+  a non-default `Value` throws `ArgumentException` before a byte is written. `Value`'s default becomes a cached static delegate so
+  the check is a reference comparison. `Image` with `AutoFit` throws the same way, since there is
+  nothing to measure. `Format` is ignored, since there is no cell to format.
 - **`DataRowHeight` applies to every data row**, not only rows holding an image. The header keeps the
-  default. It is set once on the scaffold's `Rows`, so it goes through the existing `WriteRowStart`.
+  default. It is passed to `WriteRowStart` for each data row as it streams, not set on the scaffold's
+  `Rows`: `Axis` keeps a height per index in a dictionary (`Axis.cs:167`), which would be `O(rows)`.
   Null means the default height.
 - **`SpillImages`** backs the journal with a `FileStream` under `Path.GetTempPath()`, opened
-  `DeleteOnClose`. A caller-supplied stream factory is left out until something needs it.
+  `DeleteOnClose`, and opened on the first image, so a sheet without images creates no file. A
+  caller-supplied stream factory is left out until something needs it.
 - **The sniffer** recognizes PNG, JPEG, GIF, BMP and TIFF, the formats Excel renders. Anything else
   throws `InvalidOperationException` naming the cell, as the 32,767-character limit does. A
   caller-supplied `ContentType` is used unchecked.
@@ -13048,10 +13050,10 @@ row's `spans`. A non-null `StreamedImage` is appended to the journal.
 
 The journal hashes each image with SHA-256. The map from hash to media index is keyed by a 32-byte
 struct, not a hex string, so an entry costs about 48 B. A record is `row, column, mediaIndex`, and the
-first time an image is seen the record also carries `extension, length, bytes`. What the journal keeps
-in memory is that map, the anchor count, and one byte per distinct image naming its extension, which
+first time an image is seen the record also carries `length, bytes`. What the journal keeps
+in memory is that map, the anchor count, and a string reference per distinct image naming its extension, which
 the rels and the content types are both produced from. **With `SpillImages`
-on, memory is `O(distinct images)` × ~49 B, and nothing grows with the image bytes or with the number
+on, memory is `O(distinct images)` × ~56 B, and nothing grows with the image bytes or with the number
 of rows holding an image.** With it off, memory grows by the distinct image bytes, and that is the
 choice the caller made.
 
