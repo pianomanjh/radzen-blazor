@@ -12849,6 +12849,30 @@ for the workbook; that is the trade to decide, and it is now a number rather tha
 verified findings below exist only in the slot store, so neither should be fixed before that decision —
 they may be bugs in code about to be deleted.**
 
+**Decided and rebuilt on 2026-09-10.** The two-state store (`627d9a8bf`) and the `CellView` commit it
+carried (`92a524768`) left the fork. The box reuse (`76fa9a25e`) and the inline value with a rare-field
+holder (`6b6ad3fa8`) stayed. Measured on the rebuilt tip with the same harness and the same calibration:
+
+| arm | fork before | fork after | no fork storage at all |
+| --- | --- | --- | --- |
+| streamed export | 3.6 MB | **3.6 MB** | 3.6 MB |
+| built and saved | 18.5 MB | **56.3 MB** | 94.1 MB |
+
+56.3 is what `6b6ad3fa8` measured for itself, to the tenth of a megabyte, which is the arithmetic
+agreeing with the rig a second time. The streamed path did not move. Every part of a saved workbook
+still compares byte for byte against the pre-decoupling output.
+
+`spreadsheet-streamed-sheet-v2`'s spreadsheet sources are now **identical to the upstream branch's** —
+the narrative comments that made the twin a twin are gone, at Josh's instruction — so the fork diverges
+by exactly two storage commits, the CSV writer's view conversion and one auto-fit regression test.
+
+**One correction this forces.** `6b6ad3fa8` is *not* the upstream-tolerable half of the pair. It is the
+commit that makes `Cell.Data` build a fresh `CellData` on every read, and the `CellData.Equals` it adds
+exists to paper over exactly that — which is the public API break this section opens with, and one of
+akorchev's six findings. The shape he would take is `measure/accepted-shape-fill`, worth 8.4 MB, not the
+37.8 MB this one is worth. `76fa9a25e` is three lines, changes no signature and no identity, and is the
+only one of the two that could be offered on its own.
+
 ### The findings from his review, and which of them are verified
 
 Two were checked against the branch and both hold — and **both are the branch's own**, introduced by
