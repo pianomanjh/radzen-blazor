@@ -12827,12 +12827,27 @@ Against that it costs continuously: a divergent `Cell` and `CellStore` is why fi
 three-branch dance, why `rerere` carries two recurring conflicts, and why every upstream merge risks the
 most central type in the spreadsheet.
 
-**This is read from the code and not yet measured.** The arm that settles it is streamed-export
-allocation on the fork tip against the same writer rebased on master, and it falls out of the rebase
-almost free. If they agree, retiring the slot store puts the fork's spreadsheet layer back on upstream
-master and ends the dance. One consequence to catch first: **both verified findings below exist only in
-the slot store, so neither should be fixed before that decision — they may be bugs in code about to be
-deleted.**
+**Measured on 2026-09-10, and it agrees.** `StreamedExportFloor.cs`, 50,000 rows x 11 columns, three
+passes, arms interleaved, the same binary run against the fork tip and against the decoupled writer
+on #2710.
+
+| arm | fork tip, slot store | decoupled, master storage |
+| --- | --- | --- |
+| **streamed export** | **3.6 MB** | **3.6 MB** |
+| built and saved | 18.5 MB | 94.1 MB |
+| calibration | 75.5 MB | 75.5 MB |
+
+The calibration arm is 550,000 objects of 96 B, 550,000 of 32 B and two reference arrays — **75.5 MB by
+arithmetic, and 75.5 MB in both rigs**, so the two are comparable and the export figures may be quoted.
+Each arm asserts it wrote at least 100 KB before its number is believed; both wrote about 2.94 MB.
+
+**The streamed export allocates the same on both storage shapes, to the tenth of a megabyte.** The slot
+store earns nothing on the path the fork reaches by default. What it does earn is **5.1x on the built
+path — 94.1 MB against 18.5 MB** — which is `OnExport` and direct `Workbook` use, exactly where §67 read
+it from the code. So retiring it is free for the streamed export and is not free for a handler that asked
+for the workbook; that is the trade to decide, and it is now a number rather than a reading. **Both
+verified findings below exist only in the slot store, so neither should be fixed before that decision —
+they may be bugs in code about to be deleted.**
 
 ### The findings from his review, and which of them are verified
 
