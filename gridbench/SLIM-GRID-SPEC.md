@@ -12723,3 +12723,144 @@ The download. `Destination` removes it for an application that has somewhere to 
 default is still a `MemoryStream` behind `DotNetStreamReference`, because a menu entry has to produce
 something a browser can save. §65 said this and it is unchanged; it is repeated here so the flat claim
 above is not read as covering the whole path.
+
+## 67. #2711 was declined, and the shape offered instead is worth 11% of it
+
+akorchev declined `radzenhq/radzen-blazor#2711` on 2026-09-09. The reason is not a detail of the code:
+**it replaces a central piece of the model to serve one scenario, and the cost lands on everything
+else.** Formulas, formats and change notification are core features of a spreadsheet, and hiding them
+behind a lazily created bag plus a two-state store makes every lookup path ask "value or cell?". He
+priced the trade at realistic sizes rather than at 550,000 cells: at 10k–50k rows the per-cell fill
+gains about a third while reading the data back pays much of it away, and `=SUM` over a bulk-filled
+column allocates ~30% *more* than master.
+
+He also named what he would take: keep `CellData` as the stored field so `Data` identity and
+zero-allocation reads survive, keep the `CellView` path for the writers, no two-state store, no
+`GetType()` dispatch, no public API changes — and, if `Cell` is slimmed at all, `Formula`, `Format` and
+`Changed` stay plain fields because they are not rare.
+
+### The branch did change public API, and §60's own sentence is why that was missed
+
+Two claims, both true:
+
+- `CellStore.data` went from `protected readonly Dictionary<(int, int), Cell>` to
+  `private readonly Dictionary<(int, int), object?>`. `CellStore` is public and unsealed, so a
+  `protected` field is part of its surface for anyone deriving from it. That is a removal, not a retype.
+- `Cell.Data`'s *signature* is unchanged. Its behaviour is not: a stored auto-property became
+  `get => value is null ? CellData.Empty : new CellData(value, type)`, a fresh instance per read.
+
+§58 already recorded the second one — the restated `HyperlinkCommand_UndoRestoresExactCellData` is
+exactly this — and §60 still concluded **"Nothing in this needs a public signature to change."** That
+sentence is accurate and it is narrower than "no public API change". Signatures held; a protected
+member and a documented identity guarantee did not. **A vendor with external derivers holds the wider
+line, and the narrower sentence is what let a branch carry two breaks while reading as carrying none.**
+
+### Three arms, and a rig calibrated against §58 before any of them were believed
+
+`BulkVsIndexer.cs` with a fourth arm added: a graph of known shape — 550,000 × 96 B, 550,000 × 32 B, two
+reference arrays and a dictionary sized once, **90.3 MB by arithmetic**. It touches nothing in
+`Radzen.Blazor`, so all three rigs must report it identically or the comparison means nothing.
+
+| arm | `SetValues` | vs master | a cell at a time | vs master |
+| --- | --- | --- | --- | --- |
+| **A** post-#2708 master, `51e8258d6` | 94.0 MB | — | 113.7 MB | — |
+| **B** the shape offered instead | **85.6 MB** | −8.9% | 105.3 MB | −7.4% |
+| **C** #2711 as declined, `34967281a` | **18.4 MB** | −80.4% | 75.9 MB | −33.2% |
+| calibration, all three arms | 90.5 MB | identical | | |
+
+Arm A reproduced §58's 94.0 and 113.7 **byte for byte**, which is what earned the other two arms their
+credibility. The calibration read 90.5 against 90.3 by arithmetic, 0.2%.
+
+Arm B is master plus the only slimming the constraints allow: `Hyperlink`, `FormulaSyntaxTree` and
+`ValidationErrors` behind one reference, `Format`/`Formula`/`Changed` left as plain fields, `data` still
+`protected Dictionary<…, Cell>`, `Data` still a stored `CellData`. `Cell` goes from ten fields to eight
+— 96 bytes to 80 — and **16 bytes a cell over 550,000 cells is 8.4 MB, which is the whole of the
+difference.** The prediction and the measurement were both 85.6. There is no headroom hiding inside the
+constraints.
+
+2,015 spreadsheet tests pass on arm B, and both new paths are mutation-checked rather than assumed:
+nulling the `Hyperlink` getter fails 7, emptying `ValidationErrors` fails 9, and the restore was
+byte-identical from a file snapshot.
+
+**The offered shape recovers 8.4 MB of the 75.6 MB the declined branch won — 11% of it.** A rebuilt
+#2711 would be a 9% PR against the most central type in the spreadsheet, submitted to the maintainer
+who had just declined a change to that type as not worth the churn. It should not be written.
+
+### The seam that does not exist, and why it should not be asked for
+
+`CellStore` is public and unsealed and `Worksheet.Cells` has a `protected set`, so a derived worksheet
+could swap in a derived store — and it would buy nothing. `this[int, int]` is the **only** virtual
+member. `SetValues`, `Find`, `TryGet`, `GetPopulatedCells`, `Compact`, `PopulatedCount`, `HasCell` and
+the four shift methods are non-virtual, read `data` directly as a `Dictionary<…, Cell>`, and all but two
+are `internal`. The writers and the dependency graph bypass the indexer entirely. Nothing derives from
+`CellStore` today.
+
+So "extend what is there" and "ask for a seam" are the same request. **It is the wrong request to make
+now**: he declined because a central piece of the model was being replaced for one scenario, and a seam
+asks him to commit *permanently* to an extension contract over that same piece — a larger and more
+durable obligation, constraining their own future refactors, made immediately after a decline, with
+#2710 still unmerged and needing the goodwill. This is also a different question from the seam
+already closed: `IAsyncQueryExecutor` was about the DataGrid's query path, priced at ~600 lines of
+wiring inside their components, and it stays closed.
+
+### #14 never needed #2711, which is what actually unblocks the stack
+
+`XlsxWriter.Streaming.cs` touches `sheet.Cells` **once**, to `SetText` a title row. It reads nothing
+through the store. Its entire dependency on #2711 is `CellView` — 49 lines — plus the mechanical
+conversion of four writer methods from `Cell` to `in CellView`. Both can travel in #14 itself.
+
+`CellView` was always justified by the streaming writer rather than by the two-state store: the streamed
+path constructs one from a raw `(address, value, type)` for a row that has no `Cell` at all, which is
+how it shares the typed-value and style code with the ordinary writer. **The thing held to be blocking
+the stack was not load-bearing.** The streaming writer rebases onto #2710 or onto master and goes
+upstream self-contained.
+
+### What this asks of the fork's slot store
+
+The streamed path is store-independent by construction, so a streaming PR off master is **as efficient
+as one off the slot store**. And `WorkbookExporter` takes `ToWorkbook` only when `options.OnExport` is
+set — *"a handler that asked for the workbook asked for the model"* — while the default path and the
+`Destination` sink path both stream. **The slot store's 94.0 → 18.4 MB is earned on the `OnExport`
+handler path and on direct `Workbook` use, and on nothing the fork reaches by default.**
+
+Against that it costs continuously: a divergent `Cell` and `CellStore` is why fixes take the
+three-branch dance, why `rerere` carries two recurring conflicts, and why every upstream merge risks the
+most central type in the spreadsheet.
+
+**This is read from the code and not yet measured.** The arm that settles it is streamed-export
+allocation on the fork tip against the same writer rebased on master, and it falls out of the rebase
+almost free. If they agree, retiring the slot store puts the fork's spreadsheet layer back on upstream
+master and ends the dance. One consequence to catch first: **both verified findings below exist only in
+the slot store, so neither should be fixed before that decision — they may be bugs in code about to be
+deleted.**
+
+### The findings from his review, and which of them are verified
+
+Two were checked against the branch and both hold — and **both are the branch's own**, introduced by
+the two-state store and absent from master, so closing #2711 removes them and neither needs an upstream
+fix:
+
+- **`Adopt` resurrects removed keys.** `GetPopulatedCells` snapshots `data.Keys` and then adopts each
+  one, and `Adopt` uses `GetValueRefOrAddDefault` (`CellStore.cs:362`), so a `DeleteRow` or `Compact`
+  during that enumeration puts the key back as an empty cell. `Find` is safe; it gates on `ContainsKey`.
+- **Saving mutates the store.** `ComputeAutoFitWidths` walks the cheap `GetPopulatedViews()` into an
+  address list and then re-reads every one through `sheet.Cells[address]` (`XlsxWriter.cs:1211`),
+  materialising every raw cell in an auto-fit column, with `catch (ArgumentOutOfRangeException)
+  { continue; }` as control flow per out-of-range row. The view in hand already carries the text — his
+  "`CellView.FormatDisplayText` is unused" is the same finding from the other end. **Master does not do
+  this**: it iterates `GetPopulatedCells().ToList()` and reads the cell it already holds
+  (`XlsxWriter.cs:1187`), so there is nothing to fix upstream. The `try`/`catch
+  (ArgumentOutOfRangeException)` is pre-existing and vestigial there, guarding a re-read master never
+  performs.
+
+Four are recorded unverified: `Find`/`TryGet` double-probing and permanently materialising raw entries;
+`CellData.Equals` ordinal while `CompareTo` is case-insensitive, so `CompareTo == 0` no longer implies
+`Equals`; the `SetValues` remarks still claiming every write notifies through `Cell.Value`; and
+`Cell.Changed`'s `add` allocating the bag on every rendered grid cell.
+
+### The two found reviewing #14, recorded here because §66 did not
+
+Cancellation was ignored at the end of enumeration, and numeric table headings fell back to `Column1`.
+Both were found reviewing fork PR #14. `FastGridExport.ToWorkbook` additionally stores a
+numeric-looking heading as a number where the streamed path is already correct — unfixed, in no PR, and
+now subject to the same question as everything else on the workbook path.
