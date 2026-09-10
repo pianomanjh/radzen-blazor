@@ -12973,3 +12973,151 @@ the whole-`XDocument` save for an `XmlWriter` — was scoped and declined as *"a
 rather than a hunk"*, and taken only on the streamed path, where it is worth 94.1 MB to 3.6. An
 `XmlReader` rewrite of the load is the same trade in the same proportion, and has the same answer:
 **not attached to a PR that is under review for something else.**
+
+## 69. A streamed image waits for the sheet to close, and where it waits is the caller's choice
+
+FastGrid is getting image columns, and they have to export as pictures, not as text. The built path
+already embeds images from bytes (`SheetImage`, `InsertImageCommand`), and was proved with five
+Northwind photos. The streamed writer of #2716 has no image support at all. This section is the design
+for adding it to the writer. The grid's image column and its export wiring get their own section once
+this lands and the fork branches are re-cascaded onto the #2716 tip.
+
+### Nothing in the drawing can be written while the rows stream
+
+`sheet1.xml` is held open for the whole row loop (`XlsxWriter.Streaming.cs:164`), and `ZipArchive` in
+Create mode refuses a second open entry. Tested: *"Entries cannot be created while previously created
+entries are still open."* That applies to more than the image bytes. `xl/drawings/drawing1.xml` and its
+`.rels` are entries too, and the built path's `SaveDrawing` builds the drawing as an `XDocument`, so it
+costs about 1 KB of anchor XML per image even when no bytes are attached. So everything an image
+contributes waits until the sheet entry closes.
+
+### The decisions
+
+| question | answer |
+| --- | --- |
+| scale | both: memory by default, spill to disk as an opt-in, the same trade `InlineStrings` makes |
+| how a column yields an image | a separate `Image` accessor, exclusive with `Value` |
+| sizing | fill the cell: a `twoCellAnchor` from the cell's top-left to its bottom-right, rows from a sheet-level `DataRowHeight` |
+| content type | sniffed from magic bytes, and a caller-supplied type overrides it |
+| where the bytes wait | one append-only journal, backed by memory or a temp file, replayed after the sheet closes |
+
+Two alternatives were rejected. Separate stores for memory and spill mean two code paths and twice
+the mutation surface. Spilling the *sheet* instead, and writing media into the zip as rows arrive,
+puts a disk cost on the rows rather than on the image bytes, and in memory mode it holds the entire
+sheet. Re-fetching by key after the sheet closes needs a source that can be queried twice, and spill
+mode covers the same need without that.
+
+### Public API
+
+```csharp
+public sealed class StreamedImage
+{
+    public StreamedImage(byte[] data, string? contentType = null);
+    public byte[] Data { get; }
+    public string? ContentType { get; }
+}
+
+public Func<T, StreamedImage?>? Image { get; set; }   // StreamedColumn<T>
+
+public double? DataRowHeight { get; set; }            // StreamedSheet, pixels
+public bool SpillImages { get; set; }                 // StreamedSheet
+```
+
+- **`byte[]`, not `ReadOnlyMemory<byte>`.** It matches `SheetImage.Data`. The sampled-width buffer
+  keeps the reference for up to *n* rows before it writes them, so a pooled or reused buffer would put
+  the wrong picture in the file without any error. The doc says the array must not change once it has
+  been returned.
+- **An image column writes no `<c>`.** A cell under a picture holds nothing, so `Image` together with
+  a non-default `Value` throws at write time. `Value`'s default becomes a cached static delegate so
+  the check is a reference comparison. `Image` with `AutoFit` throws, since there is nothing to
+  measure. `Format` is ignored, since there is no cell to format.
+- **`DataRowHeight` applies to every data row**, not only rows holding an image. The header keeps the
+  default. It is set once on the scaffold's `Rows`, so it goes through the existing `WriteRowStart`.
+  Null means the default height.
+- **`SpillImages`** backs the journal with a `FileStream` under `Path.GetTempPath()`, opened
+  `DeleteOnClose`. A caller-supplied stream factory is left out until something needs it.
+- **The sniffer** recognizes PNG, JPEG, GIF, BMP and TIFF, the formats Excel renders. Anything else
+  throws `InvalidOperationException` naming the cell, as the 32,767-character limit does. A
+  caller-supplied `ContentType` is used unchecked.
+
+### The journal, and the three reads that follow the sheet
+
+`StreamedSheet` gains `internal abstract bool IsImageAt(int column)`, turned into a `bool[]` once
+before the loop. In `WriteStreamedRow` an image column skips `CellData.Infer` and is left out of the
+row's `spans`. A non-null `StreamedImage` is appended to the journal.
+
+The journal hashes each image with SHA-256. The map from hash to media index is keyed by a 32-byte
+struct, not a hex string, so an entry costs about 48 B. A record is `row, column, mediaIndex`, and the
+first time an image is seen the record also carries `extension, length, bytes`. What the journal keeps
+in memory is that map, the anchor count, and one byte per distinct image naming its extension, which
+the rels and the content types are both produced from. **With `SpillImages`
+on, memory is `O(distinct images)` × ~49 B, and nothing grows with the image bytes or with the number
+of rows holding an image.** With it off, memory grows by the distinct image bytes, and that is the
+choice the caller made.
+
+When the last row has been written, the anchor count is known, so `<drawing r:id>` goes in after
+`pageMargins` and before `tableParts`, which is the `CT_Worksheet` order. Once the sheet entry
+closes:
+
+1. **Media.** Read the journal from the start and write each first occurrence as
+   `xl/media/image{N}.{ext}`.
+2. **Drawing.** Read it again and stream `drawing1.xml` through an `XmlWriter`, one `twoCellAnchor`
+   from `(col, row, 0, 0)` to `(col + 1, row + 1, 0, 0)` per record. Stored bytes are skipped with
+   `Seek`, never read back.
+3. **Drawing rels.** One `rId{N}` per distinct image, produced from the extension bytes without
+   touching the journal.
+
+The sheet's rels add the drawing beside the table, with ids given by which of the two are present.
+`SaveContentTypes` takes the extensions and the drawing as parameters, because today it finds images
+by walking `sheet.Images` on the scaffold, which is empty. The journal is disposed in a `finally`, and
+`DeleteOnClose` removes the temp file on a throw as well. The existing `Discard` of a partial
+destination is unchanged. The built path's `SaveDrawing` is not touched.
+
+### A row height is written in pixels and read in points
+
+`WriteRowStart` (`XlsxWriter.cs:1478`) writes `sheet.Rows[row]` into `ht`. That value is in pixels:
+the default is 22, set at `Worksheet.cs:325`. OOXML defines `ht` in points, and the reader
+(`XlsxReader.cs:664`) multiplies by 96/72. So a 48 px row opens in Excel at 64 px and round-trips as
+64. It is on upstream master: the `XElement` writer that `c357049f8` replaced had the same line.
+`DataRowHeight` goes through that method, so it is fixed there, in its own commit at the base of the
+image branch, for both paths. It could go upstream as a PR of its own.
+
+### Sequencing
+
+Branch `upstream/xlsx-streaming-images` off `e041dad58`, the #2716 tip, in a worktree of its own.
+One piece per commit, each red before it is green, with a review between pieces:
+
+1. `ht` in points.
+2. `StreamedImage` and the sniffer.
+3. The `Image` accessor, the journal and the drawing parts, in memory mode.
+4. `DataRowHeight`.
+5. `SpillImages`.
+
+### What is claimed, and how it is held
+
+Round-trip through `XlsxReader`, which already reads `twoCellAnchor` images (`XlsxReader.cs:1232`):
+
+- every image comes back with its bytes, its content type, and From/To equal to its own cell;
+- three rows sharing one image give one media entry and three anchors;
+- an image column with every value null writes no drawing part, no rel, and no content-type override;
+- a table and a drawing in the same file both resolve, with distinct rel ids;
+- `Image` with `Value`, `Image` with `AutoFit`, and an unsniffable image each throw, the last naming
+  its cell;
+- **spill mode writes the same bytes as memory mode**, and leaves no temp file after either a
+  successful write or a faulting source;
+- Sampled and Declared both hold;
+- a 48 px row reads back as 48.
+
+Every new test is mutation-checked, restored from a `cp` snapshot. The byte gate over the built path
+still reads 16 parts and 0 differing after the `ht` fix. If a saved part carries a custom height, the
+difference is named, not waved through.
+
+The allocation sweep goes in `gridbench/spreadsheet-perf`, and it sweeps the number of image rows with
+both arms. **Memory mode has to grow by about the image bytes.** That is the arm computable by hand,
+and it is what shows the instrument can see growth at all. Spill mode has to stay flat. A flat
+spill arm next to a memory arm that does not grow tells us nothing.
+
+The five Northwind photos are written through the streamed path and opened in Numbers, which is the
+only spreadsheet app on this machine. Excel has not been checked until Josh opens the file, and that
+is stated rather than implied. Before any push, `Radzen.Blazor` and its tests are built in Debug, as
+upstream CI does. Nothing goes to GitHub without asking.
