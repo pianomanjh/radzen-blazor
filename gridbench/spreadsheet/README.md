@@ -19,6 +19,7 @@ running the same program against it.
 | `SaveFloor.cs` | What is left in the save and who pays for it - the sink against the writer, and a distinct against a repeated string table. |
 | `ShiftCost.cs` | What a row insert costs on a sheet carrying range formulas - the arm that says whether keying the dependency graph on an address makes the editor worse. |
 | `FillFloor.cs` | What the fill would cost if a cell were not an object. Six stores over the same block, dense and sparse, plus two calibration arms of known shape. Needs the ClosedXML package reference. |
+| `StreamedExportFloor.cs` | What a streamed export allocates, run against a checkout with the slot store and one without. |
 
 ## What `SetValues` actually saves
 
