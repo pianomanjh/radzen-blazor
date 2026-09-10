@@ -1,0 +1,135 @@
+@using RadzenBlazorDemos.Data
+@using RadzenBlazorDemos.Models.Northwind
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
+@using System.IO
+@using Radzen.Documents.Spreadsheet
+
+@inherits DbContextPage
+@inject IJSRuntime JSRuntime
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1rem">
+        <RadzenButton Icon="download" Text="Download XLSX" ButtonStyle="ButtonStyle.Primary"
+                      IsBusy=@busy BusyText="Writing..." Click=@Download />
+        <RadzenText TextStyle="TextStyle.Body2">
+            @rowCount.ToString("N0") order lines, @ColumnCount columns -
+            @((rowCount * ColumnCount).ToString("N0")) cells the streamed write never builds.
+        </RadzenText>
+    </RadzenStack>
+
+    <RadzenDataGrid Data="@preview" TItem="OrderLine" AllowPaging="true" PageSize="10">
+        <Columns>
+            <RadzenDataGridColumn TItem="OrderLine" Property="OrderId" Title="Order" Width="90px" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="OrderDate" Title="Date" FormatString="{0:d}" Width="110px" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="Customer" Title="Customer" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="Country" Title="Country" Width="120px" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="Employee" Title="Employee" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="Category" Title="Category" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="Product" Title="Product" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="Quantity" Title="Qty" Width="80px" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="UnitPrice" Title="Unit price" FormatString="{0:C}" Width="120px" />
+            <RadzenDataGridColumn TItem="OrderLine" Property="LineTotal" Title="Line total" FormatString="{0:C}" Width="120px" />
+        </Columns>
+    </RadzenDataGrid>
+</RadzenStack>
+
+@code {
+    const int ColumnCount = 10;
+
+    public record OrderLine(
+        int OrderId,
+        DateTime? OrderDate,
+        string Customer,
+        string Country,
+        string Employee,
+        string Category,
+        string Product,
+        short Quantity,
+        decimal UnitPrice,
+        decimal LineTotal);
+
+    bool busy;
+    int rowCount;
+    IEnumerable<OrderLine> preview = Array.Empty<OrderLine>();
+
+    IQueryable<OrderLine> Query() =>
+        dbContext.OrderDetails
+            .Include(detail => detail.Order).ThenInclude(order => order.Customer)
+            .Include(detail => detail.Order).ThenInclude(order => order.Employee)
+            .Include(detail => detail.Product).ThenInclude(product => product.Category)
+            .Where(detail => detail.Order.OrderDate != null
+                && detail.Quantity != null
+                && detail.UnitPrice != null
+                && detail.Discount != null)
+            .OrderBy(detail => detail.Order.OrderDate)
+            .ThenBy(detail => detail.OrderID)
+            .Select(detail => new OrderLine(
+                detail.OrderID,
+                detail.Order.OrderDate,
+                detail.Order.Customer == null ? "" : detail.Order.Customer.CompanyName,
+                detail.Order.ShipCountry,
+                detail.Order.Employee == null
+                    ? ""
+                    : detail.Order.Employee.FirstName + " " + detail.Order.Employee.LastName,
+                detail.Product.Category == null ? "" : detail.Product.Category.CategoryName,
+                detail.Product.ProductName,
+                detail.Quantity.Value,
+                (decimal)detail.UnitPrice.Value,
+                (decimal)(detail.UnitPrice.Value * detail.Quantity.Value * (1 - detail.Discount.Value))));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+
+        rowCount = await Query().CountAsync();
+        preview = await Query().Take(50).ToListAsync();
+    }
+
+    StreamedSheet<OrderLine> Sheet() => new()
+    {
+        Name = "Order lines",
+        Rows = Query().AsAsyncEnumerable(),
+        RowCount = rowCount,
+        TableName = "OrderLines",
+        FrozenRows = 1,
+        Columns =
+        {
+            new StreamedColumn<OrderLine> { Title = "Order", Value = line => line.OrderId, AutoFit = true },
+            new StreamedColumn<OrderLine> { Title = "Date", Value = line => line.OrderDate, AutoFit = true,
+                Format = new Format { NumberFormat = "yyyy-mm-dd" } },
+            new StreamedColumn<OrderLine> { Title = "Customer", Value = line => line.Customer, AutoFit = true },
+            new StreamedColumn<OrderLine> { Title = "Country", Value = line => line.Country, AutoFit = true },
+            new StreamedColumn<OrderLine> { Title = "Employee", Value = line => line.Employee, AutoFit = true },
+            new StreamedColumn<OrderLine> { Title = "Category", Value = line => line.Category, AutoFit = true },
+            new StreamedColumn<OrderLine> { Title = "Product", Value = line => line.Product, AutoFit = true },
+            new StreamedColumn<OrderLine> { Title = "Qty", Value = line => line.Quantity, AutoFit = true },
+            new StreamedColumn<OrderLine> { Title = "Unit price", Value = line => line.UnitPrice, AutoFit = true,
+                Format = new Format { NumberFormat = "#,##0.00" } },
+            new StreamedColumn<OrderLine> { Title = "Line total", Value = line => line.LineTotal, AutoFit = true,
+                Format = new Format { NumberFormat = "#,##0.00" } },
+        },
+    };
+
+    async Task Download()
+    {
+        busy = true;
+
+        try
+        {
+            using var stream = new MemoryStream();
+
+            await Workbook.SaveToStreamAsync(stream, Sheet());
+
+            stream.Position = 0;
+
+            using var streamRef = new DotNetStreamReference(stream);
+
+            await JSRuntime.InvokeVoidAsync("Radzen.downloadFile", "order-lines.xlsx", streamRef);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}
