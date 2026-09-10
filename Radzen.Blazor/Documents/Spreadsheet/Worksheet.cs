@@ -564,7 +564,7 @@ public partial class Worksheet
     {
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(cellDelimiter);
-        var rows = value.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+        var rows = SplitRows(value);
 
         var rowCount = Math.Min(rows.Length, RowCount - address.Row);
 
@@ -579,6 +579,16 @@ public partial class Worksheet
                 cell.SetValue(cells[columnIndex]);
             }
         }
+    }
+
+    internal static string[] SplitRows(string value)
+    {
+        if (value.EndsWith("\r\n", StringComparison.Ordinal))
+        {
+            value = value[..^2];
+        }
+
+        return value.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
     }
 
     /// <summary>

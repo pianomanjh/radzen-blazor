@@ -347,7 +347,21 @@ public class Format
     /// <summary>
     /// Gets a value indicating whether all format properties are at their default values.
     /// </summary>
-    public bool IsDefault => Properties.All(p => !p.IsSet(this));
+    public bool IsDefault
+    {
+        get
+        {
+            foreach (var property in Properties)
+            {
+                if (property.IsSet(this))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
 
     internal Format Merge(Format format)
     {

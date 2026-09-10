@@ -115,7 +115,7 @@ class SpreadsheetClipboard
             return RangeRef.Invalid;
         }
 
-        var lines = pastedText.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+        var lines = Worksheet.SplitRows(pastedText);
         var rowCount = Math.Min(lines.Length, targetSheet.RowCount - destination.Start.Row);
 
         var columnCount = 0;
