@@ -20,6 +20,7 @@ running the same program against it.
 | `ShiftCost.cs` | What a row insert costs on a sheet carrying range formulas - the arm that says whether keying the dependency graph on an address makes the editor worse. |
 | `FillFloor.cs` | What the fill would cost if a cell were not an object. Six stores over the same block, dense and sparse, plus two calibration arms of known shape. Needs the ClosedXML package reference. |
 | `StreamedExportFloor.cs` | What a streamed export allocates, run against a checkout with the slot store and one without. |
+| `StreamedImageFloor.cs` | What a streamed export's images cost, held in memory against spilled to a file, swept over image count and, by its argument in KB, image size. |
 
 ## What `SetValues` actually saves
 
