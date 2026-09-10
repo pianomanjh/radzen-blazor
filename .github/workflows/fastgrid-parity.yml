@@ -1,0 +1,100 @@
+# Styling parity between RadzenFastGrid and RadzenDataGrid: markup contract plus rendered geometry
+# measured through Chromium against the real theme stylesheet.
+#
+# Kept separate from ci.yml on purpose: this job needs a browser, and a missing Chromium should not be
+# able to fail the main build. It watches Radzen.Blazor as well as the grid, because every rule it
+# checks is anchored against RadzenDataGrid rendered over the same data in the same run, and the theme
+# it measures against is generated from Radzen.Blazor/themes at build time - the CSS itself is
+# gitignored, so a path filter naming it could never fire.
+
+name: FastGrid styling parity
+
+on:
+  push:
+    paths:
+      - 'Radzen.Blazor.FastGrid/**'
+      - 'Radzen.Blazor.FastGrid.Tests/**'
+      - 'Radzen.Blazor/**'
+      - 'Radzen.Blazor.FastGrid.TrimTest/**'
+      - '.github/workflows/fastgrid-parity.yml'
+  pull_request:
+    paths:
+      - 'Radzen.Blazor.FastGrid/**'
+      - 'Radzen.Blazor.FastGrid.Tests/**'
+      - 'Radzen.Blazor/**'
+      - 'Radzen.Blazor.FastGrid.TrimTest/**'
+      - '.github/workflows/fastgrid-parity.yml'
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    # Installed globally, because the measurement script resolves Playwright from the global npm root
+    # when there is no node_modules beside it. The check deliberately has no browser-missing fallback:
+    # without Chromium it fails rather than passing on the markup half alone, since the fault it exists
+    # to catch is invisible in markup.
+    - name: Install Playwright and Chromium
+      run: |
+        npm install -g playwright
+        playwright install --with-deps chromium
+
+    - name: Styling parity check
+      run: dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj
+
+  # Publishing trimmed says the linker had no objection; it does not say the application runs, because
+  # a trimmed member is only missing once something reaches for it. So this publishes the app and then
+  # drives it - sorts by a string column and a numeric one, filters, and checks the answers.
+  #
+  # Sharing this workflow rather than ci.yml for the same reason the parity job does: it needs a
+  # browser, and a missing Chromium should not be able to fail the main build.
+  trimming:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Install Playwright and Chromium
+      run: |
+        npm install -g playwright
+        playwright install --with-deps chromium
+
+    # TreatWarningsAsErrors is set in the project, so a new trim warning fails here rather than being
+    # noted and scrolled past.
+    - name: Publish trimmed
+      run: dotnet publish Radzen.Blazor.FastGrid.TrimTest/Radzen.Blazor.FastGrid.TrimTest.csproj -c Release
+
+    - name: Serve the published app
+      run: |
+        cd Radzen.Blazor.FastGrid.TrimTest/bin/Release/net10.0/publish/wwwroot
+        python3 -m http.server 8477 &
+        for i in $(seq 1 30); do
+          curl -sf -o /dev/null http://localhost:8477/ && break
+          sleep 1
+        done
+
+    - name: Drive it
+      run: node Radzen.Blazor.FastGrid.TrimTest/check.js http://localhost:8477/

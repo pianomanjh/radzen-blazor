@@ -1,0 +1,12476 @@
+# Slim read-only Radzen grid — build spec
+
+Everything here is derived from measurements in `README.md` in this folder. Where a decision was made,
+the reason and the number behind it are given, so it can be re-argued rather than merely obeyed.
+
+Read `README.md` first for the raw data. This file is the design that follows from it.
+
+---
+
+## 0. Where this is
+
+Shipped as `Radzen.Blazor.FastGrid` on `tech/radzen-datagrid-slim`, rebased onto `upstream/master`.
+The branch is now **purely additive**: it changes nothing in `Radzen.Blazor` at all, and the package
+needs **no `InternalsVisibleTo`** - the async executor, the string resolver and the non-rendering event
+handler are all mirrored over public surface, so it installs against stock `Radzen.Blazor`.
+
+It got there by sending its one library change up rather than carrying it. Upstream has absorbed the
+async IQueryable seam (#2689), the render optimizations (#2684) and now the `QueryableExtension`
+array-filter fix (#2696) - which is why `Radzen.Blazor.EntityFrameworkAdapter` no longer exists: the
+built-in `AsyncEnumerableQueryExecutor` made it redundant. The theme fix that keyboard navigation needs
+is up as #2698 and is the one piece not yet merged.
+
+**Built and measured** (1000 x 5, allocation, modal of several runs):
+
+All from one run at `2e7f756dc`, against that run's own bare - the whole feature table in `README.md`
+was re-measured with it, and two runs of it agreed to within 0.71 KB.
+
+| | Costs |
+| --- | ---: |
+| bare | 154.0 KB |
+| sorting, filtering, paging, virtualization, column picking, settings, templates, `ItemKey` | see `README.md` |
+| row click, cell click, cell context menu, row detail - **all four together** | **+0.7 KB** |
+| column resize | +4.9 KB |
+| column reorder | +6.7 KB |
+| two frozen columns | +1.1 KB |
+| keyboard navigation | **+1.2 KB, 1.00x** |
+| range selection, on top of navigation | **+0.3 KB** |
+| positional ARIA, row numbers | **+0 KB** |
+| positional ARIA, column numbers on every cell | **+0.1 KB, ~1.1x** |
+| responsive titles | **+0 KB, 1.40x** |
+| column auto-fit, off | **0 KB** - 154.04 against a 154.09 bare |
+| column auto-fit, on demand | **+0.2 KB**, and ~1.7ms + 0.03ms a rendered row in the browser (§13) |
+| the scroll container and `role="grid"` | 0 |
+
+Resize and reorder are measured together as well as apart: 158.9 KB and 160.8 KB on their own, 162.9 KB
+at once. They are additive because they are the same kind of cost - a handle and a pair of callbacks
+per *header*. Against `RadzenDataGrid` with reorder on both sides, which allocates 13,184 KB for it,
+that is **82x**.
+
+Frozen columns cost +1.1 KB - the inset belongs to the column rather than the cell, so what is paid is
+one memoized string for the whole grid plus a class and a style frame on the cells of a frozen column.
+`RadzenDataGrid` allocates 19,785 KB for the same two frozen columns, which is **128x**.
+
+Every figure above is allocation. `--job short` does not measure time, so the ratios quoted here and in
+`README.md` are the ones settled by full-length runs; a feature added since carries no ratio rather
+than a short-run guess.
+
+Frozen is the one feature here that costs measurably more *time* than it does memory: a full-length run
+puts it at **1.10x** (478.0us to 525.0us, error 3.7 and 10.5), which is those two frames on two
+thousand cells. Two frames per cell being visible while a kilobyte is not is the pooled-frame-array
+question in §11 again, from the other side.
+
+Against `RadzenDataGrid` with the same feature on both sides, the narrowest row is cell click at
+**132x** and row detail is **109x**. Nothing in the grid charges a delegate per row any more.
+
+Keyboard navigation measured 155.2 KB against a 153.85 KB bare grid over three full-length runs, inside
+the +2 KB and 1.02x gate §12 set for it, and the re-measurement above puts it at +1.2 KB against a
+154.0 KB bare - the same answer from a different baseline, which is what a marginal is for. It cost eight times that until an assumption in §12 was
+measured rather than believed: `data-r` on every row read **+16 KB at a thousand rows**. That number
+has since been taken apart and it was never the frame - the table of cached index strings held 512
+entries, so 488 rows of every render called `ToString`. Growing it to fit took row click, cell click
+and row detail from +16 KB each to under a kilobyte, and an attribute per row with it. §12 records
+both the design that came out of the wrong reading and the measurement that corrected it.
+
+Range selection measured as nothing at all, which is the answer its shape predicts: it has no
+parameter, binds nothing and emits nothing, because a Shift key is its whole surface. The row that
+proves it reads 0.23 KB above the navigation row, and setting `SelectionMode` to its default rather than
+`Multiple` - the feature off, the parameter still passed - reads the same 0.23 KB. **A benchmark row
+that differs by a parameter is measuring the parameter too**, and at this resolution that is visible.
+
+Positional ARIA landed on the other side of the budget from where §12 put it, and for a reason that
+took the `data-r` number down with it: **the row attribute is free and the cell attribute is free in
+bytes and not in time**. §12 had them the other way round, on a frame-count argument that turned out to
+be about string values instead.
+
+**Not built**: editing, grouping, composite headers. Keyboard navigation is built in full - the cursor,
+the keys, range selection and positional ARIA - and so are column auto-fit (§13) and lookup columns
+(§14, shapes 1 to 3). §10 has what is still open.
+
+## 1. Why a separate component
+
+`RadzenDataGrid` renders 1000 rows x 5 columns in 28,708 KB on master. Optimising it in place got that
+to 18,189 KB (-36.6%, shipped in PR #8). The remaining ~55% is structural:
+
+- the `RadzenDataGridRow` component instantiated per row
+- the `RenderFragment` returned per cell by `RenderCell`
+- the per-row attribute machinery (`RowAttributes`, `RowStyle`, `RowAriaSelected`, the `<tr>` splat)
+
+**Ruled out, with reasons — do not retry these:**
+
+| Idea | Why not |
+| --- | --- |
+| Move the cell markup into `RadzenDataGridRow`'s loop so no per-cell fragment is needed | `RenderCell` is **self-recursive** — it calls itself for child columns of a composite header (`RadzenDataGrid.razor`, the `else` branch over `childColumns`). Markup in a loop cannot recurse. Flattening it restructures composite-column rendering, which is live (see the `DataGridCompositeColumns` demo). |
+| Pass the parent's builder as a `__builder` parameter so a `@code` method can emit markup | Razor only does this for a component's `BuildRenderTree`. For a method in a `@code` block it parses the generic signature as markup — tried it, 124 compile errors. |
+| Render rows inline on a fast path, keeping `RadzenDataGridRow` as fallback | Two row-rendering paths to keep in sync forever. Same drift hazard that `/simplify` flagged in `RenderCell`, at much larger scale. |
+
+A separate component is the low-risk route, not the only one: it touches nothing that already works.
+
+## 2. Budget
+
+At 1000 rows x 5 columns, for identical output:
+
+| | Allocated |
+| --- | --- |
+| `RadzenDataGrid` on master | 28,708 KB |
+| `RadzenDataGrid` after PR #8 | 18,189 KB |
+| QuickGrid | 370 KB |
+| Slim, bare | 220 KB (119 KB with typed columns, §4) |
+| Slim, every feature on and every callback wired | 2,601 KB |
+
+Target: under ~1,000 KB for a realistic configuration. Anything above that means a rule in §3 was broken.
+
+## 3. Architecture rules
+
+1. **Rows and cells are written inline** into the grid's own render tree. No component per row, no
+   `CascadingValue` per row, no `RenderFragment` returned per cell.
+2. **No callback is allocated unless a handler exists.** This is where the budget goes:
+   a row click costs ~310 B/row; a cell click ~296 B/**cell**, which at five columns is five times worse.
+   Bind `onclick` only when the corresponding `EventCallback.HasDelegate`.
+3. **Nothing is paid for when switched off.** Feature costs are conditional, never unconditional. The
+   `oncontextmenu` modifiers in `RadzenDataGrid` cost 10.6% of its entire allocation while evaluating to
+   `false` on every cell — that is the failure mode to avoid. The same trap in C# rather than Razor: a
+   lambda capturing a local makes the compiler allocate that method's display class **on entry**, not at
+   the declaration, so a per-row method with an unused closure inside a branch costs a closure per row.
+   That was 21% of this component's allocation until it was moved into its own method.
+4. **Free features are in, not out.** Selection, row-style callbacks and responsive column titles measured
+   at *zero* marginal allocation. There is no performance argument for omitting them.
+5. **A generic value must never be widened to reach an interface.** `((IFormattable)(object)value)` boxes
+   every value type it touches — 32 B per cell for a `decimal`, on every row of every formatted column.
+   The formatter is built once per column by a generic method constrained to `struct, IFormattable`, so
+   the interface call is made under a constraint and the struct stays on the stack. Same rule, same
+   reason, as compiling the cell to `Func<TItem, string>` rather than reading the value as an object.
+6. **Deriving a string to compare two things allocates; comparing the things does not.** Razor rebuilds
+   every column's expression trees on every render, so each one is compared against the last to avoid
+   recompiling. Deriving both property paths to compare them cost a list and a joined string per
+   expression per column per render; walking the two member chains together costs nothing.
+
+## 4. Column model
+
+Expressions, not string property names. This is both the better ergonomics and the cheaper option:
+
+| Column shape | Allocated (1000x5) |
+| --- | --- |
+| `Property="Name"` -> `Func<T,object>` | 220.47 KB |
+| `Expression<Func<T,TProp>>` -> `AddContent(value)` | 165.78 KB |
+| `Expression<Func<T,TProp>>` -> `Func<T,string>` -> `AddContent(string)` | **118.91 KB** |
+
+`RenderTreeBuilder` has no generic `AddContent<T>`, so handing it a value type binds the `object`
+overload, which boxes **and then** stringifies. Compile the expression once into a `Func<T,string>` and
+only the string is paid for. The naive typed column still pays the box — implement row 3, not row 2.
+
+Shape:
+
+```
+abstract class ColumnBase<TItem>
+    string Title, CssClass, FormatString        // genuinely strings, leave them alone
+    abstract void RenderCell(RenderTreeBuilder b, int seq, TItem item)
+    virtual IOrderedQueryable<TItem> ApplySort(IQueryable<TItem> source, bool descending)
+    string SortPath { get; }                    // derived, see below
+    ColumnIdentity Identity { get; }            // what names it across a reload, §27
+
+sealed class PropertyColumn<TItem, TProp> : ColumnBase<TItem>
+    Expression<Func<TItem, TProp>> Property
+    Expression<Func<TItem, TProp>> SortBy       // optional, defaults to Property
+    Expression<Func<TItem, TProp>> GroupBy      // optional, defaults to Property
+    Expression<Func<TItem, TProp>> FilterBy     // optional, defaults to Property
+
+sealed class TemplateColumn<TItem> : ColumnBase<TItem>
+    RenderFragment<TItem> Template              // ~94 B/cell, see README
+```
+
+### Collection-valued properties
+
+A property that is a collection is **listed**, not stringified: `List<string>.ToString()` is the type
+name, which is why such a column otherwise needs a template doing nothing but `string.Join`. The
+members are joined with `Separator` (default `", "`), `Format` applies to each member, and the filter
+matches a row when **any** member matches - `Contains` for a collection of strings, `Equals` for a
+collection of value types, because the *element* type decides the operator, not the property type.
+
+Such a column is not sortable: no provider can order rows by a list. An explicit `SortBy` re-enables
+it, naming something that can be ordered.
+
+For a collection of **objects**, `CollectionColumn<TItem, TElement>` puts the element type in the
+signature, so the member to show and the member to filter on stay expressions:
+
+```razor
+<CollectionColumn Property="@(r => r.Accounts)" DisplayProperty="@(a => a.Name)" />
+```
+
+Razor infers `TElement` from `Property` - output type inference reaches `IEnumerable<TElement>` from a
+lambda returning `List<Company>` - so neither type parameter is named at the call site.
+`FilterProperty` defaults to `DisplayProperty`, since filtering on what the reader can see is almost
+always what is meant, and the check-box list offers the same member.
+
+**A selector declared as returning `object` hides its member's real type two different ways**, and both
+have to be unwrapped or everything derived from that type is wrong: a value type is wrapped in a
+`Convert` node, and a reference type is *not wrapped at all* - the tree simply carries a body narrower
+than the delegate's return type. Comparing `body.Type` to `ReturnType` catches both; checking only for
+a `Convert` catches the first.
+
+A column typed as `object` cannot be recognised statically, so its value decides per cell - one type
+test. A typed collection column takes the same path; the element type itself is resolved once per
+closed generic type, not per column.
+
+The column applies its own sort (`ApplySort`), since only it knows `TProp`. Strongly typed, translates to
+SQL, and skips the dynamic-LINQ string parse entirely. This is QuickGrid's `GridSort<T>` shape.
+
+### Property path derivation — do not skip this
+
+Four things in the Radzen ecosystem consume property **name strings**, and an `Expression` serves none
+of them:
+
+| Consumer | Why |
+| --- | --- |
+| `LoadDataArgs.OrderBy` | it is a `string` — the whole `LoadData` contract |
+| OData | `$orderby=Customer/Name` goes over the wire |
+| Settings persistence | `DataGridColumnSettings` keys state by property name across reloads |
+| `CompositeFilterDescriptor.Property` | a string, and it is what `RadzenDataFilter` emits (§33 - this row named `FilterDescriptor` and had the type wrong) |
+
+So the expression is the *authored* form and the path is *derived* from it once at init and cached.
+Walk `MemberExpression`, stripping any `Convert`/`ConvertChecked` wrapper (the boxed
+`Expression<Func<T,object>>` form). Verified working for `p => p.Id`, `p => p.Customer.Name`, and
+`p => (object)p.Id`. Radzen has `PropertyAccess.GetProperty(string)` but nothing expression->path;
+it is about 20 lines.
+
+**Sharp edge:** a computed expression has no path. `p => p.First + " " + p.Last` renders fine but cannot
+sort server-side, round-trip through `LoadData`, or persist. Such a column is **not sortable unless an
+explicit `SortBy` (or sort key) is supplied** — make that visible at the call site, as QuickGrid does by
+requiring an explicit `GridSort<T>`. Do not silently disable sorting, and do not throw for a
+display-only column.
+
+## 5. Data path
+
+- **`Data` (`IEnumerable<T>`/`IQueryable<T>`) is the primary path.** Compose filter/sort/page onto it.
+  With `IAsyncQueryExecutor` registered (PR #7) an EF queryable is counted and paged asynchronously.
+- **`LoadData` stays**, as the escape hatch for sources that are not composable queryables — REST, OData,
+  gRPC, stored procedures. Async `Data` does not replace it; it only removes the need for it with EF.
+- **Gate the cost.** Build the `OrderBy` string only when `LoadData.HasDelegate || IsOData`. A grid using
+  neither must pay nothing for their existence. (Rule 3.) Measured after the data path landed: 0.13 KB
+  at 1000 x 5, inside the noise.
+- **Never render from the parameter-set path.** `ComponentBase` renders after `OnParametersSetAsync`
+  returns; a `StateHasChanged()` inside it flushes the queued render early and the one that follows is a
+  second full pass over every row. That cost +94% allocation and no test noticed, because the second
+  pass produces identical DOM. `APlainGridRendersExactlyOnce` pins it.
+- **No dynamic LINQ.** Sorting uses typed expressions; filtering builds predicates with `Expression.Call`.
+  Note `Radzen.Blazor` has **no** `System.Linq.Dynamic.Core` package reference — it ships its own
+  161-line `DynamicExtensions.cs`. So there is no dependency to avoid, but there is a string-parse cost
+  to skip.
+
+## 6. Markup and styling contract
+
+Emit Radzen's class names and the theme applies for free — including custom themes and CSS variables.
+Verified against the real stylesheet: rendered geometry matches exactly (header cell 37px, body cell
+37px, table 332px).
+
+- Wrapper: `rz-data-grid rz-datatable`
+- Table: `rz-grid-table rz-grid-table-fixed rz-grid-table-striped`
+- Row: `rz-data-row` — **no alternating class.** Striping is `:nth-child` off the table-level class;
+  computing odd/even per row is both wrong and wasted work.
+- Cell: `<td role="gridcell"><span class="rz-cell-data">…</span></td>`. The span is what carries the
+  cell's colour, font size, line height and ellipsis truncation, via `.rz-grid-table td .rz-cell-data`.
+  `RadzenDataGrid` puts the class on the span **only**, and so does `RadzenFastGrid`. An earlier version
+  of this line also put it on the `td`. Harmless under the shipped themes — every `.rz-cell-data` rule is
+  a descendant selector — but it is not what Radzen emits, and a custom theme writing a bare
+  `.rz-cell-data` rule would have applied it twice.
+- **`title="<value>"` on the cell span is opt-in, not absent.** `RadzenDataGrid` always emits one, so a
+  cell truncated to an ellipsis reveals its full value on hover. This spec predicted ~61 B/cell from the
+  prototype — 305 KB at 1000 x 5, a tripling — and said not to pay it. The shipped component measures
+  **+116 KB**, about 23 B/cell, so it is +77% rather than 3x: the prediction was pessimistic because the
+  real column's text path is cheaper than the prototype's. It is still off by default, being an attribute
+  per cell plus a second derivation of the cell's text, and a `TemplateColumn` is still the way to have
+  it on one column rather than all of them.
+- **Header cell is structurally coupled:** the theme gives `th` `padding: 0` and hangs the header padding
+  off a *direct child div*. `th > div > span.rz-column-title > span.rz-column-title-content` is required.
+  Without the div the header row renders shorter. Per column, not per row, so it costs nothing.
+- Do **not** emit `rz-datatable-scrollable` unless the full nested scrollable structure is there.
+
+## 7. Reuse from Radzen.Blazor
+
+All public and callable from a dependent package:
+
+| Reuse | For |
+| --- | --- |
+| `QueryableExtension` | filter/sort composition |
+| `RadzenPager` | paging UI, drop in as-is |
+| `FilterDescriptor`, `SortDescriptor`, `LoadDataArgs`, `DataGridColumnSortEventArgs<T>` | the descriptor/event model, so `LoadData` handlers port unchanged |
+| `RadzenComponent` (base) | `Visible`/`Style`/`Attributes`, mouse + context-menu callbacks, culture, localization |
+| `ContextMenuService`, `TooltipService`, `DialogService` | ambient services, consumed the normal way |
+| `PropertyAccess` | fallback for genuinely dynamic columns |
+| themes | shipped as static web assets under `_content/Radzen.Blazor/` |
+
+**Not** reusable: `ClassList` is internal — write a small class-composition helper.
+
+Will not compose: anything typed to `RadzenDataGrid<T>` specifically (`RadzenDropDownDataGrid` embeds a
+real one; the column picker and `RadzenDataGridColumn` are grid-specific).
+
+## 8. Packaging
+
+A separate NuGet package depending on `Radzen.Blazor`, in the shape of
+`Radzen.Blazor.EntityFrameworkAdapter` (PR #7). Radzen need not adopt anything; offering costs them
+nothing. Package name is still **open** — it lands in the namespace, so decide before writing code.
+
+## 9. Verification protocol
+
+Each layer below caught real faults the previous one missed. Use all of them.
+
+1. **Tests** — and check each one *discriminates*: break the thing deliberately and confirm the test
+   fails. Several tests written during this work passed whether or not the code was correct.
+2. **Styling parity check** — `dotnet test Radzen.Blazor.FastGrid.Tests`. Layers 3 and 4 below, and the
+   structural half of layer 2, run automatically and fail with a non-zero exit: it renders both grids
+   over the same data, asserts the markup contract in §6 against `RadzenDataGrid` in the same run, and
+   compares rendered header/body/table heights through Chromium against the real stylesheet. Every one
+   of its assertions was confirmed to fail with the component deliberately broken — see
+   *Proving it discriminates* in `README.md`. It never skips: a missing node, Playwright or Chromium
+   fails the run rather than quietly passing.
+
+   **It reads paint as well as geometry**, because three faults got past every markup assertion by
+   emitting correct classes the theme did nothing with. Over seven panes it now also asserts that a
+   selected row's computed background differs from an unselected one of the same stripe parity and
+   matches `RadzenDataGrid`'s; that declared widths land on the columns that declared them; that a
+   frozen column does not move when its container is scrolled; and that nothing is drawn over a frozen
+   column in *any* of the four sections that stack independently — title row, filter row, body, footer.
+   Each of those panes exists because a check without it passed while the grid was wrong.
+3. **Markup diff against `RadzenDataGrid`** — `dotnet run --project gridbench -- visual <dir>` writes
+   both grids' real HTML. Diff them. This caught a bug where a cell's `style` vanished entirely while
+   every test still passed. Still worth doing by hand for anything the parity check does not assert;
+   `README.md` lists the divergences it deliberately allows.
+4. **Visual pass** — screenshot `compare.html` against the real theme. Caught missing striping and a
+   `rz-datatable-scrollable` class that lied about the markup. Both are now assertions in step 2; keep
+   the eye for what no assertion has been written for yet.
+5. **Geometry** — `node measure.js` reads rendered sizes back through Playwright, ad hoc. Caught a short
+   header row that survived a screenshot being looked at, which is why step 2 exists at all.
+6. **Drive it in a browser** — `dotnet run --project Radzen.Blazor.FastGrid.Playground`, then
+   http://localhost:5399 (it takes ~25s to bind, and a stale instance from an earlier session will hold
+   the port while you drive the *old* build - check the toolbar matches your change). Toggles for every
+   feature, an Entity Framework / in-memory switch, an adjustable row count, and a metrics strip on the
+   page.
+
+   **This layer is not optional, and it is not last.** Layers 1-5 all assert on markup; none of them
+   can see what a browser does with it. Nine bugs got through every one of them and were found here,
+   most within a minute of the first click, and three of them by a person looking at the screen rather
+   than by anything that could have been automated first:
+
+   Two of the nine turned out to be testable after all, once the browser had shown what to look for -
+   which is the layer's other use. A fault found here is worth a minute asking what the test would have
+   had to do; sometimes the answer is "have a viewport", and sometimes it is a parameter nobody thought
+   to set.
+
+   | Fault | Why nothing above caught it |
+   | --- | --- |
+   | Resize ran, raised its callback, and moved nothing | The script takes a base id and appends `-col`; it was handed the already-suffixed one, found no col, and wrote the width to the `th`, which `table-layout: fixed` discards. The id test agreed with the markup rather than with the script. |
+   | The row-detail toggle counted as a row click | Whether a click was a toggle was decided by a flag settled when the listener attached, so a grid that gained a `Template` later drew a toggle the listener had never heard of. |
+   | Unhandled `JSDisconnectedException` on every teardown | It derives from `Exception`, not `JSException`. Nothing failed; the only trace was a line in a server log. |
+   | A render loop at ~3,600 renders/sec | Nothing on screen changed while the circuit spun, so it read as "the grid is slow". |
+   | A selected row was never painted | The theme nests its selected-row rule inside `.rz-selectable`, which the grid did not emit. `rz-state-highlight` sat on exactly the right `tr` and matched nothing. |
+   | Scrolled columns drawn over the frozen ones, in the header only | The theme stacks every header cell at the same z-index, frozen or not, so a frozen one tied with its neighbours and document order let the column to its right win. The body was correct, which made it look like a rendering glitch rather than a rule. |
+   | The filter row not pinned with its column | It is a second `tr` inside `thead` rather than part of the title row, so it never received the class or the inset - and the check written for the previous fault skipped it, because it searched for cells already carrying the frozen class. |
+   | A virtualized grid over an asynchronous source refreshing itself forever | `RefreshAsync` announced a data change as a settings change; the application stored it, re-rendered, and its `Data` property answered with a new queryable - which is what `AsNoTracking()` does on every read. 880,000 renders in 2.5s, no exception, nothing in the log. Every existing test passed: bUnit's `Virtualize` fetches once, and nothing tested a parent that hands the settings back. |
+   | The keyboard cursor vanishing on `PageDown` under virtualization | The jump lands on a row outside the rendered window, so the script has nothing to focus; it scrolls to where the row will be and the re-assert after the next render was to catch it. There is no next render - `Virtualize` re-renders *itself* when the window arrives, and the grid's `OnAfterRenderAsync` never runs. The fix waits for the row in the script instead, bounded and superseded by the next keystroke. Every bUnit test passed throughout: there the window is the whole data set, so the row is always already there. |
+
+   **The browser pass on the review fixes (Sep 3 2026) found nothing new broken and confirmed two
+   things nothing above could see.** `Responsive` renders correctly for the first time: above the
+   breakpoint a cell reads `0` where it used to read `Id 0`, and below it the rows stack into cards
+   with the headers hidden - the card layout had never once rendered, because the class the theme
+   scopes it under was never emitted. And the column picker's renumbering was proved with a control
+   rather than argued: tag the scroller and `tbody` with an expando, toggle `AllowColumnPicking`, and
+   at the old sequence both come back **undefined** - the whole table was destroyed and rebuilt to
+   show a drop-down - while at the new one both survive. That is the discrimination check §9 asks for,
+   applied to a browser rather than a test.
+
+   The playground had no `Responsive` toggle until this pass, which is why the feature could ship
+   broken and stay broken: **a feature the playground cannot drive is a feature nobody looks at.**
+
+   Watch **renders/sec** on the metrics strip: a grid at rest is 0, and the panel turns it red above
+   five. That reading alone names a render loop in a glance - **while the circuit is answering.** Once
+   it is not, the strip freezes at its last value and a stopped counter reads exactly like a quiet one.
+   The reading that tells them apart is whether the page still *responds*: click a toggle and see
+   whether the DOM changes. A render loop killed a circuit here and was twice read as "clean" from a
+   counter that had simply stopped being updated.
+
+   The playground is also where a feature is *discoverable*: selection is driven by clicking a row and
+   nothing on the page said so, and its toggle was wired to discard the grid's answer rather than to
+   `AllowRowSelectOnRowClick`, so "off" measured a grid that selected into a bin. A control that does
+   not drive the grid teaches the wrong thing about it.
+
+7. **Benchmarks** — `--job short --filter "*FastGridFeatureBench*" --buildTimeout 900`. Numbers last:
+   they say nothing about correctness.
+
+   **`--buildTimeout 900` is not optional, and omitting it does not look like an error.** The generated
+   project takes ~200s to build here against a 120s default; when that expires the run prints `NA` in
+   every column, buries "There are not any results runs", and **exits 0**. **Check `executed benchmarks:`
+   is non-zero before believing a row** - §26 has the six-run table that was collected and tabulated
+   before anyone noticed none of them had run.
+
+   **Take the modal value of several runs.** The `RadzenDataGrid` reference rows are bimodal between
+   two values about 990 KB apart. One pass of the table reported a 507 KB regression that was an
+   artefact of that. This was read for three sessions as `RenderTreeBuilder`'s pooled frame arrays and
+   **is refuted in §26**: the step is tier-1 JIT with dynamic PGO stack-allocating objects tier-0 puts
+   on the heap, it is reproducible on demand with `DOTNET_TC_CallCountingDelayMs`, and the gen1/gen2
+   correlate no longer holds on the current SDK.
+
+   **`--job short` measures allocation, not time.** Allocation repeats to two decimals across runs;
+   the time column does not.
+
+   **That first half is too strong, and §18 already knew it.** The bare row has read 154.55, 154.58,
+   154.66, 154.73, 154.77 and 154.81 on runs of bit-identical code - a spread of **0.26 KB**, which is
+   the noise floor §18 measured and larger than most of the differences this file quotes to two
+   decimals. Allocation repeats far better than time and is worth reading to two decimals *within* a
+   run; across runs, a difference under about 0.3 KB on a 154 KB row has not been measured. Every
+   "unmoved" in this file means that, and §21 is where it caught up with the wording. Reorder came out at 1.76x, 1.86x and 0.97x on three passes of it, frozen
+   at 1.01x and then 2.68x, every one with an error bar wider than the difference being claimed. Both
+   settled under a full-length run - reorder 0.93x, frozen 1.10x, errors under 3%. Quote a time ratio
+   from a full-length run or do not quote one. And run it on a quiet machine: one of those passes had
+   the playground serving a circuit alongside it.
+
+   **Read the numbers against what the feature does per row.** Frozen columns cost +0.9 KB and 1.10x
+   time, which looks contradictory until you count what changed: two attribute frames on the cells of
+   a frozen column. Frames are pooled, so the work shows up in time and not in bytes - and *that* half
+   §26 confirms directly off `ArrayPool`'s own events, where the large buckets are rented and returned
+   every render without allocating. It is not the same observation as the bimodal rows, which turned out
+   to be the JIT; the pooling is real, its role in that step was not.
+
+   **Sequence numbers ascend per run, not per element.** `RenderTreeDiffBuilder` finds where an
+   element's attributes end and diffs that range on its own, then diffs the children on their own - so
+   an attribute numbered above a child costs nothing, and two attributes out of order drop the fast
+   attribute path. The comment in `RenderHead` said the two shared one space and was the stated reason
+   for a region; the region is still right, for the other reason (a conditional first child and a
+   loop's first child would claim the same number), but the rule it cited was wider than the truth. A
+   review found seven violations against the wide rule; four were real.
+
+   **Markup is paid in the values, not the frames.** Three large costs on this branch were attributed
+   to render-tree frames and all three were strings: `data-r`'s 16 KB was uncached `ToString`, the cell
+   tooltip's 116 KB is text derived per cell with a *free* attribute, and `ItemKey`'s 23.5 KB is
+   boxing - the one of the three whose stated cause survived a control, at +0.04 KB for a
+   reference-typed key. What frames actually cost is time: `aria-colindex` 1.1x, frozen columns 1.10x,
+   responsive titles 1.40x, each for under a kilobyte. **A large allocation attributed to a frame has
+   not been measured yet.**
+
+   **A control that separates a feature from an attribute does not separate an attribute from its
+   value.** `data-r` read +16 KB, and the control that established it - a row-click grid writing the
+   same attribute and binding nothing else - was sound and landed within half a kilobyte. It proved the
+   cost belonged to the attribute, which was true, and every reading of it after that said "the frame",
+   which was not: the table of cached index strings stopped at 512 and the benchmark renders a
+   thousand. **When a number is attributed to a mechanism, check that the other half of the thing was
+   actually free rather than assumed to be.** What settled it was a second attribute per row measuring
+   the same, and one per *cell* - six times the frames - measuring a twentieth of it.
+
+   **Keep the harness's fakes honest.** `gridbench`'s fake `IJSObjectReference` answered `default(bool)`,
+   so the grid's click listener never confirmed, the fallback rendered, and the benchmark measured the
+   cost the browser no longer pays. A fake standing in for a browser has to answer like one.
+
+### Rules this protocol has cost us
+
+- **Do not narrow a `catch` around an optional path.** Three times in one session, narrowing to the
+  precise-looking exception types broke the exact case the catch was written for: bUnit's strict mode
+  throws a type this package cannot name, and `JSDisconnectedException` is not a `JSException`. Where
+  the fallback is correct, catch everything and say why.
+- **A test that agrees with the markup is not a test.** Both the resize id test and the toggle flag
+  were self-consistent and wrong about the contract they were meant to pin. Pin the contract, not the
+  output.
+- **A class the theme scopes under a parent does nothing until that parent is emitted, and every
+  markup assertion passes meanwhile.** Selection put `rz-state-highlight` on exactly the right `<tr>`
+  and painted nothing for the life of the feature, because the theme nests that rule inside
+  `.rz-selectable`, which the grid never emitted. Frozen columns did the same twice over: the theme
+  makes a `.rz-frozen-cell` sticky and supplies no inset, and it stacks header and footer cells at a
+  fixed z-index whether or not they are frozen. All three were found by a person looking at the screen.
+  **Before trusting a mirrored Radzen class, read what the theme nests it under** - `grep` it in
+  `themes/components/blazor/_grid.scss` and follow the nesting, not just the rule.
+- **A check that looks for the thing being present can only see it once it works.** The frozen-overlap
+  probe searched each row for a cell *carrying* the frozen class, so the filter row - which never got
+  the class at all - was skipped in silence and the grid reported clean with the bug in place. Ask
+  instead what is drawn at the position the feature claims to own. The same trap as the two above,
+  one level up: the check agreed with the markup rather than with the contract.
+- **A probe that can report a false positive will eventually be deleted rather than fixed.** The same
+  overlap check hit-tests rows clipped by the scroller as "covered", because `elementFromPoint` returns
+  whatever is painted there. Bound the rows to the scroller before asking.
+- **Any browser-facing optimization needs a fallback, and the fallback is what keeps it testable.**
+  The click listener leaves the per-cell delegates in place unless the script confirms it attached, so
+  `cut.Find("td").Click()` still reaches `CellClick` under bUnit. Without that a test written the
+  obvious way would pass while asserting nothing - worse than a slow grid. Cost: a grid whose listener
+  cannot attach renders twice, so render hooks run twice there.
+- **Order the optimistic render first.** Render the cheap shape and fall back on failure, never the
+  reverse: starting with the handlers and dropping them on success makes every browser grid pay the
+  cost once and then re-render to undo it.
+
+## 10. Open decisions
+
+- Package and namespace name.
+- ~~Column resize~~ - **done**, and it settled the question that gated three features. Resize does not
+  need the scrollable variant's structure; it needs a `colgroup`, which the grid already emitted. What
+  it did need was the ordinary `.rz-data-grid-data` scroll container, so a widened column has somewhere
+  to overflow rather than pushing the page sideways. That container is now emitted always, costs
+  nothing measurable, and carries the `role="grid"` the grid had never emitted - the `row`, `rowgroup`
+  and `gridcell` roles below it had no grid ancestor. **Column reorder and frozen columns were gated on
+  the same decision**; reorder is now built, frozen columns are not.
+- ~~Column reorder~~ - **done**, and it needed nothing the scroll container had not already settled.
+  A drag writes a `reorderedIndex` beside the column's declared `OrderIndex`, and the placement pass
+  that `OrderIndex` already drove does the rest: the feature is a way to *set* an order the grid could
+  always draw. The one thing it could not copy from `RadzenDataGrid` is how a move is recorded -
+  upstream removes the column from its own list and re-inserts it, which cannot work here because that
+  list is rebuilt from column registration. Every visible column is given its index outright instead,
+  which survives a re-registration and a round trip through the settings. Costs +6.7 KB and no
+  measurable time.
+- ~~Frozen columns~~ - **done**, and the theme turned out to supply less than it looked. A
+  `.rz-frozen-cell` is made `position: sticky` and given a background, a z-index and the seam shadow -
+  but no inset, and sticky without an inset does not stick. `RadzenDataGrid` supplies it from
+  `updateFrozenColumnPositions`, which measures the header and writes an inline style to every frozen
+  cell in every row - and which is called from exactly one place, inside the resize drag, so upstream
+  does not pin anything until a column is resized.
+
+  Here the inset is a property of the *column*: the table is `table-layout: fixed` with a colgroup, so
+  a column's distance from its edge is the sum of the declared widths between it and that edge. It is
+  composed once, folded into the cell style that was already memoized and already emitted, and correct
+  on the first paint with no script and no interop - and nothing to redo on a scroll, a page or a
+  virtualized window. The widths are summed with `calc()` rather than parsed, so a column may be sized
+  in any unit or a mixture of them. **A run ends at the first frozen column that declares no width**:
+  its own position is still known, but nothing after it is, so those are drawn unfrozen rather than
+  pinned to a guess.
+
+  Left and right edge runs only. A frozen column stranded in the middle is what `RadzenDataGrid`'s
+  `-inner` classes are for; it is drawn as an ordinary column here.
+
+  **Every section stacks differently, and a frozen column has to win in each.** The theme makes header
+  cells sticky at `z-index: 1` and footer cells at `2`, frozen or not, so a frozen cell there ties with
+  the ordinary ones beside it and document order settles it - the column to its right paints straight
+  over the pinned one while every position and inset stays correct. Each is raised one above its own
+  siblings, inside the stacking context its section already creates, so neither can climb out over the
+  rows. The body needs none of it: an unfrozen cell there is `static`, so being positioned at all is
+  enough.
+
+  There are **four** such sections - the title row, the filter row, the body and the footer - and the
+  filter row is a second row of the header rather than a thing of its own, which is how it was missed
+  after the title row was fixed. The check that catches this reads which columns are pinned off the
+  title row and then asks every row what is drawn at that column's x. An earlier version looked for
+  cells *carrying* the frozen class instead, and passed with the filter row's pinning deliberately
+  removed: a row that never got the class has nothing to find, so it was skipped in silence.
+
+  Costs +0.9 KB and 1.10x the render time at 1000 x 5 with two columns frozen - the only feature on
+  this list whose time cost is larger than its allocation, because what it adds is two attribute frames
+  per cell of a frozen column and frames are pooled.
+- **Delegated clicks are off under virtualization**, and that is a scope choice rather than a gap. A
+  virtualized grid renders a window of some tens of rows, so the per-cell delegates cost tens of
+  kilobytes there rather than 1,483, and `Virtualize` hands its `ChildContent` an item with no position,
+  so there is no row index for the listener to resolve. Revisit only if virtualized windows get large.
+- **Whether turning `AllowSorting` off should clear an applied sort.** It currently does not - the data
+  stays ordered, because reordering it would be the surprise - but the icon, the multi-sort badge and
+  `aria-sort` now follow `AllowSorting`, so the grid no longer advertises a control that is not there.
+- **`ShowExpandColumn="false"` is now a placement choice, not a saving.** It used to avoid 404 KB; row
+  detail costs under a kilobyte, so the parameter is about where the control lives.
+- ~~**Nothing a column declares reaches the first asynchronous load.**~~ - **done in §23**, and not by
+  the reload this bullet anticipated. The first load moved out of the parameter set and into
+  `OnAfterRenderAsync`, which is the first moment the column list is complete: one query, composed from
+  everything the markup declared, rather than one composed from nothing followed by a correction. The
+  rule it settled is that **nothing composing from column state may run before the first render** -
+  which the settings restore had already been obeying alone, from `RenderTable` behind `Defer`. The
+  record of what was
+  wrong, kept because the diagnosis is worth more than the fix: A column's declared filter becomes
+  its current one, and its declared sort reaches the grid, in the column's own `OnParametersSet`, which
+  runs as the table is drawn - and the load that fetches the first page is started from the grid's
+  *parameter-set* path, before any column has registered. So a grid over an executor-backed queryable
+  draws its first page unfiltered, with the filter row showing a filter that is not in the query, and
+  no reload follows to put it right. The in-memory path does not have this: it composes during the
+  render, by which time every column has registered.
+
+  Found while building §15's candidate 2, which needed the asynchronous route because it is the only
+  one that composes without asking about `AllowFiltering` first. Recorded rather than fixed, because
+  the fix is a reload triggered by the first registration and that is the same "when may the grid
+  reload itself" question the settings entry above turns on - with the same `!ReferenceEquals` hazard
+  underneath it.
+
+  **Both halves of that were understated, and §23 measured how much.** The declared *sort* is missing
+  from the same query by the same mechanism - the header draws `aria-sort="ascending"` over rows in
+  source order - and **`LoadData` has the whole fault identically**, its handler called once with
+  `Filters` null, `OrderBy` empty and `Filter` empty. Two routes, not one; two kinds of declaration, not
+  one. §23 also argues the fix should not be the reload this bullet anticipated: a reload sends one
+  query composed from nothing before it sends the right one, which unpaged materializes the whole table
+  and for `LoadData` invokes the application's handler twice.
+- ~~Whether virtualization is in scope for v1~~ - **done.** `AllowVirtualization` puts the rows through
+  `Virtualize` with `SpacerElement="tr"`, and one items provider serves every source. It is exclusive
+  with paging: the two solve the same problem, so `Paging` is a single property both the pager and the
+  view read.
+- ~~Whether to support `RadzenDataFilter` interop in v1~~ - **resolved.** The grid speaks
+  `CompositeFilterDescriptor` in both directions, which is what `RadzenDataFilter` emits. The path
+  derivation of §4 is what makes that possible.
+  **This said `FilterDescriptor` until §33, and that was wrong about the component it named.**
+  `RadzenDataFilter.Filters` is `IEnumerable<CompositeFilterDescriptor>`, so the reason given here for
+  the choice never held, and the interop it was meant to serve was the one the choice fitted worst.
+- **A column's settings identity is not unique, and a column may have none.** Both are the same gap:
+  settings key a column by its property path. Two columns over one property are restored onto the
+  first of them, so hiding the second and reloading hides the first; a column with no path - a
+  `TemplateColumn`, or a `CollectionColumn` with no `SortBy` - cannot be stored at all, so its
+  position in a dragged order never survives. `RadzenDataGrid` answers both with `UniqueID`, matched
+  ahead of `Property`. Adopting that here is a new public parameter and a settings-format addition,
+  which is why it is recorded rather than done. §10b has the failure in full.
+- ~~**Row expansion is keyed on the item instance, which both leaks and loses state.**~~ - **done in §21**, and the leak is bounded rather than closed: `RowCollapse` has to name a row that may no longer be on screen, so one instance per currently-expanded row is kept. What ended is the accumulation. `expandedRows`
+  is a `HashSet<TItem>` added to by `ToggleRow` and emptied only by an explicit collapse or
+  `ExpandMode.Single`. Over a source that re-materialises - `AsNoTracking()` read per render, or a
+  `LoadData` handler assigning a fresh page - every entity ever expanded is pinned for the life of
+  the circuit, and because the set compares by reference those entries can never match a new instance
+  again: the row draws collapsed while the old one is held. Both halves are the same cause.
+
+  **The obvious fix is wrong.** Clearing it beside `lookups.Clear()` looks right and is not:
+  `dataChanged` is `!ReferenceEquals(lastData, Data)`, which for exactly those re-materialising
+  sources is true on *every* parameter set - so it would collapse every expanded row on every render,
+  for precisely the grids the leak affects. `lookups` tolerates that because rebuilding a check-box
+  list costs nothing; user state does not. The grid already has `ItemKey`, and keying expansion by it
+  would answer the leak and the lost state together. Recorded rather than done, for that reason.
+
+  **That last sentence is what §21 had to correct.** Keying it answers the lost state; the leak it only
+  bounds, because `RowCollapse` takes the row and naming a row that may no longer be on screen means
+  having kept one. What ended is the accumulation, and it ended by construction: a dictionary keyed on
+  identity cannot hold two entries for one row.
+- ~~**A sortable header that is not currently sorted draws no sort icon.**~~ - **done.** The glyph is
+  now reserved the way upstream reserves it, so hovering signals something and the first click no
+  longer inserts an element into the flex line and re-truncates the title. It became urgent rather
+  than cosmetic once §13 needed to measure a header: a header measured around a missing glyph fits a
+  glyph too narrow, which makes the jump permanent instead of momentary.
+- ~~**Column auto-fit for `RadzenFastDropDownDataGrid`**~~ - **done in §29**, and the fork this bullet
+  was waiting on turned out to be a false one. "Grow to the content" and "fit within the width the popup
+  has" differ only in where the width comes from, and growth has to be capped at the viewport or the
+  panel leaves the window - so the grown case ends with a fixed width too and needs the same
+  redistribution. They compose: `PopupFit { None, Columns, Content }`, where `Content` is `Columns` with
+  a bounded growth step in front of it. What the section had to settle instead was *ordering*, which
+  this bullet did not anticipate at all: `Radzen.openPopup` measures the panel once and decides the flip
+  above the control and the shift left from that single rect, so the panel has to carry its final width
+  before it is opened, and `syncWidth` goes off because the width is then ours.
+- ~~The built-in filter UI is a text box or a check-box list, and nothing else: no operator menu, no
+  date popup, no numeric range, no enum picker.~~ - **answered by §31 and built from §35.** All four
+  are one feature rather than four, which is what building them separately would have made clunky:
+  `FilterUI.Menu` is the operator menu, the date popup is its relative presets and typed picker, the
+  numeric range is `Between`, and the enum picker is `In` edited as a list. `FilterTemplate` remains
+  the escape hatch for what the menu deliberately does not offer.
+
+- ~~**A check-box list's distinct scan is dropped on every parameter set, not on every data change.**~~ -
+  **found, measured and fixed.** `lookups` was cleared on `!ReferenceEquals(lastData, Data)`, which for
+  the sources this grid is built for - `context.Rows.AsNoTracking()` read per render, a `Where` written
+  in a property - is true whenever the parent renders. So the filter row drew empty, `pendingLookups`
+  refilled, and one `SELECT DISTINCT` per check-box-list column ran again behind a second render. Not a
+  loop, since `StateHasChanged` does not re-set parameters: N queries and one extra render per *parent*
+  render.
+
+  **Measured at 3 scans for one render and two parameter sets** - exactly one per set - by the control
+  the file did not have. `CheckBoxListFilterTests` asserted what is offered and never how often it is
+  asked for, so a scan re-running on every render passed all sixteen of its tests.
+
+  The fix is to ask what a new source *instance* means, which differs by source kind. A materialized
+  collection is rows, so a new one is new values and the scan must run again. A queryable the grid
+  composes over is a *query*, and application code answers with a new instance every time it is read -
+  so that identity is not a data change, and `Reload()` is what drops the values, exactly as its own
+  comment always claimed. Held between two tests: the control above, and
+  `TheLookupIsRebuiltWhenTheDataChanges`, which fails if nothing clears.
+
+  **The consequence, accepted:** markup that swaps one query for a genuinely different one goes on
+  offering the first one's values until `Reload()`. That is the same lifetime rule §14 gives its
+  lookups, chosen there for the same reason.
+
+  The `!ReferenceEquals` trap now has **four** recorded participants - row expansion above, the `Once`
+  fit in §13 which dodges it deliberately, this, and the drop-down's `Adopt` found in §19 - and this is
+  the only one whose cost was a database round trip. §14 never inherits it: a lookup column runs no
+  distinct scan at all.
+- ~~**A multiple-select drop-down over a re-materialising source loses its ticks and doubles its value.**~~
+  - **done in §21**, and it needed no new parameter: the drop-down already knew a row's id, as `ValueOf`,
+  and its chosen rows are now a set that compares by it. The grid is handed that same collection as its
+  `Selection`, so one comparer answered both halves. Found in §19 and left there, because fixing it is the identity question rather than a patch. The grid
+  draws a tick by asking a `HashSet<TItem>` whether it holds the row being drawn, and that set compares
+  by reference - so a source read again per render ticks nothing, and a click on an apparently unticked
+  row `Remove`s the new instance, misses, and `Add`s it beside the old one: two objects, one id, and a
+  value that publishes the id twice. Measured at two ticks before and none after. This is row expansion
+  above from the other end, it wants `ItemKey` for the same reason, and it is the first instance in this
+  list whose symptom is a wrong value rather than a wasted query.
+- **A lookup column's *Simple* filter box shows the filter's list rather than what was typed.** Typing
+  a team's name into the row's box sets an `In` over the matching ids, and `ColumnBase.FilterBoxText`
+  is `FirstCondition?.Value?.ToString()` - so the box then reads
+  `System.Collections.Generic.List`1[System.Nullable`1[System.Int32]]`. `FilterText` holds what was
+  typed and is not consulted. Found by §37's browser pass, which drew a correct pill beside a wrong
+  box; it predates §37 and is the filter row's rule rather than the bar's, so it was left alone rather
+  than fixed in passing.
+
+## 10b. Review status
+
+What has been read by a reviewer other than its author, what that found, and what has not. Recorded
+because the branch is 106 commits long and "has this been reviewed" is not answerable from the log -
+its first general pass sits a long way back, and the slices below were read at very different points.
+
+Every pass below ran as a sub-agent against a written brief, reported CONFIRMED or PLAUSIBLE per
+finding, and had its fixes mutation-checked. The count is what each pass found that a green suite did
+not - the whole suite passed before and after every one of them.
+
+| Slice | State | Found |
+| --- | --- | --- |
+| Early core + column faults | reviewed at `a95a32e04` | 7, fixed then |
+| The drop-down | reviewed at `fbc6e9516`; 3 commits since | 15, fixed then |
+| Keyboard, range selection, positional ARIA | reviewed | 4 |
+| `RadzenFastGrid.Data.cs` - lifecycle, async, invalidation | reviewed | 4 |
+| `RadzenFastGrid.Data.cs` - query semantics | reviewed | 5 |
+| Delegated clicks and `fastgrid.js` | reviewed | 4 |
+| Frozen columns, resize, reorder | reviewed | 6 |
+| The drop-down, re-reviewed | reviewed | 6 |
+| Today's own fixes, re-reviewed | reviewed | 3 |
+| Attribute-run ordering, all render files | mechanically checked | 1 |
+| `ColumnBase.cs` and the column types | reviewed | 5: 4 fixed, 1 open |
+| `RadzenFastGrid.cs`, the core render path | reviewed | 5: 4 fixed, 2 open |
+| Lookup columns, §14 | reviewed twice, two axes each | 23: 6 wrong answers, the rest tests, names and claims |
+| Architecture, whole library | reviewed for shape, not correctness | 1 fault, 8 deepening candidates - §15 |
+
+**Every slice has now been read by someone other than its author**, and the whole has now been read
+once for shape rather than for faults - §15 has what that found and the one fault it turned up.
+
+The lookup columns were read on two axes - does it follow the repo's standards, does it implement
+§14 - and then read again on both at greater depth, which is where most of it came from: the second
+round found more than the first, and the whole suite passed before and after every one.
+
+Four of it are worth carrying forward.
+
+**A nit is worth chasing.** The first standards pass ended on "typing 'bl' matches the blank entry
+too", filed as an aside. It was a real fault - the entry is labelled in the reader's own language, so
+what a typed filter found depended on the page's culture - and fixing it exposed a second underneath,
+where text matching no name showed every row rather than none.
+
+**Reviewing a day of fixes finds faults in them, and this is the third time.** The fix for a non-key
+value read as `default(TKey)` went into the method that finds the ticked entry and not the one beside
+it that composes the predicate, so the grid filtered to the id-zero rows while the list showed nothing
+ticked. Both axes of the second round found it independently.
+
+**A test written for an exit path can fail to reach it.** The first cancellation test disposed the grid
+and asserted nothing threw; removing the catch it was written for did not fail it, because the wide
+catch below took the exception and a disposed grid renders either answer identically. It is a direct
+test of the column now, and the mutation fails it. The parity test between the two filter routes had
+the same shape one step removed - it compared the two answers, and two empty grids agree, so a
+predicate that went always-false on both sides was invisible. It asserts the answer now.
+
+**A claim in a comment is a claim whether or not its author wrote it as one.** Two of this section's
+own sentences were overstated and a reviewer had to trace the code to find out: that the settings
+identity "could not have been" the id path, and that the empty-answer bound "has its own test now".
+Both conclusions held; the reasoning under the first and the coverage under the second did not. Between them they found ten, of which eight are fixed and three are
+recorded as open because each is a design decision rather than a fix - one finding was two symptoms of
+a single cause, fixed once.
+
+Both passes independently reported the same two non-ascending attribute runs, which is also what a
+script walking every run in the package found: the footer splat and the header title cell. **Both are
+now fixed, and every attribute run in the package ascends.**
+
+The header cell is the more interesting of the two. It had been left alone twice on the strength of a
+comment saying the element *could not* be fixed, only declined to add to - a claim about the framework
+rather than about the schedule, and false: the reorder pair drops into the gap the class and
+`aria-sort` leave by moving up. **A recorded decision is only as good as the reason recorded with it**,
+and "we chose not to" and "it cannot be done" are worth checking apart before either is inherited.
+
+From the core render path, all three fixed ones were a rule applied in one place and not in its
+neighbour:
+
+- **`Responsive` never emitted `rz-datatable-reflow`**, which is the class the theme scopes the entire
+  feature under - both the rule hiding the per-cell title above the breakpoint and the media block
+  that stacks rows into cards below it. So the titles showed beside every value at every width,
+  nothing stacked, and the grid paid 1.40x the render time to be worse than with the feature off.
+  The sixth instance of this failure mode, and its test asserted the span count and the title text -
+  the implementation restated.
+- The footer cell's render hook was numbered below the attributes above it, while the body cell's -
+  the same hook, one method away - was numbered past them and says why.
+- The column picker was written first among the root's children and numbered 700, after everything
+  else. To be written first it needed a number *below* the top pager's 10; the comment had the rule
+  backwards.
+
+From the column model, likewise:
+
+- A declared `SortOrder` was the only route into the sort list that never asked `CanSort`, and
+  `PropertyColumn` was the only column whose `ApplySort` overrode the nullable "cannot order by"
+  contract its own base declares. Together they ordered a grid by a `List<string>`, which has no
+  comparer: the render threw and drew nothing.
+- A settings reset cleared every column's filter and the whole sort list, but the restore that
+  follows could only name a column by `PropertyPath` - so a column without one lost what its markup
+  declared. A `CollectionColumn` had no `PropertyPath` when it had no `SortBy`, and none when its
+  `SortBy` was over a computed key, while filtering perfectly well by `FilterPropertyPath` throughout.
+  **The rule survives §27 and the column that shows it has changed**: both sides now ask one question,
+  `Identity.HasName`, and a collection column bound to a member has a name. What is left with none is a
+  column that names no member at all.
+- A computed column borrowed its sort key as a filter path. `ApplyFilter` composes from the display
+  expression and the reflective route filters by the path, so the column filtered two different
+  members depending on which route ran - and which one runs is decided by whether some *other* column
+  declined. It declines to filter now, as it already declines to sort.
+- `In` and `NotIn` read a null string as itself in the delegate builder and as the empty string in the
+  expression builder, so one grid over a `List` and the same grid over a queryable answered one
+  check-box-list filter differently - and the list was the side disagreeing with `QueryableExtension`.
+  Every other operator in that builder already coalesced; `In` was the one missed.
+
+**~~Open~~ Closed by §27: a column's settings identity was not unique.** `ColumnForPath` answered with
+the first column matching a stored path, and `CaptureSettings` wrote every column under that same key -
+so two columns over one property were both restored onto the first. Hiding the second and reloading hid
+the *first* instead, which is a wrong answer on screen and not merely lost state.
+
+**It did not take a duplicated property to collide.** A `PropertyColumn`'s path is its *sort* path when
+`SortBy` is set, so a column displaying `Last` and sorting by `First` shared an identity with the column
+displaying `First` - two ordinary columns, nothing declared twice. A filter stored for one was restored
+onto the other, and the grid answered with rows neither column asked for.
+
+**One sentence of this entry was wrong and §27 corrects it.** It said **`RadzenDataGrid` does not have
+this problem**, because "it matches on `UniqueID` first and falls back to `Property` only when there is
+none". The matching is exactly that (`RadzenDataGrid.razor.cs:4227, 4623`) and the derivation defeats
+it: `SetColumnDefaults`, called from `OnInitialized` and again at `:1657`, overwrites the parameter
+unconditionally in all three of its branches - `$"{Property}.{FilterProperty}"` where both are set, else
+`Property`, else `FilterProperty`, which is the empty string where there is neither
+(`RadzenDataGridColumn.razor.cs:250-257`). A declared `UniqueID` on any column with a `Property`
+is discarded, so the escape hatch it appears to offer does not exist. What it does avoid, by keying on
+the display property rather than the sort path, is the second collision above - and that is the half
+worth adopting.
+
+Both halves are closed together, with the `TemplateColumn` limitation that is the same missing concept
+seen from the other side. §27 has the model and the two claims of its own that did not survive being
+built. The instruction not to guess at the identity model stood for four sections and was right to: what
+closed it was not a better derivation but the observation that the collision §14 refused to create is
+only intolerable while it is silent.
+
+**What the passes have taught about where to look**, which is worth more than the counts:
+
+- **Its faults are silent.** A render loop that took 880,000 renders in 2.5s logged nothing. A load
+  that overwrote its successor rendered the wrong table with no exception. A grid rendered zero rows
+  above a pager still counting. Assume a wrong answer or a hang, not a throw.
+- **A class the theme scopes under a parent does nothing until that parent is emitted**, and every
+  markup assertion passes meanwhile. Five instances now. Grep the class in `_grid.scss` and read what
+  it is nested *under*.
+- **A check that looks for the thing being present can only see it once it works.** The frozen-inset
+  test took the first cell carrying `rz-frozen-cell` and asserted about it - correct while one kind of
+  cell could carry it, wrong the moment another did.
+- **Two features sharing one mechanism is where the branch breaks.** A declared `OrderIndex` and a
+  drag shared a placement rule; `View()` and `TotalCount()` asked the same two questions in opposite
+  orders; the click listener and the keyboard cursor share one `locate()`.
+- **A number attributed to a mechanism without a control has not been measured.** §9 has the rule and
+  what it cost to learn.
+- **A comment that states a constraint is a claim to be checked, not a fact to be inherited.** Two
+  separate ones on this branch were wrong in the same direction - both said something was impossible
+  when it was merely undone, and both were believed twice. See the header cell above and the sequence
+  rule below.
+- **A rule stated in a comment is only as good as the comment.** `d9992eaaf` corrected the sequence
+  rule where it was argued and left one instance of the old, wider claim standing - ten lines above a
+  comment stating the true one, and directly above numbering that is only correct under the new rule.
+  A reviewer citing it would have read working code as a fault. Fix the rule everywhere it is written
+  down, not only where it was being argued.
+- **A fix is right for the case that motivated it and has to be checked against the neighbouring
+  one.** Reviewing a day of fixes found three faults in them: a listener that let go without
+  forgetting it had attached, so the grid could not take it up again; `default(TItem) is not null`,
+  which answers null for a `Nullable<T>` as well as for a class; and three attribute runs left
+  descending by the commits that documented the rule against it. Every one was the other half of a
+  conditional the fix had only read one way. **A fifth instance came out of §16**, and as a gap rather
+  than a fault: `AllowFiltering` is asked in exactly one place and `ComposeInMemory` never re-asks, so
+  a grid with filtering switched off and a column still carrying a value would be filtered - and no
+  test said otherwise. Nothing was wrong; nothing was holding it right either, and the two halves only
+  became visible in one file once the composition moved into one.
+- **"It was reviewed once" and "little has changed since" predict nothing.** The drop-down had its own
+  15-fault pass and 3 commits after it, and was ranked last for that reason; re-reading it found six,
+  including a validator that never fired and a multiple selection that lost a tick when the user
+  turned the page.
+
+## 11. What is next, in the order it was argued
+
+Nothing here is committed to; this is the list as it stood, so it can be picked up cold.
+
+**Not built:**
+
+- ~~**Keyboard navigation**~~ - **built, all four steps of §12.** It is the last of the three the scroll
+  container unblocked; resize, reorder and frozen columns are all built. The roving-focus model turned
+  out not to be the obstacle it looked like, because `RadzenDataGrid` does not use one either: focus
+  stays on `.rz-data-grid-data` and the active cell is named by `aria-activedescendant`. What the design
+  had to settle instead was where the algorithm lives, what paints a focused cell when the theme has no
+  rule for one, and what a keystroke costs on a server-rendered circuit.
+- ~~**Column auto-fit**~~ - **built**, as §13 designed it, and the sort glyph it needed went up first
+  on its own. Two of that section's decisions did not survive being measured; both are marked there.
+- ~~**Lookup columns**~~ - **built**, shapes 1 to 3 of §14, with the auto-fit deferral it needed as a
+  prerequisite rather than a follow-up. Six of that section's decisions did not survive the build and
+  two rounds of review; all six are marked there. The playground draws both cardinalities, all three
+  provenances and both filter modes, which is the fastest way to see what the section describes.
+- **Editing, grouping, composite headers.** Unchanged, and for the reasons in §1 and §10.
+- **Settings storage, a grid menu, and Excel export.** Read off a production consumer's wrapper rather
+  than designed from here - §38 is the survey, §39 the first two and §40 the third. None is on the
+  render path; §39's menu needs §37b's band question settled and §40 wants its own package.
+
+**Measurement debt:**
+
+- ~~**The bimodal reference rows.**~~ - **measured in §26, and the hypothesis it had carried for three
+  sessions is refuted.** The ~990 KB step is not `RenderTreeBuilder`'s pooled frame arrays. The arrays
+  are pooled, which §26 confirms directly off `ArrayPool`'s own EventSource rather than off a GC column,
+  but a real pool miss costs 5,121 KB and the buckets are 2,560 / 1,280 / 640 KB - no bucket and no sum
+  of them is 990 KB. The step is the JIT: 991 KB that tier-1 with dynamic PGO stack-allocates and tier-0
+  puts on the heap, and it disappears with `DOTNET_TieredCompilation=0`. §26 has the tables and the one
+  thing that did not reproduce.
+
+  Frozen columns are the same question from the other side: two attribute frames per cell of a frozen
+  column cost **1.10x** the render time and under a kilobyte of allocation. If frames are pooled, that
+  is exactly the shape to expect - the work is real and the bytes are not new. **They are pooled**, so
+  that reading stands, and it is now the measured half rather than the inferred one.
+
+- **`--job short` cannot answer a question about time.** Reorder measured 1.76x, 1.86x and 0.97x across
+  three runs of it; frozen measured 1.01x and then 2.68x, with error bars wider than the means. Both
+  were settled by one full-length run, which put reorder at 0.93x and frozen at 1.10x with errors under
+  3%. Allocation is stable to two decimals at `--job short` and is what that job length is for. **Take
+  a time ratio from a full-length run or do not quote one.**
+
+**Upstream, separable from everything else:**
+
+- ~~**`updateFrozenColumnPositions` is not scoped to its own grid.**~~ - **sent up on its own** as
+  radzenhq/radzen-blazor#2702, from a branch off `upstream/master` rather than from here. A resize drag
+  calls the shared `Radzen.startColumnResize`, whose move handler runs that routine on every frame once
+  any `.rz-frozen-cell` exists. It measured the header's frozen cells and then wrote an inline inset to
+  every frozen cell of `gridElement.querySelectorAll('tr')` - which reaches the rows of a grid rendered
+  inside a row-detail template, and pins them to the *outer* grid's offsets. **A second fault one level
+  down was found while writing the fix**: for the detail row that holds the nested grid, the per-row
+  `row.querySelectorAll('.rz-frozen-cell-left, ...')` reaches the inner grid's cells too, so scoping the
+  rows alone would not have been enough.
+
+  Measured in a browser against an outer grid with two frozen columns holding a nested grid with two of
+  its own: the inner grid's second frozen column was pinned at the outer's **129px** when its own first
+  column is 49px, 80px out of place. The outer grid's own cells are byte-identical either side, which is
+  what makes the fix a narrowing rather than a change.
+
+  **What the PR deliberately leaves**: `startColumnResize` computes `hasFrozenColumns` with an equally
+  unscoped `gridElement.querySelector('.rz-frozen-cell')`, so an outer grid with no frozen columns of
+  its own still calls the routine every drag frame when a nested grid has some. After the scoping fix
+  that is wasted work rather than wrong output, so it was offered rather than included.
+
+  None of this affects this branch's own grid, which composes its insets server-side as a `calc()` sum
+  of declared widths and calls that routine never.
+
+- ~~The `QueryableExtension` array-filter fix~~ - **sent up on its own** as radzenhq/radzen-blazor#2696,
+  from a branch off `upstream/master` rather than from here. An array property is enumerable but not
+  generic, so the filter was built against the array itself and threw ("the binary operator Equal is not
+  defined for Int32[] and Int32"). Upstream had no array coverage on that path at all - the two tests
+  named `Where_FiltersArrayProperty_*` filter a string - so the PR carries two of its own, written to
+  fail on master first.
+
+**Still open from before, unchanged:**
+
+- Package and namespace name.
+- ~~Whether any of `RadzenDataGrid`'s four richer filter UIs - operator menu, date popup, numeric range,
+  enum picker - should be built in, or whether `FilterTemplate` stays the whole answer.~~ - **answered
+  in §31 and built in §35**: they are one feature, `FilterUI.Menu`, and `FilterTemplate` is still the
+  answer for everything the menu does not offer. §36 is the checklist half.
+
+---
+
+## 12. Keyboard navigation - the design
+
+All four steps of the order below are built: the theme fix upstream, the cursor itself - the C#
+algorithm, the JavaScript effect layer, the re-assert after every render, and the package's interim
+stylesheet - range selection, and positional ARIA. **Measured at +1.4 KB and 1.00x** for the cursor,
+**+0 KB** for range selection and **+0.1 KB** for the ARIA. Three of the four are inside the gate; the
+fourth is not, and deliberately. **`aria-colindex` on every cell runs at ~1.1x against a gate of
+1.02x** - brought back as a number to decide on, as the budget section requires, and kept: the tiers
+below confine it to a grid whose user has hidden a column that is not at the end, and the alternative
+was gating a screen reader's correctness behind a switch aimed at sighted keyboard users. Everything below carries the reason it was decided that way, so it can be re-argued rather
+than merely obeyed; where it diverges from `RadzenDataGrid` the divergence is deliberate and the reason
+is given. Two of the decisions did not survive contact with a measurement, and both are marked where
+they stand rather than quietly rewritten.
+
+### What it is for
+
+**Power-user navigation on a large business grid**, not an accessibility checkbox. The target shape is
+`Cartons.razor` in the consuming application: eight-plus columns, ~11,700 rows, `RowClick` navigating to
+a detail page, `SelectionMode.Multiple`. Accessibility follows from doing it properly, but it is not
+what sets the scope.
+
+**It is judged against the WAI-ARIA grid pattern, not against `RadzenDataGrid`.** Every other feature
+here mirrors Radzen because the *theme* keys off the class names; keyboard behaviour is not a markup
+contract, so that argument does not carry. Where upstream matches the pattern, matching upstream is
+free. Where it does not, this grid follows the pattern and the difference is recorded in the README's
+divergence table rather than inherited.
+
+The bar is an upstream pull request, because that bar subsumes the consuming application's.
+
+### The model
+
+**Cell level.** Up and Down move a row; Left and Right move a cell within the row. The grid already
+emits `role="grid"` on the scroll container, and a `role="grid"` whose cells cannot be reached is
+mis-roled - that content is a `table`, or the container is a `listbox`. Cell movement is also the only
+keyboard route to a column that horizontal scrolling has pushed off screen, which a ten-column grid
+has and a five-column one does not.
+
+**The header is row 0**, as upstream has it: Left and Right cross the `<th>`s and Enter or Space sorts
+the focused column. Sorting is the most common thing anyone does to a business grid and without the
+header there is no keyboard route to it at all.
+
+**The filter row is not in the arrow space.** It holds real `<input>`s that `Tab` already reaches, and
+putting them in the arrow space would make every keystroke decide whether it is navigation or typing.
+It swallows keydown instead, which is what upstream does and costs nothing to copy.
+
+**One tab stop**, on `.rz-data-grid-data`, which restores its last position when re-entered - tabbing
+out to a filter box and back is a constant gesture, and starting over each time is the difference
+between keyboard support existing and anyone using it. `aria-activedescendant` is cleared on blur;
+upstream never resets `hasActiveRow`, so its grid claims an active descendant while unfocused.
+
+**The active cell is named by `aria-activedescendant`, not by roving tabindex.** Roving focus would put
+a `tabindex` attribute on every cell, which is an attribute frame per cell - the shape that costs frozen
+columns 1.10x - and it is over budget for a feature that does not need it.
+
+### Where the work happens
+
+**The algorithm is C#. The effect is JavaScript. JavaScript holds no rules.**
+
+Upstream splits it the other way: ~156 lines of `focusTableRow` own the index arithmetic, the clamping,
+the highlight and the `aria-activedescendant` bookkeeping, and C# caches two integers. Two of upstream's
+four keyboard bugs come from that split - JavaScript mutating state Blazor also owns. Its focus ring is
+wiped whenever selection changes `RowStyle` and Blazor rewrites the row's `class`; and passing
+`UniqueID` where the rendered element carries `GetId()` means setting `id=` on a grid kills navigation
+silently, swallowed by a bare `catch`.
+
+Here C# computes the new `(row, cell)` and calls down with it. The script swaps a class, moves the id
+and scrolls into view. It decides nothing, so it cannot disagree.
+
+**No render per keystroke.** The handler is wrapped in `NonRenderingHandler`, which already exists for
+exactly this. Note that upstream re-renders on every arrow key too - its keydown is an ordinary Blazor
+handler, so `ComponentBase` wraps it in `StateHasChanged` and the JavaScript then patches a class on top
+of a render that already happened. Skipping the render is not a divergence in behaviour, only in cost.
+
+That has one consequence worth naming, because it is what forces a listener into the script that the
+design did not otherwise want. Blazor's `preventDefault` for an event is an attribute written by a
+render - upstream drives it from a `preventKeyDown` field, which only reaches the DOM on the render its
+keystroke caused. A grid that does not render per keystroke can never update it, and blanket
+`preventDefault` on keydown would swallow `Tab` and trap focus in the grid. So the script attaches one
+native listener whose only job is to call `preventDefault` for the keys **C# names in the call** - the
+browser scrolls a line for an arrow key and a page for `Space`, and the grid scrolls the focused cell
+into view itself, so both run and the container jitters. Suppressing a key the grid handles is not a
+rule about navigation; which keys those are is still decided where they are handled.
+
+Two exceptions the same listener has to make, both about the browser rather than about the grid: it
+ignores a key typed inside an `input`, `textarea`, `select` or `contenteditable`, where the arrows move
+a caret and are not ours to take. The filter row separately stops keydown propagating, which is what
+keeps the *grid's* handler from seeing it - two mechanisms because there are two listeners, and only
+Blazor's honours Blazor's flag.
+
+**`OnAfterRenderAsync` re-asserts focus.** The grid re-renders constantly for other reasons - sort,
+filter, page, resize, a parent's `StateHasChanged` - and each one rewrites the row's `class`. Rather
+than defend the class, the grid tells the script where focus is again after any render while focus is
+live. One interop call on renders that were happening anyway, and C# is unambiguously the authority.
+This is what upstream cannot do, because its `focusedIndex` is a cache rather than the source of truth.
+
+**Rows are addressed by `data-r`**, whose emit condition widens from "clicks are delegated" to "clicks
+are delegated or navigation is live". Addressing by `tbody.rows[i]` would cost no markup and be wrong:
+`Virtualize` emits a spacer `tr` and row detail emits a second `tr` per expanded row, so DOM order is
+already not model order. The index strings are pre-cached, so the attribute costs a frame and no
+allocation.
+
+> **Measured, and wrong on the last sentence - then measured again, and wrong about why.** An attribute
+> per row read **+16 KB at 1000 rows**, eight times this feature's whole budget, and that was put down
+> to the frame: the value being a pre-cached string, the frame was what was left, and
+> `RenderTreeBuilder` renting its frame array from a pool made a plausible mechanism for it.
+>
+> The premise was the part that was false. **The table of index strings held 512 entries**, so a
+> thousand-row grid called `ToString` on 488 rows of every render - the values were pre-cached for the
+> first 512 rows and for no others, and the benchmark renders a thousand. Grown to fit, `data-r` costs
+> **+0.78 KB** and the frame is nearly free after all.
+>
+> What made it findable was positional ARIA writing two more index attributes: one per row, which
+> measured the same +15.5 KB, and one per *cell* - six times the frames - which measured +0.09 KB. Six
+> times the frames for a twentieth of the cost is not a frame-count story, and the only thing the two
+> do not share is how large their values get.
+>
+> The addressing decision below stands on its own even so, and is now a preference rather than a
+> saving. DOM order is not model order - but the
+> rendered *data rows* are, because the two things that break it are distinguishable: a detail row is a
+> sibling carrying `rz-expanded-row-content`, and `Virtualize`'s spacer carries no class at all. So the
+> nth `tr.rz-data-row` is the nth row, and the inline path needs no attribute. Under virtualization it
+> still does, because there the index is a position in the whole data set rather than in the DOM - and
+> there it is tens of rows rather than a thousand, which is the same argument delegated clicks make in
+> reverse. `RowsAreAddressed` is `ClicksAreDelegated || (navigation && virtualizing)`, and the script
+> takes `data-r` where it is offered and counts where it is not. Writing it on every row would now
+> cost 0.78 KB rather than 16, so the case for counting is that it needs no attribute rather than that
+> the attribute is expensive.
+
+### The keys
+
+Arrows; `Home` and `End` for the first and last cell **in the row**; `Ctrl+Home` and `Ctrl+End` for the
+first and last cell **in the grid**; `PageUp` and `PageDown` for a viewport of rows.
+
+`Home` and `End` are a deliberate divergence: upstream binds them to the first and last *row*, which is
+the pattern's `Ctrl+Home` and `Ctrl+End`. On a ten-column grid the row meaning is the more useful of the
+two and the one fingers expect.
+
+**`Enter` activates and raises `RowClick`. `Space` selects.** Upstream binds both to selection and
+offers no keyboard route to a row click at all, which on the target page means a keyboard user can
+multi-select cartons but can never open one. Splitting the two keys is the pattern's own answer and it
+resolves that outright. `Shift+Space` and `Shift+Arrow` extend a range from the selection anchor.
+
+**In RTL the arrows flip**, because the pattern specifies visual direction and this grid is already
+direction-aware through logical properties and edge-relative freezing. `Home` and `End` do not flip -
+"first cell in the row" is already logical. Direction is read once when the listener attaches, not per
+keystroke.
+
+**Not built: typeahead, `F2`, `Escape` in the body.** Typeahead on a grid sorted by an arbitrary column
+is ambiguous about which column it should match, and that ambiguity is a design question rather than a
+key binding. `F2` and `Escape` belong to editing, which is out of scope for the reasons in §1.
+
+### Range selection, and the anchor it reaches from
+
+Built, and it cost nothing: no parameter, no binding, no markup. A Shift key is the whole of its
+surface, which is why there is no `AllowRangeSelection` - a switch would name a cost that does not
+exist. It is live when `SelectionMode` is `Multiple`, which is the only mode where a range means
+anything.
+
+**The anchor is a selection anchor, not a cursor.** This is the one thing the design above got wrong,
+and `Shift+Space` is what exposed it: that gesture does not move, so a run anchored where the cursor
+stands would reach from a row to itself. The anchor is the last row `Space` or `Enter` acted on, and a
+grid whose cursor has only ever moved has none - there the first Shift key sets one where the cursor
+is, which is what makes `Shift+Arrow` work on a grid nobody has selected anything in yet.
+
+It follows that a plain arrow key moves the cursor without moving the anchor. That is a divergence from
+a desktop list, where an unmodified arrow moves the selection too - and it is forced rather than
+chosen: `Space` selects here and the arrows do not, so the last row *selected* and the last row
+*reached* are different facts, and the anchor is about the first.
+
+**The range is recomputed from the anchor on every keystroke rather than accumulated**, so shrinking it
+gives back exactly the rows it covered: the answer is a function of where the two ends are now, not of
+the path taken between them. What that costs is the selection as it stood when the run opened, kept for
+as long as the run lasts. It has to be kept, and this is the reason: the grid does not own `Selection`,
+so once the range has covered a row there is nothing left to read to find out whether the user had
+chosen it beforehand.
+
+**Which rows changed is the difference against the selection as it stands**, not against the previous
+range - so growing and shrinking are one code path, and a caller that changed the selection underneath
+the grid is still told the truth. Both sides go through sets: a range is thousands of rows on the grid
+this was written for, and `ICollection.Contains` per row would make it quadratic.
+
+**`Shift` with Left or Right does nothing.** The pattern extends a *cell* selection with them; what
+this grid selects is rows, so a sideways move has nothing to extend. The pattern's `Shift+Space` -
+"selects the row that contains the focus" - is likewise written for a cell-selecting grid, where it
+widens a cell selection to its row. Where selection is already rows that gesture is just `Space`, so
+`Shift+Space` takes the meaning it has in every desktop list instead, which is the one users arrive
+with.
+
+**A run ends at the next key without `Shift`, at a sort, a filter or a page, and at leaving the grid.**
+The middle three end the anchor with it, because both ends of a range are positions in the view and all
+three are ways a row arrives at an index that used to belong to another one. That is one call in
+`RefreshAsync`, which is where every state change a user can make already funnels.
+
+Leaving is different and ends only the run. A run also carries the selection as it stood when it
+opened, and blur is exactly where that stops being trustworthy - the user can select elsewhere and come
+back, and a surviving run would restore rows they had since dropped. The anchor stays, on the same
+reasoning the cursor's position does: it says where the next range reaches from rather than what is
+selected now. The visible consequence is that a range you tabbed away from is committed - the next
+Shift can extend past it but not take it back - which is the honest reading of a gesture that ended.
+
+**Off under virtualization**, which is the same scope choice delegated clicks make and for a related
+reason. A range is the rows between two positions, and the rows come from `View()` - what the render
+walked. A virtualized view can only hand over the window it drew, so a range reaching past it would
+select the rows it could see and call that the answer. `Shift` there moves the cursor, which is what
+the grid did before this existed.
+
+**The anchor does not move on a mouse click.** The inline click path is handed the row rather than its
+index - only the delegated listener knows the position - and an anchor that moved on the grids whose
+script attached and not on the others would be worse than one that does not move at all.
+
+### Boundaries
+
+**Paging: arrowing past the last row advances the page** and lands on the first row of the next, and
+likewise backwards. Upstream simply stops - nothing calls `ChangePage` - which on 11,700 cartons makes
+the keyboard useless past row 100. Paging state and the item count are already in C# here, so the
+boundary is a comparison rather than a DOM measurement.
+
+**Virtualization: focus follows the data, not the rendered window.** Upstream clamps `focusedIndex` at
+the window edge while the viewport scrolls, so the index and the row drift apart with nothing to
+re-sync them. The window edge is an implementation detail the user should never feel.
+
+### Cells, columns and rows that move
+
+**Every rendered cell is navigable, including the row-detail toggle**, and `Enter` activates whatever
+is in it. The toggle is already a `<td role="gridcell">`; making it unreachable would be the markup
+lying again. One rule beats two, and it avoids upstream's trap of having `ArrowRight` mean expand rather
+than move whenever a `Template` is supplied - which costs upstream horizontal navigation entirely on
+exactly the grids that have the most columns.
+
+**Scroll-into-view carries an inset equal to the frozen run's width.** A frozen column is sticky and
+pinned from the first paint, so `scrollIntoViewIfNeeded` - which reads the viewport rect - considers a
+cell scrolled underneath one to be visible, and the focused cell sits occluded with no indication.
+`RadzenFastGrid.Frozen.cs` already sums those widths with `calc()` for the pinning; the scroll margin is
+the same number reused - *almost*. That sum is a CSS length, `calc(80px + 220px)`, and nothing in C#
+can turn it into the pixels a scroll needs. What is reused is the run rather than the number: C# says
+how many cells of the row are pinned to each edge, which it knows, and the browser measures how wide
+they came out, which only it does. Same division of labour as everywhere else here. Upstream never meets this because it pins nothing until a column is resized.
+
+**Focus tracks a column's position; it tracks a row's item.** These point different ways on purpose.
+Reordering or hiding a column is a deliberate act on the columns, and having focus stay where it is on
+screen is less startling than having it chase a column across the table. A sort or a filter is an act on
+the *rows* whose entire purpose is to move the one being looked for, so focus follows the item through
+`ItemKey` - which already exists, as the key the render tree diffs rows by - and falls back to the
+position where no `ItemKey` is supplied.
+
+**This paragraph used to say `ItemKey` "already backs selection membership", and when §20's review found
+that false it was true that focus was the only place a row was named rather than compared.** Selection
+membership was `selection.Contains(item)` over the collection the caller supplied, which compares however
+that collection compares - by reference for the `HashSet<TItem>` the grid's own keyboard range built.
+
+**§21 then made the original sentence true, by a different route than it claimed.** Selection membership
+*is* keyed now, on the render path, against a set of keys rather than through `ItemKey` being consulted
+by the collection; row expansion is keyed too; and `ItemKey` has five reading sites rather than two. So
+the correction above is a record of what was so between §20 and §21, and focus is no longer the only
+place. What survives unchanged is why §12 chose it: a sort or a filter moves the row being looked for,
+so focus has to follow the item rather than the position.
+
+**Nothing to focus.** Keys are inert while `IsLoading`. Focus clears when the row set empties and
+returns to the first row when data arrives; retaining an index against an empty set means holding a
+position that may not exist later, for a benefit nobody would notice. The empty-message row is not
+navigable. **Focus never enters `FastGridSettings`** - column order, widths, sorts and filters are the
+user's configuration; where the cursor was is about the current moment.
+
+### What paints the focused cell
+
+**The theme cannot draw one, and this is why upstream's cell navigation is invisible.**
+`_grid.scss` has exactly two focus rules: `.rz-grid-table thead th.rz-state-focused` gives an outline,
+and `tr.rz-state-focused > td` gives a row background. There is **no `td.rz-state-focused` rule**.
+`focusTableRow` adds that class to a body `<td>` on Left and Right, and it lands under neither parent;
+the row's own class is not cleared either, since the query only finds descendants. So upstream moves
+`aria-activedescendant` correctly - a screen reader announces the new cell - while a sighted keyboard
+user pressing `ArrowRight` sees nothing change at all.
+
+This is the third instance on this branch of the same failure: **a class the theme scopes under a parent
+does nothing until that parent is emitted, and every markup assertion passes meanwhile.**
+
+**And the row highlight is scoped to selection, which is the same bug one level up.** The
+`tr.rz-state-focused > td` rule lives inside `.rz-selectable`, a class `RadzenDataGrid` adds only when
+`RowSelect`, `ValueChanged` or `SelectionMode.Multiple` is set - and which this grid adds only when
+`SelectsOnRowClick`. So on a **read-only grid, keyboard focus paints nothing at all**: not the cell,
+not the row. That is not upstream trivia, it is a hole in this design, since the grid this section is
+written for is read-only by definition.
+
+The fix went upstream as **radzenhq/radzen-blazor#2698**: it adds the missing `td.rz-state-focused`
+rule using the `--rz-grid-cell-focus-outline` variables every theme already defines, and moves the
+focus block out of `.rz-selectable`, placed directly after it so a focused row still beats a selected
+one at equal specificity. Measured in Chromium against the compiled themes rather than read off the
+source - on a selectable grid, selected, focused and selected-and-focused are byte-identical before and
+after; on a grid without selection, the row background goes from nothing to `rgba(53,160,215,.2)` and
+the cell from no outline to `solid 2px` inset by `-2px`.
+
+**Both halves have now landed and the stand-in is gone.** #2698 merged, and a follow-up moved the
+frozen-cell pseudo-element block out of `.rz-selectable` as well - without it a read-only grid tinted
+the focused row everywhere except its frozen cells, which stayed white. `Radzen.Blazor` 11.3.1 carries
+both, so the package no longer ships `fastgrid.css`, the playground no longer links it, and the parity
+fixture measures against the theme alone. The suite passes unchanged, which is what says the theme's
+rules and the stand-in's were the same rules.
+
+A read-only grid is the *only* configuration this component promises, so before that landed the
+feature had no visible cursor at all. That made the upstream fix a prerequisite rather than a courtesy,
+which is why it was first in the order below.
+
+### The ARIA that costs something, and when it is paid
+
+**It is designed here and gated nowhere near here.** This is step 4 of the keyboard work because that
+is the order it was argued in, but the emission conditions are `Paging || AllowVirtualization` for the
+rows and "a column is hidden" for the columns - `AllowKeyboardNavigation` appears in neither. A screen
+reader on a paged grid needs to know where the window sits whether or not a sighted user can arrow
+around it, and gating that behind a switch aimed at sighted keyboard users is how accessibility ends up
+off everywhere.
+
+The consequence is that the per-cell tier is a cost a grid can reach without opting into anything - a
+user hides a middle column and the render goes to ~1.1x. **That is the decision, taken knowingly**, and
+it is what makes the three tiers load-bearing rather than a refinement: they keep the bill on the one
+configuration that earns it, and leave the baseline and the two cheaper cases at zero.
+
+With paging or virtualization the DOM holds a window - a hundred rows of 11,700 - and nothing tells a
+screen reader which. The pattern's answer is `aria-rowcount` and `aria-rowindex`; for hidden columns it
+is `aria-colcount` and `aria-colindex`.
+
+These were predicted to land on opposite sides of the budget: `aria-rowindex` a frame **per row**,
+roughly a tenth of what frozen columns cost and comfortably inside; `aria-colindex` a frame **per cell**,
+about half of frozen's cost, which is outside.
+
+> **Both halves of that were wrong, and finding out why corrected a number this branch had been
+> quoting for weeks.** Measured, `aria-rowindex` on every row costs **nothing** and `aria-colindex` on
+> every cell costs **+0.09 KB** - six times the frames for a twentieth of the cost, which cannot be a
+> frame-count story at all. What the per-row attribute had actually been paying for was its *value*:
+> the table of cached index strings held 512 entries, a thousand-row grid called `ToString` on 488 rows
+> of every render, and that was the +16 KB `data-r` had been charged for and attributed to the frame.
+> Grown to fit, both attributes are free in bytes.
+>
+> The cell attribute is not free in **time**: one frame on every cell of a thousand-row grid runs at
+> **about 1.1x**, which is exactly the shape frozen columns already had at 1.10x for two frames on the
+> cells of one column. So the conclusion §12 reached - that the per-cell attribute is the expensive one
+> - survives; only the currency and the mechanism were wrong.
+
+So **each is emitted only where it is needed**, which is §3 rule 3 applied literally and, as it turns
+out, the specification's own rule quoted back: "if all of the columns are present in the DOM, including
+`aria-colindex` is not necessary as user agents can calculate the column index". `aria-rowindex` and
+`aria-rowcount` only when paging or virtualization makes the DOM a window; `aria-colcount` only when the
+picker has hidden a column. An unpaged grid showing every column pays nothing, which is the
+configuration the 153 KB baseline measures.
+
+**And `aria-colindex` in three tiers rather than one**, because the specification has three cases and
+the 1.1x is what makes the difference between them worth having:
+
+| What the picker has hidden | What is written |
+| --- | --- |
+| nothing | nothing |
+| the trailing columns | `aria-colcount` alone - what is left is still columns one upward |
+| the leading columns | one index per row, on the first cell, naming where the run starts |
+| a column in the middle | an index on every cell, because the run has a hole in it |
+
+A row-detail toggle pins the first cell to column one, so any run starting later already has a hole
+before it and falls into the last case. **The frame is the declared column order**, which is the only
+ordering a hidden column has a place in: a reorder index is a position among the *visible* columns and a
+column nobody can see was never given one. A grid that both hides and reorders therefore numbers cells
+by where they were declared rather than where they are drawn - which is the case the specification
+already requires every cell to be numbered for, so it is the honest answer rather than a drawn position
+invented for a column that has none.
+
+**Row numbers include the header rows**, which are rows of the grid: the title row is 1, the filter row
+is 2 where there is one, and the data rows follow. A detail row repeats its parent's number instead of
+taking one of its own - numbering it separately would push every row below it out of step with the data
+set, which is the one thing the attribute exists to keep true. A total not yet known reads `-1`, the
+value defined for it, rather than a zero that would be a claim.
+
+### The drop-down
+
+`RadzenFastDropDownDataGrid` opens on `Enter`, `Space` and `ArrowDown` and closes on `Escape`, but has
+no navigation inside the popup - the README lists it as a limitation. It gets row-level navigation from
+the same code with cell movement switched off, and the drop-down owns `Enter` as select-and-close. Full
+cell navigation in a picker is motion without a purpose: the user is choosing a row, not reading a
+table.
+
+### Allocation is a design constraint here, not an afterthought
+
+This component exists because `RadzenDataGrid` allocates 13,172 KB where it allocates 153. A feature
+that quietly gives some of that back has taken the argument away. §3 rules 2 and 3 apply in full, and
+for this feature specifically they mean:
+
+- **Nothing per cell.** No `tabindex`, no `id`, no unconditional `aria-colindex`. This is what rules out
+  roving focus, and what makes the conditional ARIA above the design rather than a refinement of it.
+- **Nothing per row that is not already there.** `data-r` is reused rather than joined by a second
+  attribute, and its index strings are already pre-cached.
+- **No delegate per row or per cell.** One keydown listener for the whole grid.
+- **No render per keystroke**, via `NonRenderingHandler`.
+- **Nothing at all when the feature is off.** A grid with navigation disabled must measure as the bare
+  grid does, to the two decimals `--job short` is stable to.
+
+### Budget, and the measurements that have to be recorded
+
+**The gate: under +2 KB and under 1.02x at 1000 x 5.** That is strict enough to rule out anything
+per-cell and loose enough not to micro-argue. A model that lands at 1.05x gets brought back as a number
+to decide on, not quietly accepted.
+
+**Measuring is part of the work, not a follow-up.** A commit here is not done until its number exists
+and is written down. Concretely:
+
+- `gridbench` gains cases in the established naming: `+ keyboard navigation`,
+  `+ keyboard navigation and range selection`, `+ positional ARIA`, and
+  `= RadzenDataGrid + keyboard navigation` for the like-for-like ratio, which is the only comparison
+  that means anything once a feature is paid for on both sides. **That last row does not exist**, and
+  the reason is worth keeping: `RadzenDataGrid`'s navigation has no switch - the tab stop and the
+  keydown handler are unconditional - so its baseline row is already the navigation-on measurement and
+  a second identical row would say nothing. The like-for-like comparison is `+ keyboard navigation`
+  against that baseline: 155.2 KB against 12.86 MB, **85x**, and it costs that grid nothing marginal
+  because it never had the choice.
+- **Navigation is measured alone, before range selection**, so the gate judges one thing rather than a
+  bundle.
+- **Time ratios come from a full-length run or are not quoted.** `--job short` measures allocation;
+  it settled reorder at 1.76x, 1.86x and 0.97x across three runs before one full-length run put it at
+  0.93x. Allocation is stable to two decimals at `--job short` and that is what that job length is for.
+- Run it on a quiet machine. One earlier pass had the playground serving a circuit alongside it.
+- The numbers land in **three places**: the cost table in §0, the "what each of these costs" and
+  "where that leaves it against `RadzenDataGrid`" tables in `README.md`, and `gridbench/README.md` for
+  the raw data. Take the modal value of several runs before trusting the `RadzenDataGrid` column, which
+  is bimodal between two values about 990 KB apart - the JIT warming up, measured in §26.
+
+### How it is verified
+
+**bUnit for the algorithm, Chromium for the paint.** bUnit drives keydowns and asserts the computed
+`(row, cell)`, the boundary behaviour, the key set and the ARIA - which is the whole reason the
+algorithm is in C#. `GeometryParityTests` gains a pane for what is drawn.
+
+**The probe must ask the question the wrong way round.** Not "does the focused cell carry
+`rz-state-focused`" - that is the check that passed while the filter row's pinning was deliberately
+removed, because a row that never got the class has nothing to find and is skipped in silence. It must
+ask *what is painted at the focused cell's rect*, and assert it differs from its neighbours. The same
+probe covers the frozen-column occlusion case, by asserting the focused cell is not painted over by a
+pinned one.
+
+**No parity pane against `RadzenDataGrid` for focus.** It would assert that this grid matches a grid
+that paints nothing.
+
+### The order it lands in
+
+1. ~~The `_grid.scss` focus rule, upstream, on its own~~ - **done, radzenhq/radzen-blazor#2698.** It
+   turned out to be two rules rather than one, for the reason above. The interim package rule now
+   matches what went up, in `wwwroot/fastgrid.css`, and the README's styling section says so.
+2. ~~Navigation. Then measure, and record.~~ - **done: 155.2 KB against 153.85 KB bare, 1.01x over
+   three full-length runs.** Allocation is `--job short`, stable to two decimals across three runs; the
+   time ratio came out 1.03, 1.01 and 0.90 at full length, every one with an error bar wider than the
+   difference, which is the answer "not measurably slower" rather than a number to quote to two places.
+3. ~~Range selection - `Shift+Space` and `Shift+Arrow`.~~ - **done, and it measured as nothing.** It
+   turned out to need one thing the design had not named: a *selection* anchor rather than a cursor
+   one. `Shift+Space` is aimed at the row the cursor is already on, so a run anchored where the cursor
+   stands reaches nowhere - the anchor has to be the last row `Space` or `Enter` acted on, and only
+   falls back to the cursor on a grid that has not selected anything yet. See below.
+4. ~~Positional ARIA.~~ - **done, and it measured on the opposite side of the budget from where this
+   section put it.** The per-row attribute is free, the per-cell one is free in bytes and about 1.1x in
+   time, and chasing the difference is what took `data-r`'s +16 KB apart. It also gained a tier the
+   design had not: the specification asks for the index on every cell only where the drawn columns have
+   a hole in them, and the 1.1x is what makes the cheaper cases worth telling apart.
+
+One commit each, which is what every other feature on this branch did, and the only reason resize,
+reorder and frozen columns have separate numbers at all.
+
+### Where this could still be wrong
+
+- **The row/column asymmetry** of "focus follows the item, focus follows the position" will read as an
+  inconsistency to anyone who meets it without the reason. The reason is above; it needs to survive
+  review rather than be smoothed away.
+- **The measured `--job short` time column was noise, and it nearly took a decision with it.** Three
+  short runs of this feature returned 1.00, 1.04 and 1.19; three full-length runs returned 1.03, 1.01
+  and 0.90. Had the gate been read off the first set it would have failed on a number that does not
+  exist. §9 already says this; it is recorded again here because the temptation to read the column that
+  is already printed is what makes the rule necessary.
+- **The round trip is accepted, not solved.** Every keystroke costs one server round trip, which in the
+  consuming application is a ~157ms floor from Hong Kong that is the speed of light rather than
+  anything fixable in code. A single press is fine; holding an arrow to scan may not be. The escape
+  hatch is moving the algorithm into JavaScript, which reverses the decision that made it testable -
+  a rewrite of the tested part, not a tweak, and one that should be taken on a measurement rather than
+  a guess.
+
+---
+
+## 13. Column auto-fit - the design
+
+**Built.** Everything below carries the reason it was decided that way, so it can be re-argued rather
+than merely obeyed. Three of the decisions come from facts about the shipped theme rather than from
+preference, and those are marked, because a theme change invalidates them and nothing else here.
+
+Two of the things written here before the code did not survive being measured, and both are marked
+where they stand rather than quietly rewritten: the header's `max-content` flip needed its flex growth
+turned off as well, and the one-frame gate was a guess that the pass does not meet at a thousand
+rendered rows and comfortably meets at every size a paged or virtualized grid reaches.
+
+### What it is for
+
+**A column as wide as what is in it.** The table is `table-layout: fixed`, so a column that declares no
+width gets an equal share and every value longer than that share truncates to an ellipsis. The consuming
+application's grids are the shape this is aimed at - `Cartons.razor` and its neighbours, eight-plus
+columns of very unevenly sized text, where an equal share is wrong for every column at once.
+
+**It is not a fill-the-width feature**, though it ends up doing that too. Fitting to content is the part
+that needs a measurement; distributing what is left over is arithmetic on the answer, and under this
+theme it turns out to need no arithmetic at all (see *Who absorbs the slack*).
+
+### The surface
+
+`AutoFitColumns`, typed `AutoFitMode { None, Once, OnDemand }`, `None` by default. `AutoFit` on the
+column, a `bool` defaulting to `true`, opts one column out.
+
+**`Once` fires on the first render that has rows in the DOM, and never again.** It is deliberately not
+keyed on the data changing. `dataChanged` here is `!ReferenceEquals(lastData, Data)`, which for the
+sources this matters to - `context.Rows.AsNoTracking()` read per render, a `LoadData` handler assigning a
+fresh page - is true on *every* parameter set, so a re-fit keyed on it is the continuous mode arrived at
+by accident. §10b records the same trap taking down row expansion. A consumer who wants a re-fit when
+their data changes calls the API from their own handler, where they know something actually changed and
+the grid cannot.
+
+**`OnDemand` is a double-click on the resize handle**, which fits that column and requires
+`AllowColumnResize` because there is otherwise no handle to double-click. That requirement is
+documented rather than worked around: the alternatives were a modifier key, which is undiscoverable and
+untestable, and an item in the column picker, which is a menu about visibility.
+
+**`AutoFitOverflow`, `AutoFitPriority`, `AutoFitAsync()` and `AutoFitAsync(column)` are the whole rest
+of the surface.** The first two arrived with the fit-to-container work below and belong here rather than
+only in the section that argued for them - a surface section that lists two of four parameters is worse
+than one that lists none, because it reads as complete. No event: a fit is
+awaitable, and `Once` has no audience for a notification. Recorded as a decision so it is not later read
+as an oversight.
+
+### Where the work happens
+
+One round trip per trigger, and **the script both measures and writes**. C# storing the widths and
+re-rendering would cost a full pass over every row to change N `col` elements, and would show a reflow
+between the measure and the paint. Resize already has this shape - the drag writes widths in the browser
+and calls back afterwards - so this is the existing mechanism, not a second one.
+
+1. **C# to the script**, with the target column indices, each column's `MinWidth` and `MaxWidth` strings
+   as authored, which columns are frozen, and the current load generation.
+2. **The header row**, N elements: set `width: max-content`, force one reflow, read, revert.
+3. **The body**, the maximum `scrollWidth` over the rendered `.rz-cell-data` spans of each column.
+4. **The chrome**: `getComputedStyle` on each column's own first cell for horizontal padding and
+   borders. Per column rather than per grid, because `CssClass` can change them.
+5. **Compose and write**, then hand the widths back with the generation they were measured under.
+6. **C#** discards a stale generation, stores into `autoFitWidth`, and renders only under the condition
+   in *What it collides with*.
+
+`EffectiveWidth` becomes `resizedWidth ?? autoFitWidth ?? Width`. **A fitted width is not captured into
+the settings**: a drag is a choice a user made, a fit is derived from the data, and restoring a fit
+computed against a different result set is worse than recomputing it. It also keeps the
+settings-identity collision of §10b from acquiring another participant.
+
+**Which of a drag and a fit wins depends on who asked, and the first version of this got it wrong in a
+way that destroyed user state.** This section originally said only "a drag beats a fit". The code then
+did the opposite - a fit cleared `resizedWidth` outright, so that fitting a column somebody had already
+dragged would do something visible - and the section was never amended to say so. What that missed is
+that **`resizedWidth` is also where a width restored from the settings lands**, a restored width being
+a drag from a previous visit. So `AutoFitMode.Once` wiped every saved width on first render, and
+because `CaptureSettings` reads that same slot, the next sort or page turn persisted the absence. The
+width was not overridden; it was deleted.
+
+The rule now distinguishes the two callers, which is the distinction that was missing:
+
+- **The automatic fit** (`Once`) does not measure a column that already carries a width the user chose.
+  It is not a target at all, so nothing is written and nothing is cleared.
+- **A fit somebody asked for** (`AutoFitAsync`, the double-click) does take that column, and clears the
+  drag with it - because a fit that visibly did nothing to the column under the pointer is worse.
+
+Two tests hold it, both confirmed to fail against the original code.
+
+### Measuring a cell is free; measuring a header is not
+
+**The body needs no clone and no offscreen probe**, because of a theme rule: `.rz-cell-data` is
+`display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`, so a truncated cell's
+`scrollWidth` already *is* its untruncated content width. The ellipsis this feature exists to remove is
+what makes it measurable.
+
+**But "the body is free" was written here before it was tried, and it is wrong.** That same
+`display: block` means the span fills its column, so its `scrollWidth` is never *less* than the column
+it sits in - a column wider than its content measures as itself, and a fit built on that could only
+ever grow a column, never shrink one. The body gets the `max-content` flip too. The shipped rule covers
+both elements:
+
+```css
+.rz-fastgrid-measuring .rz-cell-data { width: max-content !important }
+.rz-fastgrid-measuring .rz-column-title { width: max-content !important; flex: 0 0 max-content !important }
+```
+
+**The consequence is the performance one**, and it is why the gate below is what it is rather than what
+this section first guessed: both forced layouts are over N x rows, not over N header elements. One
+class toggle still buys one layout each way - that part holds - but they are whole-table layouts.
+
+**The header is not, and reading it the same way returns a plausible wrong answer.**
+`.rz-column-title` is an `inline-flex` at `width: 100%` with `overflow: hidden`, and its content child
+carries `overflow: hidden` too - which zeroes that child's automatic minimum size. A flex container
+whose items shrink to nothing has `scrollWidth == clientWidth`, so the header measures as *the width it
+currently has*. Every column fits to itself, the numbers move a pixel or two, and nothing about the
+result says it is wrong.
+
+**And `width: max-content` on its own does not fix it - that was written here before it was tried, and
+the probe caught it.** `.rz-column-title` is `flex: auto` inside the header's flex line, and a flex
+item's used main size comes from its flex properties rather than from `width`, so setting the width
+changes nothing at all. The measuring rule has to turn the growth off with it. The first run measured
+every column at 226px against a 224.5px starting width - five columns agreeing to within a pixel, which
+is what a fit that has measured nothing looks like from the outside.
+
+**A specificity argument was the wrong diagnosis and would have survived review.** `!important` is
+needed, but it was needed against `flex`, not against `width: 100%`, and a fix aimed at the second one
+passes every markup assertion while measuring the same wrong number.
+
+The header therefore needs a flip of its own, with the flex growth turned off. It is one rule beside the
+body's rather than a pass of its own - the class goes on once and both elements answer it. The
+alternative - reading the content child and adding
+the glyph width, the flex `gap` and the title's `padding-inline` back from computed styles - is
+arithmetic against the theme's current internals, and it is the shape of thing that has now been wrong
+six times on this branch without any test noticing.
+
+**The header must reserve its sort glyph**, which is why that fix lands first and on its own. A header
+measured without it fits one glyph too narrow and jumps on the first sort - the same jump §10 recorded,
+made permanent by a width computed around its absence.
+
+### Turning a measurement into a width
+
+`ceil(max(header, cells)) + padding + border + 1`.
+
+The `+1` is for `scrollWidth` rounding to an integer. A fitted column one pixel short shows an ellipsis,
+which is the single outcome that makes the whole feature look broken.
+
+**No over-fit percentage.** `RadzenSpreadsheet` adds 3% because it measures on a canvas and the result
+has to survive being drawn by something else, including Excel after an export. Here the measurement
+comes from the renderer that will draw it, so the same 3% on a 400px description column is twelve
+pixels of visible slack bought against a mismatch that does not exist.
+
+**`MinWidth` and `MaxWidth` are applied by the browser, not by us.** The fitted number is pixels and
+those parameters are arbitrary CSS - `10rem`, `30%`, `4em`. So the `col` is written as
+`clamp(<MinWidth>, <fitted>px, <MaxWidth>)` when either bound is set, and as the bare pixel width when
+neither is. This is the argument frozen insets already won: they are summed with `calc()` rather than
+parsed, precisely so a column may be sized in any unit or a mixture of them. Parsing CSS is the option
+that works for pixels and is quietly wrong for everything else.
+
+`MaxWidth` matters more than it looks. Without an upper bound one four-hundred-character value takes the
+whole table and every other column truncates to nothing - the state the feature was meant to leave.
+
+### Who absorbs the slack
+
+**The last non-frozen column *being fitted* is left with no width at all.** The last *visible* one is
+what this section first said, and the two differ when the trailing column declares its own `Width` - a
+column the markup has sized cannot also be the one with no width, so the code takes the last of the
+columns it is actually fitting. The consequence is that slack can land mid-table on a grid whose last
+column is declared, which is a real cost of "a declared width wins" rather than a separate decision. Under `table-layout: fixed` a `col`
+with no width absorbs the remainder, so the browser does the distribution: no slack arithmetic, no
+container measurement, and it stays right through a window resize with no observer and no second round
+trip. The whole distribution pass deletes itself.
+
+Two constraints come with it. It must never be a frozen column, because §10's rule is that a frozen run
+ends at the first frozen column declaring no width. And if every column is frozen there is no candidate,
+so the fallback is pixels everywhere and a table that scrolls.
+
+**The last column rather than the widest one**, though the widest is what a distribution pass would pick.
+"Widest" is a property of the data, so a filter changes which column stretches and the layout rearranges
+itself under a reader for no visible reason. The trailing edge is where slack is expected to be, it is
+stable across re-fits, and it needs no parameter.
+
+**A fitted total wider than the container scrolls; it does not shrink.** The `.rz-data-grid-data`
+container that resize needed is already there. Shrinking columns back to fit a viewport truncates every
+one of them, which is the state this feature exists to escape - "always fill the width, never scroll" is
+a different mode, not a fallback inside this one.
+
+### What it collides with
+
+**Frozen columns, and this one is not optional.** The frozen inset is composed *on the server*:
+`PinLeftRun` and `PinRightRun` build a `calc()` sum from `EffectiveWidth` and hand it to `SetFrozen`,
+which feeds the memoized style emitted on every frozen cell. So a script that writes new `col` widths
+while C# records them without rendering leaves every frozen cell carrying an inset computed from the
+*old* widths - wrong on screen, and invisible to any test that asserts markup. **An auto-fit renders
+when the grid has a frozen column and skips the render when it does not.** The cost belongs to frozen,
+not to auto-fit, and resize pays it unconditionally today.
+
+That collision has an upside worth banking in the same commit: because a run stops at the first frozen
+column with no declared width, fitting one *extends* runs that currently give up and draw unfrozen.
+
+**The toggle column.** The colgroup emits a bare `col` standing in for it, with no column of its own in
+`visibleColumns`. Any mapping between a measured cell and a `col` has to account for that offset - it is
+the off-by-one that once drew every column one position left.
+
+**`Responsive` below its breakpoint** stacks rows into cards and the colgroup means nothing, so no fit
+runs there. It is asked as **"is this still a table"** - `getComputedStyle(table).display !== 'table'` -
+rather than by comparing a width against 768px: the breakpoint is the theme's number to change, and
+every other reason a table might stop being one has the same consequence for a colgroup. Its test
+applies the `display: block` that media query applies and asserts the fit answers null **and leaves
+every `col` exactly as it found it** - declining after writing would be the worst of both. This guard
+was specified here, left unbuilt in the first version, and caught by review. A fit taken above the breakpoint stays stored and is correct again when the window widens.
+This needs its own test rather than an argument: `Responsive` shipped broken on this branch for exactly
+the neighbouring reason.
+
+**Virtualization.** The script sees the current window and nothing else, so `Once` fits the first window
+and `OnDemand` fits the one on screen. That is documented rather than hidden, and it is what the user can
+see. Refusing to run under `AllowVirtualization` was considered and rejected: those are the grids that
+want this most.
+
+### What invalidates a fit, and what supersedes one
+
+**Nothing invalidates it.** A filter that removes the one long value leaves the column wide, and that is
+the wanted behaviour: narrowing a column while a reader is looking at it is the jumping this design has
+now rejected in three separate places. Widths are stored per column, so a reorder carries them and a
+hide-then-show restores them for free. The README says that after a filter the columns may be wider than
+they need to be, and that the answer is to re-fit.
+
+**A newer trigger supersedes an older one, and a fit is stamped with the grid's load generation.** A
+result whose generation is stale is discarded - it was measured against rows that have since been
+filtered, sorted or paged away. This deliberately reuses the coordinator that `RadzenFastGrid.Data.cs`
+already owns rather than adding a second notion of "is this still current" beside it; §10b's standing
+lesson is that two features sharing one mechanism is where this branch breaks, and two mechanisms
+answering one question is how `View()` and `TotalCount()` came to ask theirs in opposite orders.
+
+### Budget, and which harness reports which number
+
+**The cost of this feature is in a place gridbench cannot see.** gridbench is BenchmarkDotNet over
+bUnit: it renders and measures allocation, and it cannot execute `fastgrid.js`, cannot reflow and cannot
+measure a node. It will report the reflow, the `scrollWidth` pass and the `getComputedStyle` calls as
+zero.
+
+So two channels, and **a browser millisecond must not be written into the allocation table**, where
+every other figure is a KB from a bUnit render. §9 already has "a number attributed to a mechanism
+without a control has not been measured"; this is its sibling, and the failure is quieter.
+
+| Channel | What it answers | Gate | Measured |
+| --- | --- | --- | --- |
+| gridbench, `AutoFitColumns = None` | that the feature off costs nothing | identical to bare | **154.04 KB against a 154.09 KB bare - free** |
+| gridbench, `OnDemand` on | the render-side delta - an element id and a colgroup | under 0.5 KB | **154.33 KB, +0.24 KB** |
+| Chromium harness, `performance.now()` around the pass | the actual cost | see below | **~1.7ms + ~0.03ms a rendered row** |
+
+Allocation from `--job short`, so no time ratio is quoted from it.
+
+**The one-frame gate this section first wrote down was a guess, and the measurement replaced it.** The
+pass reads 3.2ms at 50 rendered rows, 7.1ms at 200 and ~32ms at 1000 - a straight line through a ~1.7ms
+fixed cost and ~0.03ms a row. So it is inside a frame for any paged or virtualized grid, which is every
+grid this feature is aimed at, and two frames for one rendering a thousand rows at once. That last
+configuration has neither paging nor virtualization, and it is the one where the pass is also doing the
+most work it will ever be asked to do.
+
+Replacing the per-cell `querySelector` with a sibling walk changed nothing measurable, which says where
+the time actually is: not the read loop but the **two forced layouts** of the whole table, one when the
+measuring class goes on and one when it comes off. That is the cost of measuring a table that sizes
+nothing to its content, and it does not go away by reading faster.
+
+The browser figure carries the machine it was taken on. Unlike an allocation number it does not travel,
+and quoting it without one invites the comparison it cannot support. These were taken on an M-series
+Mac with the suite running alongside.
+
+### How it is verified
+
+**There is no `RadzenDataGrid` parity pane available** - upstream has no auto-fit at all, so there is
+nothing to compare against and a pane asserting agreement would be asserting agreement with a grid that
+does nothing. That is the same reasoning that left the keyboard cursor without one.
+
+The Chromium probe carries it alone: a fitted column's rendered width equals its widest cell's content
+plus the cell padding; a column of short values comes out narrower than one of long values; `MaxWidth`
+clamps; the bare trailing column absorbs the remainder; a grid below the responsive breakpoint fits
+nothing. bUnit covers the decision half with the measurement stubbed - eligibility, the precedence of the
+three width layers, which column is left bare, and the all-frozen fallback.
+
+**Prove it discriminates by making the measurement return a constant.** If the probe still passes with
+every column measured identically, it was asserting the implementation rather than the behaviour, which
+is what §9 exists for.
+
+**As built: 24 bUnit facts on auto-fit alone and one many-scenario Chromium pane.** The probe runs the shipped `fastgrid.js` itself
+rather than a transcription of it - the export keywords come off so a `file://` page can call it, and
+nothing else about the source is touched. Its pane holds two columns with identical values and
+different titles, which is what separates the header half of the measurement from the body half: a
+width difference between those two can only have come from the header, and that is the assertion the
+flex fault failed. It carries its own control - the pane starts with every column equally wide, so a
+fit that does nothing fails rather than passes.
+
+The recorded answer at 1000 x 5, for the record and so a change to it is visible:
+`[43, 281, 159, 40, 375]` from a starting `[179.6 x 5]`, with `min(81px,40px)` written for the clamped
+column, 1000 cells truncated in that column and none in any other, and the table the same 898px before
+and after.
+
+### The order it lands in
+
+Landed as three commits, in this order.
+
+1. **The sort glyph**, on its own and first. It is a prerequisite of measuring a header, but it also
+   changes header geometry for every grid and fixes a jump that exists today - so it must not hide
+   inside a feature commit for a feature that is off by default.
+2. **This section**, before the code.
+3. **The feature**: the mode and the API, the script's measure-and-write, the third width layer, the
+   frozen render condition.
+4. **README, the cost rows, and §10.**
+
+### Recorded open
+
+- ~~**`RadzenFastDropDownDataGrid` does not get this in v1**~~ - **it does now, in §29**, and the
+  question this bullet was waiting on had a third answer: the two candidates are one feature with a
+  bound on it. The risk this bullet was protecting was spent carefully - the slice's own layout is
+  untouched, because the width is written by the script and the *placement* stays upstream's.
+  §29 also withdraws one thing said here by implication: forcing `AutoFitOverflow.Fit` on the popup does
+  not prevent a horizontal scrollbar, because the hard floor below is a column's own body width and an
+  unbounded column will not truncate.
+- **No event.** Above, with its reason.
+
+**A fit somebody asked for animates.** `transition: width` on a `col` works - worth stating because it
+reads like it should not, and was measured twice before being believed. A transition declared on a `th`
+or `td` animates nothing: under `table-layout: fixed` the column decides the width, so the cells have
+nothing of their own to interpolate.
+
+- **It costs less than not animating.** Over a thousand rendered rows and five columns: 60fps held,
+  worst frame **17.5ms against 29.4ms for the instant jump**. The per-frame relayout only moves boxes -
+  the cells are `nowrap` with `overflow: hidden`, so no text re-wraps, and only visible rows paint.
+- **The bare column glides without being animated.** It is the remainder, so the browser recomputes it
+  from its neighbours on every frame of theirs. Worth recording because the obvious test of this - to
+  transition the bare column's own width - answers a question a re-fit never asks, and says it jumps.
+- **`auto` does not interpolate**, so a first fit would land in one frame while every later one glided.
+  Each column being sized is pinned to the width it already has and the style flushed, giving the
+  transition somewhere to leave from. **2.5ms over a thousand rows**, because the pin writes what is
+  already there and the layout it forces has nothing to move.
+- **Only a fit the user asked for is animated.** The one `Once` runs is the grid settling into its first
+  layout; animating that reads as a page still loading rather than as an answer to anything.
+- **The transition is scoped to a class the fit adds and removes.** A permanent rule on `col` would put
+  200ms between a resize drag and the pointer.
+- `prefers-reduced-motion: reduce` turns it off - which is also why the headless probe must ask for
+  `no-preference` before it can observe the feature at all.
+
+The browser test counts transitions rather than sampling a width part-way through one: headless
+Chromium runs the animation clock free of wall time, and all four transitions start *and finish* inside
+90ms of a 200ms run. An intermediate width is correct in a real browser and not observable in that one,
+so the test asserts what is - that a transition ran, and for which caller.
+
+**When the columns cannot fit, the table overflows and the wrapper scrolls.** Sizing a column to its
+content is the point; compressing it again would undo the measurement just taken. But a `col` with no
+width in a table that has overflowed its parent is given *nothing* - the bare column renders zero
+pixels wide and its content is simply not there, which is not part of that answer. So when the fitted
+columns already fill the container, the bare column is sized like the rest: bareness exists to absorb
+slack, and there is none to absorb.
+
+Decided by arithmetic rather than by writing the widths and looking, because looking costs a second
+whole-table layout. **Both figures it needs are read inside the measuring pass, with every other read.**
+Taking them from after the class comes off instead put the pass at 111ms against its own 100ms gate -
+the first thing that gate has caught, and it caught a claim made in a comment that the reads "cost
+nothing".
+
+**`AutoFitOverflow.Fit` keeps the table inside its container and follows it.** Columns marked
+`AutoFitPriority.Required` keep their measured width; the rest give way in proportion to what they hold
+above their `MinWidth`, iteratively, so a column that reaches its floor hands its share to the ones
+still above theirs.
+
+**Required-ness is a floor, not a flag.** A required column is given a floor equal to its content
+width, so it arrives at the distribution with nothing to take and the ordinary arithmetic leaves it
+alone. The first version also tested a `required` flag inside the loop, and a mutation deleting that
+flag passed every test - because the floor was already doing the work. Two mechanisms for one rule is
+how §10b says this branch breaks; the flag is gone.
+
+**A pure-CSS version of this does not exist, and the first design said it did.** `<col>` width takes a
+pure length or a pure percentage. Anything mixing the two - `min()`, `max()`, `clamp()`, or
+`calc((100% - 120px) * 0.6)` - parses, survives in the style attribute, and then **falls back to `auto`
+at layout**. A sweep that appeared to show proportional shrinking was the browser splitting leftover
+space between columns it was treating as `auto`, with the required ones holding only because they were
+plain px. Read the numbers against the expression before believing them: a `min(300px, ...)` reporting
+490px is the tell.
+
+So it needs JS, and what that costs was measured rather than argued (1000 rows x 8 columns, six
+resizes):
+
+| | wall | callbacks | in callbacks |
+| --- | --- | --- | --- |
+| no observer | 327ms | - | - |
+| observer redistributing | 464ms | 7 | **0.3ms** |
+
+The observer and the arithmetic are free. The cost is the second table layout each write forces -
+~23ms per step at a thousand rendered rows, ~1ms under paging - which is why the callback is throttled
+to one redistribution per animation frame.
+
+**Allocation is the part that matters on Blazor Server, and it is nothing.** 2000 redistributions and
+16,008 column writes moved the JS heap by 0 bytes. Per-column arrays are typed and built once at fit
+time; a column is written only when its value changed; and the observer never calls back into .NET, so
+no interop, no render and no managed allocation - the cost does not multiply by the number of circuits.
+
+Two things the design has to keep holding:
+
+- **The surplus still goes to one column.** Handing every column its content width leaves the table
+  narrower than its container, and `table-layout: fixed` then shares the difference across *every*
+  column in proportion - including the required ones, which is the one thing the mode promises not to
+  do. So while there is surplus the bare column absorbs it, exactly as under `Scroll`.
+- **Changing `AutoFitOverflow` re-arms a `Once` fit.** The two modes produce different widths, and the
+  fit that already ran produced the other ones.
+
+**`MinWidth` and `MaxWidth` mean the same thing in both modes, and neither is parsed.** Under `Scroll`
+they go to the browser inside a `clamp()` and it resolves them, so any unit works. Fitting to a
+container is arithmetic and needs a number - and the first version got one by reading the string, which
+is exactly what this section rules out elsewhere: *"Parsing CSS is the option that works for pixels and
+is quietly wrong for everything else."* `MinWidth="10rem"` was silently ignored under `Fit` alone.
+
+The number now comes from the browser too: each bound is written to a probe element and measured back.
+All of them are written and then all read, one layout for the set, once per fit and never on a resize -
+and on a grid that declares no bounds there is nothing to write, so it costs nothing at all.
+
+**The probe's holder is given the container's width explicitly.** A percentage resolves against its
+containing block, and an absolutely positioned box with no width of its own is shrink-to-fit: a probe
+asking for 20% of that gets 20% of nothing, measures zero, and is discarded as a length the browser
+could not resolve. The first version left the holder to size itself and this section claimed the
+percentage resolved "against the width it was written against", which it did not. `rem` was unaffected,
+which is why the test written for units passed - it asked only for `rem`. It asks for both now.
+
+**One bounded measurement, not two.** The bounds are applied where the column is measured, so the total
+that decides whether any slack is left is the same number the fitting arithmetic uses. Applying them
+only to the string handed to the browser overstated a `MaxWidth`-capped column by whatever the cap
+removed - enough to conclude there was no slack when there was.
+
+The bounds are applied in `clamp()`'s order, the minimum last, so a `MinWidth` above a `MaxWidth` wins
+the way CSS has `min-width` beat `max-width` - and so a `MinWidth` wider than the content *widens* the
+column, which the first version only did under `Scroll`. Getting that order wrong is not cosmetic: it
+leaves a floor above the width it is a floor for, the table's `min-width` then overstates what the
+columns can sum to, and the browser scales them back up to reach it - so columns promised they would
+not move, moved.
+
+**Fitting one column is not leaving the mode, and the grid has to be able to say which.** A
+double-click on a resize handle fits that column alone; it cannot rebuild a distribution, because one
+column is not a layout. But the first version said so with the same `false` that means "this grid is no
+longer fitting", and the script took the teardown branch: floor cleared, observer released, the grid
+stopped following its container until some later whole-grid fit. What travels is now `'fit'`, `'keep'`
+or `'scroll'` - rebuild, leave alone, take down - because the two facts a boolean was carrying were
+never one fact.
+
+**There are two floors, and they are spent in order.** A column headed "Manufacturing Code" over
+six-character codes carries width its values never needed, and holding that width while the grid
+scrolls is the wrong trade. So the distribution runs twice:
+
+1. Down to the **soft floor** - the width at which a column still shows its own heading. Everything
+   with ordinary slack gives here first.
+2. Then, only if the table still does not fit, down to the **hard floor** - what the values themselves
+   need. This is the round that spends the gap between a heading and its content, and a column whose
+   heading is about as wide as its values has almost nothing here and gives almost nothing.
+
+The order is the point: a heading is learned once and a value is read every time, so the heading is the
+cheaper thing to spend - but only after the columns with real slack have given theirs. Measured on the
+probe pane at 120px: `[38/38/158/80/30]` with two rounds against `[42/280/158/80/51]` with one, where
+the long-headed column goes on holding 280px it does not need.
+
+**A best-effort column with no `MinWidth` gets both its floors from its own measurement**: the soft one
+from its heading, the hard one from its values. The heading is the point below which it stops saying
+what it is, and both are numbers the grid already has - the two halves of the measurement it just took -
+rather than any invented for the purpose. The first version floored such a column at zero and a narrow
+enough container took it there: still in the table, no longer on the screen.
+
+Under the hard floor sits a 5px backstop, for a column whose values measure nothing. It is not a
+readable column and is not meant to be; it is the difference between a column the eye can find and one
+that is simply gone. **It has no test of its own** - the probe page cannot produce a header with no
+title to measure - so it is a guard, not a guarantee.
+
+Its test asks whether the heading is *truncated* rather than re-deriving what the heading needs, and
+**the element that clips is `.rz-column-title-content`, not `.rz-column-title`**. The title is
+`flex: auto; width: 100%`, so it never overflows and always reports its column's width - measured on it
+the answer is "nothing is clipped" at every width, 38px included. The same `flex: auto` also makes
+`scrollWidth` useless for deriving what a heading needs: it answers 600px for every column on a wide
+pane. Two separate ways to measure the wrong thing, both of which this branch has now paid for.
+
+**What the tiers are tested for, and what they are not.** The test asserts that the hardest squeeze
+leaves every column on its hard floor - within a pixel per column of the table's own `min-width`, which
+is the sum of them - and that catches a second round that never runs. It does **not** catch the two
+rounds being run in the wrong order: at every pressure this probe pane can produce, spending the
+headings first and the slack first land in the same place, and separating them would need a pane built
+for that alone. The order is a claim the code makes and the spec explains; it is not one a test holds.
+
+**Waiting for rows is bounded by a clock that can actually be read.** Under virtualization the rows
+arrive after the render, so the script waits for them rather than measuring an empty table. Waiting on
+frames alone waits as long as a backgrounded tab stays hidden, since `requestAnimationFrame` does not
+fire there - and the server has disarmed by then, so nothing would ask again.
+
+The first attempt at a bound tested the deadline at the top of the loop, *after* awaiting a frame. That
+reads as a timeout and is not one: the tab that needs it is exactly the tab where the await never
+returns, so the deadline was only ever consulted when it was not needed. The frame and a timer race,
+and the timer has to be able to win.
+
+### Known consequences, recorded rather than designed around
+
+- **A fit of the bare column itself is discarded.** The colgroup skips that column by reference so the
+  grid's `ColumnWidth` cannot come back and size it, which also drops a width an `AutoFitAsync(column)`
+  on it had just measured. Staying bare is the right answer for the layout and the wrong one for the
+  user who double-clicked its handle and watched nothing happen. Recorded rather than fixed: the two
+  wants are genuinely opposed, and the layout's is the one the rest of the design depends on.
+- **A grid whose every column is `Required` cannot be fitted.** Nothing may give way, so a container
+  narrower than their total scrolls, and one wider leaves the browser to share the surplus across them
+  in proportion. Where at least one column is best-effort the surplus goes to it instead - the last one
+  if there is no bare column to take it - so this is only the all-required case.
+
+- **A one-column fit does not move the bare column**, and the first version cleared it - the trailing
+  column silently regained the grid's `ColumnWidth` on some later unrelated render. Both review axes
+  found it independently. The test that missed it asserted what was *sent* to the browser rather than
+  what the grid recorded.
+- **Hiding the bare column leaves the table narrower until the next fit.** The reference is kept, so
+  showing the column again restores it. Re-picking on every render was considered and refused: the
+  fit's other widths are stale the moment a column is hidden anyway, so the honest answer is to fit
+  again rather than keep one number fresh among several that are not.
+- **A reorder does not bump the view generation.** `RadzenFastGrid.Reorder.cs` deliberately skips
+  `RefreshAsync`, so a fit in flight during a drag can land against positions that have moved. Narrow -
+  it needs a reorder to complete inside one round trip - but recorded, because the generation is
+  documented above as covering "a sort, a filter or a page turn", and a reorder is none of those.
+
+### Where this could still be wrong
+
+- **"Fits what is rendered" is a caveat, not a guarantee, and a paged or virtualized grid is the common
+  case.** A user fits a column on page 1 and meets a longer value on page 7. The honest alternatives are
+  both worse - re-fitting on every page turn is the jumping already rejected, and asking the server for
+  the longest value per column is a query per column that only works for a property column and cannot
+  rank a template at all. Recorded so that the first complaint about it is met with the decision rather
+  than a fix.
+- **The measuring class is a write between two reads**, which is the shape that produces layout thrash.
+  It is one toggle rather than one per element, so the pass costs two whole-table layouts rather than
+  thousands - but two is where the ~32ms at a thousand rendered rows goes, and reading faster does not
+  touch it. If that ever needs to come down, this is the only place with anything in it.
+- **The three theme facts this rests on.** The body being free rests on `.rz-cell-data` truncating; the
+  header needing a flip rests on `.rz-column-title` being an `inline-flex` with a shrinkable child; the
+  slack column rests on `table-layout: fixed`. All three are read out of the shipped theme rather than
+  assumed, and all three would change silently under a custom one. The probe is what would catch it,
+  and only if it is run against that theme.
+
+---
+
+## 14. Lookup columns - the design
+
+**Built**, shapes 1 to 3. Argued before the code, the way §12 and §13 were, so what follows can be
+re-argued rather than merely obeyed. Every decision carries its reason; the two that rest on facts about
+a dependency rather than on preference are marked, because a change there invalidates them and nothing
+else here. *What the build changed* at the end records the four decisions that did not survive contact
+with the code, and the numbers that replaced the predictions in *Budget*.
+
+### What it is for
+
+**A column that displays a name and carries an id.** A grid over `Product` wants to show a category,
+a brand list, an owner - and the row holds `CategoryId`, `BrandIds`, `OwnerId`. Today the only routes
+are a join the source may not have, a navigation property that drags whole entities across the wire per
+row, or a `TemplateColumn` that resolves each cell by hand and cannot filter or sort.
+
+The efficiency argument is the point rather than a side effect: **the row carries integers and the names
+are held once for the grid.** A thousand rows with a category each is a thousand ints and one lookup of
+however many categories exist, against a thousand materialized `Category` instances. What a cell renders
+is a string already in that lookup, so the cell itself allocates nothing.
+
+### The surface
+
+Two column types, split on the cardinality of the key the row carries:
+
+```razor
+<LookupColumn Property="@(p => p.CategoryId)" Lookup="@categories" Title="Category" />
+<LookupCollectionColumn Property="@(p => p.BrandIds)" Lookup="@brands" Title="Brands" />
+```
+
+`LookupColumn<TItem, TKey>` takes `Expression<Func<TItem, TKey>>`; `LookupCollectionColumn<TItem, TKey>`
+takes `Expression<Func<TItem, IEnumerable<TKey>>>`. Razor infers both type parameters from the property,
+as it already does for `CollectionColumn`.
+
+**The split is on cardinality and not on provenance, and that is the whole shape of this section.** The
+two axes are orthogonal - one id or many, against three ways of saying where the names come from - and
+folding both into one type gives a component with six mutually exclusive parameters, five of them null
+at any call site, and a run-time check of which were set that no compiler can help with. Cardinality is
+knowable at compile time from the property's type and it changes how the column renders, filters and
+sorts, so it earns a type. Provenance does not: every case ends as the same `TKey -> string` map.
+
+So provenance is **one** parameter of a closed type:
+
+```csharp
+abstract record FastGridLookup<TKey>
+    sealed record Map<TKey>            : IReadOnlyDictionary<TKey, string>
+    sealed record Items<TKey, TEntity> : IEnumerable<TEntity>,
+                                         Func<TEntity, TKey>, Func<TEntity, string>
+    sealed record Query<TKey, TEntity> : IQueryable<TEntity>,
+                                         Expression<Func<TEntity, TKey>>,
+                                         Expression<Func<TEntity, string>>
+
+// TEntity is per case and inferred at the call site, so it never reaches the column's own signature:
+// the column is LookupColumn<TItem, TKey> whichever case supplies its names.
+```
+
+This is the `FulfillmentTrait` pattern the consuming application's own guidance names for a closed set of
+cases. Illegal combinations are unrepresentable rather than validated, and a fourth source later is a new
+case rather than a fourth nullable parameter.
+
+**`Items` takes delegates and `Query` takes expressions, deliberately.** Only `Query` composes into a
+database query; `Map` and `Items` are resolved in memory, where an `Expression` buys nothing and costs a
+`Compile()` per grid. §4's rule is that the authored form should be the one the consumer needs, and
+uniformity for its own sake would make the common case pay for the rare one.
+
+### Where the lookup lives
+
+**Declared on the column, deduplicated by the grid.** Two columns over the same table is the ordinary
+case, not the exotic one - `CreatedByUserId` and `ApprovedByUserId` both resolve against users - and
+per-column ownership would fetch it twice and hold it twice.
+
+A grid-level registry would share it at the cost of a second thing to declare and a name to get wrong,
+and it makes a column's meaning non-local. Instead the grid caches on the `FastGridLookup<TKey>` value
+itself: `record` equality gives `Map` and `Items` deduplication for nothing, and the sharing is an
+optimization nobody has to name or think about.
+
+**Measured, and the answer splits the cases.** Two instances built the way Razor markup builds them -
+the whole expression re-evaluated on every render:
+
+| case | equal? | why |
+| --- | --- | --- |
+| `Map` | yes | a dictionary reference held in a field |
+| `Items` | **yes** | non-capturing lambdas are cached in static fields, so the *same delegate instances* come back every render, and the collection reference is stable |
+| `Query` | **no, ever** | its `Expression<Func<>>` members are a fresh object graph on every evaluation and `Expression` does not override `Equals` |
+
+`Query` fails **even over a stable root queryable**, so this is not about the `IQueryable` member at all -
+it is the expressions beside it, and no call site can hold it right by being careful with the query.
+
+**That is harmless, and only because the lifetime rule in *Loading and lifetime* is "once".** A failed
+dedup costs one extra fetch at startup, not a fetch per render. What it does make load-bearing is the
+other half of that rule: **once a column has resolved its lookup it does not re-resolve because the
+parameter arrived as a different instance.** A cache keyed on the lookup's identity per render would
+refetch a `Query` on every render - which is precisely the defect §10 records against the check-box
+list's distinct scan, in a feature designed to avoid it. Resolve once per column; `Reload()` is what
+drops it.
+
+So the dedup is a bonus that `Map` and `Items` get and `Query` does not, rather than a mechanism
+anything depends on. Two columns over one `Query` fetch twice, once, at startup.
+
+### The row carries ids, so the filter compares ids
+
+**Everywhere: the predicate, the persisted settings, the descriptor's value.** A user picks "Toys"; the
+grid translates that to `3` against the lookup it already holds and emits `CategoryId In [3]`.
+
+- **No join is needed**, which is the premise - the source has an id and no navigation.
+- **It translates on any provider**, and it is the operator the check-box list already uses.
+- **Persisted settings survive a rename.** A filter stored as a name breaks the day someone edits the
+  lookup row; stored as an id it does not.
+
+Accepted with it: a saved filter goes stale when a row is *deleted* from the lookup, and a human reading
+persisted settings sees ids rather than names. Both are better than filters that break on a rename.
+
+The collection case appends to the authored expression rather than rewriting it:
+
+```csharp
+p => p.BrandIds.Any(id => selected.Contains(id))
+```
+
+**Every generic argument there is `TKey`, which is a type parameter**, so there is no
+`MakeGenericMethod` over a type known only at run time and nothing to guard with `DynamicCode`. A
+provider translates it as a subquery.
+
+### The check-box list is the lookup, not a distinct scan
+
+**No `SELECT DISTINCT` runs for a lookup column.** The names are already held, and the ids come with
+them, so the list is the lookup's own entries.
+
+The alternative - `DistinctValues`, the way an ordinary check-box-list column works - would offer only
+ids actually present in the data, which is a real advantage on a grid narrowed to a handful of them.
+It was rejected for three reasons, in increasing order of weight:
+
+1. It is a query per column where this design has none.
+2. The list would then **change as the data changes**, so a filter control's options move under the
+   user. A stable list is worth more than a shorter one.
+3. **Its cache is the one §10 records as having been invalidated wrongly** - dropped on
+   `!ReferenceEquals(lastData, Data)`, so the scan re-ran per column per parent render, measured at one
+   per parameter set. That is fixed, so (3) is history rather than a live cost; it is kept here because
+   it is the reason to be careful about *what a cache is keyed on*, which the dedup finding above then
+   ran into from the other side.
+
+A `FilterLookupInUseOnly` opt-in was considered and **refused**: it buys back a query per column to
+shorten a list, and `FilterTemplate` is already the escape hatch for a grid that needs it. Build it when
+something asks, and key its cache on the source kind rather than a reference when you do.
+
+### What `Simple` mode does on a lookup column
+
+**The typed text is matched against the names, in memory, and the ids it hits are emitted as `In`.** The
+lookup is already there, so this is a `Where` over a dictionary's values and the query is unchanged from
+the check-box path.
+
+The two alternatives are both worse. Filtering the ids as text is useless - nobody types `47` looking for
+Toys. Refusing `Simple` outright leaves `FilterMode` with a value that throws or silently does nothing on
+one column type, which is the sort of hole §10b keeps finding.
+
+**Documented consequence:** text matching two hundred names emits two hundred ids, and providers have
+parameter limits. A cap belongs in the code with the number stated, rather than a surprise at run time.
+
+**And text matching *no* name is a filter that matches no row, not an absent one.** That is the
+opposite of what the same empty list means on the check-box list beside it, where nothing ticked is no
+filter - so `HasFilter` asks the one thing that tells them apart, which is whether the box recorded
+what was typed. It survives a settings round trip because that text is stored with the filter; see
+*What the build changed*.
+
+### The descriptor the collection case reports is portable, and no sentinel is invented
+
+An earlier draft of this section had the collection descriptor as a grid-local encoding, on the
+assumption that a bare `BrandIds In [3, 7]` would read as a scalar comparison to any other consumer.
+**Reading `QueryableExtension` rather than assuming shows upstream already has exactly this convention**,
+and it is the one to emit:
+
+```
+Property       = "BrandIds"     the collection property
+FilterProperty = null/empty     meaning: the element itself
+FilterOperator = In
+FilterValue    = [3, 7]
+```
+
+Given a collection property with no `FilterProperty`, upstream sets the compared expression to the
+element parameter itself rather than to a member of it, rewrites `In` to `Contains`, and wraps the whole
+thing with `EnumerableAnyOrAll`. What comes out is
+`BrandIds != null && BrandIds.Any(x => new[]{3,7}.Contains(x))` - **the predicate this section
+specifies**, arrived at independently.
+
+So the descriptor round-trips through `RadzenDataFilter` and this grid alike, and nothing here needs a
+sentinel of its own. Emit the convention that exists.
+
+**Available and not used in v1:** `CollectionFilterMode` on the descriptor already chooses `Any` against
+`All` at that same call. "Rows carrying *every* selected brand" is therefore a parameter away rather than
+a redesign, and is left out only because nothing has asked for it.
+
+### Sorting
+
+**Not sortable unless an explicit `SortBy` names something the provider can order by.** Sorting by the id
+puts categories in insertion order under a column showing names alphabetically - a wrong answer that
+looks like a working feature. This is §4's existing rule for a column whose display cannot be ordered by,
+applied unchanged, and made visible at the call site rather than silently disabled.
+
+Where a navigation property does exist, `SortBy="@(p => p.Category.Name)"` is the honest answer, and the
+author is the one who knows whether it is there.
+
+**Ruled out, so it is not built later:** translating the lookup into the query as an ordered
+`CASE WHEN CategoryId = 3 THEN 'Toys' ...`. It works and it translates, and it is a query whose size is
+the lookup's size, which is the opposite of this feature's premise.
+
+### Loading and lifetime
+
+**The whole lookup, once, held for the life of the grid.** For the shapes this is aimed at - categories,
+brands, statuses, owners - that is tens or hundreds of rows fetched once, after which every cell resolves
+and the filter list is complete. Fetching only the ids in play would be smaller and would refetch on
+every page turn, sort and filter, which trades one small query for a stream of them.
+
+An author with a genuinely large lookup already has the answer: hand over a narrowed `IQueryable`
+(`db.Users.Where(u => u.Active)`), which is more honest than the grid guessing at a limit.
+
+**A `Query` lookup is fetched through `IFastGridQueryExecutor` even when `Data` is in memory.** What
+decides is the lookup's own queryable, not `AsyncOwnsData` - a grid over a `List<Product>` with an EF
+lookup must still not block the circuit on database I/O. The fetch happens after the render, the way
+`LoadLookupsAsync` already does, so it cannot overlap a page load on the same context.
+
+**Nothing invalidates it automatically. `Reload()` drops it.** That is the only escape hatch, and a
+lookup with no way to refresh is a cache with no invalidation at all - which produces an "I added a
+category and it never appeared" report that has no answer. The cost is bounded and only paid when
+somebody asks.
+
+**No `ReloadLookups()`.** A second refresh verb with subtly different scope is how the
+`RefreshAsync(announce:)` confusion in §0 happened, and nobody will remember which one they wanted.
+
+### What a cell draws before the lookup arrives
+
+**Blank, and the rows are not gated on it.** `Map` and `Items` have no gap; `Query` has one fetch between
+the first render and the names, so the first paint has ids and no names.
+
+- **Not the raw id.** It is a number the reader did not ask for, in a column titled "Category", and it
+  makes the settle look like a bug rather than a load.
+- **Not a gate on the rows.** Making every lookup column a blocking dependency of the first paint trades
+  a small ugliness for a large latency, and this grid's round trip has been measured at ~157ms from Hong
+  Kong (§12). The existing loading indicator already says something is in flight.
+
+One extra render, cells fill in - the shape the check-box list already has.
+
+### A null key and a missing key are different failures
+
+**A null key renders an empty cell and is offered in the filter as a "(none)" entry.** "Which products
+have no category" is a reasonable question and `In` over a nullable key answers it. Note that this
+differs from the current check-box list, which drops nulls outright in `FilterLookup`.
+
+**A missing key - an id with no lookup entry - renders the raw id and is never offered.** It is the one
+case where showing the id is right: a deleted row, a lookup narrowed by a `Where`, or a stale cache is a
+*fault*, and the id is the only thing that lets someone diagnose it. It is not a choice a user can make,
+so it does not go in the filter.
+
+Two different failures should not look the same. §10b's first lesson is that this grid's faults are
+silent; these two are the cheapest possible place to stop being.
+
+### What it collides with
+
+**Auto-fit, and it will get this wrong unless §13 is changed.** `autoFitPending` is disarmed by the
+*attempt* rather than the answer, and the script waits for **rows** rather than for cell content. So an
+`AutoFitMode.Once` grid fits on the render where lookup cells are still blank, the column settles at its
+soft floor - the header width - and the names then arrive into a column too narrow for them.
+Permanently, because §13 settled that nothing invalidates a fit.
+
+**The fix belongs on the server, not in the script**, and an earlier draft of this section said the
+opposite - "extend what the script waits for", plus an instruction to make that wait race a timer.
+Reading `fastgrid.js` rather than assuming shows `ready()` already races a `setTimeout` against
+`requestAnimationFrame` against a 1000ms deadline, carrying the fix from the second auto-fit review. Its
+`wait` argument asks one question, "are there rows yet", and rows are not what is missing.
+
+What is missing is on the C# side, where `AutoFitOnFirstRenderAsync` decides whether to fire at all. So:
+**do not attempt the fit while a `Query` lookup is still outstanding, and leave `autoFitPending`
+armed.** The resolve already calls `StateHasChanged`, and the next render fires the fit that was owed.
+Nothing in the script changes, and nothing re-arms.
+
+**Not by re-arming on the lookup's arrival**: that makes columns jump after the grid looked settled,
+which §13 rejected when it decided `Once` stays instant and only an asked-for fit animates.
+
+**The bound is the thing to get right, and it is not the script's.** §13 disarms on the *attempt* rather
+than the answer, precisely so that a grid whose script never loads does not ask again on every render.
+Deferring the attempt gives that property back temporarily, so a lookup that never resolves is a fit that
+never fires. **Every exit path out of the fetch must clear the outstanding state** - the success, the
+throw, and the cancelled-and-superseded return that `LoadLookupsAsync` already has. A test per exit path,
+not one for the happy one.
+
+**`FilterLookupData` has nothing left to do**, since the list comes from the lookup. It is inherited from
+`ColumnBase` and therefore still settable, so setting both is a **dev-time error naming both
+parameters**, not a silent loss. `DynamicCode.Unavailable` is the precedent: say what was asked for and
+what to use instead. Silently ignoring a parameter somebody deliberately set is a failure mode this
+branch has already paid for more than once.
+
+### Budget
+
+The predictions are kept above what was measured, so being wrong is visible.
+
+- **A scalar lookup cell should allocate nothing.** It is `AddContent(string)` over a string already held
+  in the lookup - cheaper than a `PropertyColumn` carrying a FormatString, which builds one.
+  **Measured: nothing**, on the same harness `PropertyColumnTests` weighs a string cell with.
+- **A collection lookup cell allocates one joined string per cell per render**, through `CellText.Join`,
+  whose `[ThreadStatic]` `StringBuilder` is already reused across cells. **Measured: 112 B a cell at
+  three ids** - and the prediction missed something. `CellText.Join` was non-generic, so every id was
+  boxed on the way to a `Func<object, string>`: the same cell through that route measures **184 B**, and
+  the 72 B between them is exactly three boxed integers. A typed overload went in beside it, and the
+  control that says which is which is that same cell listed the untyped way.
+- **The lookup itself is one dictionary per distinct lookup**, not per column and not per row.
+- **The filter costs what the check-box list already costs**, minus the distinct query it does not run.
+
+**A control is required before any of these is quoted.** §9's rule - a number attributed to a mechanism
+without a control has not been measured - is what the `data-r` claim cost when it went unchecked.
+
+### Native AOT
+
+**Nothing declines**, and this is checked rather than argued. Every selector is typed, both filter shapes
+compose from the columns' own expressions, and no member is reached by name, so no path here sits behind
+`DynamicCode.Supported` - so unlike the four features `Radzen.Blazor.FastGrid.TrimTest` deliberately
+leaves out, both columns belong in it. They are on its reachable path now: it publishes trimmed with
+warnings as errors and no trim warning, and the browser check that follows resolves a cell of each
+cardinality and filters a column by a name it typed, which is what a trimmed member would be missing
+from.
+
+**All three provenances, because provenance is where the risk actually is.** A review pointed out that
+the first version of this used a `Map` for both columns, which exercises none of the only code here
+that builds an expression tree at run time - `Query`'s projection, an `Expression.New` over a captured
+constructor with a body rebound onto another lambda's parameter. That application carries a `Query`
+column now, over a `List<T>.AsQueryable()` that needs no database, and the check waits for its cells to
+fill rather than asserting about the render they are blank in.
+
+Not covered *there*: the collection column's *expression* filter route. That application's data is an
+array, so the in-memory predicate is what runs. It is driven elsewhere - the playground's Entity
+Framework source maps `TagIds` as a primitive collection, so ticking a tag composes
+`Any(id => selected.Contains(id))` into SQLite - and it is composed from `MethodInfo`s captured by
+ldtoken rather than found by name. What is untested is that combination *under a trimmer*, which is a
+narrower gap than it was.
+
+That is a stronger position than `CollectionColumn` manages, and it is a reason to keep the selectors
+typed even where an `object`-returning one would read more simply at the call site: §4 records that a
+selector declared as returning `object` hides its member's real type two different ways, and this branch
+has paid for that once already.
+
+### Shape 4, and why it is not built
+
+An earlier form of this design had a fourth shape: `Property="@(p => p.Brands.Select(b => b.Id))"`, the
+ids projected out of a navigation collection, with the grid loading them on demand.
+
+**It is buildable and it is not built.** Two facts settled it, and both are recorded because the first
+one was got wrong here before it was checked:
+
+- **`Include` is not required.** Projecting a collection navigation alongside the entity has been
+  first-class since EF Core 6.0 ("split queries for non-navigation collections"), so
+  `source.Select(p => new { p, Ids = p.Brands.Select(b => b.Id) })` translates. An earlier draft of this
+  section required `.Include()` and proposed a guard for its absence; that guard would have fired on
+  correct code.
+- **`ItemKey` is `Func<TItem, object>`, not an expression**, so it cannot be composed into a query. A
+  side query projecting `(key, ids)` per page therefore needs a key the grid does not have, and getting
+  one means either widening `ItemKey` to an expression - whose `Convert`-to-object node is its own
+  translation question - or a third type parameter on the column.
+
+The remaining route, projecting the item and its ids together in one query, needs a projection type with
+a member per lookup column, which means **building a type at run time** and giving back the "nothing
+declines under AOT" property above, in exchange for one round trip.
+
+**The supported answer is a DTO.** `db.Products.Select(p => new ProductRow { ..., BrandIds =
+p.Brands.Select(b => b.Id).ToList() })` makes `TItem` the projection, `BrandIds` an ordinary collection
+of ids, and the column an ordinary `LookupCollectionColumn` needing none of the above. It is one query,
+no key, no data-path change, and it drops the columns nobody renders - which is the same efficiency
+argument this whole section is built on, applied one level up.
+
+**Filtering never needed any of it.** `.Any(id => selected.Contains(id))` composes into the main query
+and materializes nothing client-side, so only the *cell* ever wanted the ids. That is worth keeping in
+mind if this is revisited: the feature at stake is display, not filtering.
+
+### What the build changed
+
+Six decisions above did not survive contact with the code - four found while building it and two more
+that two rounds of review turned up. Each is recorded here rather than edited away, because what a
+decision was before it was checked is the part worth inheriting.
+
+**The fetch is cancelled by the grid going away, and by nothing else.** *Loading and lifetime* said it
+had the "cancelled-and-superseded return that `LoadLookupsAsync` already has", meaning the page load's
+token. That is wrong twice over. The check-box list's scan is about the data and is stale the moment a
+newer load replaces it; a lookup column's names are not, so a sort landing mid-fetch would throw away an
+answer that was still correct. And *nothing would ask again*: the render that superseded it has already
+happened, so "a newer load will ask on its own render" is a render that is already behind. The question
+actually being asked is "was this dropped while it ran", and that is a generation stamped on the column
+and moved by `Reload`. The token is now a lifetime one, cancelled in `Dispose`.
+
+**A fetch that throws resolves the column to no names.** *What a cell draws before the lookup arrives*
+never said what a *failed* fetch draws, and the auto-fit rule needs an answer: a throw that propagates
+out of `OnAfterRenderAsync` takes the circuit down, which makes "clear the outstanding state on the
+throw path" pointless. The rows are drawn and correct and only the names are missing, so it resolves to
+an empty lookup - and every cell then draws its id, which is what a missing entry already draws and for
+the same reason. Two silent blanks would have been one fault nobody can see.
+
+**A column that comes back with nothing asks again itself, and an empty answer is an answer.** The
+column cannot wait for a parameter set, because the renderer skips `SetParametersAsync` for a retained
+component whose parameters have not changed - which is exactly a column whose lookup is held in a field.
+So it re-queues itself, and that is a render feeding a fetch feeding a render. The bound is that an
+answer counts even when it is empty: a mutation that left the column outstanding after a *successful*
+fetch did not fail a test, it aborted the run with a stack overflow. A review caught the first version
+of that claim overstating itself - the test named for the bound fetched a *non-empty* lookup, so the
+empty case it was cited for was the one it did not cover. There is a test for a lookup that resolves
+to nothing now.
+
+**The sharing is narrower than the table above suggests, and the table is still right.** Two `Items`
+built the same way are equal - but only from *one call site evaluated twice*, which is what markup does
+with an expression on every render. Two separate call sites are two compiler-cached delegates and are
+never equal, so two columns each writing `FastGridLookup.Items(...)` in their own markup share nothing.
+What the sharing actually pays for is the ordinary shape - one lookup held in a field and handed to both
+columns - where it is the same instance and the second column skips building the map at all.
+
+**`HasFilter` is virtual, and an empty selection means two opposite things.** Not a departure this
+section foresaw at all - it came out of *What `Simple` mode does on a lookup column* meeting the rule
+that a check-box list with nothing ticked is no filter. On the box, a name nothing answers to *is* an
+answer and the grid should show no rows; on the list, nothing ticked is the absence of a filter. Both
+are `In` over an empty list of ids, so the value cannot tell them apart. What can is that only the box
+records what was typed, so that is what the override asks.
+
+The consequence reaches further than the column: **the typed text is part of the stored settings now**,
+because a filter captured and restored through the value alone comes back as the other one - a grid
+showing nothing restored as a grid showing everything. And recording that text had to move: it was
+being written by the caller after `Filter` returned, and `Filter` reloads, and the reload is what
+announces the settings, so it was recorded after the thing that stores it.
+
+Two smaller things, recorded because they will look arbitrary otherwise:
+
+- **The blank entry is `Spreadsheet_Blank`, so it reads "(Blank)" rather than "(none)".** It is the only
+  string in Radzen's resources that already means "the rows with nothing here", and it is translated
+  into every culture Radzen ships, which a key of this component's own would not be. The grid's
+  `BlankFilterText` overrides it.
+- **A nullable key types the lookup at the nullable key**, and `FastGridLookup.Map` is the awkward one
+  there: `Dictionary<int?, string>` is a CS8714 warning in the *consumer's* own nullable-enabled code,
+  because `Dictionary` asks for a key that cannot be null. `Items` and `Query` take a selector, so a cast
+  in the lambda is the whole answer, and that is what the README documents. Inside the library the
+  suppression is stated once, beside the one factory that builds the map.
+
+**Two seams on `ColumnBase` replaced a branch the grid could not have written.** A review read the
+filter plumbing moving onto the column as a refactor riding along, and it is worth saying why it is
+not optional: the grid had to ask a column what typed text means and what a ticked list means, and it
+cannot ask a lookup column anything specific because it is not generic over `TKey`. A virtual needs a
+default, and a default lives on the base - so the two methods moved rather than being added beside the
+ones they replace. What came with it is that the selection seam absorbed the `MakeGenericType` the grid
+was doing to type that list, so a lookup column reaches nothing by name on that path either.
+
+The collection case turned up a fault of the kind §10b keeps finding, before it shipped rather than
+after: **the null guard has to sit inside the negation**. Written outside it, `NotIn` keeps a row
+carrying no ids at all when composed as an expression and drops it when composed as a delegate - which
+is the same shape as the `In`-over-a-null-string disagreement a review found in the shared builder. It
+has that fault's test: the same data as a `List` and as a queryable, and the two answers compared.
+
+### Recorded open
+
+Both of the questions this section originally left for a spike have been answered before the build, and
+both changed what is written above rather than confirming it: `Query` never deduplicates by value and it
+is the expressions rather than the queryable that prevent it, and the collection descriptor needs no
+sentinel because upstream already has the convention. What is left:
+
+- **~~A lookup column's settings identity is its *sort* path, not its id path~~ - closed by §27, and
+  the separation this bullet refused is the one that was taken.** What it said, and the reasoning is
+  worth keeping because it was sound: `PropertyPath` is two things at once - the settings key *and* the
+  name a `LoadData` or OData sort travels under - so it cannot simply carry the id, or a remote grid
+  would order by `CategoryId` under a column sorting by `Category.Name`. Separating them was available
+  and was **not taken**, not because it could not be done, but because an id-path settings key gives a
+  `LookupColumn` over `p.CategoryId` **the same identity as a `PropertyColumn` over `p.CategoryId`** -
+  §10b's collision newly created rather than avoided.
+
+  **That collision is real and §27 creates it deliberately.** What changed is the word *silent*: the
+  grid throws, names both columns and names the attribute to declare, and the author writes one
+  `UniqueID`. This bullet's premise was that nothing would say so, and it was the premise rather than
+  the reasoning that was wrong - which is a different kind of mistake from the ones this file usually
+  records, and worth the distinction.
+
+  So the consequence it recorded is gone rather than standing: a lookup column with no `SortBy` is
+  identified by the id member it is bound to, and its width, order, visibility and filter are captured
+  like any other column's. Its filter still stores as ids and still survives the rename this section
+  argued for, and that round trip still has its test.
+- **Not in `RadzenFastDropDownDataGrid`**, for the same reason §13's auto-fit is not: that slice has the
+  worst review history on the branch, and its open layout question should be answered before anything
+  else is added to it.
+
+### Where this could still be wrong
+
+- **"The lookup is small" is an assumption about the caller's domain, not a fact.** Everything here -
+  fetching it whole, holding it for the grid's life, offering all of it in the filter, reverse-mapping
+  text against it - is right for hundreds of entries and wrong for hundreds of thousands. The design
+  offers a narrowed `IQueryable` as the answer and does not enforce a limit. The first grid to point a
+  lookup at a large table will find this, and the honest response is a documented ceiling rather than a
+  silent degradation.
+- **A stable filter list is asserted to be worth more than an accurate one.** That is a judgement about
+  users, not a measurement, and it is the one decision here most likely to be reversed by somebody
+  actually using it.
+- **The blank-cell interval is invisible in every test that renders synchronously.** A bUnit test with a
+  `Map` lookup never sees it, so the case that needs covering is specifically the `Query` one, and it has
+  to assert about the *first* render rather than the settled one. This is the same shape as the frozen
+  filter row in §10b: a check that looks for the resolved state can only see it once it works.
+
+---
+
+## 15. Architecture review — the deepening candidates
+
+Every pass in §10b asked whether the code is *correct*. This one asks whether it is the right *shape*:
+where a module is shallow, where a seam is missing, and where a rule that lives in a comment should
+live in an interface instead. It found two wrong answers, recorded below, and building the first two
+candidates turned up a third that is recorded in §10; the rest of what follows is shape. None of the
+three was visible until the shape was written down, which is the argument for this kind of pass rather
+than a summary of it.
+
+Read by four sub-agents against written briefs, over the two grid partials, the column model, the
+browser module with its six calling partials, and the test suite read as a consumer of the interfaces
+rather than as coverage.
+
+**The constraint every candidate is scored against is §3.** Rules 3 and 5 make allocation a design
+rule, so any deepening that puts a new allocation on the per-row or per-cell path fails on arrival.
+Everything below moves work that already happens once per render or once per column.
+
+**The vocabulary is deliberate** and is `codebase-design`'s: *module* (an interface and an
+implementation, at any scale), *interface* (everything a caller must know — signature, invariants,
+ordering constraints, error modes, cost), *deep* and *shallow* (behaviour per unit of interface), *seam*
+(where behaviour can be altered without editing in that place), *leverage* (what callers gain), and
+*locality* (what maintainers gain). Not "component", "service", "layer" or "boundary".
+
+### The two faults - **both fixed**, with `Attachment` (candidate 4, built)
+
+**The key guard was recorded before the call that earned it, and never let go.** `navigationAttached`
+was set *before* `attachNavigation` was invoked, so a throw still recorded success - and there was no
+`DetachNavigationAsync` at all, though `detachNavigation` is exported and dispose called it. Switching
+`AllowKeyboardNavigation` off at runtime stops `RenderNavigation` emitting the view id, so
+`getElementById` answered null and the guard stayed bound to a live element: a grid that no longer
+navigates went on calling `preventDefault` for every key in `HandledKeys` while nothing acted on them.
+
+The pointer listener does the opposite and says why - "recorded once it is true of the DOM rather than
+before the call". **This is the fourth instance of §10b's rule that a fix is right for the case that
+motivated it and has to be checked against its neighbour**, and the first where the neighbour had
+already been fixed and the lesson was not carried across.
+
+**And then the neighbour turned out to have the same fault.** `DetachClicksAsync` existed, ran on the
+right condition, and could not work: the tbody's id was emitted under `ClicksAreLive &&
+!AllowVirtualization`, which is the very condition that stops the grid delegating - so switching
+virtualization on dropped the id on the render *before* the detach that needed it, `detach(bodyId)`
+found nothing, and the listener stayed bound beside the per-cell handlers that had just replaced it.
+Every click raised twice. **That is exactly what the comment above `AttachClicksAsync` has always said
+must not happen**, written by an author who had seen the hazard, fixed the half they could see, and had
+no way to notice that the markup undid it.
+
+Neither fault is reachable from a bUnit test on its own: the C# call is made in both cases and only the
+browser knows it removed nothing. What is testable is the cause, and it is one rule -
+
+> **An element a listener is bound to keeps its name past the switch that bound it.** Letting go means
+> naming the element, and the switch that stops the feature is the switch that would stop it being
+> named. So both ids are *latched*: never emitted for a grid that has never used the feature, never
+> withdrawn from one that has.
+
+Making them unconditional instead was tried and rejected: three tests assert those ids are absent when
+the features are off, which is §3's rule 3, and a fourth compares two grids' markup, which per-grid ids
+break. Keeping an id only while a listener is *currently* bound was also tried, and is worse than
+either - correct only while nothing re-renders between the switch and the release, which the component
+does not control, `Virtualize` violates on its own, and no test can pin.
+
+**A mutation check caught one of this section's own tests not discriminating.** The test for "the
+attempt is forgotten with the listener" passed with that rule deleted, because releasing also clears
+the remembered payload - so for any payload but its type's default the guard sees a change and
+re-attaches regardless. It uses a default payload now, and fails when the rule is removed. Eight
+mutations, eight caught; §9's first layer earning its place again.
+
+### The candidates
+
+Ranked as found. Nothing here is committed to; each is an argument to be taken or refused, and a refusal
+with a load-bearing reason should be recorded here beside it.
+
+| # | Candidate | Strength |
+| --- | --- | --- |
+| 1 | Compose the view behind one interface | ~~Strong~~ **built**, §16 |
+| 2 | `drawing` is a mode, not a field | ~~Strong~~ **built** |
+| 3 | The browser seam has no interface | ~~Strong~~ **built**, §18 - and three of this row's claims corrected there |
+| 4 | Attachment is a pattern copied twice, one copy missing its half | ~~Strong~~ **built** |
+| 5 | Four methods of one shape, four meanings of `null` | ~~Strong~~ **built**, §17 |
+| 6 | `ColumnBase`'s internal half is a field-by-field protocol | ~~Worth exploring~~ **built**, §20 - and it is four sections, not seventeen members |
+| 7 | A column's identity is a concept with no name | ~~Worth exploring~~ **built**, §27 - and one of this row's three symptoms was not one |
+| 8 | The drop-down forwards twelve parameters, then hands out the grid | ~~Worth exploring~~ **built**, §19 - it was the scan, not the forwarding |
+
+**1. Compose the view behind one interface.** **Built**, as `Composition`; §16 has the design it was
+built from and, at the end, the three of its decisions that did not survive the building.
+`RadzenFastGrid.Data.cs:1117-1246` and `:1832-2007` were
+about 300 lines that are already a function of `(columns, sorts, source, config)` — `BuildFilters`,
+`ApplyFilters`, `Reflective`, `ComposeInMemory`, `ApplySorts`, `Compose`, `Page`, `Total`, `OrderBy`,
+`FilterString`. They are private instance methods over `columns` and `sorts`, both of which are declared
+in the *other* partial, so the partial-class split is a text split rather than a module boundary and
+the pipeline's only interface is "render a grid and read the DOM". `InMemoryCompositionTests.cs:48-64`
+stands up two `TestContext`s and diffs rendered rows to check the two routes agree.
+`FilterExpressionParityTests` is the proof this is avoidable: it calls
+`FilterExpression<Person, TProp>.For` and `.PredicateFor` directly, covers 84 operator x route
+combinations, and needs no bUnit at all.
+
+**2. `drawing` is a mode, not a field.** **Built**, as `DrawPass<TItem>`. The flag and the four fields
+beside it are one value: what the render in progress has already worked out. `Composed` and `Compose`
+are one method, and `TotalCount` is one line rather than a memo dance around `CountAll`, which keeps
+the source selection it was tangled with.
+
+**One claim in this section was too strong, and is corrected here.** It said `ApplyFilters` "filters
+differently inside a render than outside one". That divergence is not reachable: `Filtered` and
+`Compose` both guarded on `AllowFiltering` before calling, and `LoadPageAsync` - the one caller that
+did not - only ever runs outside a render. So the `!drawing` term in that guard was dead. It sharpens
+the candidate rather than weakening it: a guard written against an ambient that *cannot* vary is worse
+than one that does, because nobody can see the rule and the next caller inherits it. The guard is
+`!AllowFiltering` now, asked in one place, and its two callers have dropped the term they duplicated.
+
+**What the build changed.** Two of this candidate's own decisions did not survive it.
+
+- **The readers were going to test `Drawing`, and now do not.** A mutation check found the test for
+  "the total is remembered only for the pass" passing with that condition deleted - `Keep` already
+  gates on `Drawing`, so nothing can have been remembered outside a pass for a reader to find. Two
+  redundant branches, both unreachable, both looking like the rule was enforced twice. `Keep` is the
+  single gate now.
+- **Which moved the risk somewhere a test could not follow it**, and that is the more interesting half.
+  With the readers ungated, correctness depends on a pass being closed *entirely* rather than by
+  clearing its flag - otherwise a later caller holding the same source instance is handed a stale
+  composition. No test could pin that: the obvious one asserts the assignment it makes itself, not the
+  one the grid makes. So `Drawing` and `Filters` are settable only by `Begin`, and the mutation that
+  closes a pass by clearing the flag **no longer compiles**. A fault made unrepresentable is worth more
+  than a test that it has not happened.
+
+**Measured**, `--job short` at 1000 rows, one run before and two after: bare 154.53 KB -> 154.54 and
+154.65, one sort 175.89 -> 175.79 twice, a filter row 158.90 -> 158.77 twice. Allocation-neutral,
+which is what was claimed; the bare spread of 0.11 KB across the two after-runs is the noise floor
+rather than a cost, and the two composing paths are a shade cheaper in both. **No time ratio is
+quoted**: at that job length the errors on all three were wider than the differences, and §9 has the
+rule about that.
+
+The pass is a field on the grid, and is passed by `ref` only where it crosses a module edge - which is
+candidate 1, not this. What this does *not* do is remove the ambient from the grid's own helpers:
+`ActiveFilters` and `Compose` still read the field. The claim is only that it no longer crosses a seam.
+The alternative - threading `ref pass` through `RenderGrid`, `RenderPager`, `RenderHead`, `RenderBody`
+and `RenderRow` - is a large diff through the hottest code on the branch, to buy something this already
+has.
+
+**3. The browser seam has no interface.** **§18 has the design, and disagrees with this entry: the
+coverage count below is wrong and the reason given for it is wrong.** Sixteen named entry points
+carrying about forty-five positional arguments — and that is the narrow half. The wide half is undeclared: element ids, `data-r`,
+`data-toggle`, `rz-data-row`, `rz-cell-data`, and `:scope > table > tbody > tr`, none of which appears
+in a signature, so a rename breaks the script and no C# test notices. `autoFit` takes ten positional
+arguments; `FastGridAutoFitTests.cs:39-49` has already written the type that wants to exist, as
+`record Ask(...)` plus a hand-rolled positional decoder. Seven of the nine exports have zero coverage
+of any kind, and because the doubles answer `null` the RTL arrow flip at `Keyboard.cs:313, 318` is
+never executed by any test. `NavigationMetrics` is already a value crossing the seam with no in-process
+way to supply one.
+
+The ordering constraints are part of the interface and are written only as prose, in a different file
+from the calls they govern (`Data.cs:952-992`): attach after the pagers sync, fit before focus, fit
+after the lookup names land, reassert focus last, detach before release before dispose. §13 already
+recorded that swapping two of them would measure blank cells "and every test would still pass".
+
+**4. Attachment is a pattern copied twice.** ~~See the fault above.~~ **Built.** Two features with
+identical lifetime, one of which had grown re-attach, `attachedKinds`, `DetachClicksAsync`, a fallback
+and record-after-the-call, and the other of which had grown none of them. Both are now one
+`Attachment<TPayload>` - `SyncAsync(wanted, payload)` answering what it did, and `ReleaseAsync()` - with
+the tbody listener and the view listener as its two adapters, which is what makes the seam real rather
+than hypothetical.
+
+It calls interop through two delegates rather than reaching for the module itself, so a fake is the
+second adapter and the module's rules are testable in-process: six of the nine tests written for it
+need no browser and no `TestContext`. That is candidate 3 in miniature, scoped deliberately to attach
+and detach over one payload and nothing about geometry, focus or fitting - so that if candidate 3
+disagrees with it, what is thrown away is twenty lines.
+
+Three things moved out of the callers and into it, and each was a place the two disagreed: what
+"attached" means (the pointer listener asked what `attach` reported, the key guard asked nothing at
+all - it now asks whether the script found the element to measure); when the binding is recorded; and
+what dispose should release, where the two features had been reading *different* flags on adjacent
+lines, neither matching the condition its own detach used. What stayed with the callers is the
+fallback, because it is click-specific and ends in a re-render: `SyncAsync` reports, the caller
+decides.
+
+**5. Four methods of one shape, four meanings of `null`.** **Built.** §17 has the design it was built
+from, the three findings a probe turned up, and the four of its own claims that did not survive. `ApplyFilter` returning null means "fall
+back for *me*" (`Data.cs:1195`); `ApplyFilterInMemory` means "abandon the route for *everyone*"
+(`:1940`); `ApplySort` means "skip me, keep the rest" (`:2002`); `ApplySortInMemory` means "abandon for
+everyone, but only if `i == 0` and nothing is ordered yet" (`:1977`). Four contracts, one return shape,
+none of them stated where an implementer would read it — and the decision is contagious: on a mixed
+`Or`, one declining column sends every typed column through the reflective route (`:1211-1218`). §10b's
+computed-column fault was this reading the wrong one of the four.
+
+**6. `ColumnBase`'s internal half is a field-by-field protocol.** **Built**; §20 has the design it was built from, corrects two of this entry's three counts and the diagnosis behind them, and records at the end the three of its own claims that did not survive. The public half is deep — 28
+parameters, `RenderCell`, and four `Apply*` methods behind which the whole typed-expression story
+sits. The internal half is not: seventeen members each answering exactly one grid call site
+(`CellClass`, `CellStyle`, `CellElementClass`, `ColStyle`, `FrozenCellStyle`, `FrozenFooterStyle`,
+`IsFrozen`, `ElementIds`, `CanAutoFit`, `SetAutoFitWidth`, `ResizedWidth`, `FilterValues`,
+`FilterSelection`, `FilterValueFromText`, `FilterValueFromSelection`, `FilterMemberPath`,
+`FilterPropertyType`), plus `AutoFitWidth`, which has no reader anywhere in the library or the tests.
+The ordering rules between them are enforced by comment: derive before `base.OnParametersSet`, hand the
+same string instance back or the frozen memo misses, re-write `AppliedFilterText` after `SetFilter`
+clears it (two call sites, one rule).
+
+The class is public and abstract with a public abstract member, so it advertises itself as an extension
+point — but nine of its twenty-one virtuals are `internal virtual`, so an out-of-assembly column can
+render and sort and cannot participate in the filter row at all. The sibling duplication is the same
+gap from the other side: the six-member sort-forwarding block is copied verbatim into `TemplateColumn`,
+`CollectionColumn` and `LookupColumnBase`, the "Derive" ceremony four times, and
+`RenderCell => AddContent(CellTextOf(item))` four times.
+
+**Constrained by §3, and possibly refused by it.** Any consolidated answer must be a readonly struct
+over strings the column already memoizes, handed back by reference identity — `ColumnBase.cs:367-383`
+already keys its memo on `ReferenceEquals`. If it cannot be done at zero marginal allocation it should
+not be done, and `gridbench` answers that in one run.
+
+**One of its complaints is refused, and this is the reason.** Opening the eight `internal virtual`
+members - which are not scattered, but are exactly the filter row's protocol - would publish that
+protocol at its current shape while two things that would change it are open: §10's question of whether
+an operator menu, a date popup, a numeric range or an enum picker is built in, and candidate 7 below,
+which would give a column an identity the filter lookup is currently keyed by. Publishing eight members
+now and revising them after either lands is worse than publishing them once. §20 records it the same
+way.
+
+**7. A column's identity is a concept with no name.** **Built**; §27 has the design it was built from,
+and corrects this entry's count. It said settings, reorder and the picker all need to name a column and
+all three borrow a *query* path to do it, listing `PropertyPath` as the settings key and the remote
+sort's name, `FilterPropertyPath` as the filter lookup's key, and `FilterMemberPath` as the reflective
+descriptor's.
+
+**One of those three is not a symptom.** `ColumnByFilterPath` has exactly one caller - the public
+`ApplyFilters`, which takes `FilterDescriptor`s built by somebody else out of member names, so a
+`RadzenDataFilter` or a restored remote filter can drive the grid. Keying it by an identity the grid
+invented would break it on arrival: it is a query path doing a query path's job. Reorder and the picker
+are not separate participants either - both persist *through* settings and have no key of their own, so
+`ColumnForPath` had a single caller too.
+
+What was left after that narrowing is what §27 built: `PropertyPath` meaning both the sort's name and
+the settings key, and nothing naming a column that names no member. §10b's collision, the
+`TemplateColumn` limitation and §14's lookup consequence are all closed by it. **The claim that survives
+is the one this entry actually made** - that they were one question and should be designed once.
+
+**8. The drop-down forwards twelve parameters, then hands out the grid.** It is not a shallow
+pass-through overall: `Adopt`, `Chosen`/`ElementOf`, the popup lifetime and the form participation are
+about 380 of its 668 lines and none is reconstructible from `RadzenFastGrid`. But twelve of its
+thirty-three parameters are one-line forwards, so a thirteenth is four places; and `Grid => grid`
+(`:202`) then exposes all 81 of the grid's parameters, which its own test already reaches through
+(`FastDropDownDataGridTests.cs:414-428` asserts `Assert.Same` and then reads `Grid!.CurrentPage`). Its
+second id-to-name path is the more interesting half: `Adopt` scans `Data` linearly with no cache,
+guarded by `ReferenceEquals(lastData, Data)` — **which §10 has already recorded as false on every
+render for exactly the sources this library targets**. That makes it a fourth participant in the
+`!ReferenceEquals` trap, and the only one whose cost is a full scan per render.
+
+### Deliberately not proposed
+
+- **`FilterExpression`'s two implementations of sixteen operators.** The duplication is between an
+  expression tree and a delegate, which is the point of it, and `FilterExpressionParityTests` is a real
+  check rather than a hope. Its own comment already names the risk.
+- **Lifting `ApplyFilter` out of the columns.** `TProp`, `TKey` and `TElement` are type parameters only
+  there. Any move erases the type and puts `MakeGenericMethod` back, which is what `DynamicCode` exists
+  to fence off. The available deepening is to move *shape* into a helper already closed over the type —
+  which is what `FilterExpression<TItem, TProp>` and `FastGridSort<TItem>.By<TKey>` already are.
+- **A seam for localization, `Defer`, or `NonRenderingHandler`.** One adapter each, so each is a
+  hypothetical seam and fine as it stands.
+- Anything §1 rules out, or §10 has already settled with a reason.
+
+---
+
+## 16. Composing the view behind one interface - the design
+
+§15's first candidate, argued before it is built. Nothing here has been written yet; the numbers are
+measurements of the code as it stands, and the decisions are the ones that came out of grilling the
+candidate rather than assumptions to be rediscovered.
+
+### What it is for
+
+`RadzenFastGrid.Data.cs` holds about 250 lines that are already a function of their arguments -
+`BuildFilters`, `DescriptorFor`, `ApplyFilters`, `Reflective`, `Compose`, `ComposeInMemory`,
+`ApplySorts`. They are private instance methods over `columns` and `sorts`, both of which are declared
+in the *other* partial, so the partial-class split is a text split rather than a module boundary and
+the pipeline's only interface is "render a grid and read the DOM".
+
+What that costs is visible in the suite. `InMemoryCompositionTests` stands up **two** `TestContext`s
+and two grids and diffs the rendered rows, because there is no function to call twice with the same
+arguments. `FilterCompositionTests` types into the DOM to reach the mixed `And`/`Or` branch - the one
+place in the composition carrying a written correctness argument. And `ComposedInMemory` exists as a
+property whose own doc comment says it is "exposed for the tests, and only to them", because which
+route ran is invisible in the rows.
+
+**The proof that this is avoidable is already in the repo.** `FilterExpressionParityTests` calls
+`FilterExpression<Person, TProp>.For` and `.PredicateFor` directly, covers 84 operator x route
+combinations, and needs no bUnit at all. That interface sits at the right seam. The composition above
+it does not.
+
+### The surface
+
+As designed, and **as built** - the build widened it, and §16's addendum has the argument:
+
+```csharp
+internal static class Composition
+{
+    internal static Composed<TItem> Compose<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns,
+        IReadOnlyList<(ColumnBase<TItem> Column, bool Descending)> sorts,
+        IEnumerable<TItem> source,
+        CompositionOptions options,
+        ref DrawPass<TItem> pass);
+
+    // Filtering and ordering on their own, for the callers that have to count between them.
+    internal static IQueryable<TItem> Filter<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns, IQueryable<TItem> source, CompositionOptions options);
+
+    internal static IQueryable<TItem> Sort<TItem>(
+        IReadOnlyList<(ColumnBase<TItem> Column, bool Descending)> sorts, IQueryable<TItem> source);
+
+    // What the columns are asking for: as descriptors, gated on AllowFiltering, and in force now.
+    internal static List<FilterDescriptor>? Filters<TItem>(IReadOnlyList<ColumnBase<TItem>> columns);
+
+    internal static List<FilterDescriptor>? DeclaredFilters<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options);
+
+    internal static List<FilterDescriptor>? ActiveFilters<TItem>(
+        IReadOnlyList<ColumnBase<TItem>> columns, CompositionOptions options,
+        in DrawPass<TItem> pass);
+}
+
+internal readonly struct Composed<TItem>
+{
+    internal IEnumerable<TItem> Rows { get; }
+
+    /// Whether the delegate route ran rather than the expression one.
+    internal bool InMemory { get; }
+}
+
+internal readonly struct CompositionOptions
+{
+    internal bool AllowFiltering { get; }
+    internal FilterCaseSensitivity FilterCaseSensitivity { get; }
+    internal LogicalFilterOperator LogicalFilterOperator { get; }
+}
+```
+
+Three parameters that are really parameters, one options value, and the pass. That is the whole
+argument list, and it is not a guess: the moving code reaches for exactly nine things on `this`, and
+they are `columns` (6 references), `LogicalFilterOperator` (6), `sorts` (4), `pass` (4),
+`FilterCaseSensitivity` (3), `ComposedInMemory` (3), `AllowFiltering` (1), `SortColumn` (1) and
+`DynamicCode.Supported` (1). Six collapse into `CompositionOptions`, three are the real parameters,
+`SortColumn` is answerable from `sorts`, `DynamicCode.Supported` travels with `Reflective`, and
+`ComposedInMemory` stops being a reference at all.
+
+**`ComposedInMemory` becomes part of the answer.** That is the single cleanest win here: a return value
+currently smuggled out through a field becomes something a caller can read - and act on - rather than
+merely observe afterwards. The property whose reason for existing is "for the tests, and only to them"
+stops needing to exist.
+
+> **That last sentence is wrong, and the addendum below has why.** The property still exists, because
+> this section's own verification item 3 needs it: it is the only thing a test outside the grid can see
+> that says the grid asked the module and used what it was told. What is true is the first half - the
+> value stops being written from inside the composition and becomes an answer the caller is handed.
+
+### What moves and what stays
+
+**Moves - 253 lines:** `ApplyFilters(IQueryable)` 73, `ComposeInMemory` 63, `Compose` 50,
+`BuildFilters` 22, `ApplySorts` 20, `Reflective` 14, `DescriptorFor` 11.
+
+`Reflective` takes the `DynamicCode` policy with it. "This route needs dynamic code" belongs to the
+route, not to the grid.
+
+`BuildFilters` and `DescriptorFor` move even though descriptors are not purely a composition concern -
+they also feed the **public** `Filters` property and `LoadDataArgs.Filters`. That is the argument for
+moving them rather than against it: three places answer "what are the columns asking for" today, and
+§10b's recurring finding is a rule applied in one place and not in its neighbour. One place means they
+cannot disagree, and the two outside callers call the module.
+
+**Stays - 76 lines:** `View` 33, `CountAll` 30, `Page` 10, `Total` 3.
+
+All four are about *which source owns this* - `LoadData.HasDelegate`, `loadedCount`, `AsyncOwnsData`,
+`Paging` - which is a different question from what to do to it, and the module gets shallower the
+moment it has to know both. Keeping source selection on the grid is also what keeps the module a pure
+function of its arguments, which is the whole reason it becomes testable.
+
+**A side effect worth having:** the private `ApplyFilters(IQueryable<TItem>)` moving out ends its name
+collision with the public `ApplyFilters(IEnumerable<FilterDescriptor>)`, which today are kept apart by
+overload resolution and nothing else.
+
+### What the module sees of a column
+
+`IReadOnlyList<ColumnBase<TItem>>` - the whole column type, not a narrowed interface.
+
+A narrow interface exposing only `HasFilter`, the four `Apply*`, `FilterPropertyPath`,
+`FilterMemberPath`, `CurrentFilterValue`, `CurrentFilterOperator` and `FilterPropertyType` would be a
+seam with **one** adapter, since nothing but `ColumnBase` would ever satisfy it. Worse, it would decide
+§15's candidate 6 - what a column exposes - as a side effect of moving the pipeline. That decision
+should be taken deliberately, and this module is one of the call sites that will tell us whether a
+narrowing is right.
+
+Pre-projecting the columns into a value is ruled out by §3: it allocates per column per composition and
+buys nothing.
+
+**This is where the piece is most likely to grow.** If the moving code turns out to reach the grid
+through a virtual call on a column that is not in the nine above, the argument list stops being small
+and the answer is the registry moving too - which is a materially larger change. That is a stop-and-
+re-decide point, not something to push through.
+
+### Why it is internal
+
+`internal static`, reached by the tests through the `InternalsVisibleTo` the project already grants.
+
+Making it public commits a NuGet package to supporting the composition's shape forever, for a seam
+whose whole justification is internal testability, and §8 treats the package surface as a deliberately
+narrow thing. The distinction that matters is between reaching *at* a module's interface and reaching
+*past* it: internal plus `InternalsVisibleTo` is the former. What is being fixed is the present
+situation, where tests reach past the grid into `columns` and `sorts` because there is no interface at
+all.
+
+### The pass crosses by ref, and does not travel further
+
+`ref DrawPass<TItem>` - §15's candidate 2 built it as a plain mutable struct for exactly this.
+
+It stays a field on the grid and is passed explicitly **only** across this seam. The render tree is
+untouched and `TotalCount()` keeps one signature, which matters because it has callers on both sides of
+the render - the pager and `aria-rowcount` inside it, the keyboard cursor outside. Threading `ref pass`
+through `RenderGrid`, `RenderPager`, `RenderHead`, `RenderBody` and `RenderRow` would be a large diff
+through the hottest code on the branch to buy what this already has.
+
+So the honest claim after this lands is that the memo no longer crosses a module edge - not that the
+grid has no ambient state left. `ActiveFilters` still reads the field.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **`InMemoryCompositionTests` is rewritten at the seam** and its two-`TestContext` diff deleted. Two
+   calls with the same arguments and different options, compared directly.
+2. **`FilterCompositionTests` stays as it is.** It is integration coverage and catches a different class
+   of fault; it should stop *growing*, not be replaced.
+3. **One new DOM-level test that the grid actually calls the module.** Without it the module can be
+   correct and unused and everything stays green - and this branch's recorded failure mode is silent
+   wrong answers, which is exactly that shape.
+4. **Every new test mutation-checked**, and the mutation must compile: piece 1 and piece 2 each found a
+   test that passed with the rule it named deleted, and piece 2 found two branches no caller could
+   reach with a different answer.
+5. **A `gridbench --job short` control before and after**, on `*FastGridFeatureBench.Bare`,
+   `*SingleSort`, `*Filtering`. The claim is allocation-neutral. Take no time ratio from that job
+   length - the errors are wider than the differences.
+
+Expect **31 of the 32 test files that touch filtering, sorting or composition to be untouched** (it was
+30 - the addendum has why, and the boundary held). If
+they are not, the boundary is wrong.
+
+### The order it lands in
+
+One commit, with the spec updated inside it rather than trailing - which is what the rest of this
+branch does, and a trailing docs commit is how a section ends up describing something that changed
+under it.
+
+**Candidate 5 follows this, not the other way round.** The four `Apply*` methods and their four
+different meanings of `null` are precisely what `Composition` consumes, so changing their return shape
+once the calls live in one module is a change to one caller instead of scattered ones.
+
+### Where this could still be wrong
+
+- **The module may end up shallow.** Five parameters is not a small interface, and if `Compose` turns
+  out to be the only thing anyone calls, `Composition` is a namespace with one function in it rather
+  than a module. The test for that is whether `Composed<TItem>` earns its place: if callers only ever
+  read `Rows`, the route flag should have stayed a field and this was a rename.
+- **`sorts` has no type yet.** It is a list on the grid whose element type this section has deliberately
+  not named, because naming it is the first thing the build will have to decide and guessing here would
+  be the kind of recorded decision §10b warns about.
+- **The memo and the module may not want the same lifetime.** `DrawPass` is a render pass; the
+  composition is asked for outside a render too - by the click resolver, by the keyboard cursor, by the
+  virtualized items provider. Passing `default` there is correct and cheap, but if it turns out most
+  calls pass `default`, the pass is a parameter three callers carry for one caller's benefit.
+
+### What the build changed
+
+Built as `Composition.cs`, 434 lines. 285 lines left `RadzenFastGrid.Data.cs` and 24 came back - the
+forward that records the route, the options value, and the call sites that now name the module. Five of
+this section's decisions did not survive the building, one of its own tests did not discriminate, and
+the mutation that caught that one went on to find a gap in the suite older than this piece.
+
+**The surface is six entry points, not one.** `Compose`, `Filter`, `Sort`, `Filters`, `DeclaredFilters`
+and `ActiveFilters`, and each has a caller: `LoadPageAsync` filters and sorts a queryable in two steps
+because it counts between them, `ProvideRowsAsync` filters without ordering because an ordering inside
+a count aggregate is not translatable, and three places ask what the columns are filtering by. That was
+visible in the code and not in the move list above, which itemised seven methods and no callers. It
+settles this section's first "where this could still be wrong" in the module's favour: `Compose` is not
+the only thing anyone calls, so `Composition` is a module and not a namespace with one function in it.
+
+**`ComposedInMemory` did not stop existing**, as marked above. The alternative was to delete it and move
+`FastGridSortByTests`' three route assertions to the seam - which would have moved a second test file,
+and this section's own boundary check is that one moves.
+
+**`ActiveFilters` moved with it, and the pass crosses at two entry points rather than one.** This
+section said "`ActiveFilters` still reads the field", and the grid's does - it reads `pass` in order to
+hand it over. But the *rule* it encodes, that the filters in force are the pass's while drawing and the
+declared ones otherwise, is a composition rule and now lives with the composition. Both crossings are
+the same seam; what this section ruled out was threading the pass through the render tree, and that is
+still ruled out. `DeclaredFilters` exists because opening a pass and asking outside one were one
+question written twice, as two spellings of `AllowFiltering ? ... : null` in two files.
+
+**The pass memo carries the route, not just the rows.** `DrawPass<TItem>` memoizes `Composed<TItem>`
+now. It has to: `Reuses` hands the second caller of a render the first caller's answer, and an answer
+that dropped the route would give the grid the right rows beside a wrong account of how it got them.
+Which caller composes first does not matter - the first composes and every one after is answered from
+the memo, so the memoized route is always the last thing written. That is reachable in a plain grid, a
+filtered and paged list where the body enumerates and the pager counts the same instance, and it is
+pinned at all three levels: the memo, the module and a rendered grid. This is the second existing test
+file to move, `DrawPassTests`, against the one this section budgeted for - so the count is **30 of 32
+untouched**, and the boundary is right even though the number was not.
+
+**`sorts` is the tuple it already was**, `IReadOnlyList<(ColumnBase<TItem> Column, bool Descending)>`.
+Naming that pair would be candidate 7 decided as a side effect of moving the pipeline, which is the
+argument this section already makes about narrowing what the module sees of a column.
+
+**`Filtered` is gone.** It appeared in neither list above, being two lines. Once both of them were calls
+to the module it was a forward with one caller whose guard could be read for the first time - and the
+guard was worse than nothing: it built and discarded a descriptor list to decide whether to call a
+function that returns its argument untouched when there is nothing to filter. Its one caller calls
+`Filter`.
+
+### A mutation caught a test of this section's own, and then a gap older than it
+
+The first pair of `CompositionSeamTests` compared the grid's route against the module's over a list and
+over a queryable, and **passed with the grid answering the route from the shape of its source** -
+`data is not IQueryable<TItem>`, which is what the flag looks like it means and agrees with the module
+in both of those cases. What separates them is a list whose column *cannot* compose in memory: the
+source is a list and the route is not the in-memory one. With that third case the mutation fails, and
+fails only there. §9's first layer earning its place for the third piece running.
+
+**And then the gap.** Removing the `AllowFiltering` gate from `DeclaredFilters` also passed the whole
+suite - and that is not a cost bug. `ComposeInMemory` builds its predicate from whatever the columns
+report and never re-asks, so a grid with filtering switched off and a column still carrying a filter
+value would have been filtered. One gate asks, nothing downstream re-asks, and **nothing said so**:
+§10b's recurring shape, found here only because moving the code put the gate and its neighbour in one
+file. `WithFilteringOffAColumnCarryingAFilterDoesNotFilter` is what says it now.
+
+**Eight mutations, six caught**, each compiling: the in-memory route reporting the wrong flag (10
+tests), the memo dropping the route (3), the grid answering the route itself (1), a declining column no
+longer handing the composition back (1), the nothing-to-do path claiming a route it did not take (1),
+and the filtering gate removed (1). The two that survive are recorded rather than counted:
+
+- `ActiveFilters` dropping its `pass.Drawing` term passes, and should. Within a pass the descriptors
+  cannot change, so that memo is a cost and not a correctness rule; `DrawPassTests` pins the mechanism
+  instead of the outcome.
+- `Reuses` dropping `reused.Rows is not null` passes, because `Keep` writes both fields together. That
+  redundancy is older than this piece and is left exactly as it was found, rather than removed on the
+  strength of an argument about callers that a future `Keep` would not be bound by.
+
+**Measured**, `--job short` at 1000 rows, one run before and two after: bare 154.55 KB -> 154.55 and
+154.66, one sort 175.83 -> 175.93 and 175.79, a filter row 158.76 -> 158.77 twice. Allocation-neutral,
+which is what was claimed; the sort row straddles its own before-value, and the bare spread of 0.11 KB
+is the same noise floor piece 2 recorded. **No time ratio is quoted**, per §9.
+
+**One cost is carried through rather than introduced, and is worth naming now it is in one place.**
+`Compose` derives `filtering` from `ActiveFilters(...) is not null`, which outside a render builds and
+discards a `List<FilterDescriptor>` per call. Inside a render it reads the pass and allocates nothing,
+which covers every per-row path; the calls that pay are the asynchronous ones. Candidate 5 is where the
+four `Apply*` return shapes get decided, and this is the same question from the other end.
+
+---
+
+## 17. Four methods of one shape, four meanings of `null` - the design
+
+§15's fifth candidate, argued before it is built, and in the order §16 set: the four `Apply*` methods
+are precisely what `Composition` consumes, so changing what they mean is now a change to one caller
+rather than to scattered ones.
+
+Everything below about the present code was checked by running it, not by reading it. Three of the
+findings are recorded here because a probe answered them, and two of those three are the reason this
+section is worth building at all.
+
+### What it is for
+
+Six methods on `ColumnBase<TItem>` return something-or-`null`: `ApplySort` and `ApplyThenBy`,
+`ApplyFilter`, `ApplyFilterInMemory`, `ApplySortInMemory` and `ApplyThenByInMemory`. `null` means "I
+cannot" in all six, which is one contract. What is *done* about it is four different things, and all
+four live in the caller:
+
+| The column declines | What `Composition` does | Where |
+| --- | --- | --- |
+| `ApplyFilter` | this column alone falls back to the reflective builder | `Composition.cs:149` |
+| `ApplyFilterInMemory` | the whole composition goes back to the expression route | `:290` |
+| `ApplySort` | the column is left out of the ordering, the rest of it stands | `:196` |
+| `ApplySortInMemory` | back to the expression route, but only for the first column | `:320` |
+
+**Those are not four contracts. They are two rules, one per route, and the routes are what differ.**
+The expression route can absorb a decline, because it has somewhere to put it - reflection for a
+filter, omission for a sort. The delegate route has nowhere, so it hands the whole composition over -
+while handing over is still possible. For filtering it always is: the predicate has been built and not
+yet applied. For ordering it stops being possible the moment an ordering has begun, because a
+half-applied `IOrderedEnumerable` cannot be given to the other route - so the first column can send it
+back and a later one is left out, which is what the expression route would have done anyway.
+
+Said once each, that is two sentences. Said four times inline and nowhere at the declarations, it is
+what the next three findings are.
+
+### Three findings, each from a probe rather than a reading
+
+**1. One of the four doc comments states the wrong one of the four contracts.** `ColumnBase.cs:948-951`
+says of `ApplySortInMemory`:
+
+> Orders an in-memory sequence by this column, or returns null when it cannot order - **the same
+> contract as `ApplySort`, which the grid already skips over.**
+
+It is not the same contract. A first column that declines does not get skipped over; it sends the whole
+composition to the other route. And the first column is not an edge case - it is the only column a
+single-column sort has, which is most grids. An author of a new column type reading that sentence would
+be wrong about the common case. §10b already has the rule this breaks: *a rule stated in a comment is
+only as good as the comment*, and this is the second instance of it on this branch.
+
+Behaviourally this is currently harmless, and the reason is worth recording because it is what hid it:
+**no column can decline in memory and succeed on the queryable route.** Every column guards both of its
+sort methods on the same thing - `PropertyColumn` on `!CanSort || (SortBy ?? Property) is not { }`,
+and `TemplateColumn`, `CollectionColumn` and `LookupColumnBase` on `SortBy?.` - so abandoning the route
+produces the same rows more slowly rather than different rows. The four contracts differ; the columns
+that would make the difference visible do not exist. That is the definition of a fault waiting for its
+first caller.
+
+**2. The guard has a conjunct that can never discriminate.** `Composition.cs:326` reads:
+
+```csharp
+if (next is null && ordered is null && i == 0)
+```
+
+`ordered` is assigned only at the foot of the loop and starts null, and this very `return` is what stops
+the loop reaching `i == 1` with `ordered` still null. So `ordered is null` and `i == 0` are the same
+condition, and the guard reads as three tests where there are two. **Both halves were removed
+separately and the suite passed both times.** It is the shape piece 2 found twice - a rule that looks
+like it is enforced twice and is enforced once - and it is a shape a reader cannot tell apart from the
+queryable loop twenty lines above, where `ordered is null` is *not* redundant, because there a declining
+first column leaves `ordered` null and the loop carries on.
+
+**3. Two of the four contracts have no test at all.** Removing the decline rule entirely - so that any
+declining column, not only the first, abandons the delegate route - **passes the whole suite**. So does
+making a declining column abandon the *expression* route's sort rather than being skipped. Two of the
+four rows in the table above are unpinned. The other two are well covered: the in-memory filter decline
+fails five tests when it is broken, and §16's own work pinned the route flag.
+
+### What changes
+
+**The rule moves to where it is enforced, once per route, and the declarations point at it.** Four
+restatements of a policy the declarations do not control is how one of them came to be wrong; the fix is
+not to correct the wrong one and leave four, it is to have one. `ColumnBase`'s six methods say what
+`null` means *for the column* - "I cannot" - which is the part a column author owns and the part that is
+identical in all six. What is done about it is `Composition`'s, is stated there per route, and is
+referred to rather than reproduced.
+
+**The dead conjunct goes**, with the invariant that made it dead stated in its place - including that
+the invariant is created by the `return` beside it, so that removing the return does not silently make
+the remaining test wrong.
+
+**The two unpinned contracts get a test each**, mutation-checked, and the mutation must compile:
+
+- a delegate-route sort where a *later* column declines, which must be left out while the composition
+  stays on the delegate route;
+- an expression-route sort where a column declines, which must be left out while the other columns'
+  ordering stands.
+
+Both need a column that can sort on one route and not the other, and no such column exists today - see
+finding 1. So both tests need a column type that does not ship, which is the same shape as
+`Attachment`'s fake adapter in candidate 4: a test double that exists to make a rule reachable. That is
+the piece's one real risk and it is in "where this could still be wrong" below.
+
+**No column changes.** Not one of the six overrides gains or loses a line.
+
+### Deliberately not proposed
+
+- **A stated capability - `ComposesFilter`, `ComposesSort` - replacing the nullable returns.** It reads
+  well and does not survive contact. The guards are null tests the compiler needs for flow analysis
+  (`(FilterBy ?? Property) is not { } selector`), so a capability property makes the method re-assert
+  what it just asked with a `!`, trading a check for a suppression. It also turns one call into a
+  two-call protocol, which is §15 candidate 6's complaint about `ColumnBase`'s internal half arriving in
+  its public half. And it does not fix the fault: the four caller policies would remain, keyed on a bool
+  instead of on a null.
+- **One sort loop over both routes.** The two loops are the same loop apart from their types and their
+  decline rule, but `IOrderedQueryable<T>` and `IOrderedEnumerable<T>` share no interface, so unifying
+  them means a route abstraction - a constrained generic struct, to stay inside §3 - threaded through
+  the hottest composition path to save about twelve lines. It would make the code harder to read to
+  remove a duplication that is two loops long. Refused, with that as the reason.
+- **Changing what any of the four rules *is*.** Each was argued where it stands and §15 and §16 record
+  the arguments; this section moves where they are said and pins two of them, and changes none of them.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **The two new tests must fail without the rule they name**, checked by a mutation that compiles.
+   Both rules are currently unpinned, so the mutation is simply the code as it stands today with the
+   rule deleted - which is the strongest form of this check available, because the "before" is known to
+   pass.
+2. **The doc fault gets no test**, and that should be said plainly rather than worked around: a comment
+   cannot be pinned by a test. What can be pinned is the behaviour it misdescribes, which is what the
+   two new tests do. The comment is fixed by having one of it rather than four.
+3. **A `gridbench --job short` control before and after**, on `*Bare`, `*SingleSort`, `*Filtering`. The
+   claim is allocation-neutral, and it should be trivially so: no column changes and no allocation is
+   added or removed. Control at `afb05de33` is bare 154.55 KB, one sort 175.79 KB, a filter row
+   158.78 KB. No time ratio from that job length, per §9.
+4. **Expect the existing test files to be untouched.** This piece adds tests and moves no boundary, so
+   unlike §16 there is no file that has to move. If one does, something bigger happened than was
+   designed.
+
+### Where this could still be wrong
+
+- **The test double may be the whole piece.** Both new tests need a column that sorts on one route and
+  not the other, and none exists. If writing that double turns out to be most of the work, the honest
+  reading is that these two rules are unpinnable *because nothing can reach them* - and the better
+  answer is the one piece 2 reached: a rule no caller can reach with a different answer should stop
+  being a branch. That is a stop-and-re-decide point. It would turn this piece into a deletion, and a
+  deletion with a measurement behind it is a better outcome than two tests over a double.
+- **"State it once" is still a comment.** The fix for a comment that was wrong is a comment that is
+  right, in one place instead of four. That is better and it is not structural, and §10b's rule says
+  comments rot. The structural version is the capability property, which the section above refuses on
+  three grounds - so this piece is deliberately choosing the weaker mechanism, and should say so rather
+  than claim more.
+- **Finding 1 may deserve to be resolved the other way.** If `ApplySortInMemory`'s doc is what the
+  design *should* say - a declining column is skipped, on both routes - then the code is what is wrong,
+  and the delegate route should skip a declining first column rather than hand the composition over.
+  That is a smaller diff than this section proposes and a real behaviour change: it would keep a grid on
+  the fast route where it currently leaves it. It is not proposed here because handing over is what
+  §16's `AColumnThatCannotComposeSendsItBackToTheOtherRoute` pins and what the in-memory filter rule
+  does two loops earlier, so changing it would split one route's behaviour in two. But it is the
+  argument this section is least sure of.
+
+### What the build changed
+
+All three findings landed. Four of this section's own claims did not survive the building, and two of
+its new tests had to be corrected before they tested anything - one caught by a mutation and one by
+review.
+
+**The stop-and-re-decide point did not fire, and the reasoning behind it was wrong.** This section
+expected both new tests to need "a column that can sort on one route and not the other", said none
+exists, and set that as the point to stop at. It was the wrong question. The tests are about what the
+*caller* does with a decline, so a column that declines on **both** routes is all they need - and one
+ships: a `TemplateColumn` told a `SortProperty` and no `SortBy` has `CanSort` true and returns null from
+all four sort methods. Probed before building. That settles the first "where this could still be wrong"
+in the good direction: these rules were untested rather than untestable, and the deletion this section
+held open as the better outcome is not the outcome.
+
+**A mutation caught the first of the two new tests not discriminating**, which is the third piece
+running that this has happened on. The expression-route test asserted the rows came back ordered
+*ascending* by the composing column - which is the order `People.Many` builds them in, so it was an
+assertion an unsorted source also satisfies, and the mutation that abandons the whole ordering passed
+it. Both tests sort descending now, and the helper that builds their sort list carries the reason,
+because the trap belongs to the fixture rather than to either test.
+
+**And review caught a third rule this section had asserted and not pinned.** The expression route's
+loop asks whether an ordering has *begun*, which is deliberately not the same question as "is this the
+first column" - and it is the difference between the two loops that this piece exists to make legible.
+Both new tests put the declining column second, which only ever reaches the other branch. So a
+*first*-column decline on the expression route, where the second column must start the ordering rather
+than append to one, is a third test; the mutation that collapses that test to `i == 0` fails it and
+nothing else.
+
+**Four contracts, and now the branch that separates them - five tests, each failing alone.**
+
+**The dead conjunct is gone**, and what replaced it is longer than what it removed: `i == 0`, the
+invariant that makes it sufficient, and the warning that the invariant is manufactured by the `return`
+on the next line. A conjunct that cannot discriminate is worth removing; the reason it could not is
+worth keeping, because the next reader's instinct will be to restore it after reading the loop above,
+where the same test is not redundant.
+
+### Three corrections to what this section proposed for the documentation
+
+**"Stated once" was written three times.** The first attempt put the rule in `Composition`'s class
+remarks, restated it in `Sort`'s remarks and restated it again at the delegate route's guard - a
+document whose thesis is that a consequence written where it is not enforced is a consequence nothing
+keeps honest. The two loops now carry only what is local to them, and the four decline sites carry a
+one-line pointer each.
+
+**The public half and the internal half own different halves of the rule.** `ColumnBase` is shipped API,
+and the first attempt told its readers the consequence "is stated once in `Composition`" - a type they
+cannot see, in a package that does not expose it. `ColumnBase` now states what declining *means* and
+what it costs, which is what an implementer needs; `Composition` states what follows per route, which is
+what a maintainer needs. Neither restates the other. The repo history and the §-references came out of
+the shipped docs at the same time: they resolve to nothing for a consumer.
+
+**And the replacement was nearly wrong in the same way as the original.** A draft of the new remark told
+column authors that "both routes produce the same rows whichever way a decline falls out; what differs
+is cost" - which is true of today's columns and is not the contract, and which deleted the sentence at
+the guard that carries the actual reason for the rule: **the other route may not decline where this one
+did, and that is a different answer rather than a slower one.** That is why the delegate route hands the
+composition over rather than simply leaving the column out. It is restored, and the symmetry that makes
+declining currently free is stated as a property of these columns rather than of the arrangement. A
+section whose finding is a wrong doc comment came within one commit of shipping a wrong doc comment.
+
+**Measured**, and this is the one piece whose claim was that the measurement should be uninteresting.
+Control at `afb05de33`: bare 154.55 KB, one sort 175.79 KB, a filter row 158.78 KB. Two runs after:
+154.55 and 154.55, 175.79 and 175.79, 158.77 and 158.91. No column changed and nothing was added to any
+path. **No time ratio is quoted**, per §9.
+
+That filter row is worth a sentence, because it measures the instrument rather than the change. The two
+after-runs are of **the same executable code** - everything that changed between them is comment text -
+and they differ by 0.14 KB. So a 0.14 KB reading on that row is the noise floor and not a cost, which
+until now had only been inferred from piece 2's 0.11 KB spread on the bare row. A run pair that is
+identical by construction is the cheapest way to measure that, and is worth doing deliberately the next
+time a piece needs to defend a small number rather than only when one falls out.
+
+**No existing test file moved**, as designed: three tests were added to `InMemoryCompositionTests` and
+no other suite was touched.
+
+### What this piece is, honestly
+
+The second bullet under "where this could still be wrong" stands as written, and reads better as a
+summary of the piece than as a caveat to it: **the fix for a comment that was wrong is a comment that is
+right, in one place instead of four.** That is better, and it is not structural, and the structural
+alternative is still refused above on three grounds.
+
+What is structural is the rest: a conjunct that could never discriminate is gone, and three rules that
+nothing held now have a test each. Those survive a comment rotting. §15 rated this candidate Strong for
+the four-meanings observation; what it was worth was one wrong statement, one dead branch and three
+unpinned rules - a smaller thing than the ranking implied, and worth saying in case the ranking is used
+to choose what comes next.
+
+---
+
+## 18. The browser seam has no interface - the design
+
+§15's third candidate, argued before it is built. Four things in this section were checked by running
+them, and three of those four contradict what §15 said about this candidate. That is the most useful
+part of the section and it is first.
+
+### What §15 got wrong about it, and how that changes the piece
+
+**§15: "Seven of the nine exports have zero coverage of any kind."** Four do, not seven. Counting test
+references per export: `autoFit` 41, `attach` 5, `detach` 2, `attachNavigation` 2, `detachNavigation` 2,
+and then `measureNavigation`, `focusCell`, `blurCell` and `releaseFit` at zero. Two of the covered five
+are covered thoroughly.
+
+**§15: "because the doubles answer `null` the RTL arrow flip at `Keyboard.cs:313, 318` is never executed
+by any test."** The first half is a fact about the tests that exist and the second half is a diagnosis,
+and the diagnosis is wrong. The flip is reachable now, with machinery already in the suite:
+`FastGridAttachmentTests.cs:38` already stages a `NavigationMetrics` through bUnit's module double.
+Staging one with `Rtl = true` and pressing an arrow was run while writing this section, and the flip
+executes - ArrowRight moves the cursor from cell 0 to cell 1 under LTR and leaves it at 0 under RTL,
+ArrowLeft does the reverse. `NavigationMetrics` is `internal` precisely so a test can do that, and its
+own doc comment says so. **Nobody wrote the test.**
+
+**Which means the strongest plank under this candidate does not hold.** "There is no way to reach this
+in process" was the argument for an abstraction with a fake behind it, the way `Attachment` has one.
+There is a way, it is the one bUnit already provides, and it reaches every export. What is missing is
+tests, and tests do not need a new seam to be written.
+
+**What §15 got right, and it is the half no test can reach:** sixteen named entry points carrying
+forty-two positional arguments - nine module exports with twenty-six, two stock-`Radzen` calls with
+seven, five `[JSInvokable]` callbacks with nine - and an undeclared half that appears in no signature at
+all.
+
+### What is actually wrong, then
+
+**1. Ten positional arguments, decoded by position in three places.** `autoFit(tableId, indices,
+minWidths, maxWidths, toggleOffset, bare, wait, animate, overflow, required)`. C# writes them in order,
+the script reads them in order, and `FastGridAutoFitTests.cs:39-49` reads them in order a third time -
+it has already written the type that wants to exist, as `record Ask(string Table, int[] Indices,
+string[] Min, string[] Max, int ToggleOffset, int Bare, bool Wait, bool Animate, string Overflow,
+bool[] Required)` plus a hand-rolled decoder over `invocation.Arguments`. **A test that decodes by
+position has the caller's bug in it**, so this is the one hazard here that writing more tests cannot
+touch: swapping `minWidths` and `maxWidths` would be silent in all three.
+
+**2. The export names are strings on three sides.** The C# call site, the JS export, and the test's
+`module.Setup("autoFit")`. Renaming two of the three leaves the third passing, because a module double
+in loose mode answers a name it was not set up for with a default.
+
+**3. The undeclared half.** `tr[data-r]`, `[data-toggle]`, `tr.rz-data-row`, `.rz-cell-data`,
+`.rz-state-focused`, `.rz-column-title`, `:scope > table > tbody > tr`, `:scope > colgroup`,
+`:scope > thead > tr`. The script selects on them; `RadzenFastGrid.cs` emits them as string literals
+several hundred lines away; nothing in either file mentions the other. This is the real content of "the
+seam has no interface", and it is what a rename breaks silently.
+
+**4. The ordering constraints are prose, in a different file from the calls they govern.**
+`Data.cs:952-992`: pagers before clicks, fit before focus, fit after the names, focus last, and in
+teardown detach before release before dispose. §13 already recorded that swapping two of them would
+measure blank cells and every test would still pass.
+
+### The surface
+
+A concrete façade, not an abstraction - the distinction matters and the probes above are why.
+
+```csharp
+internal readonly struct Browser
+{
+    internal Browser(IJSObjectReference module);
+
+    internal ValueTask<bool> AttachAsync(string bodyId, DotNetObjectReference<...> handler, string[] kinds);
+    internal ValueTask DetachAsync(string bodyId);
+    internal ValueTask<NavigationMetrics?> AttachNavigationAsync(string viewId, string[] keys);
+    internal ValueTask DetachNavigationAsync(string viewId);
+    internal ValueTask<NavigationMetrics?> MeasureNavigationAsync(string viewId);
+    internal ValueTask FocusCellAsync(string viewId, int row, int cell, int pinnedStart, int pinnedEnd, int itemSize);
+    internal ValueTask BlurCellAsync(string viewId);
+    internal ValueTask ReleaseFitAsync(string tableId);
+    internal ValueTask<string?[]?> AutoFitAsync(AutoFitAsk ask);
+}
+```
+
+A `readonly struct` over the one module reference, so §3 is satisfied by construction: it is a wrapper
+around a field, not an object per call, and every one of these is called once per attach, per fit or per
+focus rather than per row.
+
+**No interface and no fake.** An `IBrowser` with a test double would buy reach the suite already has,
+and would put a second implementation of nine methods in the test project to be kept in step with the
+script by hand - which is the thing that goes wrong here, done twice. `Attachment` earns its two
+delegates because it has rules of its own to test; this has none. It forwards.
+
+**`autoFit`'s ten arguments become one value**, on both sides:
+
+```csharp
+internal readonly record struct AutoFitAsk(string Table, int[] Indices, string[] Min, string[] Max,
+    int ToggleOffset, int Bare, bool Wait, bool Animate, string Overflow, bool[] Required);
+```
+
+which is `FastGridAutoFitTests`' own `Ask`, promoted out of the test and into the thing it describes.
+The script destructures one object instead of counting ten places, and the test reads
+`invocation.Arguments[0]` as the record instead of casting ten elements - so its decoder is deleted
+rather than rewritten. That is the whole of hazard 1, and the only change to the JS file's own logic.
+
+**The DOM contract gets named once and pinned.** A `BrowserContract` of the eight selectors and
+attribute names the script depends on, and a test asserting that a rendered grid carries each of them -
+so a rename in `RadzenFastGrid.cs` fails a C# test instead of a browser. The script cannot import the
+constants, so the two sides still agree by hand; what changes is that there is one list to check against
+rather than a search through a thousand lines of JS.
+
+### What changes and what does not
+
+**Changes:** `Browser` and `AutoFitAsk` are new. Six call sites stop naming exports and counting
+arguments. `fastgrid.js` changes in one function, `autoFit`, and only its parameter list.
+`FastGridAutoFitTests`' `Ask` and `Read` are deleted in favour of the real type. Four tests are added
+for the four uncovered exports, and one for the RTL flip that §15 said was unreachable.
+
+**Does not change:** the two stock-`Radzen` calls, which are upstream's interface and not this
+package's to name. Every `[JSInvokable]` callback. `Attachment`, which keeps its two delegates - it is
+constructed with them by its callers, and those callers can hand it `Browser`'s methods without
+`Attachment` knowing what a module is. No behaviour anywhere.
+
+### Deliberately not proposed
+
+- **An `IBrowser` and a fake.** Refused on the evidence above: the reach it would buy exists, and the
+  cost is a second nine-method implementation that has to track a script it cannot see. If a rule ever
+  lands *in* this seam rather than passing through it, that is when it earns an abstraction, and
+  `Attachment` is the precedent for how.
+- **Structuring the ordering constraints.** They are real and §13's finding stands, but every way of
+  making them structural - a named sequence, a phase enum, a builder - moves five awaits in
+  `OnAfterRenderAsync` behind something that has to be read to know what it does, which is worse than
+  five awaits with a comment. What would actually pin them is a test that observes the order, and that
+  needs the browser rather than a double. Left for candidate 3's second half or for §13 to answer.
+- **Generating the DOM contract from one source.** The two sides are C# and JavaScript, and there is no
+  build step here to generate either from the other. Adding one to a package whose whole claim is that
+  it is a plain library is a bigger price than the hazard.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **The four uncovered exports get a test each**, and the RTL flip gets the one §15 said could not be
+   written. Each mutation-checked, and the mutation must compile.
+2. **The DOM contract test must fail when the markup drifts**, which is checked by renaming each emitted
+   literal in turn - eight mutations, and any that passes means the contract lists something the test
+   does not really assert.
+3. **`autoFit` must still be asked for exactly what it was asked for before.** Its 41 existing test
+   references are the regression suite for the argument change, and they should need only the decoder
+   swapped, not their expectations.
+4. **`GeometryParityTests` is the one layer that runs the real script** - 38 tests against Chromium - so
+   the `autoFit` parameter change is not a C#-only claim.
+5. **A `gridbench --job short` control before and after.** Allocation-neutral: one struct over a
+   reference, one record per fit, nothing per row. Control at `7e05bc199` is bare 154.81 KB, one sort
+   175.79 KB, a filter row 158.78 KB - and note that bare has read 154.55 and 154.81 on runs of
+   identical code, so the floor on that row is at least 0.26 KB and a difference smaller than that is
+   not a difference.
+
+### Where this could still be wrong
+
+- **This may be two pieces.** The façade and `AutoFitAsk` are one argument; the DOM contract is another,
+  and it is the one with an unknown size - eight names is the count today, and finding the ninth is what
+  the work consists of. If the contract list grows past what one test can honestly assert, it should
+  land on its own and the façade should go first.
+- **The façade may read as ceremony.** Nine methods that forward to nine `InvokeAsync` calls is a thin
+  thing, and thin wrappers are how a codebase acquires a layer nobody wants. The defence is that it
+  makes each export name and each argument list exist exactly once, which is the hazard - but if the
+  built version does not visibly reduce what a call site has to know, it is a rename and should be
+  called one.
+- **The correction to §15 may be too kind to the tests.** Reach and coverage are not the same thing:
+  every export being reachable through a string-keyed double is a weaker property than a typed seam,
+  because the double answers a misspelled name with a default rather than an error. `JSRuntimeMode.Loose`
+  is what makes the suite tolerant, and it is set in almost every test file here. The piece does not
+  change that, and probably something should.
+
+### What the build changed
+
+The facade landed as designed and is not a rename - the verdict this section asked for is below. Four of
+its own claims were wrong, one of its constants was the mistake it warns other people about, and typing
+the seam turned up something no reader had noticed.
+
+**The quoted surface is not the built surface.** `Browser<TItem>` is generic, not `Browser`: the answer
+crossing the seam is `RadzenFastGrid<TItem>.NavigationMetrics`, so the type parameter follows it in.
+`AutoFitAsk`'s sequences are `IReadOnlyList<>` rather than the array-and-`List` mixture the test's own
+`Ask` had, which is why that test said `Length` for three of them and `Count` for the fourth. And a
+third type is new that this section did not name, `ClickKinds` - the click attach was already passing an
+object rather than three arguments, hand-written camelCase at the call site; naming it is the same
+change as the others and it removes the hand-written casing.
+
+**Typing the seam found a `float` nobody had noticed.** `focusCell` takes six numbers and one of them is
+`Virtualize`'s row height, which is a `float` and is multiplied by a row index to get a scroll offset.
+The untyped call took it without comment and a reader counting six numbers had nothing to say one of
+them was not a count. It is `float` in the signature and the reason is written beside it. Nothing was
+broken; it was unsayable.
+
+**One constant was exactly the mistake this section is about.** `BrowserContract` shipped a
+`FocusedClass` for `rz-state-focused` - which the grid does not emit at all. The script *writes* it, so
+no rendered-grid assertion was possible and none existed, and renaming it would have been silent in a
+list whose entire purpose is that renaming is not silent. Review caught it. `ViewClass` went the same
+way for a milder reason: the script is handed the view's **id** and never selects it by class, so the
+class is how a *test* finds the view and belongs in the test. What is left is names the grid emits and
+the script selects, and every one has an assertion. `:scope > thead > tr` and `:scope > tbody` were
+added, having been in this section's own list of the undeclared half and left out of the built one.
+
+**The list is still not the whole list, and should be read that way.** `closest('td')`,
+`closest('tr[data-r]')` and `:scope > table > tbody > tr` are structure the script depends on that no
+constant names. What `BrowserContract` is for is the names a rename could quietly change; what it is not
+is a complete description of the DOM the script walks.
+
+**The two sides of the ask are checked from both directions, and the C# side is not checked at all -
+deliberately.** `autoFit` taking one object trades a positional coupling for a naming one: the record
+serializes camelCase and the script destructures by name. So one test reads the script off disk, parses
+what it destructures, and compares that to what the record serializes to - as sets, both ways, because a
+field C# sends that the script ignores travels on every fit and a name the script takes out that C# does
+not send is `undefined` inside a measurement. Renaming on the script side fails it. Renaming on the C#
+side **does not compile**, because the tests read the properties, which is the better of the two and is
+why nothing here tests it.
+
+**And the harness had a positional call left in it.** Converting the nine `autoFit` calls in
+`measure-geometry.js` missed a tenth, which then received a string where an object goes, destructured
+nothing out of it, and returned `null` - **and the parity suite passed anyway.** Which was worth
+following: `Fitting_the_container_leaves_room_for_the_columns_it_is_not_fitting` passes with no fit
+performed at all. Its container was 700px and the table measured 698 unfitted, so it was already
+fitting; the reserved column is 220px because the harness sets it there; and both of its assertions are
+satisfied by a table the browser laid out on its own. The scenario's own comment names the band it
+needed to sit in and 700 was outside it. That is a fault in a §13 test rather than in this seam, and it
+lands in the commit after this one.
+
+**Measured**, control at `bc202edc8` bare 154.81 KB, one sort 175.79 KB, a filter row 158.78 KB; after,
+154.66, 175.90 and 158.77. Inside the floor this branch has now measured directly - the bare row has
+read 154.55, 154.66 and 154.81 on runs of identical code. **No time ratio is quoted**, per §9.
+
+### The verdict this section asked for
+
+> "if the built version does not visibly reduce what a call site has to know, it is a rename and should
+> be called one."
+
+It is not a rename. What the call sites no longer have to know: nine export-name strings, the order of
+`autoFit`'s ten arguments, the `InvokeAsync<NavigationMetrics?>` type argument written out three times,
+and the camelCase spelling of an anonymous object. Each also lost a two-step - `var script = await
+ModuleAsync(); if (script is null) return;` became `if (await BrowserAsync() is not { } browser)`.
+
+**And the count is honest about what is left.** `ModuleAsync` still exists, because something has to do
+the import and the disposer holds the module rather than reaching for it. Two ways in, one of which is
+the facade; this section's first draft claimed there was one, and the disposer forty lines below said
+otherwise.
+
+### Where it is still weak
+
+- **Reach is not coverage, and the piece did not change that.** Every export is reachable through a
+  string-keyed double that answers a misspelled name with a default, and `JSRuntimeMode.Loose` is set in
+  almost every test file here. Four exports have tests now that had none, and the RTL flip has the test
+  §15 said could not be written - but a typo in a setup string still passes silently. That is the same
+  hazard the facade fixed on the call side, unfixed on the test side, and it is the next thing to look
+  at if this seam is opened again.
+- **The ordering constraints are untouched**, as designed. §13's finding stands.
+
+---
+
+## 19. The drop-down adopts its value again on every render - the design
+
+§15's eighth candidate, argued before it is built. That entry ranks it "worth exploring" and makes three
+claims; one is a measured fault, one is wrong about which sources reach it, and one is not a fault at
+all. The measurement is first, because it is what decides the piece.
+
+### The fault, measured
+
+`Adopt` finds the row a bound value names, so a closed drop-down renders text rather than a placeholder.
+It runs on a value change **and on a data change**, deliberately - "a value is routinely bound before its
+rows arrive". The data-change test is `!ReferenceEquals(lastData, Data)`, which §10 has already recorded
+as true on every render for a source written in markup.
+
+What it does then is `Data.FirstOrDefault(item => Equals(ValueOf(item), value))`, and `ValueOf` returns
+`object?`. **So every element boxes**, which is §3's rule 5 - "a generic value must never be widened to
+reach an interface" - on a path that runs once per parent render for a drop-down nobody has opened.
+
+Measured over twenty renders of a closed drop-down whose `Data` is re-materialised each time, against
+the same drop-down holding one instance:
+
+| rows | re-materialising | stable source | the re-adopt |
+| ---: | ---: | ---: | ---: |
+| 50 | 4,843 B/render | 3,475 B/render | **+1,368 B** |
+| 1000 | 27,646 B/render | 3,475 B/render | **+24,171 B** |
+
+24,171 B over a thousand rows is 24 B an element, which is a boxed `int` exactly, and it is **seven
+times the entire rest of the render**. The scan stops at the match, so this is the worst case - a value
+whose row is last, or is not there at all, which is also what a `LoadData` page that does not contain
+the value produces.
+
+### What §15 got wrong about it
+
+**"for exactly the sources this library targets"** - no. `Adopt` returns before scanning when
+`Data is IQueryable && Data is not ICollection<TItem>`, with a comment saying why: walking a queryable
+here would run an unfiltered, unpaged query on the render thread. So the Entity Framework source §10's
+sibling findings are about is the one case that **cannot** reach this. What reaches it is an in-memory
+sequence that is a new instance each render - `Data="@people.Where(p => p.Active)"` written in markup,
+or a `ToList()` in a property. That is a real and ordinary way to write a lookup, and it is a narrower
+claim than §15's.
+
+**"twelve of its thirty-three parameters are one-line forwards, so a thirteenth is four places"** - the
+count is twelve of thirty-two, and it is not a fault. Each is a documented, typed parameter of a
+component in a shipped package; the alternative is `@attributes` splatting, which makes the drop-down's
+surface undiscoverable to anyone reading its API, and this branch's §8 argument for a narrow deliberate
+surface cuts the same way. Four places for a thirteenth is the price of saying what the component
+supports. **Refused, with that as the reason.**
+
+**`Grid => grid` exposing all 81 of the grid's parameters** is a real leak and is not this piece. Its
+one caller is a test asserting the grid instance survives the popup closing, which wants "is this the
+same grid" and not "here is the grid" - but narrowing it is an API change to a public member for the
+benefit of one assertion, and it should be argued on its own rather than as a side effect of fixing a
+scan.
+
+### What changes
+
+**Once the value is explained, a data change does not need to explain it again.**
+
+```csharp
+// today
+if (!valueChanged && !dataChanged) return;
+
+// designed
+if (!valueChanged && !dataChanged) return;
+if (!valueChanged && StillExplains(value)) { lastData = Data; return; }
+```
+
+where `StillExplains` asks whether what is already held answers the value - one `ValueOf` call for the
+single case, and for `Multiple` whether every wanted value is already in `SelectedItems`. That turns N
+boxes into one, and turns 24,171 B into about 24.
+
+**It keeps the reason `Adopt` runs on a data change at all.** A value bound before its rows arrive is
+not explained, so `StillExplains` is false and the scan runs - every render, until the row shows up,
+which is exactly the behaviour that test exists for. What stops is re-explaining an answer already
+found.
+
+**The trade, stated:** the held row is an instance from the previous source. A source swapped for a
+genuinely different one goes on showing the old row's text until the value changes or something calls
+`Reload()`. That is the same lifetime rule §10 chose for the check-box lists and §14 for its lookups,
+and it is chosen here for the same reason - the alternative is paying a scan per render to notice a
+change that almost never happens.
+
+### Deliberately not proposed
+
+- **Typing `ValueProperty` as `Expression<Func<TItem, TValue>>`.** This is the real fix for the boxing:
+  `TValue` is already a type parameter of the component, so the value's type is known, and §4's whole
+  argument - that a typed expression beats a widened one, measured at 220 KB against 119 KB - applies
+  here unchanged. It is refused *for now* because it is a breaking change to a public parameter on a
+  shipped component, and because the piece above takes the same 24 KB to nothing without one. Recorded
+  here so that it is a decision rather than an oversight: if the drop-down's surface is ever revised,
+  this is the change to make, and it would also fix the `Multiple` path's boxing, which the piece above
+  only avoids rather than removes.
+- **Caching the adoption by key.** §10's answer for its sibling was "key it by `ItemKey`", recorded and
+  not done. The drop-down has no `ItemKey`, and giving it one to avoid a scan it can already skip is a
+  larger surface for a smaller gain.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **The measurement above, repeated after.** The claim is that the re-adopt column goes to roughly the
+   cost of one `ValueOf` at both row counts. It is measured with
+   `GC.GetAllocatedBytesForCurrentThread` around twenty renders rather than in `gridbench`, because
+   what is being measured is a *re*-render of a closed drop-down and `DropDownBench` measures first
+   renders. That measurement becomes a test, since a number nothing re-checks is a number that drifts.
+2. **A test that a value bound before its rows arrive is still adopted when they do**, which is the
+   behaviour the skip must not break, and which is the one thing this change could plausibly get wrong.
+3. **A test that a genuinely changed source is not re-explained**, asserting the trade above rather than
+   leaving it as prose - a stated consequence nothing checks is how §17's wrong comment happened.
+4. **Every new test mutation-checked**, and the mutation must compile.
+5. **A `gridbench --job short` control before and after** on the grid rows, which should not move at
+   all: nothing here is on the grid's path. And `DropDownBench` itself, which measures the first render
+   the skip does not affect - quoted to show it did not.
+
+### Where this could still be wrong
+
+- **`StillExplains` may cost more than it saves for `Multiple`.** Checking that every wanted value is
+  held is a walk of `SelectedItems` and a set build, which for a large multi-selection is not obviously
+  cheaper than the scan it replaces. If it is not, the honest answer is to skip only the single case,
+  which is the common one and the one measured above.
+- **The trade may be the wrong one.** "The source changed and the text did not follow" is a real bug for
+  anyone who swaps `Data` for a different query and expects the label to follow. §10 and §14 both made
+  this choice, so the branch is at least consistent - but three consistent choices are not evidence, and
+  a user hitting it will not care which section it was recorded in.
+- **The fault may be rarer than the measurement makes it look.** It needs a re-materialising in-memory
+  source *and* a bound value *and* a parent that re-renders often. Each is ordinary; all three together
+  may not be. The number is real; how often anyone pays it is not something this section can measure.
+
+### What the build changed
+
+The skip landed and the measured fault is gone, at a third of the reach this section designed for. Three
+of its claims were wrong, one of them badly enough to change the shape of the piece, and two things it
+went looking through turned out to be broken already.
+
+**It skips a single value only.** This section designed the skip for both and named the escape hatch -
+"if it is not [cheaper], the honest answer is to skip only the single case". Two things closed it. The
+measurement: `Adopt`'s multiple path already `break`s once every wanted value is found, so over a
+thousand rows it walks one element, and skipping it saves **136 B a render** rather than 24 KB. And the
+correctness: the grid draws its ticks by asking a `HashSet<TItem>` whether it holds the row it is
+drawing, and that set compares by reference - so rows carried over from a re-materialised source are
+ticks that do not appear. Skipping would have made that permanent, because a selection that has gone
+wrong still explains the value and so is never looked at again.
+
+**And that fault is already there, without any of this.** Bound to two rows over a source that
+re-materialises, the popup ticks 2 rows before and **0** after - and clicking an already-chosen row then
+publishes **3** ids for two rows, because `OnRowClick` removes the new instance, misses, and adds it
+beside the old one. Measured with the skip and without it: identical. So it is a fourth participant in
+§10's `!ReferenceEquals` trap and the first whose symptom is a wrong value rather than a wasted query,
+it is nothing to do with this piece, and it wants `ItemKey` - the same answer §10 recorded for row
+expansion and did not do. **Recorded, not fixed here**, and the reason is that fixing it means deciding
+the identity question §15's candidate 7 exists for.
+
+**"Until the value changes or something calls `Reload()`" was false.** This component has no `Reload`.
+The stale row is dislodged by a value change and by nothing else, and the comment says that now.
+
+**The number is 96 B, not 24.** "Turns 24,171 B into about 24" was arithmetic about one `ValueOf` call
+rather than a measurement; measured, the re-adopt column goes from 24,171 B to 96 B at a thousand rows
+and from 1,368 B to 96 B at fifty. The claim - that it stops being a function of the row count - holds.
+
+### Two mutations of this section's own, and what they found
+
+**The allocation test discriminated at one of the two row counts it runs at.** It asserted the
+re-materialising case costs less than 1.5x the held one, and at fifty rows the *unfixed* code is 1.4x -
+which this section's own table already said, and neither the table nor the test noticed. The threshold
+is 1.15 now, which fails at both, and there is a second test that has no ratio in it at all: a source
+that counts how many times it is walked, asserting zero.
+
+**A third redundant conjunct in three pieces.** `!valueChanged &&` came out of the guard because no
+value that changed can be explained by the row that explained the previous one. `Multiple ||` stayed in
+despite being redundant for the same kind of reason - `selected` is only ever written by the scalar
+branch - and that one is kept deliberately, with the reason written beside it: the exclusion is a
+correctness decision and leaving it to be inferred from which field happens to be set is how it would
+quietly stop being true. Two redundant terms, opposite answers, both argued.
+
+### Two measurements that had stopped measuring
+
+**`DropDownBench` has been reporting `NA` for every `Fast_` row.** It passes `TextProperty` as the
+string `"Name"`, which is what `RadzenDropDownDataGrid` takes and is not what this one takes, so every
+run since that parameter became an expression has thrown a cast exception behind a printed table. Fixed
+here because this section's verification asks for that bench to be quoted and a bench that throws cannot
+be. What it says now, at fifty rows and at a thousand: **15.63 KB against `RadzenDropDownDataGrid`'s
+168.6 KB closed, and 49.06 KB against 169.6 KB open** - 0.09x and 0.29x, and flat in the row count
+because a closed lookup builds nothing.
+
+**A test in the suite is flaky.** `ReviewRegressionTests.ACheckBoxListLookupIsNeverRunFromTheRenderThread`
+fails about one full run in three, and fails every time it is run alone - at this commit and at the one
+before it. Not this piece's, and recorded because "the suite is green" is a claim this branch makes
+often and that test makes it conditional.
+
+**It was not flaky, and §22 has what it was.** Both halves of the observation were right and the word
+was wrong: the failure is real and reproducible, and it was never about the grid. Diagnosed and fixed
+there, along with the larger thing underneath it - that neither of those two tests had ever been able to
+observe the fault it was written for.
+
+**Measured**, control at `6317cd150` sorted 175.79 KB and a filter row 158.77 KB; after, bare 154.66,
+sorted 175.79 and a filter row 158.81. Nothing here is on the grid's path and the numbers say so.
+**No time ratio is quoted**, per §9.
+
+### What is left of the candidate
+
+Of §15's three complaints about this component, one was a measured fault and is fixed for the case that
+carried the cost, one is refused with its reason above, and one - handing out the grid - is untouched.
+What this piece adds to the list is that the multiple path is *wrong* over a re-materialising source,
+which none of the three noticed, and that the benchmark meant to catch component-level regressions here
+has not run for some time.
+
+---
+
+## 20. `ColumnBase` asks the grid to know its recipes - the design
+
+§15's sixth candidate, argued before it is built. That entry calls it "worth exploring", constrains it
+by §3, and describes it as "seventeen members each answering exactly one grid call site". Two of its
+three counts are wrong, and the diagnosis behind them is wrong in a way that changes what the piece is.
+The corrections are first, because they decide it.
+
+### What §15 got wrong about it
+
+**`CellStyle` has no grid call site.** It is read three times inside `ColumnBase` - by
+`FrozenCellStyle`, `FrozenHeaderStyle` and `FrozenFooterStyle`, each as the basis they fold an inset
+into - and once by a test. Naming it in a list of members that answer the grid is what a count taken by
+reading declarations rather than callers produces.
+
+**"Nine of its twenty-one virtuals are `internal virtual`" is 8 of 28.** Nineteen are public virtual or
+abstract, eight are internal virtual, one is protected virtual. The *substance* survives the correction
+and is sharper for it: the eight are not scattered, they are exactly one feature - `NamesOutstanding`,
+`FetchNamesAsync`, `DropNames`, `DefaultFilterOperator`, `FilterValueFromText`, `FilterValues`,
+`FilterSelection`, `FilterValueFromSelection`. An out-of-assembly column can render, sort and compose a
+filter *predicate*; what it cannot do is take part in the filter **row**. That is one closed door rather
+than nine.
+
+**`AutoFitWidth` having no reader is right**, and is the one claim in the entry that checks out exactly:
+`internal string? AutoFitWidth => autoFitWidth;` is matched by nothing in the library, the tests or the
+bench. It is the getter half of a field whose only readers are `EffectiveWidth` and `CanAutoFit`, both
+of which read the field.
+
+**And the diagnosis is wrong.** Seventeen members are not shallow because there are seventeen of them.
+Counting members is how a shallow module and a wide one are confused. What is actually shallow here is
+narrower and worse: at four call sites the grid holds a *recipe* rather than asking a question.
+
+### The fault, stated as one sentence
+
+**A column is drawn in four sections, and three of the four make the grid fold the frozen decoration in
+itself.**
+
+| section | the class the grid writes | the style |
+| --- | --- | --- |
+| header (`:1340`) | `column.FrozenClass is { } f ? headerClass + " " + f : headerClass` | `FrozenHeaderStyle` |
+| filter (`:1538`) | `column.FrozenClass is { } f ? "rz-unselectable-text " + f : "rz-unselectable-text"` | `FrozenHeaderStyle` |
+| body (`:1862`) | `column.CellElementClass` - the column folds it, memoized | `FrozenCellStyle` |
+| footer (`:1169`) | `column.FrozenClass is { } f ? ... FooterCssClass + " " + f ...` | `FrozenFooterStyle` |
+
+Four rows, and every column of the table is a rule written nowhere. That a frozen column contributes a
+class *and* an inset is the grid's knowledge in three rows and the column's in one. That the filter row
+uses the **header's** style rather than one of its own is the grid's knowledge in all four, and it is
+the only place that fact is recorded - §10 has already paid for that: "there are **four** such sections
+- the title row, the filter row, the body and the footer - and the filter row is a second row of the
+header rather than a thing of its own, **which is how it was missed** after the title row was fixed."
+The rule that was got wrong is the one this table's third column holds, and it is held at a call site
+rather than in a type.
+
+`CellElementClass` is the shape the other three want. It already exists, already memoizes on the pair it
+folds, and already means "the class of this column's cell in this section". It is one row of a table
+whose other three rows were written by hand at the point of use.
+
+### What changes
+
+Six changes, ranked by what each removes. None is on the per-row path and none adds an allocation to it;
+the fourth and fifth remove members from four subclasses and add none.
+
+**1. The four sections are four pairs, asked the same way.** `HeaderCellClass(string headerClass)`,
+`FilterCellClass`, `FooterCellClass` join `CellElementClass`, each memoized against what it folds
+exactly as `CellElementClass` is, and `FilterCellStyle => FrozenHeaderStyle` is where "the filter row is
+a second row of the header" is finally written as code rather than as a comment two files away. The grid
+asks each section for a class and a style and stops knowing that a frozen column is a class plus an
+inset.
+
+The memo is the existing one and not a new mechanism: the base classes it folds are interned literals in
+three of four rows and `FooterCssClass` - a parameter - in the fourth, so a hit returns the same string
+instance and a frozen column costs one string per section per grid rather than one per render. Today's
+three inline folds allocate a string per frozen column per render; that is once per column and not per
+row, so the change is not sold as a saving and the bench is expected to say so.
+
+**2. `SetFilter` carries the text that produced the value.** Today it clears `AppliedFilterText`, and
+two of its six call sites put the text back on the next line under a comment explaining that they must
+(`Data.cs:608-610`, `:1214-1217`). One rule, written twice, in the places most likely to be copied from.
+`SetFilter(value, filterOperator, text = null)` puts it in the signature; the four sites that want the
+clear say nothing and get it.
+
+**3. `OnParametersSet` is sealed, and derivation is a hook that runs before it.** Five classes override
+it and every one of them is "do my own derivation, then call base" - with a comment in two of them
+explaining that the order matters, because the base picks the default filter operator from
+`FilterElementType` and a column that has not read its member selector yet answers `object`. That rule
+is currently enforced by five authors remembering it, and **the test suite already contains a column
+that gets it backwards**: `ReviewRegressionTests.CompileCountingColumn` calls `base.OnParametersSet()`
+first and derives afterwards. It happens not to matter for that column, which is exactly why nobody
+noticed. A sealed `OnParametersSet` calling `protected virtual void OnDerive()` first makes the order
+not the subclass's to choose, and the mutation that gets it wrong stops compiling.
+
+`ColumnBase` is public and this narrows it: a third-party column overrides `OnDerive` where it used to
+override `OnParametersSet`. §8's packaging question is open and nothing has shipped, so this is the
+cheapest it will ever be.
+
+**4. The four `Apply*` methods default to a sort the column supplies.** `TemplateColumn`,
+`CollectionColumn` and `LookupColumnBase` each carry the same four one-line forwards to `SortBy` -
+twelve methods, verbatim across three classes, and two of the three also carry the same
+`PropertyPath => SortBy?.Path` (`SortPath` since §27, which took the settings key out of it). An
+`internal virtual FastGridSort<TItem>? SortSource => null` on the base, with the four `Apply*` and that
+path defaulting through it, turns twelve methods and two properties into three overrides of one member.
+
+Nothing public changes behaviour: the default `SortSource` is null, so every `Apply*` still answers null
+for a column that supplies no sort - which is what an out-of-assembly column inherits today.
+`PropertyColumn` overrides all four with typed expressions and does not participate. `CanSort` stays
+overridden where it differs, because it genuinely does: `TemplateColumn` can sort on a bare
+`SortProperty` with no `FastGridSort` at all.
+
+**5. `RenderCell` defaults to the cell's own text.** Four of the five columns implement `RenderCell` and
+`CellTextOf` as the same expression written twice -
+
+```
+LookupColumn            AddContent(sequence, CellTextOf(item))     CellTextOf => key is null ? null : NameOf(key(item))
+LookupCollectionColumn  AddContent(sequence, CellTextOf(item))     CellTextOf => ...Join(...)
+CollectionColumn        AddContent(sequence, Text(item))           CellTextOf => Text(item)
+PropertyColumn          AddContent(sequence, cellText?.Invoke(item))  CellTextOf => cellText?.Invoke(item)
+```
+
+- and nothing checks that the two agree. They must: `CellTextOf` is what the truncation tooltip shows
+(`RadzenFastGrid.cs:1935`) and what a column's text is read through elsewhere, so a column whose two
+halves drift shows one thing in the cell and another on hover. Making `RenderCell` virtual with
+`AddContent(sequence, CellTextOf(item))` as its body removes four overrides and makes the divergence
+unrepresentable for a text column.
+
+The cost is that `RenderCell` stops being `abstract`, so a column that overrides neither draws an empty
+cell instead of failing to compile. That is a real loss and it is small: `CellTextOf` returning null is
+already the base's answer, and the compiler was enforcing "say how a cell is drawn" over a class whose
+other twenty-seven members all have defaults. `TemplateColumn` keeps its own `RenderCell`, because a
+template is content and not text.
+
+**6. `AutoFitWidth` is deleted.** No reader anywhere.
+
+### Deliberately not proposed
+
+- **Opening the eight `internal virtual` filter members.** It is the candidate's most interesting
+  complaint and it is not a shape question, it is a decision about what a third-party column may do -
+  and taking it would freeze the filter-row protocol at its current shape while two things that would
+  change it are open: §10's question of whether an operator menu, a date popup, a numeric range or an
+  enum picker is built in, and §15's candidate 7, which would give a column an identity the filter
+  lookup is currently keyed by. Publishing eight members now and revising them after either lands is
+  worse than publishing them once. **Refused, with that as the reason**, and recorded beside the
+  candidate in §15.
+- **Composing the four sections eagerly at the two points that can change them.** It is available -
+  `OnParametersSet` and `SetFrozen` are the only writers of every input - and it would turn the body's
+  two per-cell getters into two field reads, removing the four-term comparison `CellStyle`'s memo runs
+  per cell today. It is refused because it trades a mechanism that **cannot** go stale for one that can:
+  a lazy memo guarded on its inputs is self-correcting, and compose-on-write is correct only while both
+  writers remember to recompose. That is this branch's most-recorded fault class, and the speed it would
+  buy is not measurable at `--job short`, so it would be bought on an argument rather than a number.
+- **Anything that makes the grid hoist a per-column value out of the row loop.** §15's candidate 2
+  refused that shape - "a large diff through the hottest code on the branch" - and nothing here is worth
+  reopening it for.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **A `gridbench --job short` control before and after**, on all three rows. The control at
+   `9530a37a8` is bare **154.55 KB**, one sort **175.79 KB**, a filter row **158.78 KB**, and the noise
+   floor on the bare row is ~0.3 KB. Nothing here is on the per-row path, so all three should hold. A
+   fourth run with two columns frozen, because change 1 is the only one that touches a frozen column's
+   strings and §10 measured frozen at +0.9 KB.
+2. **A test that the four sections agree**, asserting that a frozen column's filter cell carries the
+   header's style and not the body's - the fact §10 records being got wrong once, and which currently
+   nothing checks directly.
+3. **A test that the memo hands back the same instance per section**, as
+   `FastGridColumnLayoutTests:122` already does for `CellStyle` - `Assert.Same`, which is the only
+   assertion that distinguishes a memo that engages from one that does not.
+4. **A test that a column's cell and its tooltip agree**, which is what change 5 makes
+   unrepresentable and what nothing asserts today.
+5. **Every new test mutation-checked, and the mutation must compile.** Changes 3 and 5 claim to make a
+   fault unrepresentable; for those the evidence is a mutation that *fails to build*, which is worth
+   more than one that fails a test.
+6. **`GeometryParityTests` in a real browser**, because change 1 rewrites what every frozen cell in
+   three of four sections is classed and styled with, and the geometry layer is the only thing that
+   reads a pinned column's actual position.
+
+### Where this could still be wrong
+
+- **Change 1 may be a rename rather than a deepening.** It adds three members and removes three
+  concatenations, which is close to flat, and if the four pairs do not end up looking like one table
+  when they are written down, the honest answer is that `CellElementClass` was already the whole of the
+  idea and the other three sections were fine as they were. The test in verification step 2 is what
+  decides it: if the rule it asserts cannot be stated without naming a section, the sections are real.
+- **Change 3's seal may cost more than the rule is worth.** Sealing a `ComponentBase` override on a
+  public class is the most aggressive thing here, and the argument for it rests on one test column
+  getting the order backwards *without consequence*. A rule whose violation has never cost anything may
+  not need enforcing at all.
+- **Change 5 removes a compiler error.** "Say how your cell is drawn" is currently checked at build
+  time for every column anyone writes, and after this it is not. The trade is one class of mistake for
+  another, and the claim that the drift it prevents is the likelier one is a judgement rather than a
+  measurement.
+- **Change 4 puts a sort on the base that only three of five columns have.** `SortSource` is a member
+  every column inherits and most cannot use, which is the same shallowness this section is complaining
+  about, one level up. The defence is that it replaces four such members with one; the defence is not
+  that it is free.
+### What the build changed
+
+All six changes landed. Three of this section's own claims did not survive, one of them measured to the
+byte, and the refactor turned up two methods that no test in the suite had ever executed.
+
+**The memo design was wrong, and gridbench said so in an exact number.** This section said the four
+sections would each be "memoized against what it folds exactly as `CellElementClass` is", and called that
+"the existing one and not a new mechanism". Built that way it cost **8 reference fields per column** -
+three for the header's fold, two for the filter's, three for the footer's - which is 64 bytes a column
+and **320 bytes on a five-column grid**, paid by every grid whether or not anything is frozen, to save
+three concatenations per frozen column per render.
+
+The bench read it as +0.31 KB on three rows that had no business moving: bare **154.86** against a
+control of **154.55**, one sort **176.10** against **175.79**, a filter row **159.34** and **159.09**
+against **158.78**. 320 B is 0.3125 KB, and the two identical readings of 154.86 are what said it was
+not noise. Only the body's pair is memoized now - it is the one read once per *cell* - and the other
+three compose on read, which is exactly what the grid was already paying when it folded them itself.
+After: bare **154.69** then **154.55**, one sort **175.87**, a filter row **158.77**, two frozen columns
+**155.74** against **156.05** with the fields. Every row back inside the noise floor, and the frozen row
+down by the same 320 bytes.
+
+**The bisect that found it is worth more than the fix.** Reverting each change on its own - the sections,
+`RenderCell`, `OnDerive` - left the number at 154.86 every time, which reads like "none of them did it"
+and is the opposite of true. The probes renamed members back and restored the grid's inline folds while
+leaving the *fields* on the class, and the cost was never in the code that ran; it was in the size of the
+object. **A bisect has to remove the thing rather than rename it**, and a per-render cost that does not
+scale with the row count is a hint that what grew is an object rather than a loop.
+
+**Two methods had never been executed by any test.** Change 4 removed twelve verbatim `Apply*` forwards
+from three columns. Mutating the base's `ApplyThenBy` and `ApplyThenByInMemory` to answer `null` left all
+798 tests green - so the second-sort half of that block, six methods as they were written, was covered by
+nothing at all. `ApplySort` and `ApplySortInMemory` were both caught. There is a test now over both
+routes, and both mutations fail it. This is §9's first layer finding a gap that only appeared because the
+duplication was collapsed: three copies of an untested method look like coverage from a distance.
+
+**"Unrepresentable" is too strong for change 5, and right for change 3.** Sealing `OnParametersSet` does
+make the derivation order not the subclass's to choose - the mutation that moves `OnDerive()` after the
+base's own work fails ten tests, and there is no way to write the old mistake. `RenderCell` defaulting to
+`CellTextOf` is weaker than that: it removes the duplication from the four columns that had it, so those
+two halves cannot drift, but a subclass can override `RenderCell` again and reintroduce exactly the
+divergence. What guards it now is a test across all four column types, not the type system. Said plainly
+here because this section claimed otherwise.
+
+**`AutoFitWidth` was dead, and so was `FrozenClass` by the end.** The first was already recorded. The
+second became unreferenced once the three folds moved into the column, which is the small proof that the
+sections really did take the recipe: the member the grid needed to hold one no longer has a caller.
+
+**The same four-section table exists a second time and this section did not notice it.** The expand
+toggle is not a `ColumnBase` and carries its own `ToggleFrozenClass`, `ToggleFrozenCellStyle`,
+`ToggleFrozenHeaderStyle` and `ToggleFrozenFooterStyle` (`RadzenFastGrid.Frozen.cs:46-59`) - the same
+three stackings for the same four sections, with the same rule that the filter row shares the header's.
+It is composed in one place rather than at four call sites, so it is not shallow the way the column's
+half was, and it is left alone. But a change to how a pinned cell stacks now has to be made in two files,
+and neither said so; both do now.
+
+### What the review found that the build had not
+
+Two read-only passes over the diff, one against §3 and `CONTRIBUTING.md` and one against this section's
+own claims. Between them they corrected a sentence in the code, closed a door the design had left open,
+found a missing control, and produced two refusals worth recording.
+
+**"Only the body's fold is memoized" was half wrong, in the comment that is this file's own summary of
+the design.** It is true of the four *classes* and false of the three *styles*: `ComposeFrozenStyles`
+memoizes the body's, the header's and the footer's behind one pair of keys, because they are one
+composition with a z-index appended. Five fields, untouched by this piece and predating it. The comment
+now says which half is which. A policy statement that is wrong about half its members is worse than none,
+and this one sat at the top of the block a future author would read before adding a field.
+
+**Sealing `OnParametersSet` closed one door and left the next one open.** `SetParametersAsync` is what
+runs it, was `public override`, and was not sealed - so a column could override *that*, call the base,
+and derive afterwards, which is the exact fault `OnDerive` exists to make unwritable, one method over.
+It is sealed now. Registration happens there too, so a subclass that overrode it and forgot to chain
+would have left itself out of the grid entirely.
+
+**The frozen row had no control, and now has one.** §20's verification asked for four rows measured
+before and after; the frozen row was only added to the filter partway through, so its "before" was a
+cross-commit inference rather than a control. Measured at `567dfb237`, whose library is `9530a37a8`'s:
+**155.74 KB**, against **155.82** after. Unmoved, and now on the same terms as the other three - which
+read **154.64** against 154.55, **175.79** against 175.79, and **158.77** against 158.78.
+
+**Two of this section's six verification items ask for evidence the design cannot produce**, and that is
+a finding about the design rather than about the build.
+
+- Item 3 wants "the memo hands back the same instance **per section**". Three sections have no memo, on
+  purpose and for a measured reason, so the strongest available test is the one that exists: the body's
+  pair, plus the three styles that share `ComposeFrozenStyles`.
+- Item 5 wants change 5's fault to be proved unrepresentable by a mutation that **fails to build**. No
+  such mutation exists: `RenderCell` is public virtual on a public class, so a column can override it
+  and disagree with `CellTextOf`, and the mutation that does so compiles. Change 3's equivalent does
+  work - `protected override void OnParametersSet` on a column is now CS0239. **One of the two claims of
+  unrepresentability is real and the other is not**, and writing both in the same sentence is how the
+  weaker one would have been believed.
+
+**`SortSource` is `internal`, which is worse than the risk this section named.** The bullet said it puts
+"a sort on the base that only three of five columns have". It is narrower than that: no out-of-assembly
+column can override it at all, so for anyone outside this library it is a member that exists and can
+never be used, and the twelve forwards it replaced were the only way in. Kept as it is, because widening
+it means publishing part of the column protocol, which is exactly what this section refused to do for the
+filter row's eight members and for the same reason.
+
+**§20 named the toggle column's duplicate table only after the build, and the sharpest instance of it is
+one line.** `RadzenFastGrid.cs:1230` reads `var spacerStyle = element == "th" ? ToggleFrozenHeaderStyle :
+ToggleFrozenFooterStyle;` - which is "the filter row is a second row of the header, so it takes the
+header's style" written as a comparison on a tag name, at a call site. That is this section's central
+diagnosis, verbatim, in code the piece did not touch. Left alone deliberately: the toggle is not a
+`ColumnBase`, has no class, style or width of its own to fold a pinning into, and its four members are
+composed in **one** place where a column's were composed at four - so it is not shallow in the way that
+made the column's half worth moving. Both files now point at each other, which is the least that should
+have been true before.
+
+**A seventh change, not in the design.** `CellClass` became `CellContentClass`. It classes the span
+inside a body cell rather than the cell element, and next to four members named for sections it read as
+a fifth. Small, and recorded because the design listed six.
+
+**And one thing outside the piece.** §12 claimed `ItemKey` "already backs selection membership". It does
+not - membership is `Contains` on the caller's own collection - and §12 is corrected above. It matters
+beyond a wrong sentence: it means focus is the *only* place in the grid where an item is identified by
+key rather than compared by reference, which is a point for §15's candidate 7 rather than against it.
+
+### What §27 added to the protocol this section is about
+
+**One member, `internal virtual string? IdentitySource`**, joining the internal half whose publication
+this section argued should happen once rather than twice. It is the same trade §20 already makes for
+`SortSource` and is affordable for the same reason plus one: the escape hatch is public. `UniqueID` is a
+`[Parameter]`, so an out-of-assembly column that cannot supply a derivation can declare a name, and the
+only thing `internal` withholds is the convenience of not having to.
+
+**One of candidate 6's two blockers is gone and the other is not.** §15 refuses to open the eight
+`internal virtual` filter-row members while two things that would change them are open. Candidate 7 is
+built, so the identity the filter lookup was said to be keyed by is settled - and §27 found that the
+filter lookup was never keyed by identity in the first place, which weakens that half of the blocker
+further. §10's question of whether an operator menu, a date popup, a numeric range or an enum picker is
+built in is untouched, so publishing the protocol is still publishing it twice.
+
+---
+
+## 21. A row's identity is asked four times and answered once - the design
+
+Not one of §15's candidates. Its seventh is a *column's* identity - the settings key, the reorder slot,
+the picker name - and §10b's instruction not to guess at that model stands untouched here. This is a
+*row's* identity, which §15 never listed, and which two recorded faults and one found while reading all
+turn out to be.
+
+### The faults
+
+**Row expansion leaks and loses state.** §10 has it in full: `expandedRows` is a `HashSet<TItem>`
+(`RadzenFastGrid.cs:216`) added to by `ToggleRow` and emptied only by an explicit collapse. Over a source
+that re-materialises, every entity ever expanded is pinned for the life of the circuit, and because the
+set compares by reference none of those entries can ever match a new instance again: the row draws
+collapsed while the old one is held. Recorded, not fixed, with the reason - "the grid already has
+`ItemKey`, and keying expansion by it would answer the leak and the lost state together".
+
+**A multiple-select drop-down ticks nothing and publishes its value twice.** §19 measured it: bound to
+two rows over a re-materialising source, the popup ticks 2 rows before and **0** after, and clicking an
+apparently unticked row publishes **3** ids for two rows, because `OnRowClick` calls
+`SelectedItems.Remove(item)` (`RadzenFastDropDownDataGrid.razor.cs:553`), misses, and adds the new
+instance beside the old one. Left there deliberately, because fixing it is this question.
+
+**And the grid does the same thing to its own selection, which nothing had noticed.** `SelectRow`
+(`RadzenFastGrid.cs:2041`) asks `current.Contains(item)`, and on a miss takes the not-selected branch and
+`Add`s the row to a list that already holds an equal one - `next.Remove(item)` on the other branch being
+`List<TItem>.Remove`, which is `EqualityComparer<TItem>.Default`, which is reference equality for the
+entity types this grid is built for. That is §19's drop-down fault one level down, and it is why fixing
+the drop-down on its own would not have been enough: the drop-down hands the grid `SelectedItems` as its
+`Selection` (`RadzenFastDropDownDataGrid.razor:59`), so the tick that failed to appear is the *grid's*
+lookup, not the drop-down's.
+
+**A fourth, smaller.** The keyboard range builds `new HashSet<TItem>(next)` and `new HashSet<TItem>(current)`
+(`Keyboard.cs:610, 648`), and the difference between those two sets is what decides which `RowSelect` and
+`RowDeselect` events fire. Same comparison, same source, so the same wrong answer - reported as events
+rather than drawn on screen.
+
+**One place is already right, and it is the only one.** Focus keys on `ItemKey` and falls back to the row's
+position where none is supplied (`Keyboard.cs:700, 733`), which §12 argued for and got right. §12 also said
+`ItemKey` "already backs selection membership"; §20's review found that false and §12 is corrected. So the
+precedent exists, it is exactly one deep, and everything else compares instances.
+
+### What identity is, and why this is affordable
+
+**A row is named by `ItemKey` where one is supplied, and is itself where one is not.** That is not a new
+decision and it is not a new parameter - it is §12's rule for focus, applied to the three other places
+that ask the same question.
+
+**What makes the piece small is that the key is already paid for.** With `ItemKey` set the grid already
+calls it once per row while drawing, for `SetKey` (`RadzenFastGrid.cs:1733`), and §9 has measured exactly
+what that costs: `+ ItemKey` renders 1000 x 5 in **178.03 KB** against a bare **154.55**, and the same
+feature over a reference-typed key renders it in **154.59**. The 23.5 KB is boxing and nothing else. So
+for a row being drawn the key is already computed and already boxed, and a membership test that uses it
+adds no allocation at all. **Where `ItemKey` is null nothing changes anywhere** - same comparison, same
+cost, same behaviour, including the leak, which without a key has no other answer.
+
+### What changes
+
+**1. One type says how a row is named.** A readonly struct over the `Func<TItem, object>?`, answering the
+key for a row and handing out an `IEqualityComparer<TItem>` for the sets the grid builds. It is `ItemKey`
+with a name and a second question it can answer; §3 rules out its being a class, since a reference per
+grid buys nothing a field gives.
+
+**2. Row expansion holds keys, and holds one row per key.** A `Dictionary<object, TItem>` where a key
+exists: looked up by key, so a re-materialised row draws expanded; storing the last instance seen, so
+`ExpandMode.Single` can still name the row it collapsed.
+
+**§10's expectation was too strong and this is where it breaks.** "Keying expansion by `ItemKey` would
+answer the leak and the lost state together" - it answers the lost state completely and the leak only
+partly, because `RowCollapse` takes the row and the only way to name a row that is no longer on screen is
+to have kept it. What the dictionary fixes is the *accumulation*: expanding one row across ten
+re-materialisations stores one entry rather than ten, and collapsing it releases the one. What stays is
+one live instance per currently-expanded row, which is not a leak so much as the price of the event.
+
+**3. Every comparison the grid makes itself goes through identity.** `SelectRow`'s membership test and its
+removal, and the keyboard range's two sets. These are the grid's own storage and its own questions, so
+there is nothing to negotiate and no cost: a comparer on a set it was already allocating.
+
+**4. What the grid hands back knows how to compare itself.** `SelectionChanged` publishes a
+`List<TItem>` today. Published instead as a set built with the identity comparer, a caller using
+`@bind-Selection` - which is what the parameter's own documentation tells them to use - gets a `Selection`
+whose membership is keyed, and the per-row tick is then correct **for free**, with no work added to the
+render at all. It also retires the warning on `Selection` that a list of many selected rows is a scan per
+row.
+
+**5. The drop-down tells the grid what its rows are called.** It has known all along: `ValueOf` is a row's
+id, it is what `Adopt` matches on and what the component publishes. §19 said "the drop-down has no
+`ItemKey`", which is true of the parameter and false of the concept. Setting the inner grid's `ItemKey`
+from `ValueProperty`, and giving `SelectedItems` the matching comparer, fixes the measured fault with no
+new public surface on either component.
+
+### The fork this section does not settle, and how it will be
+
+Change 4 fixes the render tick for a caller who binds back what the grid published. It does **not** fix a
+caller who builds their own `HashSet<TItem>` or passes a `List<TItem>` and hands it in as the initial
+selection: that collection compares the way its owner made it compare, and `Selection.Contains(item)` is
+its method rather than the grid's.
+
+Completing it means the grid stopping asking the collection at all: build the selection's keys once per
+draw pass and probe those. Correct for every caller, and the only thing in this piece that is not free.
+The cost is arithmetic before it is measured: one `HashSet<object>` per render plus one key per selected
+row, and a key over a value type is a box - so the bench's 250 selected rows out of 1000 are about 6 KB of
+boxes and 3 KB of set, against a control of **178.49 KB** for that exact shape.
+
+**It will be built, measured, and then kept or refused with the number written here.** §3 makes that a
+design decision rather than a preference, and the fallback is already built: changes 1-5 stand on their
+own, and refusing this one leaves exactly one case wrong - a caller who supplies a selection the grid did
+not build, over a source that re-materialises - which is a narrower thing than what is wrong today and can
+be documented on the parameter.
+
+### Deliberately not proposed
+
+- **Widening `ItemKey` to `Expression<Func<TItem, TKey>>`.** §14 already recorded this as the real answer
+  to the boxing and as its own question - the `Convert`-to-object node is a translation problem, and a
+  third type parameter on the grid is a public surface change. Every number in this section would improve
+  if it were done, which is an argument for doing it deliberately rather than as a side effect here.
+- **Making the grid write to `Selection`.** The parameter's documentation is explicit that the grid
+  composes a new collection and never mutates the caller's, and the reason given - a component that
+  mutated what it was handed would change state its caller never asked it to change - is not weakened by
+  anything here.
+- **A settings identity, a reorder identity, or a picker identity.** Those are §15's candidate 7 and are a
+  *column's* identity. Nothing here touches them and §10b's instruction stands.
+
+### How it is verified
+
+§9's four layers, and specifically:
+
+1. **`gridbench --job short` before and after** on bare, selection, one sort, a filter row, `+ ItemKey`,
+   `+ ItemKey over a reference-typed key`, `+ row detail`, and the row added for this piece,
+   `+ selection and ItemKey`. Controls at `5671edddb`: **154.55**, **154.65**, **175.87**, **158.77**,
+   **178.03**, **154.59**, **155.64**, **178.49**. The claim for changes 1-5 is that every one of them
+   holds; the claim for the fork is only that its cost is what gets quoted.
+2. **A test that a row expanded over one instance is still expanded over the next**, which is §10's fault
+   stated as an assertion, and its negative: a grid with no `ItemKey` behaves exactly as it does today.
+3. **A test that a multiple-select drop-down over a re-materialising source ticks what it holds**, and
+   that clicking an already-chosen row publishes its id **once**. §19 measured 2 ticks before and 0 after
+   and 3 ids for two rows; those are the numbers to invert.
+4. **A test that the grid's own selection does not double**, which is the fault this section found and
+   which nothing has ever asserted.
+5. **A test that the expansion dictionary does not accumulate**, since bounding the leak rather than
+   closing it is the claim most likely to be wrong and the one nothing would otherwise check.
+6. **Every new test mutation-checked, and the mutation must compile.**
+
+### Where this could still be wrong
+
+- **A null key.** `ValueOf` can answer null for a lookup row, and `ItemKey` may too. `SetKey(null)`,
+  a dictionary keyed on null, and a set containing null are three different behaviours and the design
+  above has not said which it wants. The likeliest right answer is that a row with no key falls back to
+  being itself, which keeps the fallback rule already stated - but it means identity is per row rather
+  than per grid, and that is a wider claim than "a grid has a key or does not".
+- **Publishing a set rather than a list changes what a caller receives.** It is still an
+  `ICollection<TItem>`, so nothing breaks at the type level, but the order rows were selected in is gone.
+  Nothing in this library reads that order; a caller might.
+- **The drop-down's comparer calls `ValueOf` on both sides of every comparison**, which boxes twice per
+  probe for a value-typed id. It is on the popup's rows rather than the grid's, and a popup draws a page -
+  but §19 measured this exact call being the expensive thing about `Adopt`, and the same call in a
+  comparer has not been measured at all.
+- **Bounding the expansion leak may not be worth the dictionary.** A `HashSet<TItem>` with an
+  identity comparer would fix the lost state alone, in one line and with no second storage, and would
+  leave the accumulation. If the dictionary's own cost is visible on the row-detail row, that is the
+  cheaper piece and this section should say so.
+
+### What the build changed
+
+All four faults are fixed and asserted. Two of this section's claims did not survive, one of them was
+hiding a cost of 46.9 KB per render, and the fork it left open is settled below with the number it asked
+for.
+
+**"A membership test that uses the key adds no allocation at all" was the sentence that hid it.** True
+only of a test that *probes with the key*. The first build did it the obvious way instead - an
+`IEqualityComparer<TItem>` over `ItemKey`, handed to every set - and that reads the key a second time
+per row, because `GetHashCode` is given the *row* and has to derive the key from it, and deriving a
+value-typed key is a box. Measured on the row added for this piece: **225.37 KB against a control of
+178.49**, or **+46.9 KB** on a thousand rows, on top of the 23.5 KB `ItemKey` already costs. §3's rule 5
+in the one shape this section exists to serve.
+
+**So there are two mechanisms, and the rule that picks between them is where the question is asked.**
+*On the render path, ask by key* - `RenderRow` computes the row's key once, and the tick, the expansion
+lookup and `SetKey` all read that one call, so the lookups are free. *Off it, ask by comparer* -
+`SelectRow` and the keyboard range run once per click, not once per row, and there the comparer is
+simply the clearest way to say what a set means. Written down because it is the kind of split that looks
+like indecision until the number is beside it.
+
+**Change 1 said the identity would be a struct and it is a class.** "§3 rules out its being a class,
+since a reference per grid buys nothing a field gives" - except that what the off-the-render-path half
+needs is an `IEqualityComparer<TItem>`, which is an interface, so a struct would be boxed at every
+hand-off. It is one object per grid, made the first time a key is used and never rebuilt: it reads
+`ItemKey` through the component rather than capturing it, which is what keeps a key written in markup -
+a new delegate on every render if it captures anything - from making this the fifth participant in §10's
+`!ReferenceEquals` trap.
+
+**Change 4 was built and then taken out again.** Publishing the new selection as a set that compares by
+identity, rather than as the list it has always been, was argued as making the per-row tick right for
+free. Once the tick is answered by key that is no longer true of it - it buys nothing - and what is left
+is a change to what a caller receives, including the order rows were selected in. Changing that for no
+gain is not a trade. `SelectionChanged` publishes a `List<TItem>` exactly as before; the identity set is
+what composes it.
+
+**The fork, settled.** Keying the tick for a selection the grid did not build costs **190.14 KB against
+178.49**, or **+11.65 KB**, and it is kept. Three things decided it. It is confined to the only shape
+that can ask the question - a grid with both a key and a selection - so §3's rule 3 holds and every
+other row is unmoved: bare **154.73**, selection **154.69**, one sort **175.83**, a filter row
+**158.81**, row detail **155.68**, `+ ItemKey` **178.07**, a reference-typed key **154.77**, against
+controls of 154.55, 154.65, 175.87, 158.77, 155.64, 178.03 and 154.59. What it buys is a wrong answer on
+screen rather than a slow one. And the arithmetic accounts for it: 250 selected rows of 1000 are 250
+boxed keys at 24 bytes, which is 6 KB, and a `HashSet<object>` holding them is about 5.3 KB - together
+11.3 against 11.65 measured. **The set is allocated once per grid and refilled**, so in a component that
+lives across renders only the 6 KB recurs; `gridbench` renders a fresh grid per operation and cannot see
+that, which is the same limit §19 recorded about `DropDownBench`.
+
+**§10's fix for the expansion leak is available and this is not quite it.** "Keying expansion by
+`ItemKey` would answer the leak and the lost state together." The lost state, yes. The leak is bounded
+rather than closed: `RowCollapse` takes the row, and naming a row that may no longer be on screen means
+having kept one - so the store is a `Dictionary<object, TItem>` and holds the first row seen for each
+key. What that ends is the *accumulation* - ten re-reads of one expanded row are one entry, not ten -
+which is what made §10 call it a leak. One live instance per currently-expanded row is the price of the
+event, and the test that pins it is that a single collapse empties the store.
+
+**The null key, which this section flagged and did not settle.** A row whose key is null is compared as
+itself, at both levels: `RowIdentity` falls back to default equality when either side has no key, and
+the expansion store consults the keyed dictionary and the unkeyed set in turn, because a key that
+answers for some rows and not others leaves rows in each. That makes identity a property of a row rather
+than of a grid, which is the wider claim this section warned it would be - and it is the right one,
+because a lookup column's id legitimately is null.
+
+**The fault this section found by reading is now the one with the sharpest test.** `SelectRow` asking
+the caller's collection, missing, and adding the row beside the equal one already there had never been
+asserted; over a re-read source the selection held it twice. It is one line in the test and the
+unfixed code answers 2 where it answers 0.
+
+**Five mutations, five caught, two rewritten.** The two that failed to build did so for incidental
+reasons - a pattern variable that can never be null, and an always-false comparison - which under
+`TreatWarningsAsErrors` is a compile error rather than a result, exactly as this branch's process rule
+says. Rewritten to compile, both were caught. The mutation worth keeping is the first: making the key
+name a row without hashing it - so `Equals` still reads the key and no set can ever find the row - fails
+five of the eight tests and leaves the sixth green, and that sixth is the one asserting a grid *without*
+a key behaves as it always has.
+
+### What the review found that the build had not
+
+Two read-only passes, one against §3 and `CONTRIBUTING.md` and one against this section's own claims.
+Between them they found a regression this piece introduced, three claims in the addendum above that are
+not true of the code, a test that proved something other than what it said, and one number that had been
+measured against a build that no longer existed.
+
+**A regression, and it is the exact case the null-key rule exists for.** `ReadSelection` drops rows whose
+key is null from the key set, and the tick then committed to that set with no way back - so in a keyed
+grid a *selected* row whose key is null drew **not selected**, unconditionally, even with the caller's
+`Selection` holding that very instance. Before this piece `Selection.Contains(item)` answered true. So
+the piece reintroduced "ticks nothing" for one row shape while removing it for every other, in the shape
+the addendum above names as the reason for the rule ("a lookup column's id legitimately is null"). The
+tick now falls back to the collection for an unnamed row, as `Holds` and `RowIdentity` already did, and
+a test pins it.
+
+**"A row whose key is null is compared as itself, at both levels" was wrong about how many levels there
+are.** There are three - the comparer, the expansion store and the tick - and the third had no fallback.
+Two out of three, written as if it were all of them, is how the regression above went in.
+
+**Two more claims above do not survive.** *"One type says how a row is named"* - there is no such type:
+`RowIdentity` only compares, the key itself is answered by `RowKeyOf` on the grid, and the render path
+uses neither, probing a set of raw keys. That is the two-mechanism split, argued honestly a paragraph
+later and left contradicted a paragraph earlier. And *"every comparison the grid makes itself goes
+through identity… no cost: a comparer on a set it was already allocating"* is true of the keyboard range,
+which already built two sets, and false of `SelectRow`, which built one over the whole selection where it
+had built none - including in `Single` mode, where it was used for one membership test, and including for
+a grid with no key, where the comparer is the default one and the set buys nothing. It is asked of the
+collection again when there is no key.
+
+**And one half of change 5 was never built.** §21 said the drop-down would set the inner grid's `ItemKey`
+from `ValueProperty` *and* give `SelectedItems` the matching comparer. Only the second was done, and it
+is sufficient - the popup grid has no key, so its tick asks the collection, and the collection is the set
+that compares by id. Recorded because the section still describes a mechanism the code does not use.
+
+**The mutation record was measured against a build that no longer existed.** "Fails five of the eight
+tests and leaves the sixth green" was true when the tick still went through the comparer. Once the tick
+was keyed, a comparer mutation cannot reach the render path at all - which is the design's own split
+working, and it makes the recorded number wrong rather than merely stale. Measured again on the eleven
+tests as they now stand: the comparer mutation fails **three**, all of them the off-the-render-path
+sites, and the render path needed a mutation of its own - the expansion store looking a row up by the
+row rather than by its key - which fails **two**. The lesson is narrower than "re-run your mutations":
+*a mutation is scoped to a mechanism, and splitting one mechanism into two silently halves what an old
+mutation can prove.*
+
+**A test proved something better than what it was written to prove.** It asserted that the published
+selection keeps two rows sharing a key, and it could not run: `SetKey` is given the same key the identity
+uses, and Blazor's diff refuses duplicate sibling keys outright. **A non-unique `ItemKey` is not a state
+a keyed grid can reach** - the renderer rejects it on the first diff - so the whole worry about
+de-duplicating a selection was about an unreachable state. The test now asserts the refusal, and the
+justification for publishing a list rather than a set is corrected: it is that a set is an allocation
+over the whole selection bought for one membership test, not that it would lose rows.
+
+**The accumulation claim is not tested and does not need to be.** §21's verification item 5 asked for a
+test that the store does not accumulate, calling it the claim most likely to be wrong. It is
+unreachable instead: a dictionary keyed on identity cannot hold two entries for one row, so the
+accumulation ended by construction rather than by care. The test written for it does discriminate, but
+against the *lost state* - which another test already proves. **A fault made unrepresentable does not
+get a test; it gets a sentence saying why it cannot happen.**
+
+**§21's third risk bullet is answered.** "The drop-down's comparer calls `ValueOf` on both sides of every
+comparison… the same call in a comparer has not been measured at all." `DropDownBench` could not measure
+it, because every row in it leaves the chosen set empty and an empty set answers without hashing
+anything. A row that chooses three: **50.64 KB against 49.15**, and the number is *the same at fifty rows
+and at a thousand*. That flatness is the whole answer - the comparison is per drawn row and a popup draws
+a page, so it is bounded by `PageSize` and not by the data. The closed and open rows are unmoved at 15.73
+and 49.15 against §19's 15.63 and 49.06.
+
+**Four smaller things, each a fault of its own.** A row filed under a key could only be removed by the
+key it has *now*, so taking `ItemKey` away stranded the entry for good and `ExpandMode.Single` would then
+collapse a row nobody had expanded. `TryAdd` was defended by a comment describing a branch the control
+flow already excludes, and it kept the *first* instance where §21 and the field's own comment both said
+the last - the indexer now does, so `RowCollapse` names the freshest row rather than the most detached
+one. The `Single` sweep lost its "anything open?" guard and allocated a list per expand. And the
+drop-down's chosen set is hashed by `ValueProperty`, which nothing re-filed when that expression changed
+- §19's fault by another road, and the one new invalidation obligation this piece created.
+
+**The precision this file quotes numbers to is wrong, and §9 is corrected rather than §21.** The bare row
+has read 154.55, 154.58, 154.66, 154.73, 154.77 and 154.81 on bit-identical code. Most of the "+0.04"
+deltas above are inside that, and so is every "unmoved". The conclusion holds - one row moved and it is
+the one the fork is about - but §9 claimed allocation "repeats to two decimals across runs" and it does
+not, and quoting to two decimals implied a stability the harness does not have.
+
+---
+
+## 22. The test that was called flaky was not testing anything
+
+`ReviewRegressionTests.ACheckBoxListLookupIsNeverRunFromTheRenderThread` has failed about one full run
+in three since §19 noticed it, and every time it is run alone. Two sessions recorded it as flaky and not
+theirs. Both halves of that were right - it is not the grid's fault, and it is not intermittent noise
+either. It is a test that has never been able to see the thing it was written to catch, failing for a
+reason unrelated to it.
+
+There is no design section for this one. It was a diagnosis, and what it found changed what the fix had
+to be twice.
+
+### What it claimed, and what it did
+
+The rule is §9's and it is real: a source the executor owns is not touched from the render thread.
+Running a check-box list's distinct query inside `BuildRenderTree` is a blocking round trip, and on
+Entity Framework a second operation on a context the awaited page load is still using. The test stands a
+grid up over a `WalkCountingQueryable`, gives it a yielding executor, and asserts `source.Walks == 0`.
+
+`WalkCountingQueryable` counted enumerations of **itself**. The grid never enumerates the source: it
+composes - `Select`, `Distinct`, `Skip`, `Take` - and a composed query enumerates through the *inner*
+provider, past a counter that lives on the outer object. So no query the grid runs was ever visible to
+it.
+
+**The one walk it could see was the executor's own**, which is the walk that is supposed to happen. With
+no paging to compose, the check-box-list test hands the executor the source unchanged, and
+`ToListAsync` enumerates it directly. That walk arrives on a thread-pool worker after `await
+Task.Yield()`, posted through `RendererSynchronizationContext`. Whether it had landed by the time the
+assertion ran was a race, and **running the test alone lost it almost every time** - an idle pool
+schedules the continuation sooner.
+
+So its red and its green were the two sides of that race, and neither said anything about the grid.
+
+### How it was found, and the instrumentation that gave it away
+
+The stack at the walk, captured on failure. It reads
+`YieldingExecutor.ToListAsync` → `Enumerable.ToList` → `WalkCountingQueryable.GetEnumerator`, on thread
+8, with the test asserting on thread 16.
+
+**One accident was worth more than the trace.** The first attempt wrote `WALKS=1 TRACES=0` - a counter
+saying one walk and the list beside it saying none, from two adjacent statements. That is not possible
+in one thread, and it is what said the walk was concurrent with the assertion rather than before it.
+A diagnostic that contradicts itself is evidence about *when*, not a broken diagnostic.
+
+### The fix that was wrong, and why it is recorded
+
+The first fix excluded the executor's walk and stopped the flake: ten solo runs, none failing, where
+before every solo run failed. **Then the mutation refused it.** Putting the fault back - the distinct
+scan running inside the render, which is the exact line the test's comment describes - left the test
+green.
+
+That is the piece's finding, and it is §9's own rule arriving from a new direction. **A test that has
+stopped failing is not the same as a test that has started working**, and the only thing that tells
+them apart is putting the fault back. Had the flake alone been the goal, this would have shipped as a
+fix and the branch would have kept a green test over an untested rule.
+
+### What it takes to see a composed query
+
+Counting has to happen in the **provider**, not on the query. `WalkCountingProvider` wraps every
+`CreateQuery` so a query composed from a counted one is counted too, and counts `Execute` as well as
+enumeration, because `Count()` never enumerates. Then a walk of `source.Select(...).Distinct()` is
+visible where before it was not.
+
+**And the executor is excluded by what it is rather than by which thread it is on.** An `AsyncLocal`
+set before the yield flows into the executor's own continuations and into nothing else. Excluding by
+thread was the obvious alternative and is weaker: the render path is posted through
+`RendererSynchronizationContext` and also runs on pool threads, so a real fault could arrive on one and
+go uncounted - which is the mistake this whole section is about, made a second time.
+
+### What it now catches
+
+Both tests discriminate, for the first time:
+
+- Removing the `AsyncOwnsData` guard on the check-box list's lookup, so the distinct scan runs inside
+  the render, **fails `ACheckBoxListLookupIsNeverRunFromTheRenderThread`**.
+- Removing the `AsyncOwnsData` guard on `View()`, so the grid composes over an executor-owned query
+  while its load is in flight, **fails `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread`**.
+
+Neither mutation moved either test before.
+
+### Verified
+
+Ten solo runs of the previously-failing test, none failing, against every solo run failing before. Five
+full unit runs, 825 each. The browser suite, 38. No library code changed, so no benchmark applies and
+none is quoted.
+
+### Where this could still be wrong
+
+- **The provider wrapper is not a complete `IQueryProvider` implementation of anything**; it forwards
+  and counts. `CreateQuery(Expression)`, the non-generic half, closes `WalkCountingQueryable<>` over the
+  element type by reflection, which is fine in a test and would not be fine anywhere else.
+- **`AsyncLocal` flows into whatever the executor's continuation starts.** If an executor implementation
+  ever handed work back to the grid from inside its own async flow, that work would be excluded from
+  counting and would be invisible in exactly the way this section is about. The two executors here do
+  not, and nothing enforces it.
+- ~~**The rule is still only checked at two call sites.**~~ - **measured in §24, and this bullet was
+  wrong twice.** It said `AsyncOwnsData` guards four places; there were five. It said two lacked a test
+  that fails when the guard is removed; only one did. The count it named as uncovered was covered at
+  both of its sites - and `TotalCount` by the very test this section had just taught to count `Execute`
+  as well as enumeration, which is what makes that removal visible at all. This section built the
+  capability that covered the site, in the commit that recorded the site as uncovered, in a section
+  about the difference between a test that passes and a test that works. The one real gap -
+  `settingsNeedReload` - is closed in §24.
+
+## 23. The first load is composed before the columns exist - the design
+
+A load is composed from `columns` and `sorts`. The first one is started from `OnParametersSetAsync`,
+and that runs *before* the render pass in which a column registers. So the query the grid sends first
+is composed from an empty column list: no `Where`, no `OrderBy`, whatever the markup declared.
+
+§10 has recorded half of this since §15's candidate 2 found it. The half it recorded is real and the
+other half is worse, so the first thing this section has to do is widen its own subject.
+
+### What is actually broken, measured
+
+Four routes reach the data. Two of them compose at load time and two after the render, and that alone
+decides which are wrong:
+
+| route | composes at | declared filter | declared sort |
+| --- | --- | --- | --- |
+| in memory | the draw | applied | applied |
+| virtualized | the provider's fetch | applied | applied |
+| **executor-backed queryable** | the load's start | **absent** | **absent** |
+| **`LoadData`** | the load's start | **absent** | **absent** |
+
+The expression the executor is handed for a grid declaring `FilterValue="Alice"` is the bare source -
+`List<Person>`, with nothing composed onto it - and exactly one load runs, so nothing follows to put it
+right. The `LoadData` handler is called once with `Filters` null, `OrderBy` empty and `Filter` empty,
+beside a column declaring both a filter and a sort.
+
+**Both halves are user-visible, and they disagree with each other on screen.** The filter box draws
+`Alice` over four unfiltered rows. The header draws `aria-sort="ascending"` over rows in source order.
+The grid is not merely unfiltered; it is telling the user it has filtered.
+
+So §10 understated the fault twice: it names only the filter, and only the executor. The declared sort
+is missing by the same mechanism, and `LoadData` has the whole of it. Its diagnosis was right and its
+extent was not - which is worth recording, because the extent is what decides whether the fix is a
+patch on one route or a change to when a load may be composed at all.
+
+### Why the two working routes work
+
+Neither is a different mechanism; both are the same mechanism asked later. In memory the view composes
+inside `View()`, called as the table draws - behind `Defer`, so every column has registered. Virtualized,
+`ProvideRows` composes when `Virtualize` asks for a window, which is after the render that created it.
+Neither route is careful; both are simply late enough.
+
+That is the whole finding. **The grid has no rule about when its own state is complete, and gets the
+right answer wherever it happens to ask late.**
+
+### What §10 anticipated, and why this does not do it
+
+§10 says the fix is "a reload triggered by the first registration", and there is a built precedent for
+exactly that: `settingsNeedReload`. Restored settings name columns, so they are applied in `RenderTable`
+after `Defer`, and the flag they set is honoured in `OnAfterRenderAsync` - guarded by
+`LoadData.HasDelegate || AsyncOwnsData`, because an in-memory grid has already drawn the state and
+reloading it once raised a settings change that spun the circuit at several thousand renders a second.
+
+Reusing it here would work and it is the wrong shape, for a reason the settings path does not have to
+face. **Settings arrive after a load that was correct when it ran.** A first load composed from no
+columns was never correct, and reloading means the grid has already sent one query it knew nothing by:
+
+- Two round trips where one would do, on every grid that declares a filter or a sort.
+- The first of them unfiltered. Under `Paging` that is bounded by `Skip`/`Take`; **unpaged it
+  materializes the whole table**, and its `CountAsync` counts the unfiltered set.
+- For `LoadData`, the application's own handler invoked twice, the first time with a request it did not
+  ask for. That is observable behaviour, not an internal detail.
+
+And the trigger is hard to write correctly. It cannot be "columns registered", because that is true of
+every grid on every first render - so every asynchronous grid would double its queries. It has to be
+"a column brought state the load did not have", which is a second thing to keep in step with what
+composition actually reads. §21's addendum has already recorded what happens when a mechanism is split
+and something old goes on claiming to cover both halves.
+
+### The rule instead
+
+**Nothing that composes from column state may run before the first render.**
+
+Settings already obey it. Loads will now: the first load moves out of `OnParametersSetAsync` and into
+`OnAfterRenderAsync`, which is the first moment the column list is complete. One query, composed from
+everything the markup declared.
+
+This is parity rather than invention. `RadzenDataGrid` does not load from its parameter set either -
+`PagedDataBoundComponent.ReloadOnFirstRender` defers the first `LoadData` to
+`OnAfterRenderAsync(firstRender)`, and upstream's `OnParametersSetAsync` reloads *only* when
+`!LoadData.HasDelegate`. This grid took a shortcut upstream does not, and the bug is the shortcut.
+
+Where a settings restore is also pending, one reload serves both: `ApplySettings` runs during the same
+render and its flag subsumes the owed load rather than adding a second query behind it.
+
+### The frame the deferral would otherwise cost
+
+A load owed is not a load running, and `IsLoading` is what draws the scrim. Left alone, the first render
+would show a grid that is empty and *not* loading - and `RenderEmpty` draws `EmptyTemplate` on any
+render with no rows, regardless of why there are none. So a grid with an empty template would flash
+"no records" before its first query had even started.
+
+Today the executor path does not have that flash, because `LoadPageAsync` sets `IsLoading` before the
+first render happens. The deferral has to keep that: **the grid marks itself loading when it defers,
+not when it starts**, and only where it knows a load will actually run - `LoadData.HasDelegate` or
+`AsyncOwnsData`, the same predicate the settings reload is guarded by. A flag set for a load that never
+starts is a scrim that never lifts.
+
+*(The build corrected this paragraph's mechanics: `RenderEmpty` draws on that render either way, and
+what the scrim does is cover it rather than prevent it. The addendum below has it.)*
+
+### What this costs
+
+**A prerendered `LoadData` grid with a synchronous handler loses its prerendered rows.**
+`OnAfterRenderAsync` does not run during prerendering, so a handler that today completes inside the
+parameter set - and puts its rows in the prerendered HTML - will not be called until the circuit is
+live. This is accepted, for two reasons: it is exactly what `RadzenDataGrid` does, and a handler that
+does real work is asynchronous, so it never prerendered its rows in the first place. The executor path
+is unaffected: `View()` already returns `Array.Empty<TItem>()` for a source the executor owns, so a
+prerendered asynchronous grid has always been empty.
+
+Nothing else moves. The in-memory and virtualized routes are untouched and stand as the controls. Load
+counts are unchanged - one load, later - so the counts pinned across the executor, `LoadData` and
+virtualization suites should survive without being rewritten. If any of them has to change, that is a
+result about the design and belongs in the addendum rather than in the test.
+
+### How it will be verified
+
+Four tests for the four faces, each of which must fail with the deferral removed: a declared filter and
+a declared sort reaching the query on the executor route, and reaching `LoadDataArgs` on the `LoadData`
+route. Two more as controls, asserting the in-memory and virtualized routes still apply both - those
+pass today and are there to catch a fix that moves the fault rather than removing it.
+
+Then the mutation §9 asks for, on the deferral itself rather than on any test: put the load back in
+`OnParametersSetAsync` and confirm all four fail.
+
+### Where this could still be wrong
+
+- **"The first render" is not quite the same claim as "the columns have registered".** They coincide
+  because `Defer` makes them, but a future path that renders the table without walking `ChildContent`
+  would break the coincidence silently. The rule is written against the render because that is what the
+  lifecycle offers; nothing checks that the column list is actually complete.
+- **A grid that never renders never loads.** There is no `Visible` parameter here to gate on, so this
+  is currently unreachable, and it is the kind of thing that stops being unreachable.
+- **The owed load and the settings reload are two flags that must not both fire.** One subsumes the
+  other by ordering, which is the same class of coupling §22 warned about: an ordering that is correct
+  and is not asserted anywhere.
+
+### What the build changed
+
+**The design's central claim held exactly: no existing test had to be rewritten.** §23 said load counts
+would stay one - one load, later - and that the counts pinned across the executor, `LoadData` and
+virtualization suites should therefore survive. They did, all of them, including
+`FastGridLoadDataTests.IsInvokedOnceOnTheFirstRender`, whose name the deferral makes true in substance
+for the first time - though only in substance: the handler is now invoked *after* the first render
+rather than on it, and that test asserts how many times it was called, never when. The suite grew by
+addition alone.
+
+**The paragraph about the empty template was wrong about its own mechanism.** §23 said a deferred load
+would make a grid "flash *no records* before its first query had even started". `RenderEmpty` draws
+`EmptyTemplate` on any render with no rows and does not consult `IsLoading` - so the empty message is in
+the DOM on that render *whether or not* the grid marks itself loading. What `IsLoading` does is draw the
+scrim **over** it. The mitigation is right and the reason given for it was not.
+
+That mattered for the test, not only for the prose. Presence does not discriminate: both orderings end
+with the scrim drawn, because `LoadPageAsync` marks the grid loading as it begins. **Order does.**
+`StateHasChanged` queues a render rather than running one, so a grid that marks itself loading only when
+the load starts sends the query out first and paints the scrim afterwards. The test asserts that the
+loading template is invoked before the executor is asked for anything, and it is the only assertion here
+that could tell the two apart.
+
+**Two faults were found by reading the diff rather than by any test.** The executor deferral was written
+`!drawn && !AllowVirtualization && AsyncOwnsData`, and the virtualization branch above it has already
+returned - so that middle test was dead. And `PayOwedLoadAsync` invoked the `LoadData` handler without
+re-reading `AllowVirtualization`: a parameter set between the deferral and the first render can switch
+virtualization on, and then the handler would be asked for a page with no window at all, which is the
+call the parameter-set path declines to make for exactly that reason. Neither had a test and neither has
+one now; both are reachable only through a parameter change inside a window one render wide.
+
+**A third case the design did not mention:** the source can stop being one the executor owns between the
+deferral and the render that pays it. Nothing then runs, and nothing else would lift the scrim the
+deferral raised - so `PayOwedLoadAsync` lowers it itself. This is the "flag raised for a load that never
+runs" the design warned about, arriving from the one direction it did not name.
+
+### Verified
+
+- `dotnet build Radzen.Blazor.FastGrid` - 0 warnings, 0 errors.
+- 834 unit tests (825 before, 9 added), and the 38-test browser suite.
+- **Three mutations, each discriminating exactly.** Removing the executor deferral fails the declared
+  filter, the declared sort, the `aria-sort` test and the scrim ordering. Removing the `LoadData`
+  deferral fails both `LoadDataArgs` tests and nothing else. Not marking the grid loading when it defers
+  fails the scrim ordering and nothing else. The two controls - in memory, virtualized - and
+  `TheDeclaredStateCostsNoSecondQuery` passed under all three, which is what a control is for.
+- **Benchmarks: no measurable change**, and there is no mechanism for one. The change adds two `bool`
+  fields and some branching in a lifecycle method. `drawn = true` *is* written on every after-render,
+  including by the in-memory grids the bench measures - it is a store to an existing field, not an
+  allocation - and `OweLoad` is what those grids never reach. (Numbers below are from the final run,
+  after the review fixes.) bare 154.66 → 154.73, `+ sorted by one column` 175.82 → 175.74, `+ a filter row`
+  158.80 → 159.13, `+ ItemKey` 178.17 → 178.04, `+ selection and ItemKey` 190.14 → 190.13. No time ratio
+  is quoted; `--job short` does not support one.
+
+### Where this could still be wrong
+
+The three bullets the design section ends with all still stand. Two more the build added:
+
+- ~~**The two flags are ordered, and the ordering is still not asserted.**~~ - **this bullet was wrong
+  about its own mechanism, and review found it.** It claimed a test was missing that "fails when the
+  `else` becomes an `if`". No such test can exist: `loadOwed = false` is assigned *inside* the settings
+  branch, before the `else if` is reached, so that edit is a semantic no-op. The line actually carrying
+  the subsumption was the assignment, and deleting it failed nothing in 872 tests. It is asserted now -
+  see the review section below.
+- **`drawn` says the grid has rendered, which is only a proxy for "the columns have registered".** They
+  coincide because `Defer` makes them coincide. Nothing checks the coincidence, and the failure mode if
+  it ever broke is silent - a query composed from a partial column list looks exactly like a correct one.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. Between them they found one real defect, one spec claim that
+was wrong about its own mechanism, an untested path that hid both, and three statements that overstated
+what the code does. The defect and the untested path are the ones worth carrying forward.
+
+**The rule was stated globally and enforced at two call sites.** §23 says "nothing that composes from
+column state may run before the first render", and the build put a `!drawn` test in the two places that
+had the bug: the `LoadData` branch and the executor branch of `OnParametersSetAsync`. `RefreshAsync` -
+which the file itself calls the funnel, "the one place the grid has to say so" - had no such test, and
+four public methods reach it: `Reload`, `ClearFilters`, `ApplyFilters`, `GoToPage`.
+
+**That is reachable from ordinary code, and it costs exactly what §23 rejected the alternative for.** The
+renderer runs a parent's `OnAfterRenderAsync` before its child's, so a parent that calls
+`grid.Reload()` on its own first render reaches the grid while `drawn` is still false and `loadOwed` is
+still true. Nothing clears it. The reload's load goes out - composed correctly, since the columns did
+register during the render - and then the grid's own `OnAfterRenderAsync` pays the owed load on top of
+it. **Two loads, concurrent rather than sequential**: on the `LoadData` route, the application's handler
+invoked twice, overlapping. §23 argued against the reload design because it "invokes the application's
+own handler twice", and the build shipped a way to do that and be worse about it. Confirmed by a test
+before it was fixed, and `TheDeclaredStateCostsNoSecondQuery` did not see it, because it renders a grid
+nobody calls into.
+
+The fix is where the reviewer said it belonged: **`RefreshAsync` owes rather than loads while `!drawn`**,
+so the rule holds for every caller by construction rather than by roll call. That also closes the one
+place the *original* fault survived - `if (loadDataInvoked) return pagingChanged ? RefreshAsync() : ...`,
+which composed a `LoadData` call from an empty column list in the same one-render-wide window.
+Virtualizing is exempt there as it is everywhere else, and finding out that it had to be exempted cost
+three failing tests: the first version of the guard owed a load for a virtualized grid, which put a
+fetch behind the provider's own.
+
+**`PayOwedLoadAsync` was `RefreshAsync`'s dispatch written a second time, and disagreed with it twice.**
+Same three-way "which route owns this data" decision, minus the virtualized branch, plus an
+`IsLoading = false` the funnel did not have. It is gone; paying an owed load is now
+`RefreshAsync(announce: false)`. The two branches that start no load - virtualized, and nothing-to-load -
+lower the scrim themselves, which is where that responsibility belonged: they are the branches that know
+nothing will run. Without that, a settings restore arriving on the same render took the settings branch,
+bypassed `PayOwedLoadAsync` entirely, and left a scrim nothing would ever lift - contradicting
+`FastGridLoadingTests`' own standing claim that this grid has "nothing to leave stuck on".
+
+**Nothing in the suite covered a settings restore over a source that loads at all.** That is what let the
+wrong bullet above stand: the reviewer deleted the subsumption outright - both flags firing, two queries
+going out - and all 872 tests passed. There is a test now, and both mutations fail it: dropping the
+discard, and dropping it together with the `else`.
+
+**Three claims that overstated the code**, all corrected in place above: `IsInvokedOnceOnTheFirstRender`
+is true in substance rather than literally, since it asserts a count and not a moment; the benchmark
+note said two fields are "set once per component" when `drawn = true` is written on every after-render;
+and §10's struck bullet pointed "two bullets down" at a bullet about something else.
+
+**One thing the reviews confirmed rather than refuted, and it was the load-bearing one.** §23's whole
+design choice rests on the prerender cost being what `RadzenDataGrid` already pays. Upstream's
+`PagedDataBoundComponent.OnParametersSetAsync` reloads only `if (Visible && !LoadData.HasDelegate)`, its
+`ReloadOnFirstRender` fires from `OnAfterRenderAsync`, and every other `InvokeAsync(Reload)` in
+`SetParametersAsync` is guarded by `!firstRender`. Upstream never invokes `LoadData` before its first
+after-render either. The parity claim stands.
+
+### Verified, after the review
+
+- 836 unit tests, 38 browser tests, 0 warnings.
+- **Six mutations, each discriminating exactly.** The three from the build still do. Removing
+  `RefreshAsync`'s owe fails the public-reload test and nothing else; dropping the settings discard, and
+  dropping it together with the `else`, each fail the settings test and nothing else.
+- **The browser pass, §9's layer 6, which this change is squarely in the scope of**: the failure modes
+  that layer exists for - a render loop, a stuck scrim, a state nothing lifts - are exactly what moving a
+  load between lifecycle points risks, and none of layers 1-5 can see them. Driven over Entity Framework
+  in the playground: the grid loads and draws its 25 rows, with no scrim left behind and no empty message
+  under it. Sorting by a column reloads and the header agrees with the rows - `aria-sort="ascending"`
+  over data that is actually ascending, which is the pairing §23 exists to restore. Paging reloads. So
+  does switching the source back to the in-memory list, which is the deferral's other side: `drawn` is
+  true by then and the load runs at once.
+
+  **Renders went 2 → 3 → 4 → 5, one per action, and renders/sec sat at 0.0-0.2 throughout.** Both halves
+  matter, and §9 says why: a grid at rest reads 0, but a *stopped* counter reads the same as a quiet one,
+  and the reading that tells them apart is whether the page still responds. It did - every action moved
+  the count. The only console error is a missing favicon.
+- **Benchmarks re-run after the review fixes**, since the code changed materially. Against the control
+  at `9b4711381`, **not one of the 24 FastGrid rows moved beyond the ~0.3 KB noise floor**, and the
+  deltas split 13 up and 11 down - noise, not a regression. bare 154.66 → 154.58, `+ sorted by one
+  column` 175.82 → 175.92, `+ a filter row` 158.80 → 158.80, `+ ItemKey` 178.17 → 178.17, `+ selection
+  and ItemKey` 190.14 → 190.13, `+ a filter that actually filters, over a queryable` 86.16 → 86.02. No
+  time ratio is quoted; `--job short` does not support one.
+
+### Where this could still be wrong, after the review
+
+- **A statically rendered grid now shows a permanent scrim.** `OweLoad` raises `IsLoading` and
+  `OnAfterRenderAsync` never runs without a circuit, so a prerendered-and-never-interactive `LoadData`
+  grid draws the loading indicator where upstream draws its empty message. Arguably the better of the
+  two - "not yet" rather than "no records" for a grid that is about to load - but it is a change nobody
+  asked for and no test covers it.
+- **The scrim-ordering argument is specific to the executor route.** `InvokeLoadDataAsync` sets
+  `IsLoading` without a `StateHasChanged`, so on the `LoadData` route the deferral's own `IsLoading` is
+  the *only* thing that ever paints a scrim on the first load. The test asserts the executor route.
+- **The `pagingChanged` window is closed by construction and not by a test.** It needs two parameter sets
+  before the first render, which the renderer does not appear to produce - the child's render and its
+  after-render both fall inside the batch that set its parameters. "Does not appear to" is the honest
+  strength of that claim.
+
+## 24. §22's parting gap, measured rather than asserted - the design
+
+§22 ended by naming a gap: "`AsyncOwnsData` guards four places; two of them now have a test that fails
+when the guard is removed, and the other two - the settings reload path and the count - have neither."
+
+**That sentence was never measured, and it is wrong twice.** Which is worth stating plainly, because
+§22's entire subject is that a test which passes is not a test that works, and the only thing that tells
+them apart is putting the fault back. It closed by asserting which of its own tests worked.
+
+### What the measurement says
+
+Every guard removed in turn, at §22's own commit `9b4711381`, full suite each time:
+
+| guard | discriminates at §22? | caught by |
+| --- | --- | --- |
+| the check-box list's lookup | yes | `ACheckBoxListLookupIsNeverRunFromTheRenderThread`, and one more |
+| `View()` | yes | `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread`, and one more |
+| `TotalCount()` | **yes** | `AnExecutorOwnedQueryIsNeverRunFromTheRenderThread` |
+| `ClampPage()`'s count | **yes** | `ASupersededLoadDoesNotOverwriteTheNewerOne` |
+| `settingsNeedReload` | **no** | nothing |
+
+So: **five guarded places, not four**, and **one uncovered, not two**. The count §22 named as uncovered
+was covered at both of its sites - and `TotalCount` was covered by the very test §22 had just repaired.
+`Count()` never enumerates, which is why §22 taught `WalkCountingProvider` to count `Execute` as well;
+that change is what makes removing the `TotalCount` guard visible. **§22 built the capability that
+covered the site, in the same commit that recorded the site as uncovered.**
+
+Today there are **seven** guarded places - §23 added two - and six of them discriminate:
+
+| guard | discriminates now? |
+| --- | --- |
+| the deferral in `OnParametersSetAsync` (§23) | yes, six tests |
+| the check-box list's lookup | yes |
+| `ClampPage()`'s count | yes |
+| **`settingsNeedReload`** | **no** |
+| `RefreshAsync`'s owe (§23) | yes |
+| `View()` | yes |
+| `TotalCount()` | yes |
+
+### One predicate, three questions
+
+Worth naming while the sites are all in view, because it is §17's shape - one thing answering for
+several - and it is why a single gap is easy to lose among six covered siblings. `AsyncOwnsData` is
+asked three different questions:
+
+1. **"May the render thread touch this source?"** - the lookup, `View`, `TotalCount`. This is the rule
+   §22 named, and all three sites are covered.
+2. **"Is the row count on screen a placeholder rather than a total?"** - `ClampPage`. Covered.
+3. **"Does this grid load, so must it be asked again?"** - `settingsNeedReload`, and both of §23's
+   deferrals. Two of the three covered.
+
+The gap is not randomly placed, though it is easy to state it too strongly - and the first draft of this
+paragraph did. Question 3 is not untested; it has two covered sites and six tests. What had no test was
+one *site* within it, in a predicate whose name answers question 1 and whose third question nothing in
+the name suggests.
+
+### The gap, and why the obvious test no longer finds it
+
+```csharp
+settingsNeedReload = LoadData.HasDelegate || AsyncOwnsData;
+```
+
+One line with two failure modes, and **neither is asserted**:
+
+- **Under-reloading.** Mutated to `LoadData.HasDelegate`, a grid over an executor-backed queryable
+  applies restored settings and never asks for the data again: the header draws the restored sort over
+  rows that are still in the old order. 836 tests pass.
+- **Over-reloading.** Mutated to `true`, an in-memory grid reloads on every settings apply - which
+  raises `SettingsChanged`, which hands the grid new settings, which applies them and schedules
+  another. §10 records that this shipped once and "spun the circuit at several thousand renders a
+  second and never stopped". 836 tests pass.
+
+**The obvious test does not discriminate, and §23 is why.** A settings restore that reaches the *first*
+load is now covered by the deferral rather than by this flag - the owed load runs after `ApplySettings`,
+so it composes from the restored state whether or not anything asked for a reload. §23's own
+`ARestoredSettingsSortCostsOneQuery` passes under the mutation for exactly that reason. What is left
+uncovered is the case the flag still owns alone: **settings arriving at a grid that has already drawn.**
+
+That is a mutation moving under a test written for something else, which §21's addendum already records
+as a way for a recorded count to go stale. Here it changed which test could possibly catch the fault.
+
+### The tests
+
+- **New settings handed to a drawn grid over an executor-backed source re-run the query.** Render,
+  let it settle, then hand it a `Settings` carrying a sort; the executor must be asked a second time and
+  the rows must come back in the new order. Fails when the guard becomes `LoadData.HasDelegate`.
+- **A grid that is not loaded does not answer a settings restore with a reload.** A parent that stores
+  what `SettingsChanged` gives it and hands back a *fresh* object - which is what round-tripping through
+  storage does, and what the recorded loop needed - must see the exchange settle rather than run on. The
+  parent stops echoing after a bounded number of round trips and the test asserts the count, so the
+  mutation fails the assertion instead of hanging: a test that hangs is not a test that fails.
+- **A `LoadData` grid is asked again.** The guard is a disjunction and the two arms fail differently;
+  this is the other one. Added after review, which measured that replacing the whole condition with
+  `AsyncOwnsData` alone broke nothing - see below.
+
+### The harness had the same fault as the thing it was measuring
+
+The first sweep reported **all seven guards as gaps**, which contradicted two results already in hand.
+The runner wrapped each test invocation in `timeout`, which is GNU coreutils and **is not on macOS** -
+so every run died as "command not found", produced no test output, and the harness read the absence of a
+failure line as "nothing failed". The handoff's own warning is the same shape ("a shell check of did
+`Passed!` appear reports a failed build as caught"), and so is §22.
+
+A mutation harness has to assert that the suite **ran**, not merely that it did not report a failure.
+Every verdict quoted here was taken from a run that produced a `Total:` line, and a run without one was
+treated as a result about the harness rather than about the code. No sweep script is committed - it is a
+loop written per session, which is exactly why the same trap is available to the next one.
+
+### Where this could still be wrong
+
+- **The sweep removes a guard; it does not try to make it wrong in subtler ways.** A guard that is
+  load-bearing when deleted may still be wrong in a way no deletion expresses - `AsyncOwnsData` where
+  `LoadData.HasDelegate || AsyncOwnsData` was meant, for instance.
+- **"Six of seven discriminate" is a statement about this suite**, not about the guards. A site can be
+  covered incidentally, by a test that would stop covering it the moment it was rewritten for its own
+  reasons - which is precisely what §23 did to the settings flag's first-load case.
+- **The three questions are not separated in code, only in this section.** Nothing stops a fourth
+  meaning being added to the same predicate, and the name would go on answering the first question. The
+  reach is wider than the seven sites too: `AsyncOwnsData` is only a reading of `TryGetAsyncSource`,
+  which has three further callers that route rather than guard - ten places in all.
+
+### What the build changed
+
+**Both tests discriminate, and each fails only its own mutation.** `settingsNeedReload` mutated to
+`LoadData.HasDelegate` fails `SettingsArrivingAtADrawnGridOverAnExecutorSourceReRunTheQuery` and nothing
+else; mutated to `true` it fails `AGridThatDoesNotLoadAnswersASettingsRestoreWithNoReloadAtAll` and
+nothing else. One line, two directions, two tests, no overlap.
+
+**The loop test needed the settings object to be a copy, and needed `Columns` not to be null.**
+`ApplySettings` returns early when `settings.Columns is null` - before the line this section is about -
+so a parent handing back a bare `FastGridSettings` never reaches the flag at all and the mutation
+survives. The host starts with an empty list rather than a null one. And it hands back a *copy*: the
+grid remembers the object it raised, in `raisedSettings`, precisely so its own echo is not read as an
+instruction, so a parent that returns the same instance settles under either version of the flag and
+proves nothing. Round-tripping through storage produces a new object, which is the case the recorded
+loop needed and the case the test reproduces.
+
+**The bound is what makes it a test rather than a hang.** The host refuses to echo after ten exchanges,
+so a grid that will not settle fails the assertion instead of spinning until the runner is killed. The
+assertion is `Echoes == 0`, not "few": an in-memory grid has already drawn the restored state, because
+the render that applied it composed from it.
+
+**The sweep now confirms all seven guards discriminate**, where it began at six.
+
+### Verified
+
+- 839 unit tests (836 before, 3 added), 38 browser tests, and `dotnet build Radzen.Blazor.FastGrid` at
+  0 warnings. The library is what that count is about: the test project has never been warning-free and
+  `TreatWarningsAsErrors` is set on the library alone.
+- **Ten mutations.** The seven-guard sweep, each guard removed in turn against the full suite, every one
+  now failing at least one test; plus three directions of the settings line that no guard *removal*
+  expresses - `= true`, `= AsyncOwnsData`, and `|| Executor is not null`.
+- **No library code changed, so no benchmark applies and none is quoted** - the same reason §22 gave.
+
+### Where this could still be wrong, after the build
+
+- **`Echoes == 0` asserts that no reload happened, by way of nothing being announced.** A reload that
+  somehow ran without announcing would satisfy it. Announcing is what `RefreshAsync` does on every path
+  that is not `announce: false`, and the settings branch takes the announcing one, so the two coincide
+  here - but the test observes the announcement, not the reload.
+- ~~**The over-reload test is in-memory only.**~~ - **closed after review**, which measured that
+  replacing the whole condition with `AsyncOwnsData` alone broke nothing.
+  `SettingsArrivingAtADrawnLoadDataGridAskTheHandlerAgain` now fails that mutation and only that one.
+- **Seven guards is today's count.** §23 added two to §22's five without either section noticing the
+  total had moved, which is how §22's four came to be written. Nothing counts them but a person.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. Every one of §24's ten factual claims was checked against the
+code and independently reproduced - including the centrepiece, which a reviewer re-ran at `9b4711381` in
+its own worktree and confirmed: removing `TotalCount`'s guard there fails
+`AnExecutorOwnedQueryIsNeverRunFromTheRenderThread`, removing `ClampPage`'s fails
+`ASupersededLoadDoesNotOverwriteTheNewerOne`, and only `settingsNeedReload` survived. It went further
+than this section had and isolated the causal half: with the `TotalCount` guard removed **and**
+`Walked()` stripped from both `Execute` overloads, §22's suite passes. So the Execute-counting §22 built
+is not merely present, it is what makes that removal visible.
+
+**The strongest thing this section could have said about its own test, it had not said.** §10 records the
+shipped fault as reading the flag as "an executor exists" rather than "the executor will run this
+source". That is not a guard *removal*, so the sweep never expressed it. Mutated to the fault as
+recorded - `LoadData.HasDelegate || Executor is not null`, which is always true because the built-in
+executor is a fallback that always resolves -
+`AGridThatDoesNotLoadAnswersASettingsRestoreWithNoReloadAtAll` fails. **The test catches the bug that
+actually shipped**, not merely a plausible neighbour of it, and that is now measured rather than hoped.
+
+**One sentence here was false and is corrected above.** "The gap is the one question with no test of its
+own" - question 3 has two covered sites and six tests. What lacked a test was a *site* within it. A
+taxonomy is a description, and this section had started using it as an argument.
+
+**The guard is a disjunction and only one arm was pinned.** `settingsNeedReload = AsyncOwnsData` - the
+handler arm deleted - broke nothing, which the pre-review text admitted as a risk bullet rather than
+fixing. It is fixed: a third test, and that mutation now fails it alone. All four mutations of that one
+line now fail exactly one test each, and a different one each time.
+
+**The counting is narrower than "the same predicate" suggests.** `AsyncOwnsData` has seven readers, but
+`TryGetAsyncSource` - which is all `AsyncOwnsData` is - has three more that do not go through it. Those
+route rather than guard, so the sweep's scope is defensible; the risk bullet about a fourth meaning being
+added should have said ten places rather than seven, and now does.
+
+**The round-trip copy is exercised only by the failing run.** The host hands back a copy of the settings,
+and `Copy` is complete - all eight `FastGridColumnSettings` properties and all three `FastGridSettings`
+ones, checked field by field. But the green run's whole assertion is that *nothing is echoed*, so `Store`
+never fires and `Copy` never runs. Its fidelity is exercised under the mutation and nowhere else. The
+restore now carries a column rather than an empty list so that the mutated run at least exercises the
+per-column arm, which an empty `CaptureSettings` answer had left dead even there.
+
+**A hazard to this whole method, found in passing and worth more than anything else here.**
+`GeometryParityTests.The_pass_costs_about_what_it_should` asserts a fitting pass completes in under
+100 ms, measured through Playwright. A reviewer saw it fail once in fifteen runs of an unrelated
+mutation, and pass in every other run of the same one. Its own comment concedes that "a CI box asserting
+one of them is a flaky test rather than a budget" - and then asserts one.
+
+**Every "and nothing else failed" verdict on this branch is read off a suite that can go red for reasons
+unrelated to the mutation.** It did not corrupt any verdict here, because each failure set was read by
+name rather than by count - but a sweep that counted failures would have been misled, and §22 is the
+record of what happens when an intermittent red is filed under the wrong cause. ~~This is left open
+rather than fixed~~ - **fixed in §25**, which reproduced the crossing on this machine rather than a CI
+one, and found that the obvious replacement caught less than the flaky assertion it replaced.
+
+## 25. The cost check was a clock, and the mutation that refused its replacement
+
+§24 found this one in passing, called it a hazard to the branch's whole verification method, and left it
+open saying it wanted the treatment §22 gave its own flake.
+`GeometryParityTests.The_pass_costs_about_what_it_should` asserted that a fitting pass finishes in under
+100ms, measured through Playwright over a 1000 x 5 pane. Its own comment conceded that "a CI box
+asserting one of them is a flaky test rather than a budget" - and then asserted one. A reviewer watched
+it fail once in fifteen runs of a mutation that had nothing to do with it.
+
+There is no design section for this one either. It was a measurement, and what it measured changed the
+fix twice.
+
+### What the number was
+
+Unmodified code, one machine, one session. Nothing in `fastgrid.js` changed between these rows.
+
+| when | elapsed |
+| --- | --- |
+| quiet, N=20 | 35.7-39.7ms, median 36.7 |
+| ten busy loops on ten cores, N=8 | 42.9-53.5ms, median 48.6 |
+| later the same session, after those load runs, N=11 | 86.0-98.9ms |
+
+**The last row came within 1.1ms of the gate with no fault present**, and review then went past it:
+**8 of 25 healthy runs at or over 100ms, up to 107.5**. So the crossing is reproduced, and not on a CI
+box - on this machine, inside one session, running these very tests. In that state the old assertion is
+not flaky, it is failing. The gate was set from the first row, where it left a budget of 2.7x, which
+reads as generous until the same machine, warm from its own suite, spends all of it on being warm.
+
+Load alone is not the whole story and the honest split matters: saturating every core cost +11.9ms here
+and +6.6ms at review's warmer baseline, and the rest is thermal. Stated in milliseconds rather than as
+the 1.3x this section first claimed - a multiplier taken at one baseline is not a property of the load,
+and review measured that same absolute cost as 1.07x simply by starting from 96ms instead of 36.7ms. The
+first attempt to reproduce the crossing drove ten busy loops against ten cores, did not cross, and said
+so; the crossing turned up later, unforced, in a control run measuring something else.
+
+### The obvious replacement, and the mutation that refused it
+
+Chromium keeps its own tally of how many layouts the renderer has run. It is reachable over CDP as
+`LayoutCount` and not reachable from the page at all, so the probe reads it in node and hands it in
+through a binding. A batched pass forces a fixed number of layouts however many cells it walks; a write
+left inside the read loop forces one per cell, because every read after it finds the tree dirty. On a
+synthetic 1000 x 5 table the two shapes read 0-1 layouts in 3ms against 5001 in 22.3s.
+
+Against the real pane the pass reads **4 layouts over 5000 cells, in every one of twenty-seven runs,
+quiet and with every core saturated** - and 4 again in every one of review's thirty-one. An integer that
+does not move when the machine does, which is the whole of the complaint against the number it would
+replace.
+
+**Then the mutation refused it.** `fastgrid.js` reads the two figures the no-slack case needs inside the
+measuring pass rather than after it, and says why: taking them from below "put the pass over its own
+timing gate, which is what that gate is for". That regression is not hypothetical, then - it is the only
+one this gate is on record as having caught. Put back, as one forced whole-table read after the widths
+are written:
+
+| | layouts | in layout | elapsed |
+| --- | --- | --- | --- |
+| unmodified | 4 | 35.8-38.7ms | 61-69ms |
+| a read taken after the writes | **4** | 37.1-42.1ms | **114-122ms** |
+
+**Neither the count nor the time the browser spends in layout moves at all.** The fault adds no layout.
+It moves one. The tree is dirty when the fit returns either way, so without the fault that layout runs
+during the probe's own round trip to the counter, and with it, inside the pass. Same window, same work,
+same count - and twice the pass.
+
+Shipped on the count alone, a flaky test would have become a stable test that no longer caught the one
+regression it had ever caught. **A test that has stopped failing is not the same as a test that has
+started working** is §22's sentence. This is its other side: the thing that stopped failing was the
+test's own flake, and the loss would have been invisible in every green run.
+
+### Two faults, and why one unit cannot hold both
+
+The pass can go wrong in two ways, and they are not variants of one thing.
+
+| | layouts | elapsed / layout time |
+| --- | --- | --- |
+| unmodified, quiet, loaded and drifted, N=22 | 4 | 1.57-1.87 |
+| a write inside the read loop, every 50th row | **104** | 1.03 |
+| a read taken after the writes | 4 | **2.89-3.17** |
+| a write inside the read loop, every row | *never returns* | *never returns* |
+
+Each unit is blind to the fault the other catches, and the ratio is not merely blind to the interleaved
+write - it moves the *wrong way*, down towards 1, because under that fault almost all of the pass is
+layout. So a single assertion cannot be chosen between them; both are asserted.
+
+**The fault the old comment named is not a fault any assertion sees.** At full strength the interleaved
+write does not fail the cost check: the pane never comes back, and every test sharing it fails with
+`The geometry measurement did not finish within 180s.` The gate's stated purpose was catching something
+that takes the probe down long before any threshold is consulted. What it could really discriminate was
+the smaller fault - and only while the machine stayed where the threshold was calibrated.
+
+### What is asserted now
+
+Two gates, in **two tests rather than one**, each with the control that keeps it from passing without
+measuring. Two tests because §24's rule is to read a mutation's failure set by name, and as a single
+test both faults reported the same name - see the review section below, which is where that was found.
+
+`The_pass_forces_a_fixed_number_of_layouts`:
+
+- **`RowsMeasured > 0`**, so a fast pass is not an empty one.
+- **`Layouts > 0`**, because an absent counter reads as zero and zero passes a `<=` budget while
+  asserting nothing.
+- **`Layouts <= 8`.** Four measured, and one stray write interleaved once per column adds five - review
+  built that mutation and measured exactly 9, so the gate catches it with no margin to spare, which is
+  the tightest the band allows.
+
+`The_pass_costs_about_what_its_own_layouts_cost`:
+
+- **`RowsMeasured >= AutoFitRowCount`.** The ratio is only a cost check while layout dominates the pass,
+  and the pane's size is that calibration - see the review section.
+- **`LayoutMs > 0`**, because the ratio is taken against it and a zero would make it vacuously true
+  rather than false - which is exactly how a cost check stops being one.
+- **`Elapsed <= 2.4 * LayoutMs`.** The pass measured against its own layout time rather than against a
+  constant. Both numbers come off the same machine in the same run, so a slow, busy or warm box moves
+  them together.
+
+`Elapsed` is still recorded and still printed in the failure message. It is no longer asserted on as an
+absolute, and `GeometryProbe.cs` says so where the property is declared, so the next person to reach for
+it has the reason in front of them.
+
+**This is a stability fix, not a detection one, and the section should say so plainly.** Review measured
+`Elapsed` under every fault here - 195.2ms, 1497ms, 111.5ms - and the old `Elapsed < 100` would have
+caught all of them. The pair does not catch more than the clock did; it catches the same things without
+going red when nothing is wrong. Its headroom against a false positive is in fact *narrower* than the
+clock's used to be, 30% against 172%, and it is safer only because the denominator drifts with the
+numerator instead of standing still while the numerator moves.
+
+### What it costs
+
+The counters need Chromium's Performance domain enabled for the life of the page. Interleaved A/B,
+alternating so drift falls on both arms: **+1.9ms mean over five pairs here, +0.65ms over review's
+eight**, against a pass of ~90ms and a within-arm spread of 3-4ms. So the honest statement is **under
+about 2ms, which is all this method can say**: both deltas sit well inside the spread, and §9's own rule
+is that a difference under the noise floor has not been measured. Effectively free, by a wider margin
+than either single figure claims.
+
+That number is here because the first reading of it was wrong. Measured as two consecutive blocks rather
+than alternating pairs, the instrumented arm looked 25ms *cheaper* and then 25ms dearer, depending on
+which block ran second - all of it thermal drift, none of it instrumentation. On a machine that moves
+2.7x over a session, a before-and-after is not a control.
+
+### Verified
+
+- `dotnet build Radzen.Blazor.FastGrid` - 0 warnings, 0 errors. No library code changed, so no benchmark
+  applies and none is quoted.
+- The unit suite, and the browser suite three times.
+- **Both gates mutated, and each fails alone.** A read taken after the writes fails only
+  `The_pass_costs_about_what_its_own_layouts_cost`; a write inside the read loop fails only
+  `The_pass_forces_a_fixed_number_of_layouts`. One test of 39 each time, and a **different** one - which
+  became true only after review, and the review section records what it was before.
+- **The vacuity path mutated too**, which the first version of this section had not done. With the metric
+  lookup pointed at a name Chromium does not report, all 39 tests fail with
+  `Chromium reported no 'LayoutCount' metric` - the probe's own refusal, not an assertion, which is the
+  same contract the rest of this script keeps: it never falls back and never skips. Before the fix the
+  same mutation left a fabricated zero that `Layouts <= 8` passed, caught only incidentally by
+  `LayoutMs > 0`. `Layouts > 0` remains in the layout test as the second line, and is now unreachable by
+  design rather than load-bearing by accident.
+- The healthy run passes on a machine where the assertion it replaces was failing outright.
+
+### Where this could still be wrong
+
+- **The ratio is calibrated to the pane's row count, and correct code fails it on a smaller pane.**
+  Review measured unmodified code at **1.84-2.20 over 200 rows and 3.19-7.24 over 50**, against a gate of
+  2.4. The pass has a roughly fixed non-layout cost and a layout cost that scales with cells, so shrinking
+  the pane raises the ratio with nothing wrong. This is the same shape as the fault this section set out
+  to fix - a threshold calibrated to a condition that can silently move - relocated from the machine's
+  temperature to a constant in the fixture, where it is *more* likely to move. It is guarded rather than
+  only documented: the ratio test asserts `RowsMeasured >= AutoFitRowCount`, so shrinking the pane fails
+  saying the calibration moved, and `AutoFitRowCount` carries the numbers above at its declaration.
+- **The ratio's margin is asymmetric, and the fault side is the thin one.** Healthy topped out at 1.87
+  across 53 runs against a gate of 2.4 - 30% - but the fault's floor is not fixed either: review measured
+  it at 2.89-3.17 on a cool machine and **2.742 on a warm one**, because heat inflates layout time faster
+  than the JavaScript around it and compresses the fault towards the gate. That leaves 14% on the side
+  that matters for a false negative, half the margin on the other side. The gate stays at 2.4 rather than
+  dropping to balance them, because this whole section exists to stop a check going red when nothing is
+  wrong, and a missed regression is the cheaper of the two failures here - but it is a real narrowing and
+  the same enemy in new clothes.
+- **It also moves with a machine's balance of JavaScript against layout**, and nothing here has measured
+  a second machine. A box whose JS is relatively slower than its layout raises the healthy ratio.
+- **`LayoutCount` is a whole-renderer counter, not the pass's.** It is read either side of the fit, so
+  anything else the page does in that window is counted too. Nothing else does, on this page, today.
+- **The window ends at a binding round trip, and that is what made the count blind to the second fault.**
+  A layout that the fit leaves for the next frame is inside the window; one the fit forces itself is also
+  inside it. Any future fault that only moves work across that boundary will be invisible to the count
+  for the same reason, and is the ratio's job alone.
+- **The window has a near side too.** The `await` that reads the counters before the pass yields, which
+  flushes any pending layout out of the measured window on that side as well. Benign here - it is the
+  same mechanism named above on the far side - but the instrumentation moves the pass's boundaries as
+  well as costing time, and only one of the two boundaries was named when this was written.
+- **Nothing asserts the absolute cost any more.** A change that made the pass uniformly 10x slower in
+  both its layout and its JavaScript would keep the ratio at 1.7 and the count at 4, and pass. §13's
+  recorded ~1.7ms + ~0.03ms a row is the only statement of absolute cost on this branch, and it is prose,
+  not a check.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. The Spec reviewer reproduced both mutations independently,
+built two the section had not, and measured 31 healthy runs of its own; every centrepiece claim survived
+- the two blindness results, the 104, the 9-from-one-stray-write, the 180s timeout verbatim, and the §24
+edit clause by clause. What follows is what did not.
+
+**The two gates were one test, so a mutation's failure set could not tell them apart by name.** Both
+faults failed `The_pass_costs_about_what_it_should`; only the rule string inside the message differed.
+§24 is the section that established *read the failure set by name, not by count*, and this had shipped a
+check where the name was identical in both directions. Worse, `ParityAssert.True` throws on the first
+failure, so the assertions short-circuited in source order: under the interleaved write the ratio
+assertion never ran at all, and "fails only the count" was not observable from the test - it was true,
+but established by instrumentation rather than by the mutation. They are two tests now, and the claim is
+the run's rather than the author's.
+
+**A missing counter would have passed the layout gate silently.** The probe read metrics with
+`?? 0`, so a name Chromium stopped reporting would hand back a fabricated zero - and `Layouts <= 8`
+passes at zero while asserting nothing. `LayoutMs > 0` happened to catch the all-zeros case, which is why
+review's metrics-absent mutation still went red, but that is one guard covering a hole it was not written
+for, and splitting the tests would have removed even that. **This is the section's own subject, made a
+second time**: a check that stops measuring while staying green. The probe now throws on a metric it did
+not find, and the layout gate carries its own `Layouts > 0`.
+
+**The row count, and the deterrent that pointed at a gate this commit deleted.** The whole of the first
+risk bullet above is review's. `AutoFitRowCount`'s comment said the pane was sized *"the size §13's gate
+for the pass is written at"* - a justification written for `Elapsed < 100`, left pointing at an assertion
+that no longer exists, while the replacement was *more* sensitive to that constant than the thing it
+replaced.
+
+**Four numbers in this section were wrong or overstated, and one shipped comment was stale.**
+
+- *"the flake, reproduced: 98.9ms"* claimed a crossing that had not happened - 98.9 is a near miss.
+  Review then produced the crossing properly, 8 of 25 healthy runs at or over 100ms, so the claim is now
+  true on evidence rather than on enthusiasm. The measurement was right and the sentence was ahead of it.
+- *"1.3x"* for the cost of saturating every core is a ratio taken at one baseline quoted as a property of
+  the load; review read the same absolute cost as 1.07x from a warmer start.
+- *"+1.9ms"* for the instrumentation is quoted past what the method can resolve - both that and review's
+  +0.65ms sit inside the run-to-run spread, which by §9's own noise-floor rule means the difference has
+  not been measured.
+- The layout count's *"twenty-two runs"* was the **ratio's** sample size borrowed by mistake; the count's
+  own n was twenty-seven.
+- The shipped comment beside the ratio still read *"1.61 to 1.87 over seventeen runs"* - numbers from
+  before the last measurements landed, disagreeing with the section two files away. Review's 31 runs put
+  the true healthy floor lower again, at 1.48.
+
+**And the section had not said what it is.** Review measured `Elapsed` under every fault and found the
+old gate would have caught all of them, so this is a stability fix and not a detection one. That is now
+said in *What is asserted now*, along with the uncomfortable half: the new gate's headroom against a
+false positive is narrower than the clock's was, and it is safer only because its denominator moves with
+its numerator.
+
+Standards fixes in the same commit: named constants for the two budgets with the derivation of each at
+its declaration, the budget computed once instead of twice inside one statement, `85.92000000000002`
+rounded out of the failure message, `Elapsed`'s doc corrected from "never asserted on" to "never asserted
+on *as an absolute*", "one layout" corrected to "a fixed number" in the two places that still said the
+pass forces one, the counter docs corrected from "during the pass" to the wider window they actually
+measure, `StyleRecalcs` given the reason it is carried at all, and `fastgrid.js` no longer calling the
+thing it points at a timing gate.
+
+## 26. The oldest open question, measured: it was never the pool
+
+§11 has carried this as measurement debt since the beginning, and `README.md` longer than that. The
+`= RadzenDataGrid, same columns` reference row does not settle on a value: **12.86 MB about three times
+in four and 13.83 MB the rest of the time**, a ~990 KB step between two stable values with nothing in
+between. The correlate was in the diagnoser's own columns - every low run recorded gen1 and gen2
+collections and the high one recorded none - and that was read as `RenderTreeBuilder`'s pooled frame
+arrays, whether they survive between iterations deciding whether the next one re-grows from scratch.
+`README.md` was careful about its own status and said the mechanism "stays a hypothesis until something
+measures the pool directly".
+
+This measures it directly. There is no design section: it is a measurement, and it refutes what it was
+sent to confirm.
+
+### How the pool was asked, and why the probe runs twice
+
+`ArrayPool<T>` publishes an EventSource of its own. `dotnet run --project gridbench -- pool-probe`
+attaches an `EventListener` to it and renders `RadzenDataGrid` over the same thousand rows as the
+benchmark row, so a rental is a bucket with a size and a reason rather than a shape inferred from a GC
+column. The pool names itself rather than being assumed: the events carry a `poolId` and no element
+type, so the probe rents a known size from `ArrayPool<RenderTreeFrame>.Shared`, matches the event by
+that size, and filters everything afterwards on the id it reports. **A probe that cannot identify its
+own pool throws**, because an unidentified one would make every count below read as "nothing happened".
+
+**The listener is not free, and the first version of this section did not notice.** Subscribing to every
+ArrayPool event costs about **4,420 KB per render** - a third of the workload - because this render rents
+thousands of small buffers. So the probe runs in two passes: the allocation ladder with the listener
+**disarmed**, which makes its numbers the render's own and directly comparable with the benchmark's
+MB/op, and the pool questions with it **armed**, where only differences matter and a constant overhead
+cancels. Every allocation figure below says which pass it came from.
+
+### What the pool does
+
+`RenderTreeFrame` is 40 bytes. Every render rents and returns the same ladder of buckets, from 65536
+elements down to 32, and the ladder does not change from render to render.
+
+| the question | answer |
+| --- | --- |
+| Are the large frame arrays pooled? | **Yes** - 65536, 32768 and 16384 rented and returned every render, allocated only on the first |
+| Does a forced gen2 make them re-grow? | **No** - no re-allocation of those buckets after a forced gen2 |
+| Is any bucket missing the pool every render? | **Yes, and this section first said otherwise** |
+
+**The last row is a correction.** The first version of this section said "only the very first render
+allocates". That is true of the three large buckets and false of the render: the **64-element bucket
+misses 1,680 times in every render**, allocating 4,200 KB and having the pool drop each buffer again on
+return because its per-core stacks are full. That is about a third of the render's own bytes, it happens
+identically on both sides of the step, and it was invisible because the probe's summary printed only its
+top five groups by size - so the small-bucket allocations never reached the line. **The section read a
+display truncation as a finding.** The summary prints every group now.
+
+It does not rescue the pooled-array hypothesis - a constant cannot be a step - but "only render 0
+allocates" was wrong and is the kind of wrong this file exists to record.
+
+### What a pool miss costs
+
+Forcing a gen2 does not reliably make `ArrayPool` let go. So the probe takes the buffers away instead:
+rent the same buckets, hold them, and the next render's rental cannot be served. Armed, that render
+allocates **23,694.9 KB against an armed steady state of 18,574.9 KB - 5,120 KB more**, and the pool's
+own events account for it exactly:
+
+| bucket | count | bytes | reason |
+| --- | --- | --- | --- |
+| 65536 | 1 | 2,560 KB | exhausted |
+| 32768 | 1 | 1,280 KB | exhausted |
+| 16384 | 1 | 640 KB | exhausted |
+| 8192 | 2 | 640 KB | exhausted |
+| 64 | 1,680 | 4,200 KB | exhausted |
+| | | **9,320 KB** | |
+
+**9,320 minus the 4,200 KB the 64-bucket costs in every render is 5,120 KB**, against a measured rise of
+5,120 KB. The two figures the first version of this section reported as an unexplained disagreement -
+5,121 KB counted against 9,320 KB of events - never disagreed. One is a difference and the other is a
+total, and the constant cancels. The explanation offered for the gap, that
+`GC.GetAllocatedBytesForCurrentThread` is per thread while the renderer dispatches, is **false**: review
+measured the render and the measurement on the same thread, with `GC.GetTotalAllocatedBytes` agreeing
+with the per-thread counter to 0.0 KB.
+
+A miss on the large buckets costs megabytes, then - and it does not happen at all after the first render.
+
+### What the step actually is
+
+Listener disarmed, one process, 220 renders. These are the render's own bytes:
+
+| renders | KB | MB |
+| --- | --- | --- |
+| 1-19 | 14,157.4 | **13.83** |
+| ~20-105 | 13,219.9 | **12.91** |
+| ~106-219 | 13,172.1 | **12.86** |
+
+**Those are the benchmark's modes.** 13.83 and 12.86 are the historical bimodal pair; 12.91 is the third
+value ten runs of the row produced this session. **§28 adds a fourth rung, 13.78**, which is what a
+process sits at when the two optimisations arrive in the other order - so 12.91 is not a stage every
+process passes through. The steps are **937.5 KB** and **47.8 KB**, and
+13.83 to 12.86 is **985.3 KB** - the ~990 KB step, which is the two sub-steps together rather than one.
+
+It is the JIT, and three switches say so:
+
+| | ladder |
+| --- | --- |
+| default | steps down as above |
+| `DOTNET_TieredCompilation=0` | no step - **but see §28: it starts one rung down, so the small step's effect is present rather than absent** |
+| `DOTNET_JitObjectStackAllocation=0` | no big step |
+| `DOTNET_TieredPGO=0` | no big step |
+
+The 937.5 KB is **objects that tier-1 with dynamic PGO stack-allocates and tier-0 puts on the heap**. Not
+the pool, not the grid, not `RadzenDataGrid` - the JIT warming up underneath the harness.
+
+### The bimodality, reproduced on demand
+
+The first version of this section could not reproduce the 13.83 MB mode and said so. It is reproducible,
+and the experiment is one switch:
+
+    DOTNET_TC_CallCountingDelayMs=2000 dotnet run --project gridbench -c Release -- \
+        --job short --filter "*FastGridFeatureBench.ReferenceDataGrid*" --buildTimeout 900
+
+Tiering on, PGO on, promotion merely **delayed** past the measured window. The row reports **13.83 MB,
+three runs out of three**, against **12.86 MB** in the two default runs beside them, every one of them
+confirming `executed benchmarks: 2`. Changing nothing but when tier-1 arrives moves the row between the
+two historical values. That is the mechanism demonstrated rather than inferred, and it is what the first
+version of this section listed as its own largest gap.
+
+**The 1-in-4 rate is gone, though.** Review took 190 fresh benchmark processes in the default
+configuration and saw the high mode **zero** times - 57 at 12.86, 17 at 12.87, 116 at 12.91 - including
+runs under load and ten-at-a-time. At the historical rate that has probability `0.75^190`, about
+`10^-24`. So the old rate is ruled out on this SDK rather than merely suspected: tier-1 now arrives well
+before the measured window unless something delays it. The recorded correlate is gone with it - a
+full-table pass reported the row at 12.91 MB with **no gen1 collections at all**, where the old note has
+every low run recording gen1 and gen2.
+
+### The harness could not run at all, and said so quietly
+
+Before any of the above: six runs of the reference row were collected and tabulated before anyone
+noticed that **zero benchmarks had executed**. BenchmarkDotNet builds a generated project per run and
+gives it 120 seconds; here that build takes ~200s - on the machine §25 measured drifting 2.7x over a
+session - and when it expires the failure prints `NA` in every column, buries "There are not any results
+runs" in a hundred lines, and **exits 0**.
+
+`--buildTimeout 900` fixes it, and it is in `README.md`'s run instructions and §9's protocol now, with
+the reason. The rule it cost is one this branch already had from the other direction: **check that the
+run ran.** `Total:` for the test suites, `executed benchmarks:` for this one. A harness that cannot run
+looks exactly like a harness that found nothing.
+
+### Verified
+
+- `pool-probe` is a diagnostic subcommand in `gridbench`, which CI never compiles; no library or test
+  code changed, so no benchmark applies to the change itself and none is quoted.
+- Every pool figure is filtered on the frame pool's own `poolId`, and the probe throws rather than
+  reporting anything if it cannot identify that pool.
+- The allocation ladder is measured with the listener disarmed; the pool figures with it armed, and only
+  as differences.
+- Every benchmark number is from a run that printed `executed benchmarks: 2` or more.
+
+### Where this could still be wrong
+
+- **The ladder's plateaus are the benchmark's modes, but a plateau is not a benchmark process.** The
+  probe renders in a loop in one process; the benchmark uses a fresh one each time. The delayed-promotion
+  experiment is what ties them, and it ties them at the endpoint - 13.83 - rather than along the whole
+  ladder.
+- **Where the steps land moves.** They were at renders 19 and ~105 here, at 2-4 and 9-10 in review's
+  runs, and at 6-8 with the listener armed. It is a timing race, which is this section's own thesis, so
+  no reading should depend on the render number.
+- **`DOTNET_TC_CallCountingDelayMs` is a knob, not the field condition.** It demonstrates that promotion
+  timing moves the row between the two values. It does not establish what delayed promotion on the
+  machines that saw the high mode in the first place.
+- ~~**The 12.91 plateau is unexplained.**~~ **Closed by §28.** The 47.8 KB step is ~48.5 bytes per row -
+  linear at 500, 1000 and 2000 rows - is real allocation rather than the counter's granularity, belongs
+  to `RadzenDataGrid` rather than to the renderer both grids share, and is the ordinary tier-0 to
+  optimised transition. `DOTNET_JitObjectStackAllocation=0` and `DOTNET_TieredPGO=0` leave it in place
+  because it is not theirs: they own the big step. §28 also finds a fourth rung this section missed.
+- **The bucket arithmetic that stood here was wrong and is gone.** This section said "no bucket, and no
+  sum of buckets, is 990 KB". The frame pool's real ladder runs 32 to 65536 elements - 1.25 KB to
+  2,560 KB - and 640 + 320 + 20 + 10 is exactly 990. The claim survives only as a plausibility argument,
+  which is not what it was written as, so it is withdrawn rather than restated: the refutation rests on
+  the large buckets not missing at all after the first render, and on the three JIT switches.
+
+### What the review found that the build had not
+
+Two read-only reviews, Standards and Spec. The Spec reviewer built a standalone copy of BenchmarkDotNet's
+generated executable so a fresh benchmark process cost 3.3s instead of 3.5 minutes, and took ~190 samples
+where this section had taken ten. **It resolved the gap this section had called its own largest**, and
+falsified four of its claims.
+
+**The bimodality is reproducible, and the section had given up on it too early.** Delaying tier-1
+promotion past the measured window with `DOTNET_TC_CallCountingDelayMs=2000` - tiering on, PGO on,
+nothing else changed - lands the row on 13.83 MB, the historical high mode, on demand. Reproduced here
+independently: three runs of three at 13.83 against 12.86 in the default runs beside them. What this
+section had as "two numbers matching" is a controlled experiment.
+
+**And the sample it drew its caution from was far too small.** This section said seeing no high mode in
+ten runs had "a probability of about 6% … not low enough to prove" the rate had changed. At 0 in 190 it
+is about `10^-24`. The historical one-in-four is ruled out on this SDK, not suspected - a stronger and
+safer statement than the one that stood here, and the section had been timid rather than wrong.
+
+**The probe was measuring itself.** Its `EventListener` costs ~4,420 KB a render, a third of the
+workload, and every allocation figure in the first version of this section was instrumented and printed
+beside the benchmark's uninstrumented MB/op as though the two were comparable. Disarmed, the ladder is
+14,157.4 → 13,219.9 → 13,172.1 KB, which is 13.83 → 12.91 → 12.86 MB - **the row's own three values**,
+which is the evidence the section said it lacked. The 991 KB step was instrumented too; uninstrumented it
+is 937.5 KB, with 47.8 KB after it and 985.3 KB across the pair.
+
+**"Only the very first render allocates" was false, and a display bug is why.** The 64-element bucket
+misses 1,680 times per render - 4,200 KB, about a third of the render - and the pool drops each buffer
+again on return. The probe's summary printed its top five groups by size, so every small-bucket
+allocation fell off the line. **A truncated display was read as a finding**, in a section about not
+reading correlations as mechanisms. The summary prints every group now.
+
+**The two figures that "disagreed" never disagreed.** 9,320 KB of events against a 5,121 KB rise
+reconciles exactly once the 4,200 KB constant is removed: 5,120 against 5,120. The explanation this
+section offered - that `GC.GetAllocatedBytesForCurrentThread` is per thread while the renderer dispatches
+- is **measurably false**: the render and the measurement are on the same thread, and
+`GC.GetTotalAllocatedBytes` agrees with the per-thread counter to 0.0 KB. The "floor rather than a total"
+bullet went with it. **A cause was named for a discrepancy that was arithmetic**, which is the same move
+this section was written to retire, made inside it.
+
+**The impossibility claim was not one.** "No bucket, and no sum of buckets, is 990 KB" was written from
+the three buckets the truncated display happened to show. The frame pool's ladder runs 32 to 65536
+elements, and 640 + 320 + 20 + 10 is exactly 990. Withdrawn rather than restated.
+
+**A "Verified" bullet described code that did not exist.** It claimed pool identification was by matched
+`poolId` - "a buffer of the same length from a different `ArrayPool<T>` would not be counted" - and
+neither the total nor the summary filtered on it, while multiplying every pool's buffers by
+`sizeof(RenderTreeFrame)`. Harmless in this run, since no other pool allocated in the window, and both
+reviewers found it independently. Both filters are in place now, the identification matches on the size
+it rented rather than taking the first event to arrive, and the probe throws instead of reporting a pool
+it could not identify.
+
+Standards fixes in the same commit: the dead `BucketId` and `Reason` fields either surfaced or removed -
+`Reason` is printed now, mapped to names rather than the enum's underlying integer it would have shown;
+non-rental events whitelisted out, since `BufferTrimPoll` carries a different payload shape and arrives
+exactly when this probe forces a gen2; the `EventListener` null window closed, where events can arrive
+before the subclass's field initialisers have run; the duplicated render extracted with a comment naming
+`FastGridFeatureBench.ReferenceDataGrid` as the row it must stay identical to, which nothing else
+enforces; the held buffers' lifetime explained; and `PoolProbe.cs` added to `README.md`'s file table.
+
+Left as it was, with a reason: §9's benchmark protocol now carries `--buildTimeout 900` and the refuted
+mechanism's correction, which review found missing - the rulebook had not been given the rule the section
+spent a subsection deriving.
+
+---
+
+## 27. A column's identity is a concept with no name - the design
+
+§15's candidate 7, and the last of its eight. It is the one §10b twice refused to close by guessing, and
+the guess it was guarding against is real: §14 tried the obvious separation, found it created a *new*
+collision, and recorded that rather than shipping it. What follows is not that guess. It is the
+observation that the collision §14 refused to create is only intolerable because it would have been
+**silent**, and that a grid which says so can afford the model that fixes everything else.
+
+### The faults
+
+**Two columns over one property are both restored onto the first.** `ColumnForPath`
+(`RadzenFastGrid.Data.cs:1310`) answers with the first column whose `PropertyPath` matches, and
+`CaptureSettings` writes every column under that same key. Hiding the second and reloading hides the
+*first* - a wrong answer on screen, not merely lost state. §10b has it, open, since the column-model pass.
+
+**It does not take a duplicated property.** A `PropertyColumn`'s `PropertyPath` is its *sort* path when
+`SortBy` is set (`PropertyColumn.cs:125`), so a column displaying `Last` and sorting by `First` shares an
+identity with the column displaying `First`. Two ordinary columns, nothing declared twice, and a filter
+stored for one restored onto the other.
+
+**A column that names no member has no identity at all**, and is silently not persisted. That is a
+`TemplateColumn` with no `SortBy` or `SortProperty`, a `CollectionColumn` or `LookupColumn` with no
+`SortBy`, and a `PropertyColumn` whose `Property` is computed - `PropertyPathResolver.For` answers null
+for anything but a member access (`PropertyPathResolver.cs:47`). Its width, its position in a dragged
+order, its visibility and its filter are never captured, and nothing says so. §15 calls this the
+`TemplateColumn` limitation and §14 records the lookup column arriving at the same place by its own
+route; they are one fault seen three times.
+
+**And the reason all three exist is that the name is wrong.** `PropertyPath`'s own summary says the
+column "sorts, filters and persists by" it (`ColumnBase.cs:1017`). Three jobs, one string, and the two
+that are not sorting were never designed - they were inherited from a name that sounded general.
+
+### What identity is, and what it is not
+
+**A column's identity is what names it across a reload. It is not a query path.** That is the whole of
+the model, and everything below follows from taking the second sentence literally.
+
+The grid has three query paths and they are correctly plural, because each answers a question some
+*consumer outside the grid* asks:
+
+- **`SortPath`** - the string a remote sort travels under, consumed by `OrderBy()` and published as
+  `Sorts`. It is `PropertyPath` renamed, and after this piece it means one thing.
+- **`FilterPropertyPath`** - what `ApplyFilters` matches an incoming `FilterDescriptor` against
+  (`Data.cs:1137`), so a `RadzenDataFilter` or a restored remote filter can drive the grid.
+- **`FilterMemberPath`** - the member inside a collection element, for the reflective descriptor.
+
+Identity answers to none of them, because no consumer outside the grid ever asks *which column is this*.
+Only the grid does, and it asks in exactly one place.
+
+**§15's entry names three symptoms and one of them is not.** It lists `FilterPropertyPath` keying the
+filter lookup beside `PropertyPath` keying settings and the remote sort. `ColumnByFilterPath` has a
+single caller, `ApplyFilters`, which is public and takes `FilterDescriptor`s built by somebody else out
+of member names. Keying that by an identity the grid invented would break it on arrival. It is a query
+path doing a query path's job, and this section drops it: two symptoms, not three.
+
+**And §10b's comparison is half right.** It says `RadzenDataGrid` "matches on `UniqueID` first and falls
+back to `Property` only when there is none". The matching is exactly that
+(`RadzenDataGrid.razor.cs:4227, 4623`). The derivation is not: `SetColumnDefaults`, called from
+`OnInitialized` and again at `:1657`, overwrites the parameter unconditionally in all three of its
+branches - `$"{Property}.{FilterProperty}"` where both are set, else `Property`, else `FilterProperty`,
+which is the empty string where there is neither (`RadzenDataGridColumn.razor.cs:250-257`). So a declared `UniqueID` on any column with a `Property` is
+discarded, and the escape hatch the sibling appears to offer does not exist. What it *does* avoid is our
+second fault, and by accident: it keys on the display property, so its identity never follows a `SortBy`.
+The idea is worth adopting. The implementation is the thing to not copy.
+
+### What changes
+
+**1. One type says how a column is named.** `ColumnIdentity`, a readonly struct in its own file, after
+`RowIdentity` - which is the same shape of problem one level down and was answered the same way in §21. It
+composes two things and records which it used: the column's declared `UniqueID`, and the path the column
+supplies when nothing is declared. §3 rules out a class; it is built once per parameter set over a string
+the column already memoizes.
+
+**2. `UniqueID` is a parameter on `ColumnBase`.** Declared beats derived, always, and unlike the sibling
+nothing overwrites it. It is the one-attribute answer to every case the derivation cannot name, and it is
+what the grid's own exception text tells an author to write.
+
+**3. One new `internal virtual` supplies the derived path.** `IdentitySource`, mirroring `SortSource`
+(`ColumnBase.cs:1013`) - which exists for exactly this reason, so that a rule is answered once rather
+than five times in three columns. Null by default. `PropertyColumn`, `CollectionColumn`, `LookupColumn`
+and `LookupCollectionColumn` override it to their **display** path, which is the change that fixes the
+second fault: identity stops following `SortBy`. `TemplateColumn` overrides it to its sort path.
+
+**The template column is the exception and it is deliberate.** The objection to deriving identity from a
+sort path is that it makes a column's name follow a parameter that is about something else - which is the
+second fault exactly. A template column has no competing candidate: it has no display path, so its sort
+path is not a second name beating the real one, it is the only name in the markup. Deriving from it keeps
+every template column that persists today persisting, and no test would have caught the regression if it
+had not: the suite pins a template column's *filtering* by its sort property
+(`ReviewRegressionTests.cs:238`) and its settings identity nowhere.
+
+**`IdentitySource` is `internal`, and an out-of-assembly column is not locked out.** That is the trade
+§20 would otherwise object to - it adds a member to the internal protocol candidate 6 wants to publish -
+and it is affordable because `UniqueID` is public. A third-party column cannot supply a derivation hook
+and does not need one: it declares.
+
+**4. A column with no identity persists nothing, and that is the honest failure.** The grid never invents
+one. Deriving from declaration order was available and is refused here: insert a column above and every
+invented identity below it shifts by one, so stored width and order reapply to the wrong columns - which
+is the first fault re-created in a new place, and worse than remembering nothing.
+
+**5. Two columns answering the same throw.** `InvalidOperationException` from the deferred render, naming
+both columns and the attribute to declare, in the shape of the library's two existing markup-mistake
+throws (`ColumnBase.cs:1158`, `LookupColumnBase.cs:76`). The message distinguishes two derived identities
+from two declared ones, because the fix differs and the struct knows which it is.
+
+**This is the one place this piece can break a grid that works today.** Two columns over one property,
+never persisting anything, render fine now and will throw. That is the trade: §10b's standing lesson is
+that this grid's faults are silent, and this one puts a wrong answer on screen. A grid whose columns
+cannot be told apart is misconfigured whether or not anyone has yet asked it to remember anything, and
+making the throw conditional on `Settings` being bound would mean the same markup throws or does not
+depending on a parameter set somewhere else - so an author who later binds `Settings` gets an exception
+from markup they did not touch.
+
+**6. The check runs when the column set changes, and nowhere else.** A generation counter bumped by
+`AddColumn` and `RemoveColumn`, compared once per render; the walk happens only when it moved. It goes in
+the deferred `RenderTable` (`RadzenFastGrid.cs:775`) beside `ApplySettings`, which already depends on the
+same guarantee: `Defer` exists so the table is written after every column has registered. It walks all
+registered columns rather than the drawn ones, because `CaptureSettings` does. Two columns that both
+answer *nothing* are not a collision.
+
+**7. The stored key says what it is.** `FastGridColumnSettings.Property` becomes `UniqueID`, and its
+summary stops calling a dotted property path the thing that identifies a column. Nothing has shipped -
+§8's package name is still open - so there is no format to be compatible with, and keeping `Property`
+beside a new key would put the fused identity back inside the serialized form.
+
+**8. The resolved identity is readable.** `ColumnBase.Identity`, public and read-only. An author who
+persists settings themselves gets a file keyed by strings they did not write, and without this there is
+no way to correlate a stored row back to a column except by re-deriving the rule by hand. It also gives
+a test something to assert other than the round trip, which matters because a round trip agrees with
+itself when both ends are wrong - §10b has that failure recorded twice.
+
+**9. The picker's last-resort label follows.** `PickerTitle` is `ColumnPickerTitle ?? Title ?? PropertyPath`
+(`ColumnBase.cs:86`). After the rename that reads as the *sort* path, which is a poor label for a column
+displaying something else, so it becomes `?? Identity`. This is the only user-visible change outside
+settings and the new throw: a column with no `Title` and a `SortBy` is listed in the picker under what it
+shows rather than what it orders by.
+
+### What this closes, and what it does not
+
+**§10b's open collision closes**, both halves.
+
+**§14's recorded-open item closes**, and the section that argued the opposite is corrected rather than
+quietly overwritten. §14 refused to separate the settings key from the query path because an id-path key
+would give a `LookupColumn` over `p.CategoryId` the same identity as a `PropertyColumn` over
+`p.CategoryId` - "§10b's collision newly created rather than avoided". That collision still exists under
+this model. What has changed is that it is no longer silent: the grid throws and names the fix, and the
+author writes one attribute. §14's reasoning was sound and its premise was that nothing would say so.
+
+**Candidate 6 stays blocked.** §15 refuses to open the eight `internal virtual` filter-row members while
+two things that would change them are open. This closes one of the two. §10's question - whether an
+operator menu, a date popup, a numeric range or an enum picker is built in - is untouched, so publishing
+that protocol is still publishing it twice.
+
+### Deliberately not proposed
+
+- **An identity for the sake of one.** Nothing here gives identity a second consumer. If a fourth thing
+  ever needs to name a column, it uses this; inventing that consumer now is how `PropertyPath` came to
+  mean three things.
+- **Composing the identity out of two paths**, as `RadzenDataGridColumn` does with
+  `$"{Property}.{FilterProperty}"`. It buys separation in a narrow case at the price of an identity that
+  moves when `FilterBy` is edited, and a name that moves when an unrelated parameter changes is not a
+  name.
+- **Anything in `RadzenFastDropDownDataGrid`.** §14's reason stands: its open layout question comes first.
+
+### How it is verified
+
+§9's six layers, and layer 6 is not optional - the picker label, the throw and the stored key are
+behaviour.
+
+1. The collision throws, for a duplicated property *and* for the `Last`/`First` case, and the message
+   names both columns. Mutated: with the check removed, and with it comparing the wrong strings.
+2. A declared `UniqueID` separates two columns over one property, and each is restored onto itself -
+   asserted through `Identity`, not only through the round trip.
+3. A template column with a `SortProperty` still persists its width, order and visibility; one with
+   neither persists nothing until it declares a `UniqueID`, and then persists.
+4. A column displaying `Last` and sorting by `First` stores under `Last`, and `OrderBy()` still emits
+   `First` - the two strings pulled apart in one test, which is the piece in one assertion.
+5. The generation counter: a grid whose column set never changes does not re-walk, and one that gains a
+   column does. Mutated by never bumping it, which must fail.
+6. `gridbench` at 1000 rows, before and after, alternating arms per the drift rule. The claim is
+   allocation-neutral: one struct per column per parameter set, and no per-row or per-cell path touched.
+
+### Where this could still be wrong
+
+- **The throw is the aggressive choice and it is not reversible by a parameter.** A grid with two columns
+  over one property that never persists anything stops rendering. If that turns out to be common markup
+  rather than a mistake, the answer is to drop both columns from capture and restore instead - which was
+  the rejected option, and is recorded here so it can be picked up without re-deriving it.
+- ~~**"Display path" is doing quiet work.**~~ **This bullet was right to ask and wrong in its answer;
+  the review found the shape it missed.** It said that for a `PropertyColumn` over a computed expression
+  the display path is null, "which is correct and means those columns need a declared `UniqueID` where
+  today they already persist nothing. Nothing changes for them; it is worth checking that nothing does."
+  Nothing checked, and something did - see the review section below.
+- **The generation counter is a memo, and memos on this branch have a record.** §10 has four recorded
+  participants in the `!ReferenceEquals` trap. This one is an integer rather than a reference, which is
+  what makes it safe, but the failure mode if it is wrong is a collision that stops being detected - a
+  silent return to the fault, which is the worst shape available. Its mutation is listed above for that
+  reason.
+- **Identity is derived in `OnDerive`, which runs per parameter set.** A column whose `Property` changes
+  between renders changes identity, and its stored state is then keyed under the old string. That is
+  already true of `PropertyPath` today and this changes nothing about it, but it is the kind of thing
+  that is true until someone builds dynamic columns on top.
+
+### What the build changed
+
+Four of this section's own decisions did not survive it, and two of the four were deleted by mutations
+rather than by argument.
+
+**Identity is asked rather than kept.** This section said it would be "built once per parameter set over
+a string the column already memoizes". It is a property with no field behind it -
+`ColumnIdentity.Of(UniqueID, IdentitySource)`, composed whenever it is read. Both are free, and the
+computed one is better for a reason the field version would have had to solve: there is no ordering rule
+about deriving before the base, nothing to invalidate, and no third memo on a branch that has four
+recorded participants in the `!ReferenceEquals` trap. The readers are `CaptureSettings`, `ApplySettings`,
+the check and `PickerTitle`, none of which is on a per-row or per-cell path.
+
+**The gate has one signal, and this section named the two it does not have.** It said the counter would
+be "bumped by `AddColumn` and `RemoveColumn`". Building it that way showed a hole immediately: two
+columns can come to share a name with nothing added or removed, when a `Property` or a `UniqueID`
+changes between renders. So a third signal went in - a column reporting from `OnParametersSet` that its
+own identity moved - and then a mutation deleted the other two. **Removing the bump at registration
+failed no test**, because a joining column registers from its own `SetParametersAsync` and *then* runs
+`OnParametersSet`, which reports an identity moving from nothing to a name. Removal needs none either: a
+leaving column cannot create a collision, and cannot hide one it resolved, because a walk that throws
+never records its generation. What is left is one caller, and the rule is written where the two dead
+ones were.
+
+**The gate's seed went the same way, and its mutation proved something else.** The first version seeded
+the "last clean generation" at -1 to force a first walk, with a comment saying an empty grid and a grid
+whose first column had just registered would otherwise be indistinguishable. Seeding it level with the
+counter instead **failed no test** - any column with a name reports one on its first parameter set, and
+a grid whose columns all name nothing cannot collide. That mutation surviving is also the evidence for
+the ordering the whole check depends on: every column's `OnParametersSet` has run by the time `Defer`
+renders the table, or the collision tests would have found the counter still at zero and skipped.
+
+**The walk allocates nothing.** Nested loops rather than a set, because it runs only when the generation
+moved and the counts are tens. A `HashSet` per check would be an allocation bought to avoid comparisons
+nobody is paying for.
+
+**And one thing the type got wrong on the way through.** Its first version compared *where* a name came
+from as part of equality, so two columns answering to "First" - one declaring it, one deriving it - were
+unequal while `Collides` said they were the same column. Two members of one type disagreeing about the
+only question that type exists to answer. `Equals` is the name and nothing else now, `Collides` is
+`HasName && Equals`, and `IsDeclared` is provenance: it changes the advice in the message and nothing
+else.
+
+### What the build met that this section treated as hypothetical
+
+**"The one place this piece can break a grid that works today" is three places, and they were all in
+this repository.** Each was found by the throw itself, and each took one attribute to fix - which is the
+escape hatch working. The frequency is the finding:
+
+- **`GridParityFixture`'s auto-fit columns** declare `x => x.Id` twice, deliberately: "two columns hold
+  the same values and differ only in their titles, so a width difference between them can only have come
+  from the header". Seven `MarkupParityTests` failed on it, through the shared fixture.
+- **`LookupColumnTests.TwoColumnsOverOneLookupResolveItOnce`** puts two lookup columns on one member to
+  keep the lookup the only variable. Its own comment says the realistic case - `CreatedByUserId` and
+  `ApprovedByUserId` - is two *different* members, so the test's markup is the artificial one; but this
+  is §14's collision, met for the first time.
+- **`gridbench`'s `PickedColumnSet`** declares `x => x.Age` twice, once hidden and once drawn, which is
+  the condition column numbering is written under. **This is the ordinary markup of the three** - a
+  hidden column beside a visible one over the same member is not a contrivance - and it is the one worth
+  weighing against the decision to throw. It also cost a benchmark run: the row printed `NA` while the
+  other 49 ran, which is the failure mode §9 already has a rule about.
+
+**Two tests changed shape rather than being deleted.** `ReviewRegressionTests`'s two "a column it cannot
+name" tests pinned the reach rule - a reset must not clear what the restore cannot put back - using a
+`CollectionColumn` with no `SortBy`, which had no settings identity while filtering perfectly well by a
+different path. That disagreement is what this section removes, so the column no longer shows it. The
+rule is unchanged and both sides of it now ask one question; what exercises it is a `PropertyColumn` over
+a computed expression, which can still filter through `FilterBy` and still sort through `SortBy` while
+naming no member at all.
+
+**And one verification item is weaker than it was written.** "A grid whose column set never changes does
+not re-walk" is not directly observable, so it is asserted as an upper bound on how often a counting
+column is asked its identity across three renders that change nothing. It discriminates - removing the
+gate multiplies the count - but it is a bound rather than the statement.
+
+### Measured
+
+`--job short` at 1000 rows, `executed benchmarks: 49` - checked, because §26 tabulated six runs of
+zeroes before anyone did. Against §16's two post-build runs, which are the last recorded values on this
+path:
+
+| | before | after |
+| --- | ---: | ---: |
+| bare | 154.54 / 154.65 KB | **154.67 KB** |
+| + sorted by one column | 175.79 KB twice | **176.13 KB** |
+| + a filter row | 158.77 KB twice | **158.89 KB** |
+
+**Read as marginals rather than absolutes, because the whole table moved together.** Bare is +0.02 over
+the closest prior value, which is well inside the ~0.3 KB floor §9's control table established. The sort
+row's absolute is +0.34, which is just past that floor - but its *marginal* over bare is 21.46 KB against
+21.14 and 21.25 before, so +0.21, inside it. The filter row's marginal is 4.22 against 4.12 and 4.23.
+
+**No time ratio is quoted**, per §9 and the drift rule: at this job length the errors are wider than any
+difference, and this machine moved 2.7x within a session while §25 was measuring it.
+
+The mechanism agrees with the numbers, which is the part worth stating: nothing here is on a per-row or
+per-cell path. A column composes a struct over two strings it already holds, once per parameter set for
+the report and once per read for the four readers - `CaptureSettings`, `ApplySettings`, the check and
+`PickerTitle`, none of which runs per row. The check itself allocates nothing and usually does not run.
+
+**The first run of this table is thrown away rather than quoted**, and why is in the section above: the
+hidden-column row printed `NA` because `gridbench`'s own markup collided. Fixing the markup and
+re-running is what produced the numbers here.
+
+### The playground
+
+§9's layer 6, which is not optional here - the picker's label, the throw and the stored key are all
+behaviour. Nine columns over 500 rows, in-memory: the grid draws, sorts (Department ascending, arrow and
+all), the picker lists all nine by their titles, hiding Salary drops it to eight and leaves the sort
+standing, and `settings raised` counts up on both the sort and the hide - which is the capture and the
+restore going through the new key in a real browser rather than a `TestContext`. Console clean but for a
+`favicon.ico` 404 the playground has always had.
+
+### The mutations
+
+Seventeen, on the code and on the tests it came with. Fifteen caught, two survived and both survivals
+became deletions above. Two of the sixteen were run against comments rather than against behaviour -
+a claim about where a line has to sit is a claim, and the cheapest way to find out is to move it.
+
+| Mutation | Result |
+| --- | --- |
+| The check is never called | caught, 3 tests |
+| `Collides` drops its `HasName` guard, so two nameless columns collide | caught |
+| The generation is recorded before the walk rather than after | caught |
+| `IdentitySource` on `PropertyColumn` goes back to the sort path | caught, 3 tests |
+| A declared `UniqueID` is ignored | caught, 4 tests |
+| An empty `UniqueID` counts as a declaration | caught |
+| `TemplateColumn` supplies no identity | caught |
+| A column stops reporting that its identity moved | caught, 2 tests |
+| `PickerTitle` falls back to the sort path again | caught |
+| The collision message gives the same advice whatever the sources | caught |
+| The settings reset reaches past the restore, on the sort side | caught |
+| The settings reset reaches past the restore, on the filter side | caught - both rewritten regression tests still discriminate |
+| `Equals` compares where the name came from as well as the name | caught, 2 tests |
+| The identity report moves below `OnParametersSet`'s early return | caught - the branch returns, so a column would report nothing on the one parameter set where its identity is certain to have moved |
+| No bump when a column joins | **survived** - deleted, see above |
+| The gate is seeded level with the counter | **survived** - taken, see above |
+| No bump when a column leaves | **anchor missed; not a result.** The script reported it as a survival because the unmutated code passed, which is the shape §9 warns about - a run that did not happen looks exactly like nothing failing. Re-derived by argument instead, and the argument is in the code |
+
+
+### What the review found that the build had not
+
+**A column that persisted before this piece silently stopped persisting, and §27 had written the bullet
+that would have caught it.** A `PropertyColumn` whose *display* is a computed expression but which
+declares a *member* `SortBy` - `Property="@(x => x.Last + "!")" SortBy="@(x => x.Last)"` - had
+`SortPath` "Last" and no display path at all. Before §27 the settings key was the sort path, so it was
+captured under "Last". After, identity was the displayed member alone, so it was nameless: its width,
+its position in a dragged order, its visibility and its filter stopped being stored, and nothing said
+so. Measured rather than argued - `SortPath=Last`, `Identity=<null>`, `stored=[First]` - which is the
+lost-state failure the design chose over a wrong answer, but chosen here by accident rather than on
+purpose, and for a column that had not lost anything the day before.
+
+**The fix is the rule the section had already written, applied where it had not been.** §27 argued that
+a template column derives from its sort path because "it has no displayed member, so the sort path is
+not a second name beating the real one - it is the only name in the markup". That is exactly this
+column's position. So the derivation is one rule in one place now:
+
+> `IdentitySource => DisplayPath ?? SortPath` - what a column shows, and where it shows nothing
+> nameable, what it orders by.
+
+`IdentitySource` is no longer virtual; the overridable is `DisplayPath`, which the four member-bound
+column types answer and the base leaves null. **`TemplateColumn`'s override disappears entirely** - it
+was the special case that turns out to be the general rule with one operand missing - so the piece ends
+with four overrides rather than five and the ordering argued once instead of per column. Mutations pin
+both halves: removing the fallback and consulting it first are separate mutations and are caught by
+separate tests, the second by five.
+
+**And a test had been passing because of the fault.** §27's build rewrote
+`ASettingsRestoreDoesNotDropASortItCannotName` around exactly this column, on the reasoning that it
+"can still sort while nothing gives it an identity" - which was true only because the fallback was
+missing. With the fallback restored the column has a name, and the test needed a genuinely nameless
+one: a template column ordered by a computed `FastGridSort`, which sorts rows because a computed key
+still orders them and names nothing because there is no display path and the sort has no `Path` to fall
+back to. That is the shape the test used *before* §27 touched it, arrived at again from the other side.
+
+**What this says about the sweep that preceded it.** Seventeen mutations, and none of them was this,
+because a mutation asks whether a test would notice the code changing - not whether a shape nobody wrote
+a test for still works. The bullet in "where this could still be wrong" named the risk precisely and the
+build shipped without acting on it. **A recorded doubt is a task, not an absolution.**
+### What the second review found, on both axes
+
+The first round of reviewers stalled without reporting; the second round ran against the fix above and
+found five things, one of which refuted a reviewer rather than the code.
+
+**Two more collision shapes, and one of them breaks markup that worked.** §27 weighed the decision to
+throw using three examples and called the hidden-beside-visible column "the ordinary markup of the
+three". Two more belong on that list, both found by writing the markup rather than by reasoning about it:
+
+- **A `CollectionColumn` listing one collection two ways.** `Property="x => x.Accounts"` twice, differing
+  only in `DisplayProperty` - names in one column, regions in the other. `IdentitySource` is the
+  *collection* path and ignores `DisplayProperty`, so both answer to `Accounts` and the grid throws.
+  **This is the one shape that went from working to throwing rather than from silently wrong to
+  throwing**: before §27 both columns had no key at all (no `SortBy`), so they were two nameless columns
+  that persisted nothing and rendered fine.
+- **One member shown twice with different `Format`s** - `Hired` as a date and as a time. Both answer to
+  `Hired`. This was already a silent collision before §27 and is the same shape as `gridbench`'s.
+
+Neither changes the decision, and the fix for both is one `UniqueID`. Composing the display member into
+the identity would separate them and is refused for the reason already in "Deliberately not proposed": an
+identity that moves when `DisplayProperty` or `Format` is edited is not a name.
+
+**The stored key moved for three column types and was asserted for one.** New key is
+`DisplayPath ?? SortPath`; the old key was `SortSource?.Path` (or `PropertyColumn`'s `SortBy is null ?
+displayPath : sortPath`). So the key changes wherever a column has a display path that differs from its
+sort path - which §27 narrated only for `PropertyColumn`. It happens identically, on canonical markup,
+for `LookupColumn`, `LookupCollectionColumn` and `CollectionColumn`: a lookup over `p.CategoryId` sorted
+by `Category.Name` used to be stored under `Category.Name` and is stored under `CategoryId` now. The
+lookup test asserts both strings now rather than only the identity.
+
+**`TemplateColumn`'s key is bit-for-bit unchanged**, which the review established algebraically rather
+than by testing: its `DisplayPath` is null, so `DisplayPath ?? SortPath` reduces to `SortPath`, which is
+the expression the old key already was. And because the new key is `DisplayPath ?? old key` for all five
+types, **no column can be nameless today that was named before** - the class of regression the first
+review found has exactly one member, and it is fixed.
+
+**The drop-down defers the throw to the moment the popup opens.** `RadzenFastDropDownDataGrid` forwards
+`ChildContent` into an inner grid that is only constructed when the popup opens, and that inner grid
+never binds `Settings`. So colliding columns there render fine, throw on first open, from inside a popup,
+protecting state that is never stored. §14's "not in `RadzenFastDropDownDataGrid`" exclusion meant this
+was never weighed, and it is the strongest argument yet for the alternative §27 recorded and rejected -
+dropping both columns from capture instead of throwing. **Recorded, not acted on**: making the throw
+conditional on a grid that persists is the ambient guard §27 argued against, and the drop-down's own open
+layout question comes first.
+
+**And a review finding that the compiler refuted.** The Standards axis argued that `ColumnIdentity`'s
+`IEquatable<>`, `==`, `!=` and `GetHashCode` were unearned ceremony with no caller, having checked
+`Radzen.Blazor.FastGrid.csproj` for an analyzer opt-in and found none. Removing them **does not
+compile**: CA1066, CA2231 and CA1815 are all on by default for this target, and the package builds
+warnings as errors. The reviewer was right that nothing calls them and wrong about why they are there.
+**This is the cost of the rule that one reviewer runs nothing** - it is the rule that keeps the two from
+racing, and it makes that reviewer's claims about the build a guess. The type now says why those members
+exist, so the next reader does not try the same deletion.
+
+**What the standards axis got right**, and all of it is applied: the seeding comment claimed a mutation
+proved an ordering it cannot prove (seeded at -1 the first walk is unconditional, so that mutant survives
+under either ordering - the evidence is the *unmutated* code passing with the seed level); `§3 rule 5`
+was cited for an allocation argument when rule 5 is the boxing rule and rules 1-3 are the ones that bear
+on it; the struct-versus-class rationale named "a reference per column" when the real reason is a
+reference per *read*; `reportedIdentity` was recorded before the call it records, which would have made a
+column believe it had reported when it had not; and `DisplayPath` needed a sentence saying it is
+deliberately not defaulted through `FilterPropertyPath`, which three of its four overrides happen to
+answer identically.
+
+**The picker was showing a storage key as a column name.** `PickerTitle` fell back to `Identity.Name`,
+which prefers a declared `UniqueID` - and an author writes one to tell two columns over a member apart,
+which is exactly the case least likely to carry a `Title`. A column with `UniqueID="col_3"` and no title
+was offered to the user as "col_3". It falls back to `IdentitySource` first and to `UniqueID` only when
+there is no member at all, which keeps the promise that summary has always made - that a column naming
+neither is still identifiable in the list - without putting a key in front of a user. Two tests and a
+mutation.
+
+---
+
+## 28. §26's smaller step, attributed - and the ladder has four rungs, not three
+
+§26 left four things open. This closes the one it called "unexplained": the 47.8 KB step from 12.91 to
+12.86, which it recorded as "smaller than anything this section chases and not attributed to a
+mechanism". It is attributed now, and getting there corrected §26's reading of its own switch table.
+
+### What the step is
+
+**48.5 bytes per row, and the linearity is the first thing that says so.** The ladder was run at 500,
+1000 and 2000 rows. Both steps scale exactly:
+
+| rows | big step | KB/row | small step | KB/row | bytes/row |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 500 | 468.9 KB | 0.938 | — (below the resolution used) | — | — |
+| 750 | 703.2 KB | 0.9375 | 35.8 KB | 0.0477 | 48.8 |
+| 1000 | 937.8 KB | 0.938 | 47.3 KB | 0.0473 | 48.5 |
+| 1500 | 1,406.4 KB | 0.9376 | 71.4 KB | 0.0476 | 48.7 |
+| 2000 | 1,875.2 KB | 0.938 | 94.9 KB | 0.0475 | 48.6 |
+
+So the small step is one per-row cost of about **48.6 bytes** - the five rows span 48.5 to 48.8 - not a
+fixed artefact of process start-up and not something that could be a one-off buffer.
+
+**Two of those rows are review's and they are the ones that make it a fit.** The 500-row run put the
+small step below the resolution the ladder was read at, so the first version of this table established
+proportionality from **two** points, 1000 and 2000, where any line fits. 750 and 1500 were measured
+independently afterwards and land on the same slope with a zero intercept. The band first quoted here,
+0.0473-0.0475, was drawn from those two points and is about 0.5% too narrow; the slope it was drawn
+around is right.
+
+**And it is per row under the switches too, not only by default.** The endpoint table below rests on
+runs at 1000 rows alone, which cannot tell a per-row cost from a constant. Re-run under
+`DOTNET_TieredPGO=0`, the small step is **48.2 bytes a row at 750 and 48.4 at 1500** - so what survives
+PGO being off is the same per-row cost, not a fixed residue that happens to be the same size.
+
+**On 47.3 against 47.8.** §26 measured the step at 47.8 KB and this section re-measured it at 47.3 in its
+own ladder; both are the same step at 1000 rows, and the 0.5 KB between them is where the plateau means
+were taken. Nothing turns on it - the figure that matters is the slope.
+
+**It is real allocation rather than the counter's granularity.** `GetAllocatedBytesForCurrentThread`
+reports allocation *contexts* - a context counts as spent when the thread takes the next one, so the
+unused tail of the old one is included, and a codegen change that alters the size mix could move the
+number without moving a byte. The ladder reports `GC.GetTotalAllocatedBytes(precise: true)` beside it
+now, and the two agree **at every plateau** to within 1-2 KB, against a step of 47. The hypothesis was
+worth having and it is dead.
+
+Two qualifications on that sentence, because it is doing real work. The agreement is per *plateau*, not
+per render: the first render of a process differs by 12-14 KB and an occasional later one by 10, which
+is an order of magnitude below the step and does not touch the argument. And the difference has a sign -
+239 renders out of 239 positive, mean +0.8 KB - because the precise window encloses the per-thread one
+and because the precise counter is process-wide, so it also carries whatever the finalizer and tiering
+threads allocated. That makes it an **upper** bound on granularity, which is the direction this argument
+needs.
+
+**It is not in what the fast grid exercises.** `fast-ladder` runs the identical ladder over
+`RadzenFastGrid` through the same columns `FastGridFeatureBench` uses - shared rather than copied - and
+it is **flat**: 155 KB from render 2 to render 239, one plateau, flat to within 0.1 KB. It is also,
+incidentally, the strongest statement yet of §9's control: 238 renders at one value.
+
+**What that rules out, and what it does not.** Both grids drive the same Blazor renderer and the same
+frame pool, so neither step is in code every render must run. It does **not** narrow things to
+`RadzenDataGrid` the class, for two reasons this section first got wrong:
+
+- **The comparison changes two components, not one.** The reference ladder renders
+  `RadzenDataGrid` + `RadzenDataGridColumn`; the control renders `RadzenFastGrid` + `PropertyColumn`. A
+  per-row cost in the *column* type is as consistent with the result as one in the grid.
+- **The two workloads are 85x apart.** The fast grid renders 1000 rows in 155 KB - 159 bytes a row
+  against 13,172 - because emitting fewer frames per row is what it exists to do. So it exercises the
+  shared per-row renderer path at nothing like the same rate, and "absent from the fast grid" rules the
+  renderer out only to the extent the fast grid uses it.
+
+The honest statement is the weaker one: **the step is absent from a path the fast grid exercises, and
+present in one of `RadzenDataGrid`'s or its column's.**
+
+### The ladder has four rungs
+
+§26 published three plateaus and called them "the benchmark's modes". There are four, and the missing one
+is why the intermediate value differs between runs:
+
+| rung | KB | MB | which steps have landed |
+| --- | ---: | ---: | --- |
+| **A** | 14,157 | 13.83 | neither optimisation |
+| **B** | 14,110 | 13.78 | small only |
+| **C** | 13,220 | 12.91 | big only |
+| **D** | 13,172 | 12.86 | both |
+
+The two steps are **independent and additive** - A−B and C−D are both 47.5, A−C and B−D both 938, and
+the two orders sum to within 0.5 KB of each other - and they race. Review's seven default runs went
+**A → C → D six times and A → B → D once**, on the same binary. So "12.91" is not a stage every process
+passes through: it is the rung you sit on when the big optimisation has landed and the small one has
+not, 13.78 is the rung when it is the other way round, and the second is roughly a one-in-seven event on
+this machine.
+
+**13.78 MB had never been reported by the benchmark when this was written.** Review's 190 fresh processes
+returned 12.86, 12.87 and 12.91 only. That is consistent - BenchmarkDotNet warms up, so a measured window
+normally sits at D - but it was a prediction this section made and had not confirmed.
+
+**§30 confirms the number and refutes the route.** Under `DOTNET_TieredPGO=0` the benchmark reports
+13.78 MB, so all four rungs are now values it has actually returned. But the mechanism guessed at here -
+"a process whose promotion is delayed the way `DOTNET_TC_CallCountingDelayMs` delays it should be able to
+report ~13.78 as well as ~13.83" - cannot work, and not by accident: a counting delay holds *everything*
+unoptimised, which is rung A. It reports 13.83. Rung B is optimised code without dynamic PGO, which is
+what `TieredPGO=0` says directly and what no amount of delay produces.
+
+### Which switch owns which step
+
+Every configuration run twice, 240 renders, reading the **endpoint** rather than the transitions - which
+is the correction that mattered most:
+
+| | endpoint | big | small |
+| --- | ---: | :---: | :---: |
+| default | D | yes | yes |
+| `DOTNET_TieredPGO=0` | B | **no** | yes |
+| `DOTNET_JitObjectStackAllocation=0` | B | **no** | yes |
+| `DOTNET_TC_QuickJitForLoops=0` | B | **no** | yes |
+| `DOTNET_TC_OnStackReplacement=0` | D | yes | yes |
+| `DOTNET_TieredCompilation=0` | B, from render 1 | **no** | already applied |
+
+**The big step goes when any of three switches goes** - three switches, but two mechanisms: dynamic PGO
+and the object stack allocation it feeds, plus `QuickJitForLoops`, which is a *route* to disabling PGO
+for the loop path rather than a third thing. That sharpens §26, which named the first two.
+
+**The small step survives all of them, and OSR too**, and the tier boundary is where it lives. That half
+is shown rather than inferred: under `DOTNET_TieredCompilation=0` the process sits at B **from render
+1**, so code that is optimised from its first call already has the 47 KB with every other switch left
+alone. Unoptimised code allocates ~48.6 bytes per row that optimised code does not.
+
+**Which optimisation, and which object, is elimination and nothing more.** Five knobs off, step survives,
+"what is left is" - that is the shape of the remaining argument and it carries no positive evidence at
+all. It is not escape analysis, because `JitObjectStackAllocation=0` keeps the step; beyond that the
+matrix says only what it is not.
+
+### The correction to §26's table
+
+§26's table reads `DOTNET_TieredCompilation=0` → **"no step"**, and concludes "It is the JIT". The
+conclusion is right and the table hides something: with tiering off the process **starts at B**, which is
+47 KB *below* A. The small step's effect is present from the first render rather than absent. "No step"
+and "no difference" are not the same reading, and taking them as the same is what left the 47.8 KB with
+no mechanism - it looked like something that only happened under tiering, when it is something that
+happens under tiering *late*.
+
+### Verified
+
+Every figure here is from a run whose output was read, not from a run that was started. The ladder prints
+one line per render, so a run that did nothing prints nothing - the `executed benchmarks:` check §9 asks
+for applies to BenchmarkDotNet and there is no BenchmarkDotNet here.
+
+- **The ladder**: `dotnet run --project gridbench -c Release --no-build -- pool-probe <rows> <iterations>`,
+  at 500, 750, 1000, 1500 and 2000 rows, 240 renders each. Plateau means are taken from steady renders
+  only - the first render of a process is 21 MB and belongs to nothing.
+- **The control**: `... -- fast-ladder 1000 240`, which renders `RadzenFastGrid` through
+  `FastGridFeatureBench.Plain` rather than a copy of it.
+- **The switch table**: each configuration run **twice** at 240 renders, reading the endpoint rather than
+  the transitions. Reading transitions from single runs is what produced the one wrong claim this section
+  records. The environment variables are the ones named in the table, set per process.
+- **No library or test code changed**, and `gridbench` is never compiled by CI, so no benchmark applies
+  to this change and none is quoted. The library still builds at 0 warnings, 0 errors and the suite is
+  `Total: 863`, all passing - unchanged either side, as it must be.
+- **Rung positions from this probe are not comparable with §26's.** The ladder now takes two runtime
+  suspensions per render for the precise counter, in a loop whose subject is when tier transitions land.
+  Plateau *values* are unaffected, and the ordering results here were seen on the single-counter probe
+  first and reproduced on the two-counter one.
+
+### Where this is still incomplete
+
+- ~~**The object is not named.**~~ - **named in §30**, and the hypothesis written here was right while
+  the reasoning under it was wrong. It is a boxed `ComponentFrameFlags`, two per row at 24 bytes, and the
+  mechanism is `Enum.HasFlag` - which boxes its receiver and its argument, and which the JIT expands into
+  a bit test in optimised codegen only. So optimised code does not *eliminate* the boxes; it never
+  creates them, which is exactly why `JitObjectStackAllocation=0` kept the step and left this bullet
+  looking unanswerable.
+- **This section and §26 disagree about the word "grid", and §26's sentence is the one to read
+  carefully.** §26 says the 937.5 KB is "Not the pool, not the grid, not `RadzenDataGrid` - the JIT
+  warming up underneath the harness", and that is right about the *mechanism*: the JIT is what changes,
+  and no grid code was edited to make the number move. But the fast grid's ladder is flat, so the
+  allocation the JIT is removing is emitted by `RadzenDataGrid` or its column type rather than by
+  anything both grids run. Mechanism and location are different questions and §26's phrasing invites
+  reading the answer to one as the answer to the other.
+- **§26's other two leftovers stand.** `DOTNET_TC_CallCountingDelayMs` still demonstrates that promotion
+  timing moves the row without establishing what delayed promotion on the machines that saw the high mode
+  in the first place; nothing here touches that. And the probe still renders in a loop in one process
+  while the benchmark uses a fresh one - what this section adds is that the ladder now predicts four
+  benchmark values rather than three, which is a sharper thing to test than the endpoint alone.
+- **One reading in this section was wrong before repeats fixed it.** A single 160-render run put
+  `DOTNET_TC_OnStackReplacement=0` at C and it was written down as "OSR owns the small step". It does
+  not: at 240 renders every run ends at D. **And the window was not really the problem** - review's OSR
+  runs reached D at renders 82 and 95, well inside 160, so the original run was unlucky rather than too
+  short. The lesson is the harder one: the step positions are a race, which is §26's own thesis, so a
+  single observation of an *absence* is worth very little however long you watch. Repeat it.
+
+---
+
+## 29. The popup sizes itself - the design
+
+§13 deferred column auto-fit for `RadzenFastDropDownDataGrid` and recorded exactly one reason: it did
+not know whether *"the popup grows to the fitted content, or the grid fits within the width the popup
+already has"*, and said both were defensible and different features. §10 has carried that bullet since.
+This section answers it, and the answer is **both, as three named modes**, because working the question
+through showed the two are not rivals - one is the other with a bound on it.
+
+Nothing here is measurement debt or a diagnosis. It is a feature, argued before it is built, which is
+the two-commit shape the branch uses for features.
+
+### The question, answered
+
+**Both, and a third that is neither.** The fork was real but the framing was not: "grow to content" and
+"fit inside a fixed width" differ only in *where the width comes from*, and once growth is capped at the
+viewport - which it must be, or the panel leaves the window - the grown case ends with a fixed width
+too, and needs the same redistribution the other case needs. So they compose:
+
+```
+PopupFit { None, Columns, Content }
+```
+
+- **`None`** - today. Nothing forwarded, no script, no cost. The default.
+- **`Columns`** - the panel is the width it would have had - its control's, or `PopupWidth` - and the
+  grid apportions that width by content. Not literally "the width it has": see the surface below.
+- **`Content`** - the panel grows to what the columns need, bounded, and the grid then apportions
+  whatever it landed on.
+
+`Content` is `Columns` with a growth step in front of it. That is why one parameter carries all three
+and why the inner grid's own `AutoFitColumns` and `AutoFitOverflow` are **not** part of the drop-down's
+surface: both non-`None` modes imply `Once`-semantics and both imply `AutoFitOverflow.Fit`, so exposing
+them would only create the question "what happens if I set `PopupFit=None` and `AutoFitColumns=Once`".
+Column-level `MinWidth`, `MaxWidth`, `AutoFit` and `AutoFitPriority` are unaffected: they are declared on
+the columns the author writes into `ChildContent` and reach the grid without the drop-down's help.
+
+### What it is for
+
+**A lookup popup is the one grid where truncation is the whole failure.** The user opened it to read
+values and pick one. `RadzenFastDropDownDataGrid` gives its popup a `min-width: 400px` and otherwise the
+width of the control it hangs from, and its grid is `table-layout: fixed` - so five columns get 80px
+each and every value longer than 80px ends in an ellipsis. That is the shape §13 was written for,
+arriving in the component where it hurts most.
+
+**It is also a vertical question.** The popup's height is governed by two unrelated things today: when
+paging there is **no height bound at all**, so the panel is as tall as `PageSize` rows make it, and when
+virtualizing it is `PopupHeight`, defaulting to `"285px"` against an `ItemSize` of `37`. That is **7.7
+rows** - seven and a sliver. `MaxRows` below replaces that with a number that means what it says.
+
+### The surface
+
+Four parameters on the drop-down, one of them new-shaped rather than new:
+
+| | |
+|---|---|
+| `PopupFit` | `None` (default), `Columns`, `Content`. Above. |
+| `PopupWidth` | Under `Content`, the **cap** on the growth; under `Columns`, the width. Requires `PopupFit != None`. |
+| `MaxRows` | The panel's height in data rows. Requires `PopupFit != None`. |
+
+**`PopupWidth` and `MaxRows` both do nothing under `None`, and that is the same rule twice.** `None`
+means no script, so there is nothing to apply either of them with - the alternative would be a second
+implementation in C# for the mode whose whole definition is that it costs nothing. Neither is silently
+half-applied: `MaxRows` bounds no box at all rather than clamping the popup to `PopupHeight`, which
+would have applied the very default it exists to replace.
+
+**Turning `PopupFit` on at all supersedes a `width` in `PopupStyle`**, not merely setting `PopupWidth`.
+The pass writes the panel's width on every open and never reads what was there, because what was there
+is a shrink-to-fit answer at the moment it is measured rather than the author's intent. `PopupWidth` is
+how that intent is stated. A `min-width` in `PopupStyle` is *not* superseded - a floor and a width are
+different claims, and the floors compose.
+
+**Both non-`None` modes imply `AutoFitOverflow.Fit` on the popup's grid.** What that does *not* buy is a
+guarantee against a horizontal scrollbar - see *What the build changed*. A column with no `MinWidth` is
+floored at its own body width and will not truncate, so a popup whose columns declare no floor scrolls
+sideways once the viewport cap bites. Declaring `MinWidth` is what gives the fit something to take.
+| `PopupStyle`, `PopupHeight` | Unchanged, and superseded by the two above when those are set. |
+
+**`PopupWidth` is a cap under `Content` and a width otherwise, and that is not two meanings.** An author
+who writes both `PopupWidth` and `PopupFit=Content` has said "size to the content, but never past this",
+which is a sentence, not a contradiction. §27 shipped a throw for two columns claiming one settings
+identity because those claims were unreconcilable; these reconcile, so the collision is resolved rather
+than reported. It also removes the `PopupMaxWidth` that would otherwise be a fourth parameter: the cap
+and the fixed width are the same number wearing two hats.
+
+**`MaxRows` supersedes `PopupHeight`, and `PopupWidth` supersedes `PopupStyle`'s width**, by the same
+rule and for the same reason: the string forms are authored CSS this feature would otherwise have to
+*parse* in order to bound, and §4's path derivation exists precisely so nothing in this codebase parses
+what it can be told.
+
+**`MaxRows` requires `PopupFit != None`**, documented rather than worked around. It needs a measurement
+- see below - and `PopupFit` is what puts the code in the browser at all. §13 set this precedent
+deliberately with `AutoFitMode.OnDemand` requiring `AllowColumnResize`, on the same grounds.
+
+### Where the work happens, and why the order is the whole design
+
+`Radzen.openPopup` **measures the panel once** - `display:block`, `visibility:hidden`,
+`getBoundingClientRect()` - and decides from that one rect whether to flip the panel above the control
+and whether to shift it left. Nothing re-runs that decision. So there are only two coherent designs, and
+one of them is wrong:
+
+1. **Size first, then let `openPopup` position the final panel.** One placement, correct, and the
+   viewport-awareness comes from upstream code this branch does not touch.
+2. Position first, then grow, then re-position. The panel appears at one width and jumps to another, and
+   the second call re-runs the *vertical* flip decision - so a popup can flip above the control after
+   the user has already seen it below.
+
+**The design is (1).** The open path becomes:
+
+1. `OpenPopup` sets `built`, arms positioning, renders. Unchanged.
+2. In `OnAfterRenderAsync`, before `Radzen.openPopup`: one call into `fastgrid.js`, which makes the
+   panel measurable, measures, and writes the panel's width and height and the column widths.
+3. `Radzen.openPopup` is then called with **`syncWidth: false`**, because the width is now ours. It
+   measures a panel that is already final and positions it accordingly.
+
+**Step 2 leaves the panel `display:block; visibility:hidden` rather than reverting it**, because those
+are the exact two properties `openPopup` sets before its own measurement. The two calls then share
+**one** layout instead of forcing two. The risk this takes is stated rather than hidden: if the circuit
+drops between the two calls, the panel is left block-and-hidden - `position: absolute` and invisible, so
+it displaces nothing - and the next open puts it right.
+
+**`Columns` takes the same path**, even though its panel width does not change. One code path, and it
+also removes the frame in which the columns are still in equal shares. `MaxRows` forces the path too:
+the panel's *height* feeds `openPopup`'s flip-up decision just as its width feeds the shift-left one.
+
+The redistribution step is not new work. The table's `parentElement` inside the popup is
+`.rz-data-grid-data`, so `AutoFitOverflow.Fit`'s container arithmetic and the `ResizeObserver` in
+`watch()` already have a bounded box to measure and need no change.
+
+### What the theme supplies, and what it does not
+
+Two facts about the shipped theme, marked as §13 marks its own, because a theme change invalidates them
+and nothing else here:
+
+- **`.rz-dropdown-panel` and `.rz-multiselect-panel` are `box-sizing: content-box`**, set deliberately
+  against the global `[class^=rz-]{box-sizing:border-box}` reset. A width written on the panel is its
+  *content* width; the border and padding land outside it. `--rz-dropdown-panel-padding` is `0` in the
+  default theme, so today only the border escapes - but a theme with panel padding makes this large, and
+  it is what `openPopup` measures and what actually overflows the window.
+- **Neither class declares a `width` or a `max-width`.** Nothing in the theme fights the growth.
+
+The chrome is therefore subtracted from the cap by reading it, through the `edges()` helper `fastgrid.js`
+already uses for exactly this problem one level down. **Not** by forcing `box-sizing: border-box` on the
+panel: reading a theme's real numbers rather than overriding them is how all three of §13's
+theme-derived decisions were made.
+
+### Two floors compose
+
+Under `Content` the panel is never narrower than **the greater of** the author's `min-width` and the
+width of the control it hangs from.
+
+The control-width floor exists because `syncWidth: false` removes one. Today `syncWidth: true` also
+writes `popup.style.minWidth` from the control's width when the panel has none; turning `PopupFit` on
+stops that, and a 600px control over a narrow grid would otherwise get a 400px panel - **a popup
+narrower than the control it drops out of**, which reads as a rendering fault.
+
+The author's floor is read off `getComputedStyle(panel).minWidth`, already resolved to pixels, on a call
+being made anyway for the chrome. That is why there is no `PopupMinWidth` and no change to
+`PopupStyle`'s default: **two floors do not conflict, they compose by maximum**, and the collision this
+looked like was an artefact of treating one of them as a width.
+
+The consequence is stated plainly because it is the feature: **a grid that turns on `PopupFit=Content`
+will get narrower popups than it gets today** whenever its content is narrower than 400px and its
+control is too.
+
+### The cap
+
+`window.innerWidth`, minus the scrollbar allowance, minus the panel's own chrome.
+
+**`window.innerWidth` rather than `document.documentElement.clientWidth`, to agree with `openPopup`.**
+Being right about scrollbars matters less than agreeing with the clamp: `openPopup` only shifts a panel
+left `if (window.innerWidth > rect.width)`. A cap that permits a panel one pixel wider than that turns
+the clamp **off entirely**, and the panel overflows with nothing left to pull it back - the single
+failure this cap exists to prevent.
+
+**The margin is `window.innerWidth - document.documentElement.clientWidth`, floored at 8px.** That
+difference *is* the classic scrollbar, which is the thing that makes `innerWidth` a lie; it is zero on
+overlay-scrollbar platforms, where the floor takes over. Deriving it from the panel's own padding was
+considered and rejected: that value is `0` in the shipped theme, so a derived margin would silently
+vanish - the case where a derived number is worse than a literal.
+
+### When a fit runs, and what it waits for
+
+**Once per open.** Not once per built grid: under `Content` a stale fit is a stale *panel width* -
+persistent, visible chrome that is wrong until something re-runs it - where under §13's outer-grid
+`Once` it was only a column a little too wide. Per-open costs nothing extra, because the open path is
+already the measurement path.
+
+**Not once per view change.** §13 rejected the continuous mode for the outer grid; here it is worse,
+because the thing that would move is the popup itself, under the pointer. The panel is still while it is
+open and re-sizes between a close and an open, where nobody is reading it.
+
+**The wait is bounded at ~250ms**, and which sources it helps follows from two facts:
+
+- **The drop-down's `OnAfterRenderAsync` runs before the inner grid's** - the renderer calls parents
+  before children, which `RadzenFastGrid.Data.cs` already relies on by name for §23's owed-load rule.
+- **`loadOwed` is set only for `LoadData` or executor-backed sources.** An in-memory `Data` composes
+  during the render itself.
+
+So an in-memory source has its rows in the DOM already and waits **zero**; an asynchronous one has not
+even *started* its load when we measure, and the wait covers a whole query from before it was issued.
+250ms therefore catches a warm local query and gives up on a cold one, and a cold one opens unfitted and
+is fitted on every subsequent open. It is a chosen number, not a derived one, and is recorded as such.
+
+`ready(tableId, wait)` already implements this shape - a `requestAnimationFrame` loop with a clock able
+to win the race, because rAF does not fire in a backgrounded tab - so what is new is a ceiling, not a
+mechanism.
+
+**1000ms, `ready`'s own ceiling, is wrong here** and the difference is the point: for the outer grid a
+slow fit costs nothing visible, because the grid is already on screen. Here it costs the panel's
+appearance, and a click that produces nothing for a second reads as broken.
+
+### Rows in height, not pixels
+
+`MaxRows` bounds the scrolling wrapper, and the height is **measured, not multiplied**.
+
+`MaxRows × ItemSize` was the cheap version and it is wrong: the wrapper bounds the *whole grid* - header
+row, filter row when `AllowFiltering`, data rows, pager - so `MaxRows=8` at `ItemSize=37` yields a 296px
+panel showing about five rows. It would be today's 7.7-row wart renamed, with a name that lies. And
+`ItemSize` is documented as the row height *when virtualizing*; a paging popup's row height is the
+theme's.
+
+Measuring is near-free because the pass that measures the columns is already running and has already
+forced the layout: the header's height, the pager's and one data row's are a handful of
+`getBoundingClientRect` reads against boxes that are already computed. That is the whole reason
+`MaxRows` requires `PopupFit != None`.
+
+**`PageSize` keeps its own meaning** - how many rows the query returns - and stops being conflated with
+the height, which today it decides by accident because nothing bounds it. An author may fetch ten and
+show six.
+
+### An empty result fits its columns and does not grow the panel
+
+A filter matching nothing leaves headers and `EmptyTemplate`. The columns are still apportioned by
+header width - a header is real content, and dividing the panel by title width beats equal shares - but
+**the panel does not grow**, because growing chrome on the strength of five column titles produces the
+one sequence nobody wants: open narrow, clear the filter, reopen wide.
+
+It also nearly falls out of the existing code, which already keeps `headerPx` separately from the body
+measurement and already treats it as the floor a column falls back to.
+
+### Deliberately not built
+
+- **No animation.** §13 animates only a fit somebody asked for. Columns settling inside a panel that is
+  itself appearing are two motions reading as one glitch. This means the drop-down must re-arm the grid's
+  *automatic* path per open rather than call the public `AutoFitAsync()`, which is the animated path and
+  the one that replaces user-chosen widths - so a small internal seam on the grid, in preference to
+  reusing a public API that would do two wrong things.
+- **No public re-fit while the popup is open.** Under `Content` it would resize and re-position the panel
+  under the pointer, which is the jump the ordering above exists to avoid. The public `Grid` property is
+  documented as not the way to do this. A version that took effect only on the *next* open was considered
+  and refused: a method whose effect is invisible until an unrelated gesture cannot be documented
+  truthfully. `PopupWidth` is the escape hatch and stays correct.
+- **No positioning of our own.** Aligning to the control's *right* edge, rather than to the window's,
+  would need `fastgrid.js` to reimplement smart positioning, RTL and the document-click dismissal wiring
+  that `OnPopupClose` depends on - in the component §13 called the worst-reviewed slice on the branch.
+  Upstream's clamp already expands leftward: a 500px panel on a control at x=600 in a 1000px window lands
+  at 500-1000, left of the control's own left edge. **The width is ours and the position is upstream's**,
+  and the two rules are not identical - this one is anchored to the window edge.
+- **No cap on what the fit measures.** A knob that changes what a measurement *sees* makes fits
+  irreproducible, and §25 has already settled what the pass may cost.
+
+### How it is verified
+
+§9's layers, with the browser layer doing the work that matters:
+
+1. **Markup / bUnit** - `PopupFit=None` forwards nothing and emits no table id; `Columns` and `Content`
+   forward `Once` and `Fit`; `MaxRows` with `PopupFit=None` is a documented no-op and is asserted as one;
+   the wrapper is emitted when `MaxRows` or `AllowVirtualization` is set and not otherwise.
+2. **Interop contract** - `Radzen.openPopup` is called with `syncWidth: false` exactly when
+   `PopupFit != None`, and with `true` otherwise. This is the seam the whole ordering rests on and it is
+   invisible in markup.
+3. **Browser, real Chromium** - the parity fixture pre-renders with bUnit, writes static HTML and exposes
+   `fastgrid.js` as `window.__fastgrid`. **`Radzen.Blazor.js` is loaded onto that page too**, so the
+   assertions can call our pass and then `Radzen.openPopup` and read the panel's final rect. What is
+   asserted: the grown width; the cap actually preventing overflow *including* the content-box chrome
+   that lands outside it; the leftward shift for a control near the right edge; the composed floor;
+   `MaxRows` yielding that many data rows; an empty result fitting columns without growing the panel.
+   Testing our pass alone would test everything except the claim the design rests on - that `openPopup`
+   positions a final width correctly - which is a claim about code we do not own.
+4. **Playground** - a drop-down on `Home.razor` under the auto-fit controls already there, and placed
+   near the **right edge** of the page, because a popup that never has to shift never exercises the
+   branch most likely to be wrong. §9 layer 6, not optional for behavioural change.
+5. **Mutations** - against the cap arithmetic, the floor composition and the `syncWidth` argument, on
+   §24's rule that a mutation whose application is not confirmed is not a mutation.
+
+The fixture's known fragility is its **auto-fit columns** - the two `x => x.Id` columns are a deliberate
+collision and the second declares `UniqueID` - and adding a panel and a second script does not touch them.
+
+### The order it lands in
+
+1. **This section**, before the code.
+2. **The feature**: `PopupFit`, `PopupWidth`, `MaxRows`, the script's measure-and-write, the internal
+   re-arm seam on the grid, `syncWidth: false`.
+3. **README, the drop-down's cost rows, §10 and §13's "Recorded open"**, which both carry the deferral
+   this closes.
+
+### What the build changed
+
+**A cap the browser is free to ignore is not a cap.** The arithmetic above was right and the panel was
+still 3318px wide in an 1100px window, because `min-width` beats `width` and the author's floor was
+still sitting on the element. The fix is that the pass writes **both** declarations, always, to the same
+number - so the width it chose is the width the browser is allowed to use. This is the single most
+important thing the build found, it was found by the browser layer rather than by reading, and it is the
+exact failure the cap exists to prevent: `openPopup` only shifts a panel left while `window.innerWidth >
+rect.width`, so a panel that reaches the window width disarms the only thing that would pull it back.
+
+**Writing `min-width` means it can no longer be read.** On the second open `getComputedStyle` answers
+with our own answer to the first, and the floor becomes defined in terms of itself - it would ratchet
+downwards, one open at a time. The author's floor is therefore read once and remembered on the element,
+which is the idiom `openPopup` itself uses to remember where it moved a panel from.
+
+**Nothing has to be re-armed.** This section said the drop-down would "re-arm the automatic path per
+open" and would need a seam for it. The seam is real but it is not about re-arming: forwarding
+`AutoFitMode.OnDemand` gives a grid whose render loop never fires a fit of its own, so the drop-down is
+already the only thing that decides when one happens. What the seam is actually for is the word
+*automatic* - not animated, and not permitted to replace a width the user chose - which the public
+`AutoFitAsync` would get wrong in both directions.
+
+**The margin does not keep the panel off the edge, and this section said it did.** `openPopup` clamps
+flush - `left = window.innerWidth - rect.width` - so a panel that has to shift ends up against the window
+edge whatever margin we left. The margin has exactly one job, and it is the other one this section gave
+it: keeping the *width* below `innerWidth` so that clamp stays armed at all. The claim about how it looks
+was wrong; the claim about what it prevents was right.
+
+**Forcing `Fit` does not prevent a horizontal scrollbar**, and the sentence above saying it does is
+withdrawn. §13 gives a column with no declared `MinWidth` a hard floor at its own body width, so an
+unbounded column never truncates, the distribution has nothing to take, and a capped popup ends with a
+table wider than its panel - which scrolls. That is §13's rule working exactly as argued, not a fault
+here, and it is the same answer the outer grid gives. **A popup that must fit needs `MinWidth` on its
+columns**, and the playground declares them for that reason. Found by running the playground, not by any
+test: with floors the table goes 676px to 560px inside a 594px panel and eight cells truncate instead.
+
+**The measuring pass runs twice under `Content`.** Once to choose a width, once inside the fit to measure
+against the width that was chosen. Accepted rather than engineered around: a popup renders `PageSize`
+rows - five by default - so the second layout is over a handful of cells, and the alternative is a second
+seam through the placement half of a function §13 spent a long time getting right.
+
+### What the build met that this section treated as hypothetical
+
+Both "read the shipped upstream file again" bullets were read, and both found more than they asked for.
+
+- **`if (syncWidth)` holds exactly two writes**, and the second is `popup.minWidth = true` - an *element
+  property* used as bookkeeping, which `closePopup` reads to decide whether to clear `style.minWidth`.
+  It is not the typo it looks like. `closePopup` never resets it, so it latches once set; with
+  `syncWidth: false` it is never set, and our floor therefore survives a close. It is already never set
+  today, because `PopupStyle`'s `min-width: 400px` makes the guard that writes it false.
+- **The early return needs `rz-autocomplete-panel`.** Ours are `rz-dropdown-panel` and
+  `rz-multiselect-panel`, so leaving the panel displayed for `openPopup` to reuse does not skip the
+  placement. Asserted rather than assumed.
+- **`openPopup` reparents the panel to `document.body`** - it must, because `.rz-dropdown` is
+  `position: relative; overflow: hidden` and would otherwise clip its own popup - and **`closePopup` does
+  not put it back**; only a full teardown does. So every open after the first is measured with the panel
+  somewhere else in the tree. The pass is insensitive to that because every input it takes is either a
+  width it writes itself or an element it resolves by id, and that insensitivity is now a test rather
+  than a claim.
+- **`openPopup` installs a `visualViewport` handler that rewrites `maxHeight`** - but only when the panel
+  contains `.rz-dropdown-items-wrapper` or `.rz-multiselect-items-wrapper`. Ours holds a
+  `.rz-lookup-panel` and a grid, so it is never installed and cannot fight `MaxRows`.
+
+### The mutations
+
+Fourteen, each confirmed to have applied to the file on disk and each run against a suite that reported
+a non-zero total - §24's rule, and §27's variant of it where an anchor silently missed.
+
+**Six survived the first pass, and every one of them was a gap in the checks rather than dead code.** The
+page the browser layer measures always has a vertical scrollbar, so the margin's 8px floor never bound;
+the popup's content is 760px in an 1100px window, so no scenario ever wanted more room than there was,
+which left both viewport caps unexercised; the rows are in the static DOM, so the patience ceiling was
+never reached; the box was always shorter than its content, so clearing it before measuring changed
+nothing; and two assertions were one-sided - "the empty popup is narrower than the grown one" is true
+whether the growth was skipped or merely small, and "four rows is shorter than twenty" is true even when
+the height was read off the previous answer.
+
+Four scenarios and two sharper assertions close all six: content deliberately wider than a window whose
+own scrollbar has been taken away, a floor past the window with growth switched off so nothing rescues
+an uncapped base, twenty rows followed by four with the drop measured in rows rather than in pixels, and
+an empty result whose *header* is wide enough to grow the panel if anything let it. All fourteen are
+caught.
+
+### What the review found that the build had not
+
+Two axes, read-only Standards and a Spec reviewer allowed to run things. Between them four findings the
+build had missed, and three are the same shape: a *confident* sentence that was wrong rather than a
+doubtful one. §27's lesson was that a recorded doubt nobody acts on is how a regression ships; this
+piece's is that the sentences carrying no doubt at all are the ones nothing was checking.
+
+- **The feature switched itself off for a whole authoring shape, silently.** `RunAutoFitAsync` returns
+  early when no column wants fitting, which is right for a grid - there is nothing to write - and wrong
+  for a drop-down. `CanAutoFit` excludes any column declaring a `Width`, so a lookup whose columns are
+  all fixed got no panel width, no `MaxRows` height and `syncWidth` left on, with nothing saying why.
+  That is an ordinary shape - fixed columns and a row count - and it was in none of the doubt bullets.
+  The panel is the popup's, not the columns'.
+- **`MaxRows` under `None` was not the no-op this section called it.** `HasWrapper` read
+  `AllowVirtualization || MaxRows > 0` with no reference to `PopupFit`, so a `MaxRows` nothing would
+  measure still emitted a bounded, scrolling box at `PopupHeight` - clamping the popup to the 7.7-row
+  default `MaxRows` exists to replace. **And the test cited as covering it checked only the two halves
+  that were no-ops**: no script call, and the grid's mode. It asserted the harmless half of a claim and
+  read as if it had asserted the claim.
+- **`PopupWidth` does nothing under `None`**, while this section and the README both called it "the
+  width" there. Corrected in the surface above rather than in the code: `None` means no script.
+- **Turning `PopupFit` on discards a `width` in `PopupStyle`** whether or not `PopupWidth` is set,
+  because the pass never reads the existing width. Also a documentation fault; the behaviour is right.
+
+Two smaller things, both worth doing. `PopupChrome` and `PopupFitAsk` re-listed the same six fields with
+a hand copy joining them, so adding a seventh popup knob was a five-site edit - the shape a
+caller-ordered argument list has, arriving by another road; they nest now, as `AutoFitAsk` already did.
+And two names said something other than what they were: `PopupFits` is one character from the parameter
+it reads and asserts a fact about the screen, and `widen` also narrows. They are `PopupIsSized` and
+`sizePanel`.
+
+**The floor memo was a latch and is now a cache.** `PopupStyle` is a parameter and a theme is a
+stylesheet; either can put a new floor on the panel after the first open, and a memo that never looked
+again would answer with a number nobody had asked for since. It re-reads whenever the declaration is not
+the one the pass itself last wrote - **and getting that comparison wrong cost the rest of the piece**:
+the first version compared the written *string* against `getComputedStyle`'s, which normalises, so a
+width written as `409.99999px` came back as `410px`, read as somebody else's declaration, and was
+adopted as the author's floor. That ratchets - the floor becomes whatever the panel last happened to be
+- and an empty popup stayed at the width it had been grown to. Compared as numbers now.
+
+**And the probe had the same bug from the other side.** Its capped scenario restored
+`panel.style.minWidth` to what was there, which is the width *the pass* wrote, planting it as an
+author's declaration for every scenario after it; it clears the floor instead. Worth recording because
+the fixture is what decides whether any of the above is true, and it was quietly answering a different
+question than its scenario names claimed - the popup pane also carried the component's default
+`min-width: 400px` against five columns needing 376, so the floor answered everything and nothing in
+that pane ever grew. It declares no floor now, which is also the only way the "author declared nothing"
+path gets exercised at all.
+
+**Sixteen mutations, all caught**, including two the review's own fixes made reachable: sizing a popup
+none of whose columns can be fitted, and `MaxRows` bounding nothing without a fit.
+
+### Where this could still be wrong
+
+- **250ms is chosen, not derived**, and the source that most wants it - a warm executor-backed lookup -
+  is the one this branch has least ability to time honestly on one machine. What is measured is only
+  that the ceiling is reached and left; whether it is the right ceiling is not measured by anything.
+- **`MaxRows` measures a pager that may not be there** - **half closed.** Two shapes are checked now,
+  not one: the single-select pane has `AllowPaging` off and carries no pager, and a second pane was added
+  with paging on that does. The arithmetic subtracts the rendered rows from the whole box and keeps
+  everything else, so a pager is chrome it never names and therefore never has to know about - and that
+  is now measured rather than argued.
+
+### A virtualized popup's first open is fitted to a window that is about to change
+
+The remaining half of that bullet was checked in the playground, which is the only instrument that can:
+`Virtualize` needs a live runtime, and the browser fixture is static HTML. It found a real consequence,
+measured at 1000 rows with `PopupFit=Content`, `MaxRows=6` and a floor on every column:
+
+| open | panel | rendered rows | truncated cells |
+| --- | ---: | ---: | ---: |
+| **first**, window not yet settled | 829 px | 106 | **112 of 424** |
+| second and third, settled | 861 px | 106 | **0 of 424** |
+| the same popup paged instead | 821 px | 8 | 0 of 32 |
+
+**The first open sizes the panel from one window and fits the columns to another.** The measurement
+happens against the window `Virtualize` built for `PopupHeight`; `MaxRows` then rewrites that height,
+`Virtualize` re-renders, and the fit that follows is against rows whose content is wider than anything
+the growth saw. The columns are squeezed onto their floors and a quarter of the cells truncate - in a
+panel that grew specifically so they would not.
+
+**It is not fixed, and measuring it is what settled that it should not be.** Three fixes were considered
+and each fails for a reason worth recording:
+
+- *Measure once and use those numbers for both* - the split `autoFit` would allow - **does not help.**
+  The rows that truncate are ones that had not been rendered when any measurement ran, so one measurement
+  or two makes no difference to them.
+- *Re-fit once the window settles* is the continuous mode §13 rejected, and here it would resize the
+  panel under a pointer that is already inside it.
+- *Write the height before measuring* only moves which window is the wrong one, because `Virtualize`
+  re-renders on its own schedule and over-renders by a wide margin - 106 rows for a box eight rows tall.
+
+The root cause is §13's own documented semantics arriving somewhere they bite harder: *"what it measures
+is what is rendered"*. What is new is that the **panel's width** is now derived from that, so being wrong
+about the window is visible truncation rather than a column that is merely narrower than ideal. **It
+corrects itself on the next open**, which is what per-open fitting buys, and an author who cannot accept
+one badly-fitted first open should page the popup rather than virtualize it.
+- ~~**Multi-select is inferred, not checked.**~~ - **closed.** A second browser pane opens a `Multiple`
+  drop-down and asserts what the single-select pane asserts: it sizes itself, it is placed, its chrome
+  lands outside the width written on it - the `content-box` fact, which had been read off the theme for
+  both classes and asserted for one - and it stays inside the window. A `Multiple` bUnit case covers the
+  C# half. Both are held by a mutation that swaps the two panel classes over, which the analyzer would
+  not let be written as the more obvious "always return the dropdown class": `CA1822` fires the moment
+  the member stops reading `Multiple`, and this library treats warnings as errors.
+- **The panel is left block-and-hidden between the two calls**, and if the circuit drops between them it
+  stays that way until the next open. Claimed harmless because it is `position: absolute` and
+  `visibility: hidden`; the browser layer only ever sees the pair complete.
+- **Growth is relative to a base, and the base is trusted.** `outer = base + (measured - container)`
+  assumes every box between the panel's content edge and the table's container is full-width chrome that
+  does not change. That is true of the markup this component emits and is not enforced anywhere: a
+  `CssClass` that makes one of those boxes narrower than its parent would make every growth answer wrong
+  by the difference, silently.
+
+---
+
+## 30. §28's object, named - it is a box the JIT never creates
+
+§28 closed the mechanism and left the identification open, and said so plainly: *"Tier-0 allocates 48.5
+bytes per row that optimised code does not" is a mechanism, not an identification*, with boxing
+elimination written down as *"a hypothesis with no measurement behind it"*. It also left a prediction it
+had not confirmed - that the fourth rung, 13.78 MB, should be reportable by the benchmark though 190
+fresh processes had never returned it.
+
+Both are closed. The hypothesis was right, and the reasoning under it was wrong in a way that explains
+§28's own most puzzling negative result.
+
+### The object
+
+**A boxed `Microsoft.AspNetCore.Components.RenderTree.ComponentFrameFlags`**, 24 bytes, two per row.
+
+| arm | KB/render | rung | `ComponentFrameFlags` ticks |
+| --- | ---: | :---: | ---: |
+| tier-0 | 14,159.0 / 14,159.0 | A | **166 / 188** |
+| optimised | 14,111.6 / 14,111.6 | B | **0 / 0** |
+
+Two runs an arm, 400 renders each. Every sampled object is 24 bytes exactly - the probe reports object
+bytes beside the count, and 3,984 / 166 and 4,512 / 188 are both 24.0.
+
+**"Absent" is a bound, not an observation.** Zero ticks over 800 optimised renders says the rate is
+below what this instrument can see, not that the object is never allocated. That is still the shape an
+identification wants and a correlation never has - one arm has it and the other cannot be shown to - and
+it is worth stating carefully in a section whose own lesson below is that this instrument has a
+resolution.
+
+### How it was asked
+
+The runtime raises `GCAllocationTick` about every 100 KB carrying the *type* that crossed the threshold,
+so a tick count per type samples allocated bytes weighted by volume. `alloc-types` in `gridbench` listens
+for it over the same render `PoolProbe` and `FastGridFeatureBench.ReferenceDataGrid` use.
+
+**Choosing the pins took two corrections, and the first was found by review after the section had been
+written on the wrong one.**
+
+- **`DOTNET_TC_CallCounting=0` is not a pin.** It stops methods being *counted*, and a process still
+  leaves rung A partway through a long run - review saw it go at render 32, and a 400-render histogram
+  taken under it reported 13,309.9 KB a render, which is not rung A and not any rung: it is a mixture.
+  That arm's histogram would have been of two configurations at once. `DOTNET_TC_CallCountingDelayMs=600000`
+  holds it, and is what everything above was re-measured under.
+- **The two pins differ in a second way.** The tier-0 side compiles *Instrumented* Tier0 - the
+  disassembly carries `CORINFO_HELP_CLASSPROFILE32` and `COUNTPROFILE32` - and the optimised side
+  instruments nothing, so PGO's instrumentation is a candidate for the whole 47 KB. Asked directly:
+  `DOTNET_TieredPGO=0` beside the delay, uninstrumented and never promoted, holds rung A across renders
+  5-39. The confound is dead and the remaining variable is codegen.
+
+| pin | rung | KB/render |
+| --- | :---: | ---: |
+| `DOTNET_TC_CallCountingDelayMs=600000` | A | ~14,157 |
+| `DOTNET_TieredCompilation=0` | B | ~14,110 |
+| `DOTNET_TieredPGO=0` + the delay | A | ~14,157 |
+
+**Every run prints its own KB per render and this section quotes it, because that is the check that the
+arm held.** §26's thesis is that the transitions are a race; flatness observed in one process says
+nothing about another. A histogram whose KB is not its arm's rung is a histogram of nothing in
+particular, and nothing but that line would say so.
+
+### The mechanism, in the disassembly
+
+`Enum.HasFlag(Enum)` boxes twice per call - the receiver, because the method is declared on `Enum`, and
+the argument, because the parameter is typed `Enum` - and the JIT expands it into a bit test in
+optimised codegen only. At tier-0 the call is real and both boxes are allocated.
+
+That is not inferred here. `Renderer:InstantiateChildComponentOnFrame` at tier-0, on arm64:
+
+```
+    movz x0,#0xBE40 movk x0,#0xB64 LSL #16 movk x0,#1 LSL #32
+    bl   CORINFO_HELP_NEWSFAST          ; box 1
+    str  x0,[fp,#0x88]
+    ldr  x0,[fp,#0xD0]  ...  blr x1     ; get_ComponentFrameFlags()
+    ldr  x1,[fp,#0x88]  strb w0,[x1,#8] ; box 1 payload <- the flags
+    movz x0,#0xBE40 movk x0,#0xB64 LSL #16 movk x0,#1 LSL #32
+    bl   CORINFO_HELP_NEWSFAST          ; box 2, same type handle
+    mov  w1,#1          strb w1,[x0,#8] ; box 2 payload <- the flag constant
+    ldr  x1,[fp,#0x80]  ldr x0,[fp,#0x88]  blr x2   ; HasFlag(receiver, argument)
+    cbnz w0, G_M000_IG07                ; branched on as a bool
+```
+
+Two allocations of the same type handle, one filled from the getter and one from a constant, both passed
+to a two-argument call whose result is a branch. The method's other `NEWSFAST` sites are each followed
+immediately by `CORINFO_HELP_THROW` and are exception paths. The same source under
+`DOTNET_TieredCompilation=0` is:
+
+```
+    ldrb w0,[x21,#0x06]
+    tbz  w0,#0, G_M000_IG04
+```
+
+A byte load and a bit test. No allocation, and the only `NEWSFAST` sites in that listing are the same
+two throw paths.
+
+Two boxes at 24 bytes is **48 bytes a row** against a step of 48.5-48.8, so 1-2% is unaccounted for.
+
+**This is why `DOTNET_JitObjectStackAllocation=0` kept the step, which §28 recorded as its sharpest
+negative and could not explain.** Escape analysis was never the mechanism. Optimised code does not
+*eliminate* these boxes; it never creates them, because the call that would have created them is gone
+before there is an allocation to analyse. §28 read that result as "not escape analysis, and beyond that
+the matrix says only what it is not". It says more: it was pointing at the right answer from the wrong
+side.
+
+**It also retires a location claim §28 made and this section is the first to contradict.** §28 concluded
+that the allocation "is emitted by `RadzenDataGrid` or its column type rather than by anything both grids
+run". It is emitted by the framework's own `Renderer`, which both grids run. §28's *observation* survives
+untouched - the fast grid's ladder is flat - and its inference does not: the fast grid emits far fewer
+component frames per row, so it exercises this site at nothing like the same rate. Absence there was
+always about rate rather than about ownership, which is the weaker reading §28 itself reached for
+elsewhere on the same page and did not apply here.
+
+### Linearity, checked the way §28 checked the step
+
+If it is two boxes a row it must scale with rows. Under the holding pin, 400 renders each:
+
+| rows | KB/render | ticks/render | implied bytes/row |
+| ---: | ---: | ---: | ---: |
+| 500 | 6,688.3 | 0.228 | 48.3 |
+| 1000 | 14,159.0 | 0.443 | 46.8 |
+| 2000 | 29,115.8 | 0.990 | 52.6 |
+
+Doubling the rows doubles the count. The implied bytes/row **straddle** the 48 the box arithmetic
+predicts - one under, one over - which is what a 91-to-396 tick count's Poisson error looks like. An
+earlier draft of this table read the same scatter as a consistent shortfall "in the direction sampling
+error goes", which is not a direction sampling error has; the runs it was drawn from happened to fall
+one way and the claim was a pattern imposed on noise.
+
+### The fourth rung, observed
+
+§28 predicted 13.78 MB and had never seen it. The benchmark reports it:
+
+| pin | reports | rung |
+| --- | ---: | :---: |
+| default | 12.86 MB | D |
+| `DOTNET_TieredPGO=0` | **13.78 MB** | **B** |
+| `DOTNET_TC_CallCounting=0` | 13.83 MB | A |
+| `DOTNET_TC_CallCountingDelayMs=600000` | 13.83 MB | A |
+
+All four rungs are now values the benchmark has returned rather than values a probe inferred.
+
+**The prediction was right about the number and wrong about the route.** §28 guessed that *"a process
+whose promotion is delayed the way `DOTNET_TC_CallCountingDelayMs` delays it should be able to report
+~13.78 as well as ~13.83"*. It reports 13.83 and cannot report 13.78, and the reason is structural:
+delaying promotion holds *everything* unoptimised, which is rung A by definition. Rung B is optimised
+code without dynamic PGO - the small step landed, the big one not - and no delay produces that.
+`TieredPGO=0` does, because it is the same thing said directly.
+
+### What did not survive
+
+**The first version of this measurement reported differences that were noise, and would have named the
+wrong object.** At 60 renders an arm the tick histograms differed by up to 1.4 ticks a render on the
+large types - `RenderFragment` "fell" by 1.37, `<>c__DisplayClass791_0` "rose" by 0.87 - while the whole
+step is **0.459 ticks a render**. Every visible difference was larger than the thing being measured.
+**A sampled instrument has a resolution, and 0.34% of a workload is below this one's** until the sample
+is large enough - §26's lesson about single observations, in another form.
+
+**The type was nearly misnamed by a print width.** The difference first read as
+`Microsoft.AspNetCore.Components.RenderTree.Component`, which does not exist - a throwaway differencing
+script truncated the column at 52 characters. `alloc-types` does not truncate and the full name was in
+its output all along, which is the only reason it was caught: the check was to go back to the raw line
+rather than trust a summary of it.
+
+**And the section shipped on a pin that was not one**, which review found and which is the most important
+correction here: the tier-0 arm of the published histogram could have been a mixture, and nothing in the
+section would have shown it. The fix is not only the better pin but the habit - the arm's own KB per
+render is now quoted for every run, so a reader can check the arm held rather than take it on trust.
+
+### Verified
+
+- **The pins**: `pool-probe 1000 40` under each of the three, reading renders 5-39. A ~14,157, B ~14,110,
+  and the confound run on A.
+- **The histograms**: `alloc-types 1000 400`, twice per arm, each quoting its own KB per render above.
+  **The two histograms were differenced outside the tool** - `alloc-types` prints one run - so the
+  comparison in *The object* is of two printed tables read against each other, not of a diff the probe
+  computes.
+- **The linearity**: `alloc-types <500|1000|2000> 400` under the holding pin.
+- **The disassembly**: `DOTNET_JitDisasm='InstantiateChildComponentOnFrame'` with `DOTNET_JitStdOutFile`,
+  under the holding pin and under `DOTNET_TieredCompilation=0`.
+- **The rungs**: `--job short --filter "*ReferenceDataGrid*"`, one run per pin, each confirmed with
+  `executed benchmarks: 2` before the number was read - §9's check, and the one §24 was caught by.
+- **No library or test code changed.** `gridbench` gains one mode and one extracted helper; `pool-probe`
+  reports the same rungs either side of that extraction, which is the only check available for it.
+
+### Deliberately not proposed
+
+**Nothing here is actionable in this library.** The boxes exist only in unoptimised code in a framework
+method, so they are transient by construction and gone by the time any process is warm. This explains a
+benchmark artefact; it does not describe a cost anyone pays in production, and no change is proposed
+here or upstream on the strength of it.
+
+### Where this could still be wrong
+
+- **1-2% of the step is unattributed**, and the gap has a sign in both directions rather than one: two
+  boxes is 48 bytes a row, the KB step is 48.5-48.8, and the tick-derived estimates straddle 48. What is
+  left over is under the instrument's resolution, so it is bounded rather than asked about.
+- **One `HasFlag` call per row is still arithmetic rather than a count.** The disassembly shows exactly
+  one such site in `InstantiateChildComponentOnFrame`, and that method runs once per component frame, so
+  this is close to settled - but the number of times that site executes per row was not measured.
+- **The `%` column mixes two units.** Large-object allocations tick once per object rather than once per
+  ~100 KB. The probe now counts them separately so the mixture is visible, and no type in this section's
+  argument is one - but the percentages for large types are not shares of bytes.
+- **§28's third leftover is untouched.** `DOTNET_TC_CallCountingDelayMs` still demonstrates that promotion
+  timing moves the row without establishing what delayed promotion on the machines that saw the high mode.
+  That needs those machines.
+
+---
+
+## 31. Filtering by column menu, with pills - the design
+
+§10 has carried an open question since the column model: *"The built-in filter UI is a text box or a
+check-box list, and nothing else... whether any of them should be built in is open."* This answers it,
+and answers it larger than the bullet asked. The four richer UIs §10 listed - operator menu, date popup,
+numeric range, enum picker - are not four features. They are one, and building them separately is what
+would make each of them clunky.
+
+**Nothing here is built.** This section is the design, argued before the code, and it spans five pieces
+rather than one. The order is at the end and it matters.
+
+### What it is
+
+**A filter icon on every filterable column header, opening one context-aware menu; operators matched to
+the column's type and worded as sentences; applied filters shown as removable pills above the grid.**
+
+The bar it has to clear was set explicitly: *simpler than Excel is fine, at least as friendly is not
+optional*. Several decisions below are Excel's affordance without Excel's cost model, and each says so.
+
+### The surface
+
+`FilterUI { Row, Menu }`, grid-wide, **this grid's own enum**. Upstream's `FilterMode` keeps meaning
+*which editor* - text box or check-box list - and stays per-column overridable, which it already is
+through `FilterModeOf`.
+
+That separation is doing real work. `FilterMode` is `Radzen.Blazor`'s enum with four values, of which
+this grid implements two, and a fifth cannot be added without changing a file this branch does not
+touch. Reusing `SimpleWithMenu` or `Advanced` was rejected: both have documented upstream meanings -
+an inline row plus an operator menu, and a two-condition popup - and quietly redefining another
+component's public enum breaks the one promise that matters for a near-drop-in, that a reader can carry
+knowledge across. **Where the editor lives is ours; what the editor is stays upstream's vocabulary.**
+
+Pills are a separate parameter, default off, and work under either `FilterUI`. A pill bar explains
+*applied filters*; tying an explanation feature to an input feature would mean a team that prefers the
+row can never have one.
+
+Everything defaults to today's behaviour, as `AutoFitColumns` and `PopupFit` do.
+
+**§37b overturns that for `FilterUI`, on the user's call.** The menu is the default now; `FilterUI="Row"`
+is how a consumer keeps the second header row. The rule stands for everything else this section adds -
+the pills are still off by default - and it was always a rule about not surprising people rather than a
+law, which is why the person whose grid it is gets to weigh it once the thing exists to look at.
+
+### The model, which is wider than the menu
+
+**Two conditions per column, each with its own operator, joined by a within-column AND/OR.** That is the
+shape `FilterDescriptor` already speaks, which is what keeps §10's `RadzenDataFilter` interop working,
+and it is what the settings format has to be able to hold.
+
+**§33 replaces this paragraph and most of the piece it belongs to.** Two conditions survive, on the
+`In [...] OR IsNull` case alone; the reasoning from the struct does not, and `Between` stops being a
+condition pair. `RadzenDataFilter` emits `CompositeFilterDescriptor`, not `FilterDescriptor` - see §10.
+
+**The menu exposes less: single-condition operators, plus *between*.** A general two-condition editor in
+a header popup is the clunkiness this section exists to remove. The model being able to express more
+than the UI offers is normal, and `FilterTemplate` authors get the rest.
+
+The width was chosen because the settings format changes exactly once (below) and guessing narrow costs
+a break later. It stopped being speculative almost immediately: *"these three values or blank"* on a
+nullable column is `In [...] OR IsNull`, which a fixed range shape could not express.
+
+**Relative dates are stored as tokens and resolved at query time** - today, yesterday, last 7 and 30
+days, this month, this year, to begin with. Resolving a preset to absolute dates at the moment it is
+picked produces a saved filter that is *wrong by design* the next morning, which is a bug report rather
+than a limitation. Settings outlive sessions; a filter that says "last 7 days" has to still mean it.
+
+**§34 keeps every word of that and moves the list.** Those six are *presets*, and a preset is a pair of
+tokens rather than one - `last 7 days` is `Between today-6d today@end`. The tokens are the model's
+vocabulary, the presets are the menu's, and ④ is where the six live.
+
+### Settings, and a hole that exists today
+
+**One deliberate, additive format change.** An old build reading a new blob loses the second condition
+and keeps everything else, because `System.Text.Json` ignores unknown members - which is the correct
+degradation and needs no version field to achieve. A version number buys nothing until there is a change
+that *cannot* degrade silently, and adding one pre-emptively makes every later change argue about it.
+What is worth writing down is the consequence, not the mechanism.
+
+**Restore prefers the stored value and falls back to re-parsing `FilterText` when the value will not
+convert.** This is not new work for the new feature; it fixes something already broken:
+
+`FastGridColumnSettings.FilterValue` is `object?`. A consumer persisting settings through
+`System.Text.Json` turns a `DateTime` into `"2026-09-06T00:00:00"` and gets a `JsonElement` back.
+`RadzenFastGrid.Data.cs` restores with `SetFilter(stored.FilterValue, ...)` and never looks at the text.
+`FilterExpression.Converted` anticipates the case in its own doc comment - *"a stored setting read back
+from JSON"* - but `Convert.ChangeType` cannot convert a `JsonElement`, so it reaches the catch and
+returns null. `FilterText` was stored all along and unused.
+
+**The sentence that stood here said the date filter silently disappears. It does not - it throws, and
+§32 measured it.** The rest of this paragraph is right and the conclusion drawn from it was sized
+against the wrong fault; §32 replaces it and is the design that was built.
+
+Restoring by re-parsing the text *only* was rejected for the reason the text exists in the first place:
+a filter that never came from a box has no text, so lookup columns and programmatic filters would lose
+theirs.
+
+### The menu
+
+**One panel for the grid**, built lazily on first open, retargeted at whichever column's icon was
+clicked, its body `@key`ed so it never carries the last column's state. §29 established both the pattern
+and the reason - a popup that costs nothing while closed - and a panel per column multiplies that by the
+column count for a control of which exactly one can be open. It also gives the pills' click-to-reopen
+somewhere to go without a handle on a particular column's panel.
+
+**Operators, with defaults in bold:**
+
+| type | operators |
+| --- | --- |
+| string | **Contains**, DoesNotContain, StartsWith, EndsWith, Equals, NotEquals, IsEmpty, IsNotEmpty |
+| number | **Equals**, NotEquals, <, <=, >, >=, **Between** |
+| date | **Equals** (whole day), Before, After, **Between**, and the relative presets |
+| bool | **Equals** true/false |
+| enum, lookup, collection | **In**, NotIn - edited as a check-box list |
+
+Nullable columns of any type also get IsNull / IsNotNull.
+
+**Date `Equals` is "whole day" only for a date the user picked.** §34 makes a relative token resolve to
+one instant, so `Equals today` is midnight exactly; the whole-day reading is the menu writing a
+`Between`, and that is this table's job rather than the model's.
+
+**`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`.** A check-box
+list is not a different kind of filtering, it is how a set is picked - and §14's lookup columns already
+filter by `In` over ids, so the operator is the thing that exists and the mode was the accident. The
+parameter is still accepted and maps onto the new model.
+
+**Checklist-first only where the values are already known** - lookup columns, whose map §14 already
+holds, and enums, whose values come from the type. Everywhere else the menu opens on operators and
+offers *"Filter by value..."* as an explicit action that runs the distinct scan **once, on demand**.
+This is the clearest place the Excel comparison had to give: Excel leads with the checklist on every
+column, and §10 measured what that costs here - one `SELECT DISTINCT` per check-box-list column *per
+parameter set*, three scans for one render and two parameter sets, and it took a fix to stop. A menu
+that opens instantly for every column, where the one action that can cost a query is one the user asked
+for, is friendlier than a menu that queries to open.
+
+**§36 keeps the first sentence and refutes the second.** *Checklist-first only where the values are
+already known* stands, and the list of ways to know them was one short: the author saying so, through
+the `FilterMode.CheckBoxList` this paragraph's own predecessor is about. The *"Filter by value..."*
+action does not survive - the grid cannot tell a twelve-value column from a four-hundred-thousand-value
+one without running the scan, so an action offered on every column has a price it cannot know until it
+has been paid.
+
+**A `FilterTemplate` is the whole editor when present** - no operator picker beside it. The template's
+author sets value and operator themselves, so a picker would be a second control fighting the first over
+one piece of state.
+
+**It applies on Apply or Enter, never per keystroke.** A menu holding an operator and up to two values
+cannot filter as you type: a half-typed *between* bound filters to nothing on every keystroke. A
+debounce is a guess about typing speed dressed up as a feature.
+
+**Alt+Down opens it from the focused header cell**, which is Excel's own shortcut. The icon is a real
+`<button>` at `tabindex="-1"`: §12 settled that this grid is **one tab stop**, with the active cell named
+by `aria-activedescendant`, and eight icons in the tab order would undo that. Mouse-only was rejected
+against the friendliness bar; it would be the only mouse-only control on the grid.
+
+**The icon is always visible** on filterable columns, with a distinct state when that column is filtered.
+Hover-only is invisible on touch and unreachable by keyboard without inventing a second mechanism. It
+costs a few render frames per *column*: the header already binds an `onclick` per cell for sorting, so
+this joins a cost that exists rather than introducing a kind.
+
+### The pills
+
+Column title, then a plain-language phrase built from **the same strings as the operators**, so a pill
+reads *"Hired is between 1 Jan and 31 Mar"* rather than inventing a second vocabulary. Lookup ids resolve
+to names through §14's existing map - a pill reading `Status: In [3, 7, 12]` answers "why is data hidden"
+worse than showing nothing, and publishing storage keys to users is the exact fault §27's review caught
+in the column picker. Past a threshold it degrades to a count.
+
+**§37 keeps every rule here and drops one example.** Upstream's operator vocabulary has no *"is"* in
+it, so *"Hired is between..."* and *"the same strings as the operators"* were never both available; the
+rule is the half that survives and a pill reads *"Hired Between 1 Jan and 31 Mar"*. The threshold is
+three.
+
+`x` removes that filter; **the pill body reopens that column's menu with the filter loaded**, which
+matters because the column's header may be scrolled out of view, and that is precisely when someone wants
+to adjust rather than remove.
+
+**Above the scroll container, not below the headers.** This is the one place the design refuses what was
+asked for, and the reason is structural: the header is sticky *inside* `.rz-data-grid-data`, which is the
+horizontal scroller, so a bar placed under it slides out of view exactly when there are enough columns to
+need one. Making it sticky on both axes was the clever alternative and was rejected - §10 already spent a
+section on sticky positioning inside that container, and stacking a second sticky band over sticky
+headers works until a theme changes.
+
+**§37 demonstrates all of this and corrects the last clause.** Injected into the running grid, a bar
+below the headers is gone after 960px of horizontal scroll on eleven columns, and the sticky-on-both-
+axes alternative is gone with it - not *until a theme changes* but under the theme that ships, because
+`.rz-grid-table thead th` carries the `overflow: hidden` that gives a header cell its ellipsis, and a
+clipping ancestor is what a sticky child resolves `left` against.
+
+**Clear is one operation at three scopes** - menu Clear, pill `x`, Clear all - each applying immediately
+and each costing exactly **one** reload. Clear all over six filtered columns must not be six queries, and
+the naive loop over columns calling the public clear is how it becomes six.
+
+### The gate
+
+**Per-row and per-cell allocation must be unchanged.** The feature may cost per column and per active
+filter; it may not cost per row. §3's rules 3 and 5 make allocation a design rule, and 1000 rows x 5
+columns is where this grid's argument lives - a header icon is 8 elements against 5,000.
+
+Bench rows, following the drop-down's *"never opened"* precedent, which is what makes this measurable
+rather than asserted: the header chrome with the icon on, the pills bar with filters applied, and a
+**closed menu costing nothing**. The per-row invariant is a gate that can fail a piece, not a number to
+report afterwards.
+
+### The order it lands in
+
+Five pieces, each its own section and its own review.
+
+1. **The restore fallback.** Small, independent, and currently broken - it should not wait behind a
+   feature that makes it easier to hit.
+2. **The value model.** Second condition, within-column logical operator, expression and OData, settings
+   format. Headless, fully tested, no pixels.
+3. **Relative date tokens.** Headless, on top of 2.
+4. **The menu.** Panel, operators, labels, checklist-on-demand, keyboard.
+5. **The pills.**
+
+**§35 splits ④ in two**, where its gates split: §35 is the panel, the operators, the editors, the dates
+and the keyboard, whose gate is §31's per-row one; §36 is the checklist and its distinct scan, whose
+gate is queries per open. Five pieces became six.
+
+Designing the menu first was rejected explicitly: a model shaped by the first UI that used it is how the
+width in *The model* would have been lost, and 2 and 3 are where this codebase's tests are strongest and
+where a settings-format mistake is cheapest to catch.
+
+### Where this could still be wrong
+
+- **"At least as friendly as Excel" is a bar nothing here measures.** Every other gate in this section
+  has a number; this one has a judgement, and the one place the design knowingly diverges - the
+  checklist behind an explicit action - is defended by a cost measurement rather than by a usability one.
+- **The pills bar's placement contradicts what was asked for**, on a structural argument about sticky
+  positioning that has not been demonstrated in this grid. It is inference from §10's frozen-column work,
+  not a measurement of a pill bar. *§37 measured it: the inference was right, and the alternative it
+  rejected as fragile turns out to be already broken.*
+- **`FilterUI` grid-wide against `FilterMode` per-column** is a separation that reads cleanly and has
+  never been used. The first author who wants a menu on one column and a row cell on another will find
+  out whether it holds.
+- **One reload for Clear all is stated and not designed.** The composition path is built to send one
+  query, but every public clear currently reloads, so this needs a way to change several columns and
+  compose once - which is the same shape as §23's owed-load problem and may want the same answer.
+  *§37 closes this by pointing at `ClearFilters`, which was never the loop the bullet feared: it calls
+  `SetFilter` per column and reloads once. It gets a gate rather than a sentence.*
+- **Nothing here is measured.** No piece is built, so every performance claim above is a budget rather
+  than a result, including the one that is a gate.
+
+## 32. The stored filter does not disappear, it throws - the design
+
+§31's piece ① was argued from a sentence that is wrong. This is the same piece, re-argued from what the
+code actually does, and it is larger than the fallback §31 prescribed while being narrower than fixing
+restore properly - which is ②'s, because ② is where the format stops being lossy.
+
+**Nothing here is built when this section lands.** The order is §31's; only this piece's content changes.
+
+### What was measured
+
+A grid with four columns, filters set, `CaptureSettings()`, through `System.Text.Json`, back in as
+`Settings`. Every row is what the grid does today:
+
+| stored filter | after the round trip |
+| --- | --- |
+| date `Equals` (with text, or without) | **throws `ArgumentException` mid-render** |
+| int `Equals` | **throws** |
+| enum `Equals` | **throws** |
+| string `Contains` | works |
+| int `In` (a check-box list) | **shows every row** |
+
+The string works by accident: `FilterExpression.Text` reads its value as `value as string ?? value?.ToString()`,
+and a `JsonElement` holding a string stringifies to the string. Nothing else in the builder does that.
+
+### It is two faults, and neither is a disappearance
+
+**The scalars throw on the decline path.** `Coerce` cannot convert a `JsonElement`, so the column
+returns null from `ApplyFilter` - it *declines*. `Composition.Filter` routes a decline to `Reflective`,
+which exists for columns that cannot compose a predicate at all, and hands the raw value to
+`QueryableExtension`, where `Expression.Constant(value, type)` throws. Inside `BuildRenderTree`, so on
+Blazor Server it is a dead circuit, and the application never sees it to catch it.
+
+**The `In` list matches everything on the success path.** It never declines: `FilterExpression.In` sees a
+value that is not `IEnumerable` and composes `Expression.Constant(true)`, deliberately and with a comment,
+because that is what `QueryableExtension` answers - and `FilterExpressionParityTests` pins the pair. So
+the fix cannot be there.
+
+**And a third fault, in the same three lines.** `ApplySettings` restores under `if (stored.FilterValue is
+not null)`. An `IsNull` filter's value is legitimately null, `HasFilter` counts it as a filter and
+`CaptureSettings` writes it - so it is stored on every save and restored on none. Measured: a column
+filtered to its blank rows comes back showing all of them. `IsNotNull`, `IsEmpty` and `IsNotEmpty` are
+the same shape.
+
+**There is a second restore path and it never has text.** `Data.cs:1139`, the `Filters` setter that §10's
+`RadzenDataFilter` interop drives, calls `SetFilter(filter.FilterValue, filter.FilterOperator, null)`.
+A fallback keyed on `FilterText` cannot reach it, which is most of why §31's prescription was the wrong
+size: the crash needs no text and this path never has any.
+
+### The gate
+
+**No stored filter may crash the grid, and fidelity is best-effort.** The first half was written as
+absolute and **the review proved it is not** - see *What the review found*, which measures two stored
+blobs that still take the circuit down. What this piece actually delivers is narrower and worth stating
+as what it is: **no stored filter _value_ crashes the grid.** The crashes left are caused by the stored
+*operator*, they predate this work, and closing them needs the change this section talked itself out of. The second half is the
+concession: a value the format cannot carry is dropped, the column restores unfiltered, and the rows the
+user sees are all of them - which is the safe direction to fail in, because nothing is hidden.
+
+Dropping means the *next* `CaptureSettings` writes the filter away for good. Preserving the unreadable
+blob across a capture was considered and rejected: it makes `CaptureSettings` stop describing the grid's
+actual state, so the grid and its settings disagree permanently and every later restore re-runs the same
+failure. Raising a callback was rejected too - there is no other diagnostic surface on this component,
+and inventing one for a case ② should end is the wrong order.
+
+Failing loudly - leaving the throw - was rejected on what the throw actually is. It is not a diagnostic
+the application can act on; it is an unhandled exception inside the grid's own render.
+
+### The rule, which is one sentence
+
+**Reconstruct the filter from the stored value, then from the stored text, and drop what neither
+produces.** Four attempts, in this order:
+
+1. the value is already the column's type - use it;
+2. the value converts to the column's type - **invariant**;
+3. the value's *string form* converts to the column's type - **invariant**;
+4. `FilterText` re-parsed by the column - **`CurrentCulture`, column-aware**.
+
+3 is the new one and it is what fixes the crash without any text: a `JsonElement` holding a date
+stringifies to `2019-05-04T00:00:00`, which converts. It also makes §31's headline fallback the *last*
+of four rather than the second of two.
+
+**What 4 is left holding was stated wrongly here and the review measured it.** This said 4 catches
+"mostly a `Guid` and an enum stored by name"; both are caught at 3. `ConvertType.ChangeType` has an
+explicit `Guid`-from-string branch, and the suite's own Guid test carries no text at all; an enum by name
+is `Enum.Parse` on the value's string form, in 3. What 4 actually catches is **culture-formatted text,
+the lookup name path, and values no conversion reaches** - which is a smaller and more specific job than
+§31 imagined for it, and it is still the only thing that can restore a lookup column's ids from a name.
+
+**`Convert.ChangeType` reaches none of `DateTimeOffset`, `TimeSpan`, `DateOnly` or `TimeOnly`**, so a
+stored filter on one of those columns fails 2, 3 and 4 and is dropped on every restore. No crash, so it
+is inside the gate - and outside the matrix, which never tried them.
+
+**3 is type-based and must not be the column's own text parser**, and *culture* is why. The string form
+attempt 3 reads came out of a serializer, so it is invariant; `FilterValueFromText` reads
+`CurrentCulture`, because what it exists to read is what somebody typed. Route 3 through it and a stored
+`250.5` restores under de-DE as two and a half thousand - a filter that is wrong rather than missing,
+which is the outcome every other decision in this section is arranged to avoid.
+
+A second reason was written here first, then deleted as unreachable, and **the deletion was wrong** -
+this paragraph has now been wrong in both directions and the history is the useful part. The reason is
+that a lookup column's parser matches *names*, so a stringified id would build an `In` over no ids -
+which §14 makes a real filter, so it would be applied and 4 would never run. That was deleted on the
+grounds that a lookup column's default operator is `In`, so its values never reach attempt 3. But the
+code reads `filterOperator ?? DefaultFilterOperator`: **the default only applies when the stored operator
+is null**, and a blob naming `Equals` on a lookup column goes straight to attempt 3. The review drove it
+and it restores correctly there. So both reasons hold, and the mutation survived the suite not because
+the path was unreachable but because no test stored a non-default operator on a lookup column.
+
+**4 before 3 was rejected**: text is the lossier record - one person's typing in one culture - and
+preferring it over a value that still converts throws away the better of the two.
+
+**The text re-parses in `CurrentCulture` only**, which is what `FilterValueFromText` already does. Trying
+`InvariantCulture` as a fifth attempt was rejected: `5/4/2019` parses under both to different days, so
+the extra attempt's whole effect is to turn some drops into silently wrong dates - on the type this piece
+exists for. Storing the culture beside the text is the right answer and it is a format change, so it is
+②'s to consider.
+
+### The `In` list waits for ②
+
+An `In` value that is not a sequence is dropped - it is not a filter this build can reconstruct. The rule
+above is why, and it is the same rule: a JSON scalar's string form converts, a JSON array's string form
+is `[3,1]` and does not.
+
+Special-casing `System.Text.Json` - unwrapping `ValueKind.Array` through `EnumerateArray` - was
+considered seriously and rejected. It costs no package reference, `System.Text.Json` is in the shared
+framework, and it is the serializer §31's own text names, so it would fix the realistic user's check-box
+lists now rather than next piece. Against that: it puts a named dependency on one serializer inside the
+type system's conversion path, to buy a working list for one release before ② makes the value round-trip
+losslessly and leaves behind a branch nobody dares delete. One rule for the piece, with a dated hole in
+it, beats a rule plus an exception.
+
+**Newtonsoft survives for free**, and that is a consequence of the rule rather than a favour: `JArray`
+*is* `IEnumerable` and `JValue` implements `IConvertible`, so its elements convert at step 2 without
+anything here knowing its name. **This is reasoned, not run** - the package is not referenced here, so
+nothing measures it, and it is the one claim in this section with no test behind it.
+
+The review found a wrinkle in it that cuts the other way, and it is worth keeping precisely because it
+shows the rule is not as serializer-blind as the paragraph above sounds. A `JValue` is a `JToken` and so
+is *also* `IEnumerable<JToken>`, which means a Newtonsoft **scalar** stored against `In` passes the
+sequence test, enumerates empty, and yields an `In` over nothing - where the `System.Text.Json`
+equivalent is dropped. Same input, two serializers, opposite outcomes, and the Newtonsoft one is the
+hiding direction.
+
+The consequence to write down: **a lookup column filtered from a check-box list stores ids and no text,
+so it restores unfiltered.** §14 argues that "In over no ids" is a meaningful filter on a lookup column -
+the name nothing answered to - and dropping is deliberately not that. It is no filter, showing all rows.
+
+### Where it goes
+
+One method on `ColumnBase<TItem>`, non-generic, driven by `EffectiveFilterType` - a runtime `Type` the
+column already resolves for the filter row. No generic override is needed: steps 1-3 are a conversion to
+a `Type`, and the only thing step 1-3 has to know about `In` is whether the value is a sequence, which
+needs no type at all. Both restore paths call it - `ApplySettings` with the stored text, the `Filters`
+setter with null - so the rule is written once and neither path can drift from the other.
+
+`Composition` is not touched. The guard against the crash is that the column never holds an unusable
+value, not that the reflective absorber learns to refuse one: `Reflective` exists to absorb columns that
+decline for *structural* reasons - a collection element, a column declared as `object`, a filter aimed
+through a path - and teaching it to tell those apart from a value that would not convert is a bigger
+change for a case that no longer arrives.
+
+### What the build changed
+
+**`ConvertType.ChangeType` does not fail on a value it cannot convert.** Its last line is
+`value is IConvertible ? Convert.ChangeType(...) : value` - so handed a `JsonElement` it hands the
+`JsonElement` straight back. Attempt 2 therefore "succeeded" holding the value it was meant to reject,
+attempt 3 never ran, and the first build of this piece threw exactly as before it. The fix is one line -
+the conversion's result is checked against the target type rather than trusted - and it is load-bearing:
+removing it fails eleven of the twenty tests.
+
+**One test did not discriminate and one mutation survived**, both found by §9 layer 1 rather than by
+reading. `IsNotEmpty` over `People.Sample()` matches all four rows, so that row of its theory passed
+whether or not the filter had been restored; it now runs over data with one blank name. And swapping
+attempt 3 for the column's text parser passed the entire suite, because the argument this section had
+recorded for that decision was unreachable - see *The rule*, above, which now records the reachable one
+and how it was found.
+
+### What the browser pass found
+
+**The playground could not reach this fault at all**, and that is why it shipped: the page held the
+settings blob as a live object, so every value kept the type it was captured with, and the whole class of
+bug is what a serializer does to `object`. It now has a **Round-trip through JSON** button - §9's rule
+about a feature nobody can drive, applied to a bug nobody could drive.
+
+Through it, the two outcomes this section predicts both hold in a real circuit: a date filter survives the
+trip and still filters, and a check-box-list filter comes back with the column unfiltered and the log
+clean. Before §32 the first of those terminated the circuit.
+
+**And it found a crash that is not this piece's.** With a date typed into the Simple box, switching
+`FilterMode` to `CheckBoxList` terminates the circuit:
+
+```
+System.InvalidCastException: Unable to cast object of type 'System.DateTime'
+                             to type 'System.Collections.IEnumerable'.
+  at Radzen.ParameterViewExtensions.DidParameterChange[T](...)
+  at Radzen.DropDownBase`1.SetParametersAsync(ParameterView parameters)
+```
+
+The check-box list binds `FilterSelection`, which is `CurrentFilterValue`, and a scalar filter left over
+from the other editor is not a sequence. No settings, no serializer and no restore are involved -
+reproduced from a fresh page with nothing but a typed filter and one toggle - so it is outside this
+section's gate and is **recorded, not fixed**. It belongs to §31's piece ④, which is where
+`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`: the fault is exactly
+the mismatch that piece exists to remove, and fixing it here would be fixing it twice.
+
+### What it cost
+
+Nothing per row, measured rather than asserted. `alloc-types 1000 400`, interleaved base/mine/base/mine
+on one machine: base **13259.0** and **13284.0** KB per render, this change **13237.1** and **13243.6**.
+The 0.2% between the means is smaller than the spread between the two base runs. Nothing here is on the
+render path - the reconstruction runs once per stored column per restore - and the only render-path edit
+is `HasFilter` calling a static predicate instead of spelling its operator set inline.
+
+### What the review found that the build had not
+
+Two reviewers, in parallel, read-only. Both were right about things the build had argued its way past,
+and between them they refuted the gate.
+
+**The gate does not hold, and the cause is the operator rather than the value.** Two stored blobs still
+throw inside `BuildRenderTree`, both driven from `Settings` alone:
+
+| stored blob | what it raises |
+| --- | --- |
+| `GreaterThan` on a `string` column | `InvalidOperationException: The binary operator GreaterThan is not defined for the types 'System.String' and 'System.String'` |
+| `Contains` on a `decimal?` column | `ArgumentException`, from `QueryableExtension` via `Reflective` |
+
+Neither is new and neither is reachable through a value this piece rebuilds. The first is
+`FilterExpression.Ordered` building `Expression.GreaterThan` without asking whether the type has an
+ordering - the mirror of the case beside it, where `Comparison` *declines* `Contains` on a non-string
+because "building the wrong one silently is worse than declining". The second is a decline reaching the
+reflective absorber, which is this section's own mechanism arriving from the other cause: **a decline has
+two sources - an unusable value and an unusable operator/type pair - and only the first was fixed.** So
+*Where it goes* is wrong where it says `Reflective` need not tell them apart "for a case that no longer
+arrives". The case still arrives. Both are recorded rather than fixed: the first is a question about what
+`GreaterThan` on a string should *mean*, the second needs the change to `Composition` this section
+declined, and neither is about a serializer.
+
+**The rule was not checked against the operator's shape, in both directions.** Attempt 4 returned
+whatever the parser produced. An `In` whose value was a scalar fell through to the text, took a scalar
+from it, and composed `Constant(true)` - the "shows every row" row of the matrix above, arriving by a new
+route and past the test that pins it, which happened to store no text. And a lookup column with a stored
+scalar operator took a *list* from its name matcher and handed it to `Equals`, which throws. The operator
+now decides the shape both halves must have, and two tests hold each direction.
+
+**A column that cannot name its filter type was trusted, and failed in the hiding direction.** Attempt 1
+is `type.IsInstanceOfType(value)`, and `EffectiveFilterType` answers `object` for a column it cannot
+resolve - where that test is true of every value there is, so the raw wrapper became the live filter.
+Measured on a `PropertyColumn<Person, object>`: **zero rows, with the column reporting itself filtered**
+and the stored blob looking intact. That is the exact inversion of the gate's stated safe direction. Such
+a column now declines the value and takes the text, which for an unknown type is the text itself.
+
+There is a narrower crash behind the same line, from the other reviewer: `EffectiveFilterType` resolves
+its path through `PropertyAccess.GetPropertyType`, which is `Type.GetProperty` - public properties,
+exact case, **no fields** - while the Dynamic LINQ the reflective builder uses resolves fields too. So a
+column declared `object` over a public *field* answered `object`, passed the value through, and threw on
+a type only the other side could name. Declining the value closes that as well.
+
+**The lookup columns do not convert their own elements.** `RestoredSequence` checked only that the value
+was a sequence, on the stated grounds that "the predicate builders convert the elements themselves". True
+of `FilterExpression.Listed`; false of `LookupColumnBase.SelectedKeys`, which keeps what is already a
+`TKey` and drops the rest. So ids widened by a serializer that reads every JSON integer as `long`, or
+arriving from a `RadzenDataFilter`, left the column composing `Contains` over an empty list - **no rows,
+reported as filtered**, the hiding direction again. Lookup columns now rebuild their ids at the restore,
+once, rather than on the composition path.
+
+That override cost two attempts and an existing test caught both. Collapsing a stored `In` over a single
+null into an empty list turned "a filter matching nothing" into "no filter", losing §14's distinction;
+and `default(TKey)` for an unconstrained `TKey` over an `int` key is **zero**, not null - `List<TKey?>`
+is `List<int>` there - so the rebuild ticked the entry whose id happens to be zero, which is the fault
+`SelectedKeys`' own comment warns about. A null now makes the rebuild hand the stored list back
+untouched. **Rebuilding may change the elements' type and must never change how many there are.**
+
+**The catch this section argued for was not applied to its own neighbour.** §32 widened the new
+conversion's catch on §9's rule - an optional path whose job is to drop what will not convert should
+catch everything - and left `FilterValueFromText`, *attempt 4 of the same four*, still naming four
+exception types twenty lines away. Widened. It is defended by the rule rather than by a test, as its
+sibling is: nothing here can make a `TypeConverter` raise something exotic on demand.
+
+**One disagreement, recorded rather than acted on.** The Standards reviewer would fold the
+valueless-operator rule into `RestoredFilterValue`, since `RestoredFilterValue(null, IsNull, null)`
+answers "no filter" on its own and anyone reaching for it directly reintroduces the `IsNull` drop. The
+split stands: which operators need a value is a fact about operators, and it lives on `ColumnBase` as
+`NeedsNoValue` where `HasFilter` also reads it; how a value is rebuilt is a fact about values. Only the
+sequencing is in the grid, and there is one caller of each. The method's doc now says which half it is.
+
+### Where this could still be wrong
+
+- **A markup-declared `FilterValue` of a type that will not convert still throws.** It is not a stored
+  filter, so it is outside the gate as written, and it reaches `Reflective` exactly as it does today.
+  Whether the gate should have been "no filter from anywhere crashes the grid" is a real question that
+  was not asked, and the answer would move work into `Composition` that this section says not to.
+- **Best-effort fidelity is unmeasured as a *user* outcome.** The matrix above says what the grid does;
+  nothing says how often a check-box-list filter is the one someone saved.
+- **`EffectiveFilterType` resolving through the property path is described as "reached only from the
+  filter row and the filter callbacks, never per row or per cell".** A settings restore is neither of
+  those, and this adds a call per stored column per restore. It is far off any per-row budget, but the
+  comment is now slightly less true than it was.
+
+## 33. The grid owns its filter model - the design
+
+§31's piece ② was "second condition, within-column logical operator, expression and OData, settings
+format", and every one of those was shaped by a struct rather than by the grid. Grilling it turned up
+that the struct is the wrong master, and this section is the answer: **the grid owns what it filters by;
+what it hands a provider stays upstream's.** That is §31's own `FilterUI`/`FilterMode` rule, one layer
+down.
+
+**Nothing here is built when this section lands.** It replaces §31's ② and it is bigger than ② was.
+
+### Why the model moves, and why now
+
+Three symptoms, one cause.
+
+**§32 exists because `FilterValue` is `object?`, and it is `object?` because `FilterDescriptor.FilterValue`
+is.** A whole piece went into four heuristic attempts to guess a type back out of a value a serializer
+had flattened, and it still left a documented hole - a check-box list stored as a JSON array cannot be
+rebuilt at all. That is not a bug in §32; it is what inheriting an untyped slot costs.
+
+**Upstream's vocabulary cannot say what §31 wants.** There is no `Between`, and a fifth `FilterMode`
+cannot be added without editing a file this branch does not own - §31 met that once and invented
+`FilterUI` beside it. §31's ③, relative date tokens, has no representation in `FilterOperator` at all.
+
+**The width of the model was inherited, not chosen.** §31 argued two conditions partly because
+"`FilterDescriptor` already speaks that shape". It does; that is a fact about a struct, and it was
+deciding this grid's data model.
+
+**And this is the last cheap moment.** §31 budgeted exactly one settings format change and ② is where it
+lands. Building ② on the inherited shape means changing the format twice. Nothing is tagged or packed -
+`git tag` knows nothing of this component - so every public break below costs nothing today and cannot
+be had again later.
+
+### What is owned and what is not
+
+**Owned: the value model.** The operator vocabulary, how a value is represented, how a filter is stored.
+
+**Not owned: the machinery.** `QueryableExtension` still builds the reflective predicate for columns that
+cannot compose their own, and still generates the `LoadData` and OData strings. Reimplementing an OData
+dialect is a large bug-shaped project with no upside. **If that boundary starts moving during the build,
+the piece is going wrong** - that is the stated tripwire, not a hope.
+
+### The shape
+
+**A filter is up to two conditions joined by an And or an Or. A condition is an operator and the values
+that operator takes.** Arity belongs to the operator: `IsNull` takes none, `Equals` one, `Between` two,
+`In` many. That makes `In`, `Between` and `IsNull` one shape rather than three special cases, and it
+gives ③'s tokens somewhere to live without new machinery - a token is a *value*, not an operator, so
+`Hired Between [last-7-days]` needs nothing this section does not already build.
+
+**The example is wrong and §34 corrects it.** A token that supplies two bounds from one slot makes arity
+a property of the operator *and* of what is in its slots, which is the special-casing this paragraph
+exists to remove. A token resolves to one instant, and a range of them is `Between today-6d today@end` -
+two values, as the arity says. The claim that survives is the one that mattered: nothing in this model
+had to learn the word.
+
+Two conditions rather than one because §31's worked case survives its own justification: *"these three
+values or blank"* on a nullable column is `In [...] OR IsNull`, which no single condition expresses.
+Two rather than n because nothing has asked for a third and the menu will never offer one.
+
+**`Between` is an operator here, not a condition pair.** It was a pair in §31 only because
+`FilterDescriptor` had two slots to spend; with arity on the operator it is one condition, and it stops
+consuming the compound that the `OR IsNull` case needs.
+
+**Condition 1 gates.** A column is filtered when condition 1 is present - a value, or one of §32's
+`NeedsNoValue` operators - and condition 2 only joins. A filter whose first half is blank is a state
+nothing can author and every reader of the model would have to cope with. The cost is a rule rather than
+a discovery: **a `FilterTemplate` author who sets only the second condition gets nothing**, and that is
+documented rather than found.
+
+### Values are strings, and that is the whole point
+
+**A stored filter value is an invariant-culture string, parsed against the column's type on restore.** A
+date is `2019-05-04T00:00:00.0000000`, a decimal `250.5`, an enum its name, an `In` list an array of
+strings. No serializer can turn a string into anything but a string, so the round trip is lossless by
+construction: **§32's four attempts collapse to one parse, and its check-box-list hole closes** - an
+array of strings survives `System.Text.Json` as an array of strings.
+
+What that costs, stated rather than discovered: the column's type is load-bearing at restore. A column
+whose type changed since the blob was written parses nothing and drops, which is §32's policy already. A
+column whose `EffectiveFilterType` is `object` cannot parse either, so §32's rule for those survives
+intact.
+
+**`FilterText` stays, and keeps its §32 job.** It is what the user *typed*, in their own culture, and on
+a lookup column it is the only thing that can turn a name back into ids. The stored value is canonical;
+the text is human. They are different records and collapsing them was never on the table.
+
+### The vocabulary
+
+**`FastGridFilterOperator`** - upstream's set plus `Between`. It said *minus `Custom`* and the build
+proved that wrong: this grid does not implement `Custom`'s predicate, but it carries the descriptor, and
+carrying it is the entire mechanism - a `LoadData` handler cannot filter what it is not told about. Prefixed rather than bare: the namespace is `Radzen.FastGrid`, every column file already
+references `Radzen.FilterOperator`, and a bare `FilterOperator` of our own would be an ambiguous
+reference in exactly those files. It matches `FastGridSettings`, `FastGridLookup`, `FastGridSort`.
+
+**Upstream's enum keeps working in markup.** `[Parameter] public FilterOperator? FilterOperator` stays and
+maps in, because every upstream value maps onto exactly one of ours. An app migrating from
+`RadzenDataGrid` compiles and behaves identically; only an author who wants `Between` reaches for the new
+type. That is the `FilterUI`/`FilterMode` precedent: the new vocabulary sits beside the old rather than
+redefining it.
+
+### The projection, and a claim of §10's that is wrong
+
+**`CompositeFilterDescriptor` is the single currency** - the reflective `Where`, the string and OData
+forms, and the public `Filters` and `ApplyFilters`.
+
+`FilterDescriptor` carries two value slots, so an owned filter can overflow it: two conditions where one
+is a `Between` needs three. That overflow is not a problem to be handled, it is the wrong container.
+`CompositeFilterDescriptor` nests, `AddWhereExpression` recurses into `filter.Filters`, and
+`Where<T>(IQueryable<T>, IEnumerable<CompositeFilterDescriptor>, …)` exists - so the reflective route
+nests too and the overflow stops existing.
+
+Three things line up behind it. The string and OData paths **already** build composites. Composites are
+still upstream's type, so this is not a step away from parity but onto the branch of it that fits. And:
+
+> **§10 says the grid speaks `FilterDescriptor` "which is what `RadzenDataFilter` emits". It is not.**
+> `RadzenDataFilter.Filters` is `IEnumerable<CompositeFilterDescriptor>`. The stated reason for the
+> current choice is a factual error, and the interop it was meant to serve is the thing it fits worst.
+
+§10's bullet is corrected in the commit that makes the correction true.
+
+### The column's surface
+
+**`CurrentFilter` replaces `CurrentFilterValue` and `CurrentFilterOperator`.** Neither can stay honest: a
+column with two conditions, or one `Between`, has no single "the value". Keeping them as forwarding
+properties over condition 1 would put two sources of truth in the model on day one, which is the exact
+shape §32's review spent a finding on - a rule read from two places that can disagree. Both are public
+with 38 readers, and the readers are `FilterExpression`, `Composition` and the lookup columns, all of
+which this piece rewrites anyway.
+
+**The second condition gets markup parameters**, as upstream's column has: without them §31's sentence
+about `FilterTemplate` authors getting what the menu does not offer is false on delivery, and "the rest"
+would be reachable only through a settings blob. The cost is honest and small - three more comparisons
+in the declared-parameter change detection, per column, per parameter set, which is off the axis this
+branch defends.
+
+### Restoring a compound
+
+**Any condition that cannot be rebuilt takes the whole filter with it.** §32 rebuilds a value or drops
+it; with two conditions they can disagree, and degrading to the survivor is the trap. `In [...] OR
+IsNull` that loses its `In` array degrades to `IsNull` alone - the grid then shows *only* the blank rows,
+a narrower and entirely different answer presented as the user's. An `AND` pair that loses a half
+silently widens. §32 already chose "show everything rather than hide some for a reason nothing on screen
+explains"; this is that rule applied to a compound.
+
+**The second condition gets its own text** for the same reason the first has one. Without it a date range
+- this piece's headline case - is the filter most likely to die on a round trip.
+
+### The format
+
+**Defined here, not extended.** §31 promised "one deliberate, additive format change" with old builds
+degrading silently. That sentence was written when the change was additive and this one is not:
+`FilterValue`-as-`object?` goes, and values become strings. Nothing is released, so no blob written by a
+shipped build exists to degrade. **§31's sentence is amended rather than honoured**, and the honest
+version is that the format is settled *here* - future readers of a *newer* blob are what degrade, which
+is what the promise was actually for.
+
+Reading both shapes was rejected: it keeps §32's four attempts alive forever to serve blobs that cannot
+exist, and deleting them is the entire benefit of this section.
+
+### The gate
+
+**Per-row and per-cell allocation unchanged, and the single-condition path unchanged in time.** The
+second half is new and it is where a model like this leaks. If the builders compose `c1 ⊕ c2`
+unconditionally - a constant-true second half - then every filtered column pays an extra delegate call
+per row, forever, so that a feature almost nobody switches on can exist. **With no second condition the
+predicate and the expression tree must be what they are today**, and that is a gate that can fail the
+piece rather than a number to report afterwards.
+
+**All three routes compose the compound themselves** - the in-memory delegate route, the typed expression
+route, and the reflective one. Letting a two-condition column decline instead was the cheap option and it
+buys a cliff: declining drops an in-memory grid off the composed-delegate route onto `Queryable.Where`
+over a `List`, which `EnumerableQuery` recompiles on every enumeration - the 1,117 us against 38 us at
+1000 rows that `FilterExpression` records in its own remarks. A date range would cost roughly an extra
+render, which is a performance cliff attached to a feature, and this branch exists to not have those.
+
+### The order it lands in
+
+Three commits, because a mechanical move and a model change in one diff is unreviewable.
+
+1. **The currency moves to `CompositeFilterDescriptor`** - reflective route, `Filters`, `ApplyFilters`,
+   the string forms. No model change, and one named behaviour change rather than none: see below.
+2. **The model.** Vocabulary, arity, string values, the format, the column surface.
+3. **The review fix.**
+
+### What the currency move changed
+
+**"One currency" is not reachable, and the seam that refuses it is upstream's.**
+`LoadDataArgs.Filters` is `IEnumerable<FilterDescriptor>` - not ours to retype - so a handler's
+*structured* view is projected back from the composites, while `LoadDataArgs.Filter`, the string and the
+half a handler usually reads, is built from the composites and keeps whatever nesting they carry. The
+projection is faithful while a column carries one condition, which is all there is to carry until the
+model lands. Where it starts losing something is a compound wider than two value slots, and that is the
+model commit's problem.
+
+**One behaviour change, named rather than absorbed.** `FilterString` used to copy each descriptor into a
+composite field by field, and the copy dropped `FilterProperty` - the member of a collection's element
+that a `CollectionColumn` filters by. So the string a `LoadData` handler received compared against the
+collection itself rather than the member. Composites go straight through now and the copy is gone with
+it. It is a fix, it is not what the commit is for, and it has a test that fails against the copy.
+
+**The parity suite now references the overload the grid actually calls.** `FilterExpressionParityTests`
+compared the typed builder against `QueryableExtension.Where(FilterDescriptor)`; `Composition.Reflective`
+calls the `CompositeFilterDescriptor` overload since this commit, so the reference moved with it -
+pinning parity against an overload the grid no longer reaches would be a test agreeing with itself. All
+of it passes against the new reference, which is also the first evidence that the two upstream overloads
+agree everywhere the suite looks.
+
+### What the model cost, and the control that reads it
+
+`FastGridFeatureBench.FilteringApplied`, `--job short`, swept over two row counts because the gate is
+about *per row* and a single row count cannot tell a per-row cost from a fixed one:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter that actually filters | 48.87 → **49.78** KB | 79.36 → **80.18** KB |
+| the same over a queryable | 55.60 → **56.24** KB | 86.16 → **86.80** KB |
+
+**The delta is flat across a tenfold change in rows** - +0.91 and +0.82 KB, +0.64 and +0.64 KB. A
+per-row cost would have grown by ten. So the model costs a fixed ~0.7-0.9 KB on a filtered render and
+nothing per row, which is exactly what the gate permits: a filter may cost per column and per active
+filter, and may not cost per row. **The sweep is the control**, and without it the 0.8 KB at one row
+count says nothing about which kind of cost it is.
+
+`alloc-types 1000 400`, interleaved, on the unfiltered path: base 13255.5 and 13294.7 KB, this change
+13250.4 and 13276.9 - a smaller gap than base's own spread, so an unfiltered grid is untouched.
+
+**The fixed cost is measured and not attributed**, which §9 says to write down rather than guess at: the
+obvious candidates - the model objects, the descriptor, the expression tree - are each allocated the same
+number of times as before, so the ~0.8 KB has no mechanism named yet.
+
+### The time half, and what it could not settle
+
+Owed since this section landed, and left owed by §34 and §35 after it. §9's rule is that a time ratio
+comes from a full-length run or is not quoted, so this is the default job rather than `--job short`,
+swept over a hundred rows and a thousand: six passes of `b71844eca` - §32's review fix, the commit before
+the currency moved - against five of `HEAD`, which weighs §33, §34 and §35 together rather than this
+section alone.
+
+**Two rules used below are this section's own and not §9's**, which is worth saying because the first
+draft of this attributed them: a block whose StdDev exceeded 3% of its mean is discarded before a number
+is read off it, and every figure is a median over passes. §9 asks for the modal value of several runs and
+for a full-length job, and it also asks for **a quiet machine** - and that one was broken. Load average
+ran between 3 and 15 on ten cores. The discard rule is an attempt to cover a protocol violation, not a
+protocol.
+
+**The arms were not alternated, as the first write-up of this claimed they were.** A1 B1 A2 B2 alternated;
+B3 B4 B5 then ran as one block and A3 A4 A5 A6 as another, forty minutes later. Arm is therefore
+confounded with wall-clock window for eight of the eleven passes. `bare` is what says whether that
+mattered, and at a thousand rows it did not - 437.3, 439.5, 438.2, 437.3, 441.5, 441.3 on the base
+against 438.5, 440.4, 437.5, 439.3 on `HEAD`, with no drift between the windows. **At a hundred rows it
+is not excused.**
+
+| N=1000, over passes | base | `HEAD` | Δ median | Δ mean |
+| --- | --- | --- | --- | --- |
+| bare | 438.8 us (6) | 438.9 us (4) | +0.08 (p = 0.97) | -0.26 (p = 0.81) |
+| a filter row, filtering nothing | 440.0 us (6) | 440.6 us (4) | +0.59 (p = 0.75) | -4.74 (p = 0.87) |
+| a filter that actually filters | 191.2 us (6) | 193.6 us (5) | **+2.41 (p = 0.078)** | +3.63 (p = 0.011) |
+| the same over a queryable | 351.1 us (6) | 352.7 us (5) | **+1.61 (p = 0.013)** | +3.92 (p = 0.007) |
+
+p is a two-sided permutation test over the per-pass means, enumerated rather than assumed. **The median
+is the number to read and the mean is not.** Dropping any single pass moves the median deltas only
+between +2.37 and +2.64, and between +1.60 and +1.62; dropping *one* pass, B5, halves both means - +3.63
+to +2.02 and +3.92 to +1.37. B5 is the slow pass in both rows, so the first write-up's "two rows agreeing
+against two controls" was partly one pass agreeing with itself, and its own caution about a single slow
+pass dragging a mean was applied only to the control that had moved the wrong way.
+
+**A filtered render costs about 2.4 us more than it did; an unfiltered one costs nothing more.** That is
+the result. `bare` is flat at p = 0.97. The second control is not really one: the unfiltered filter row's
+base passes span 436 to 474 us, a 37 us spread against a 2.4 us effect, so it can neither detect this nor
+exclude it. *Two controls did not move* was one control that did not move and one that could not have
+said either way.
+
+### What the clock could not settle, and what did
+
+**The gate's failure mode is the same size as the residual, so the benchmark cannot rule it out.** This
+gate was written against `c1 ⊕ c2` composed unconditionally - an extra delegate call per row. The
+benchmark filters `Name` by `Contains "5"` over every source row, so at a thousand rows that fear
+predicts a thousand extra delegate invocations: one to two microseconds. The measured residual is 2.4.
+**A measurement whose resolution is the size of the effect it must exclude has excluded nothing**, and
+the first write-up of this section said the numbers ruled it out. They do not.
+
+The row-count sweep does not rescue it. At a hundred rows the same delta reads +2.75 us at **p = 0.34**,
+on three surviving base passes against four, while `bare`'s own mean moves +4.35 and the unfiltered
+filter row moves +3.34 - further than the effect being claimed. The queryable row moves +5.99 at a
+hundred against +1.61 at a thousand, a delta that *shrinks* with rows, which is neither fixed nor per-row
+and is two hot passes. **Nothing at a hundred rows can carry this argument**, and reading +2.75 against
++2.41 as flatness across a tenfold change was taking two significant figures off a p = 0.34.
+
+**What settles it is the code, which is where the rule lives.** §33's own review standard - a test one
+layer above a rule is not a test of the rule - applies to a benchmark most of all. `FilterPredicate.For`
+builds the body of the first condition and joins a second only under `filter.EffectiveSecond is { }
+second`; `PredicateFor` puts the delegate route behind the same guard. **With one condition there is no
+join, no wrapper and no second call per row** - the tree and the delegate are the ones that were there
+before. The gate is met by construction, and it was always going to be met by construction rather than
+by a clock. What the clock was good for was finding the residual, which is a different question and one
+nobody had asked.
+
+**So the residual is real, small, and not the thing the gate feared.** ~0.8 KB and ~2.4 us on a filtered
+render, unattributed in both currencies - with one thing now known about it that the allocation half
+could not say: it is not the join, because there is no join.
+
+### What the review found that the build had not
+
+Two reviewers in parallel. Between them they found two faults that put **wrong rows on the screen**, and
+one that the build had measured and failed to explain.
+
+**A `Between` inside a compound was flattened into a flat `OR`.** `DescriptorFor` put a range's two
+bounds into the parent's child list beside the other condition, so `Between(200,300) OR IsNull` became
+three siblings under one `Or` and the `And` that makes a range a range was gone. The typed routes never
+see a descriptor, so they stayed right - and the string sent to a server did not:
+
+```
+x => ((((x.Bonus ?? null) >= 200) || ((x.Bonus ?? null) <= 300)) || (x.Bonus == null))
+```
+
+An in-memory grid showed two rows while the same filter asked a server for nearly the table, and both
+strings parse and read plausibly. **This section bought the nesting for exactly this case and then did
+not spend it**, and the build note's "all three composition routes learned the compound" was wrong: two
+did. A range is now a child of its own, with its bounds under it.
+
+**`LoadDataArgs.Filters` said `Property Equals null`** for any compound - not a lossy projection but a
+false one, so a handler building a query from it returned the null rows. A `FilterDescriptor` carries two
+comparisons, so a range and a two-condition column both fit exactly; only a compound needing three
+overflows, and such a column is **left out** now rather than flattened. A handler filtering less than it
+was asked is recoverable; a blank page is not. The remark that filed this under "the model commit's
+problem" was itself in the model commit.
+
+**A UTC `DateTime` restored as a different instant.** `Convert.ChangeType` is the one path that *can* see
+a `DateTime` and reads it without `RoundtripKind`, so `2019-05-04T00:00:00Z` came back as
+`2019-05-03 17:00` local - and the same blob restored differently in every time zone, which is the exact
+thing storing invariant text was meant to prevent. The build had added explicit branches for the four
+types `Convert.ChangeType` cannot see and missed the one it mishandles. *"Lossless by construction"* was
+true of the write and not of the read.
+
+**The unattributed ~0.8 KB has a name.** `DeclaredFilter()` never returned null, so every column
+allocated a filter, a condition and a one-element array on its first parameter set - about 104 bytes,
+five columns at a time - whether or not it declared a filter and whether or not the grid allowed
+filtering. That is §3's third rule, and the method's own summary already promised *"or null when it
+declares none"*. Fixed, the in-memory delta falls from **+0.85 to +0.33 KB**, which is §9's stated noise
+floor, and it is still flat in N.
+
+**Declining moved §32's finding 1a rather than removing it.** This section claimed to have closed the
+crash where an ordered operator meets a type with no ordering. The typed builder does decline now - and a
+decline is absorbed by the reflective builder, which threw the same `InvalidOperationException` one frame
+later. Nothing but *refusing the filter* removes it, so a stored operator the column's type cannot be
+compared with is now refused at the restore, where the type is known. §32's finding **1b** - that a
+decline has two causes and only one was fixed - was right, and this is the half of it that a stored
+filter can reach.
+
+**Smaller, and all real:** a lookup's blank entry was lost on the way back, because a stored `null` and
+an unparseable text were indistinguishable after the parse and the rebuild kept only values that were
+already keys; an empty second condition was read as a *failed* one and took the whole filter with it;
+three comments about `Custom` guarded code that could not run and each said something different; and
+`AnyValue`'s arity-`Many` branch is provably a no-op.
+
+**Five mutations survived the first loop and four more the second**, every one because a behaviour was
+covered only through a route that could not see it - a range tested over a list while the mutation was in
+the expression builder, an unjoined second condition where every path that could produce one dropped it
+first, an arity rule the restore rejected before it was reached. They are why `FastGridFilterModelTests`
+exists: **a test one layer above a rule is not a test of the rule.** All thirteen are caught now.
+
+### What is still owed
+
+- **A markup-declared `Between` cannot also declare a second condition.** `SecondFilterValue` is the
+  range's upper bound *and* the second condition's value, so the one combination joining this section's
+  headline operator to its two-condition justification is unauthorable from markup. It is silently
+  ignored rather than refused.
+- **`SecondFilterText` can only echo what a restore put there.** Nothing else writes it, and a range's
+  two bounds - one condition of arity two - have nowhere to keep a text at all. It was justified by a
+  date range, which this section then made a single condition.
+- **Ordered operators on a string over a queryable now produce no filter**, where dynamic LINQ could
+  express `Name > 'M'` and a provider translate it. Refusing beats throwing, and it is a new parity
+  divergence from `QueryableExtension` that nothing measures.
+- **An `In` over OData renders the typed list's `ToString`.** Pre-existing, upstream's, and on the seam
+  this section promised not to touch - but nothing in the suite covers it.
+- **The residual is measured in two currencies and attributed in neither.** ~0.8 KB and ~2.4 us on a
+  filtered render - see *The time half, and what it could not settle*. The candidates counted for the
+  allocation half are each allocated the same number of times as before, and nothing has been counted for
+  the time half at all. **Whether it is fixed or per row is also unsettled**: the allocation sweep says
+  fixed, a delegate call costs no allocation at all so that sweep cannot see one, and the time sweep at a
+  hundred rows is p = 0.34. What is known is that it is not the second condition's join, which does not
+  exist for a one-condition filter.
+
+### Where this could still be wrong
+
+- **Owning a model is a second vocabulary, and I argued against exactly that** when rejecting a
+  grid-owned `Between` operator an hour before proposing this. The distinction claimed is coherence - one
+  owned model with a documented projection at a named seam, against one stray enum value leaking into
+  descriptors `QueryableExtension` cannot read. That distinction is real and it is also convenient, and
+  it deserves a reader who does not believe it.
+- **The near-drop-in promise is §1's, and filters are the most-used surface after columns.** Every break
+  here is free *today* and the promise is about a reader carrying knowledge across, which a second
+  vocabulary taxes whether or not the old one still compiles.
+- **"Parsed against the column's type" makes the type load-bearing at restore** in a way it was not. §32
+  made `EffectiveFilterType` matter more than its own comment claimed; this makes it decisive.
+- **Nothing here is measured.** The gate is a budget until piece 2 of the order above has run.
+  *It has, in both currencies - see What the model cost and The time half. The allocation half
+  passes; the time half found a residual the gate never asked about and could not have settled the
+  half it did ask about, which the code settles instead.*
+
+---
+
+## 34. Relative dates are values that know when they are read - the design
+
+§31's ③, and the first piece §33 was built to make cheap. A relative date is a **value**: the operator
+vocabulary, the arity rule and the two-condition shape are all untouched by this section. That is the
+claim being tested rather than a hope - **if any of them has to learn about a token, the piece is going
+wrong**, which is the same shape of tripwire §33 set for the provider seam and for the same reason.
+
+**Nothing here is built when this section lands.**
+
+### Why a preset cannot be resolved when it is picked
+
+§31 settled this and it is worth restating, because it is the whole reason the section exists.
+
+Resolving *last 7 days* into a pair of dates at the moment the user picks it produces a filter that is
+**wrong by design the next morning**. Settings outlive sessions - that is what §32 and §33 spent two
+pieces making true - so a blob written in March comes back in September still asking about March, and
+it does it silently, with dates that look deliberate. A filter that says "last 7 days" has to still mean
+it.
+
+That is a statement about *when* a value is read. Which is why a token is a value with a resolution
+time, and not an operator with a meaning.
+
+### What a token is, and §33's own example is the one form that cannot exist
+
+§33 wrote the case as `Hired Between [last-7-days]` - one token in a two-arity operator. **That form
+cannot exist in the model §33 built.** `Between` takes two values because arity belongs to the operator;
+a single value that secretly supplies two bounds would make arity a property of the operator *and* of
+what is sitting in its slots, which is precisely the special-casing §33's model was arranged to remove.
+The sentence is corrected in the commit that makes this true, and so is §31's list.
+
+**A token resolves to a single instant.** *Last 7 days* is therefore not a token at all - it is a pair of
+them, `Between today-6d today@end` - and every one of §31's six presets is that shape:
+
+| §31's preset | what the menu writes |
+| --- | --- |
+| today | `Between today today@end` |
+| yesterday | `Between today-1d today-1d@end` |
+| last 7 days | `Between today-6d today@end` |
+| last 30 days | `Between today-29d today@end` |
+| this month | `Between month-start today@end` |
+| this year | `Between year-start today@end` |
+
+**The presets are the menu's vocabulary and the tokens are the model's**, and keeping them apart is what
+lets ④ add *last quarter* without touching anything here. What it buys downstream is that a resolved
+token is a `DateTime` in a slot that already held `DateTime`s, so `FilterExpression`, the descriptors and
+the OData string never learn the word. What it costs is honest and belongs to ④: the menu writes two
+halves where the user picked one thing, and a preset that round-trips has to be *recognised* from its
+pair rather than stored as itself - which is a display problem, not a model one, and ⑤'s pills are where
+it is felt.
+
+### The vocabulary, and the two things it refuses
+
+**An anchor, a signed offset with a unit, and an end-of-day flag.**
+
+| part | values |
+| --- | --- |
+| anchor | `today`, `month-start`, `year-start` |
+| unit | `d`, `m`, `y` |
+| day part | absent (00:00:00), or `@end` |
+
+Canonically: `today`, `today-6d`, `month-start`, `year-start+1m`, `today@end`, `today-29d@end`.
+
+Anchor-plus-offset rather than a closed set of named instants, and the difference is where the format
+settles. A closed set covers §31's six with about six members and then gains a **public enum member and
+a new settings-format value** the first time somebody asks for ninety days - so "to begin with" would be
+a promise to break the format again. Three anchors and an integer cover the six, and cover the ninety.
+
+**Refused: `week-start`.** A week's first day is culture-dependent, and nothing on this component owns a
+culture decision of that kind yet - §32 spent a paragraph establishing that stored values are invariant
+and typed text is `CurrentCulture`, and a first-day-of-week would be a third answer with no argument
+behind it. It is declined rather than overlooked, and it is the obvious first request.
+
+**Refused: a `w` unit.** It is `7d` spelled differently, and two spellings of one instant is two things a
+reader of a blob has to recognise.
+
+`today-1m` on 31 March resolves to 28 February, because that is `AddMonths` and the alternatives are
+worse. Month arithmetic that does not clamp has to either throw or skip, and a filter that throws on one
+day in twelve is not a filter.
+
+### The day boundary, which is where date ranges go wrong
+
+`Between` here is inclusive at both ends. A date column holding **times** therefore makes the upper bound
+of a range a trap: `Between today-6d today` with `today` at midnight silently excludes everything that
+happened today, which is a wrong answer that looks like a right one - the exact failure direction §32
+banned.
+
+**The day part is explicit in the grammar.** `today` is 00:00:00.0000000 and `today@end` is
+23:59:59.9999999. Nothing is implicit, a stored blob reads as exactly the instant it is, and resolution
+needs to know nothing but the token and the clock - which is what keeps "a token is a value" literally
+true.
+
+The alternative considered and rejected was **position-directed** resolution: one token text meaning
+start-of-day as a lower bound and end-of-day as an upper, so `After today` would mean after tonight the
+way a person reads it. Resolution runs at one place that has both the operator and the index, so it
+would have cost nothing structurally. It was rejected because the same text would then denote two
+instants depending where it sits, and the two places that text is *read by a human* - a settings blob
+and a pill - are both places where it sits alone with no position to be judged by.
+
+**The cost, documented rather than discovered: `Equals today` on a column holding times matches midnight
+exactly, and therefore nothing.** §31's table says date `Equals` means the whole day; for a token that is
+false, and the menu resolves it by writing the `Between` instead. An author reaching for `Equals` with a
+token from markup gets the literal reading, and that is the rule.
+
+### Where resolution runs
+
+**`CurrentFilter` stays what the user authored.** Tokens intact. It is what `CaptureSettings` writes,
+what a `FilterTemplate` author sets, and what ⑤'s pills read - a pill saying *"Hired is in the last 7
+days"* cannot be built from two resolved dates.
+
+**`ActiveFilter` is the resolved projection**, internal, refreshed where the grid composes a query, and
+it is what the three query-side readers take: `ApplyFilter`, `ApplyFilterInMemory` and `DescriptorFor`.
+Everything past those sees `DateTime`s indistinguishable from typed ones.
+
+Two names rather than one property that means different things at different times. §10b's recurring
+finding is a rule read from two places that can **disagree**; these two are *meant* to differ, and the
+names are what say which is which - the authored filter and the filter as of now.
+
+**One timestamp, stamped once for the whole composition**, handed to every token. Reading the clock per
+token lets two columns - or the two bounds of one range - land on opposite sides of midnight, producing a
+range that excludes its own start. That is a once-a-day bug with no reproduction, which is the worst kind
+this branch can ship.
+
+**A filter holding no tokens resolves to itself.** The same reference, nothing allocated, nothing copied.
+§33's review spent a finding on `DeclaredFilter` allocating a filter, a condition and a one-element array
+for every column whether or not it declared one; this is that lesson applied before rather than after -
+the common case is a grid with no relative filter anywhere, and it must cost exactly what it costs today.
+
+**Resolution targets the column's declared type.** A `DateTimeOffset` column gets a `DateTimeOffset`, a
+`DateOnly` column a `DateOnly` - where `@end` is a no-op, since a `DateOnly` has no end of day to reach.
+A `DateTime` result is `Unspecified`: comparison ignores `Kind`, but the wire does not, and a `Local`
+instant renders an offset into a string a server has to parse.
+
+### The clock
+
+**A `TimeProvider` parameter, defaulting to `TimeProvider.System`, read through `GetLocalNow()`.**
+
+Local, because a user filtering *hired today* means their today, and it is what every date editor on the
+grid already shows them.
+
+The parameter is not a convenience. It is the only answer available to **Blazor Server running in a
+different zone from its user** - the app hands over a provider carrying the user's zone and the grid asks
+no further questions - and it is what makes the rule testable at all. §9's protocol has nowhere to put a
+test of "yesterday" against a real clock; with a fixed provider it is an ordinary pure-function test at
+the layer the rule lives at - §33's review finding, that **a test one layer above a rule is not a
+test of the rule**, which is what `FastGridFilterModelTests` exists for.
+
+`TimeProvider` rather than a hand-rolled clock interface because it is the framework's own abstraction
+since .NET 8, this component targets net9.0 and net10.0, and inventing a second one would be a seam with
+exactly one implementation - §16's rule about narrowing interfaces that nothing else could satisfy.
+
+### Storage, and why the two vocabularies cannot collide
+
+`FilterValueText.From` gains one arm returning the canonical text. `To` parses a token **only when the
+column's effective filter type is a date type** - so a string column filtered to the literal text
+`today-6d` stores and restores that string, untouched.
+
+Within a date column the two vocabularies are disjoint by construction: no invariant-culture date format
+parses as `today`, and no token parses as a date. §33 made values invariant strings precisely so that
+a serializer could not change what a value *is*; a token is one more string, and it survives
+`System.Text.Json` for the same reason a `DateTime`'s round-trip form does.
+
+**The format is not extended and not versioned.** §33 settled it, and a token is a value in the shape
+§33 defined rather than a new member beside it.
+
+### The gate
+
+**Per-row and per-cell allocation unchanged, and the token-free path unchanged in both time and
+allocation.** The second half is the one that can fail the piece: a grid with no relative filter must
+not pay for the existence of the feature, which is what "resolves to itself" is for and what the sweep
+has to demonstrate.
+
+A token's own cost is permitted per column and per active filter - one resolved condition and its boxed
+instants per composition - and is not permitted to grow with rows. `FilteringApplied` swept over N=100
+and N=1000, because §33's review is the reason that sweep exists: a fixed cost and a per-row cost look
+identical at one row count.
+
+### How it is verified
+
+- **The grammar and the resolution as pure rules** in `FastGridFilterModelTests`, against a fixed
+  `TimeProvider`. §33's finding again: `today-6d@end` is a rule about a token, and a test that reaches it
+  through a rendered grid is a test of the grid.
+- **A settings round trip through real `System.Text.Json`**, proving a token comes back a token and
+  still means the reading day's *today* rather than the writing day's.
+- **Three-route agreement on a token filter.** §33's review found two routes disagreeing about a range
+  with the flat one on the wire; a token multiplies whatever that class of fault costs, because the two
+  answers are both plausible dates.
+- **The playground's round-trip button**, which §32 added for exactly this class of bug.
+
+### What the build changed
+
+Four decisions did not survive contact, and one bug found itself.
+
+**The conditional that types itself.** `Resolve` ended with
+`type == typeof(DateTimeOffset) ? new DateTimeOffset(...) : instant`, and there is an implicit
+`DateTime`-to-`DateTimeOffset` conversion - so C# typed the whole expression as `DateTimeOffset` and
+*every* column, `DateTime` ones included, was handed one. It compiles, it boxes, and the only place it
+surfaces is the cast at the far end. Two statements now. The test that caught it was written before the
+code ran, which is the entire argument for testing the rule at the layer the rule lives at.
+
+**The stamp is a field, not a fresh read.** The design said "one instant, threaded through
+`CompositionOptions`", and `Options` is a computed property built at each call site - so `ProvideRows`,
+which reads the composition twice (once for the rows, once for the total), would have stamped twice. It
+is a field now, stamped by `StampFilterClock` at the head of the reload funnel, the virtualized provider,
+and each draw pass, and `Options` carries whatever the last stamp said. The public `Filters` deliberately
+reads the *previous* stamp: it reports what the grid is filtering by, not what it would filter by if
+asked again.
+
+**`In` refuses tokens rather than dropping them later.** An `In`'s values are collected into a list typed
+to the column so a provider can translate `Contains`; adding a `FastGridRelativeDate` to a
+`List<DateTime>` throws. `FilterValueText.To` takes a `relative` flag and the `Many` path passes false,
+so a token in a stored list is refused at the parse - §32's policy - rather than reaching a cast. A token
+in a set of specific days says nothing a range does not say better, so nothing is lost.
+
+**The playground's sample data moved.** `Hired` counted forward from 2010, so every row sat years outside
+any relative window and the one control that demonstrates the feature demonstrated an empty grid. It
+counts back from today now. The same fault reached the benchmark: the first version of §34's bench pair
+filtered *nothing*, allocated a constant 48 KB at both row counts, and read as a beautifully flat result.
+A sweep that measures the same render twice is not a control.
+
+### What it cost
+
+`FastGridFeatureBench`, `--job short`, swept over two row counts. The token-free path first, which is the
+half of the gate that can fail the piece:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter that actually filters | 49.35 → **49.55** KB | 79.92 → **79.84** KB |
+| the same over a queryable | 56.17 → **55.90** KB | 86.50 → **86.57** KB |
+
+Two of the four deltas are negative and none exceeds 0.27 KB, which is inside §9's noise floor. **A grid
+with no relative filter anywhere is unchanged**, which is what "resolves to itself" was for.
+
+The token's own cost, against a control that filters by the same two instants written as dates - so what
+separates the pair is the token being read, with the range held constant:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a date range written as two dates | 57.52 KB | 164.85 KB |
+| the same range written relative | **57.88** KB | **165.11** KB |
+
+**+0.36 and +0.26 KB, flat across a tenfold change in rows** - and the control itself grows from 57 to
+165 KB, so the sweep is measuring something. A per-row cost would have grown by ten. The permitted cost
+is per column and per active filter, and that is what it is.
+
+`alloc-types 1000 400`, interleaved, on the unfiltered path: base 13281.7 and 13284.4 KB, this change
+13282.7 and 13270.2 - a gap smaller than either arm's own spread, so the clock read that every draw pass
+now makes costs nothing measurable.
+
+**The time half, at full length.** Five passes of the default job, the pair read *within* each pass, so
+whatever the machine was doing it did to both arms seconds apart:
+
+| relative ÷ absolute | N=100 | N=1000 |
+| --- | --- | --- |
+| median of five passes | **1.000** | **1.001** |
+| spread | 0.991 - 1.007 | 0.995 - 1.006 |
+
+**A token costs no measurable time to read**, at either row count, with a spread under 1%. That is the
+half of this gate a within-pass pair can answer, and it is the clean half: five passes, both arms of each
+comparison measured seconds apart in one process, so none of the machine weather that troubles §33's
+cross-commit table reaches it.
+
+The other half - the token-free path unchanged - is cross-commit and is measured in §33's *The time half,
+and what it could not settle*, with the caveats recorded there: `bare` does not move at p = 0.97, and the
+unfiltered filter row's own spread is fifteen times the effect it is being used to exclude, so it says
+nothing either way.
+
+### What the review found that the build had not
+
+Two reviewers in parallel. Between them, two faults that put wrong rows on the screen, one that crashes,
+and three claims of this section that were not true.
+
+**The filter box showed a token and committing it deleted the filter.** The `Simple` box renders the
+first condition's value, so a relative filter showed `today-6d` - the lower bound only, with `today@end`
+invisible. Worse, the commit path compared the text it was handed against `AppliedFilterText`, which is
+null for every filter that did not come from a box. So a blur over an untouched box re-applied the box's
+own text as a new filter, and `today-6d` does not parse as a date, so the filter was **cleared**. With
+`FilterAsYouType` on - the default - a keystroke and a backspace did it.
+
+The destructive half is §33's, not this section's: an absolute `Between 200 300` showed `200`, and the
+same blur committed it as `Equals 200`. §34 only turned a silent narrowing into a silent deletion, which
+is how it was found. Fixed at the family rather than the symptom: `ColumnBase.FilterBoxText` is the one
+place that says what the box shows, and the commit compares against *that* rather than only against what
+a box last put there. It still shows one value of a compound, which is recorded rather than fixed - a box
+holds one value and a range has two.
+
+And **the third reader**. Storage learned to read `today-6d` and the editor did not, so the same six
+characters were a relative date coming out of a settings blob and nothing at all coming out of the box
+beside it. `FilterValueFromText` reads tokens now. *"The two vocabularies cannot collide"* was argued
+about storage, and there were three readers.
+
+**The clamp was undone one line later.** `Day` catches an out-of-calendar offset and clamps, under a
+comment committing to never putting an exception inside `BuildRenderTree`. Then
+`new DateTimeOffset(instant, now.Offset)` throws when the instant less the offset leaves the calendar -
+so a clamped `MinValue` threw for every clock east of UTC and a clamped `MaxValue` for every clock west
+of it. §10b's finding inside a single method. The test that "covered" it picked exactly the two arms that
+cannot throw: a `DateTime` column, and one negative offset.
+
+**A window fetch could straddle its own stamp.** Making the stamp a field fixed the double *read*; it did
+not fix the double *stamp*. `ProvideRows` composes the window, awaits the provider, then counts - and a
+draw pass or a parameter set landing inside that await restamps the field, so the count would be taken at
+a newer instant than the rows it counts. The options are taken into a local now and held across the await.
+
+**A cached row total outlives the day it was counted on.** `virtualTotal` is nulled in exactly one place,
+the reload funnel. Before this section a filter's answer could not change without going through it; a
+relative one can, so a virtualized grid left open across midnight serves the new day's window against the
+old day's count - a scrollbar and an `aria-rowcount` that stay wrong until something reloads. This section
+named that failure and put it in `ActiveFilter`; the carrier is an integer.
+
+**Three claims corrected.** *"A token never enters an `In`"* is not enforced by the model - it is enforced
+at storage, and a token declared into an `In` from markup behaves as any other non-sequence value in one
+does. *"Process rule 4"* was cited three times and does not exist; the rule meant is §33's review finding,
+that a test one layer above a rule is not a test of the rule. And the corrections to §33's example and
+§31's list are in the *design* commit, not "the commit that makes this true" as written.
+
+**Smaller, and all real:** the resolve rule was spelled twice - `Filters` inlined the loop instead of
+calling `Resolve`, under a remark already claiming the caller it did not have; `IsRelative` had no
+production caller at all, under a comment naming editors ④ has not built; `TryParse` was missing
+`[NotNullWhen(true)]` on a public API in a library that ships at zero warnings; and `Clock` reads back
+null while documenting a default.
+
+**The mutation loop: sixteen of twenty-six the first time, twenty-six of twenty-seven the third.** Two of
+the survivors were code that could not fail - an explicit storage arm calling the same `ToString` the
+fallback arm reaches, and a digit loop in front of a `NumberStyles.None` that already refused everything
+it did. Both deleted; §33's review named that shape in `AnyValue` and it grew back here. Two more were
+`StampFilterClock` calls redundant with the other three, and a lazy guard against an unset clock that
+guards nothing - a composition reads the columns, and no column has registered until a render has run.
+Deleting the fourth stamp made the third *fail* under mutation, which is the loop earning its keep: four
+sites covering for each other tested none of them.
+
+### What is still owed
+
+- **`ProvideRows`' stamp has no test that can see it.** It is the one mutation of twenty-seven that still
+  survives. bUnit does not run `Virtualize`'s items provider, so every rule that lives only inside a
+  window fetch - this stamp and the straddle it prevents - is covered by reading the code. The stale-total
+  rule beside it was moved to `Composition.OutlivedTheDay` for exactly this reason and is now tested; the
+  stamp cannot be moved anywhere a test can reach.
+- **The box shows one value of a compound.** §33's, now named: a `Between` and a two-condition column both
+  render their first value into a control that holds one. Committing it no longer destroys anything, and
+  the box still misrepresents what it shows. ④ is where a control that can hold a range lives. *§35
+  answers it for the menu - `Between` renders two editors - and declines it for the row, on the grounds
+  that a box holding two values is the row ceasing to be a row.*
+- **A compound with a `Between` half reaches `LoadDataArgs.Filters` as nothing.** Three comparisons
+  overflow a `FilterDescriptor`, so §33 leaves the column out rather than flattening it - and a handler
+  reading only the structured half returns every row. §33's hole. *This section added "and §34's menu
+  will write exactly that shape", and §35 refuses to: the menu authors one condition per column, so
+  `IsNull` is an operator to pick rather than an `OR`'d tail, and no menu-authored filter reaches the
+  hole. It stays open and stays owed - reachable only from markup and from a `FilterTemplate`.*
+- **The OData string truncates `today@end` to the second.** `QueryableExtension` formats a `DateTime` with
+  `.fff`, so 23:59:59.9999999 goes out as 23:59:59.000 and the last second of the day is lost on the wire.
+  Upstream's formatter, on the seam this section promised not to touch - and the same boundary loss
+  `@end` exists to prevent, one layer out.
+- **The `Unspecified` argument is right for the wrong reason.** This section said a `Local` instant would
+  render an offset a server has to parse; `QueryableExtension` writes a literal `Z` whatever the `Kind`,
+  so the local wall clock goes out labelled UTC either way. The choice is harmless and probably right;
+  the reason given for it is not what the code does.
+
+### Where this could still be wrong
+
+- **`ActiveFilter` is a second thing to keep in step**, and the failure mode is a stale resolution
+  surviving into a composition it does not belong to. The refresh is one place; the argument that one
+  place is enough is an argument about the grid's composition lifecycle, and that lifecycle is the part
+  of this component §23 found hardest to state. *The review found the staleness and it was not here: the
+  carrier was `virtualTotal`, a cached integer. The instinct was right and the object named was wrong,
+  which is worth keeping.*
+- **The preset is not in the model**, so a stored `Between today-6d today@end` cannot be told from a
+  hand-authored one, and ④ has to recognise presets by their shape to show them as presets. That is a
+  cost deliberately pushed into the menu, and it may turn out to want a token that names the preset
+  after all - which would be this section refuted rather than extended. *§35 paid the cost and did not
+  refute it: recognition is a table of six token pairs and the equality this section already shipped.
+  A hand-authored pair reading as the preset is two spellings of one filter agreeing.*
+- **"Local" is the app's problem to correct and most apps will not know they have one.** The default is
+  right for Blazor WebAssembly and for a server in its users' zone, and quietly wrong otherwise, in a
+  direction that shows plausible rows.
+- **`Equals` with a token means midnight** and §31's table says the whole day. Two readings of one
+  operator, reconciled by a rule about which one the menu writes, and a rule like that is exactly what
+  §33 called two sources of truth when it found one. *§35 narrows it to one place: the menu never writes
+  a date `Equals` at all, it writes the whole-day `Between`. The operator keeps its literal reading for
+  the markup author, and there is one rule rather than two readings.*
+- **Nothing here is measured.** The gate is a budget until the build has run - *and it has: see What it
+  cost. The token's own cost is measured and is nothing, in both currencies. The token-free half rests on
+  §33's cross-commit table, where one control is flat and the other cannot resolve the effect.*
+
+## 35. The filter menu, and the column writes its own editor - the design
+
+§31's ④, and the first of two sections it splits into. **Nothing here is built when this section
+lands.**
+
+§31 named ④ as *"the menu. Panel, operators, labels, checklist-on-demand, keyboard"* and then §34
+handed it four more things by name. That is one section only in the sense that one bullet holds it.
+It splits where the gates split: **the panel and its operators have a per-row allocation gate**, which
+is §31's own and the shape every section on this branch has cleared; **the checklist has a
+queries-per-open gate**, which is a different kind of number and the one §10 already measured going
+wrong. Two gates that cannot fail each other are two sections, and process rule 10 wants a piece a
+reviewer can hold.
+
+So: this section is the panel, the operators, the editors, the dates and the keyboard. §36 is the
+checklist and the distinct scan it needs.
+
+### What §34 left ④, answered
+
+Four things, and the answers are the design rather than a preamble to it.
+
+**The box shows one value of a compound.** Resolved for the menu and not for the row. `Between`
+renders two editors of the column's own type, so the range is visible and editable as a range - which
+is what §34 meant by *"④ is where a control that can hold a range lives"*. Under `FilterUI.Row`
+nothing changes: a box holds one value, and a row user who wants a range uses the menu. That is
+recorded as the answer rather than left owed, because "make the row's single box hold two values" is
+not a thing to build, it is the row stopping being a row.
+
+**A preset is not in the model.** Recognised by shape. The menu holds §34's six token pairs and
+compares a filter's two values against them; a match shows the preset selected, and no match shows
+`Between` with whatever is in it. §34 offered the alternative - *"a token that names the preset after
+all, which would be this section refuted"* - and it is refused here. A single token cannot supply two
+bounds; that was §34's entire argument against §33's example. So naming the preset would mean a third
+field on `FastGridFilter` beside its two conditions, which the descriptors, the expression routes, the
+OData string and the settings format would all then have to carry and ignore - and §33 settled that
+the format is not extended. **Recognition costs a table of six pairs and an equality that
+`FastGridRelativeDate` already implements.**
+
+The one oddity is stated rather than hidden: a hand-authored `Between today-6d today@end` displays as
+*last 7 days*. It **is** that range, exactly, resolved at the same instant by the same rule. A
+false positive here is not a wrong answer, it is two spellings of one filter agreeing.
+
+**`Equals today` means midnight, and §31's table says whole day.** The menu writes the `Between`, as
+§31 said its table's job was. `Equals` picked on a date column with a token produces
+`Between today today@end`; `Equals` picked with a date the user typed produces the same shape over
+that day. **The menu never writes a date `Equals`.** That is one rule in one place rather than two
+readings of an operator - and the operator itself keeps the literal reading it has, for the
+markup author §34 documented it for.
+
+**The `FilterMode`/`CheckBoxList` circuit crash.** Below, under its own heading, because the fix is an
+operator rule and not a menu one.
+
+### The surface
+
+```
+FilterUI { Row, Menu }
+```
+
+Grid-wide, default `Row`, this grid's own enum - §31 argued that separation and nothing here revisits
+it. `FilterMode` stays upstream's vocabulary and stays per-column overridable through `FilterModeOf`.
+
+**Under `Menu` there is no filter row.** Not a hidden one, not an empty one: `AllowFiltering` under
+`Menu` renders the header's icons and no second header row at all. The alternative - a row *and* a
+menu, as upstream's `SimpleWithMenu` has - was rejected because it is two places to author one filter
+and the two would have to agree; §10b's recurring finding is a rule read from two places that can
+disagree, and this would be a rule *written* from two.
+
+**The icon is a real `<button tabindex="-1">` in the header cell**, always visible on a filterable
+column, carrying upstream's own classes so a theme styles it unchanged:
+`rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base rz-shade-default`,
+plus `rz-grid-filter-active` when the column is filtered. `aria-haspopup="menu"`, `aria-controls` the
+panel, `aria-expanded` tracking it. §12 settled that this grid is one tab stop with the active cell
+named by `aria-activedescendant`, so `tabindex="-1"` is not a compromise - it is what keeps that true
+with eight icons on the screen.
+
+**It stops propagation.** The header cell's click sorts; the icon's click must not. One
+`stopPropagation` on the button, and the header keeps the gesture it has.
+
+`FilterIcon` joins the grid's parameters with upstream's default of `filter_alt`, because a consumer
+who has restyled `RadzenDataGrid`'s icon expects the same lever here.
+
+### The panel, and why there is one
+
+**One `RadzenPopup` for the grid**, `Lazy`, its body `@key`ed on the target column.
+
+Reused rather than written, and §7's table is the argument: `RadzenPopup` is public, derives from
+`RadzenComponent`, and carries outside-click closing, escape, first-element focus, a `[JSInvokable]`
+close callback and `Radzen.destroyPopup` on dispose. Writing that again to own it would be about a
+hundred and fifty lines of somebody else's solved problem.
+
+**A panel per column was rejected for the reason §29 gives**: exactly one can be open, so a panel per
+column multiplies a cost by the column count for a control that is singular by construction. It also
+gives §31's ⑤ somewhere to send a pill's click-to-reopen without holding a handle on a particular
+column's panel.
+
+**`Radzen.openPopup` moves the panel to `document.body`.** That is worth writing down because two
+things fall out of it and both are load-bearing:
+
+- **The sticky header cannot clip it.** The header is sticky inside `.rz-data-grid-data`, which is the
+  horizontal scroller, and §10 spent a section on what that container does to things positioned inside
+  it. A panel that has left the container is not subject to it. Nothing here needs a second sticky
+  band or a `z-index` argument.
+- **The panel is outside the grid's keydown handler while open.** §12's arrow space is bound on
+  `.rz-data-grid-data`; a panel on `document.body` is not a descendant of it, so an arrow key inside a
+  date picker in the panel is not also a grid navigation. The filter row needed
+  `stopPropagation` for exactly this and the panel needs nothing.
+
+**What it costs is one rule: once built, the panel is never removed from the render tree.** Blazor's
+diff tolerates attribute and child updates on a node that JavaScript has reparented - which is what
+every upstream drop-down relies on - but a *removal* is resolved against the logical parent the
+renderer recorded. `Lazy` gives §31's "costs nothing while closed"; what it must not do is come and
+go.
+
+**Opening is armed on click and positioned after the render.** `ToggleAsync` calls into JS before the
+lazy body has rendered, so a panel opened straight from the click handler is measured empty and
+positioned for a size it does not have. The click sets the target column and renders; the open runs in
+`OnAfterRenderAsync`. That is §29's order - size before position, one placement, no jump - arrived at
+from the other direction.
+
+### The operators, and where their words come from
+
+§31's table, unchanged, minus the checklist half that §36 owns:
+
+| type | operators the menu offers |
+| --- | --- |
+| string | **Contains**, DoesNotContain, StartsWith, EndsWith, Equals, NotEquals, IsEmpty, IsNotEmpty |
+| number | **Equals**, NotEquals, <, <=, >, >=, **Between** |
+| date | **Equals** (written as a whole-day `Between`), Before, After, **Between**, then the six presets |
+| bool | **Equals** true/false |
+| enum, lookup, collection | **In**, NotIn - §36 |
+
+Nullable columns of any type also get IsNull / IsNotNull. **One condition per column.** §31 said the
+menu exposes single-condition operators plus *between* and that is taken literally: `IsNull` is an
+operator to choose, not an `OR`'d tail on another one. §34 predicted that *"§34's menu will write
+exactly that shape"* - the compound-with-a-`Between`-half that vanishes from `LoadDataArgs.Filters` -
+and **it does not**. That claim is corrected where it was made. §33's hole stays open and stays owed,
+and no menu-authored filter reaches it.
+
+**Every label is already translated.** `DataGrid_ContainsText`, `DataGrid_EqualsText`,
+`DataGrid_ApplyFilterText` and the rest of the operator vocabulary are upstream's keys, shipped in the
+five cultures Radzen translates, and `StringResolver` already looks in the consuming application's own
+`RadzenStrings` first - so an app
+that has reworded one of them for `RadzenDataGrid` gets the same wording here for nothing. §31's menu
+inherits `RadzenDataGrid`'s vocabulary rather than inventing a second one, which is also the promise
+§31 made about carrying knowledge across.
+
+**Seven strings have no upstream key**: `Between`, and the six presets. `StringResolver.Get` falls back
+to *the key itself*, so a new key resolves to `"DataGrid_BetweenText"` on the screen, which is worse
+than not localizing at all. `Localize` gains a fallback overload - resolve, and where the resolver
+answered with the key, use the English default. The consequence is the good one: an application can
+translate the seven today by adding the keys to its own `RadzenStrings`, and if Radzen ever ships them
+this grid picks them up with no change. A `.resx` of our own was rejected for the same reason §31
+rejected redefining `FilterMode` - a second vocabulary beside upstream's, in the one file where a
+reader most wants there to be one.
+
+### The editors, and why the column writes them
+
+**A new `internal virtual` on `ColumnBase<TItem>`, overridden in `PropertyColumn<TItem, TProp>`.**
+
+The grid cannot write these. A grid-side switch on `FilterPropertyType` can only open
+`RadzenNumeric<object>` and `RadzenDatePicker<object>`, and §3 rule 5 is exactly that: a generic value
+widened to reach an interface boxes every value it touches. The column already knows `TProp`. It is
+the only thing that does.
+
+**§3 rule 1 does not forbid this.** That rule is about rows and cells - no component per row, no
+`RenderFragment` per cell - and its reason is the per-row multiplier. A panel is one, opened by hand,
+and its editors are one or two. This is the same trade `RadzenPager` already gets.
+
+The virtual takes what an editor needs and no more: **the value in the slot, a callback to set it, and
+the slot's aria label.** One shape for both of `Between`'s bounds, because a range's upper editor is
+its lower editor with a different value in it, and giving them two entry points is how they drift.
+The callback is created by the column, so the one box is at the seam, once per commit rather than per
+row - which is where §3 rule 5 says a box is allowed to be.
+
+**It stays `internal`.** §20 counted eight internal virtuals and read them correctly as one closed
+door: an out-of-assembly column can render, sort and compose a filter predicate, and cannot take part
+in the filter UI. This is the ninth and the door does not move. The public answer is `FilterTemplate`,
+which §31 already made the whole editor when present - no operator picker beside it, because a
+template's author sets value and operator themselves and a picker would be a second control fighting
+the first over one piece of state.
+
+### The dates
+
+The six presets sit below the operators on a date column and **apply on pick**. They need no value, so
+an Apply step after them would be a button that confirms a complete sentence.
+
+Each writes the pair §34 tabulated - `today`, `yesterday`, `last 7 days`, `last 30 days`,
+`this month`, `this year` - into a `Between`. The tokens are the model's vocabulary and the presets are
+the menu's, which is what lets a seventh be added here without touching §34.
+
+On reopen the draft's two values are matched against the six pairs. A match selects the preset; no
+match shows `Between` with its two dates. **The match is on the tokens, not on the resolved
+instants** - `Between today-6d today@end` is *last 7 days* whatever day it is read on, and two absolute
+dates that happen to span the last seven days are not.
+
+### Committing, and the draft
+
+**The panel edits a draft.** One operator and up to two values, held by the grid, replaced when the
+panel is retargeted, discarded when it closes. §31 settled that the menu applies on Apply or Enter and
+never per keystroke - *"a half-typed between bound filters to nothing on every keystroke"* - so there
+has to be somewhere uncommitted for a half-typed bound to sit. Editing `CurrentFilter` directly would
+make every keystroke a filter, which is the feature §31 refused.
+
+**Apply and Enter commit it; Clear clears the column; Escape closes without committing.** Each of
+Apply and Clear is exactly one reload. §31's *"Clear is one operation at three scopes"* has its third
+scope in ⑤ and its first two here.
+
+**Escape returns focus to the grid**, not to the icon. The grid is the one tab stop §12 built; putting
+focus on a `tabindex="-1"` button would leave the page with a focused element that Tab cannot reach
+again.
+
+### Keyboard
+
+**Alt+Down opens the menu for the focused header column** - Excel's own shortcut, and §31 chose it.
+One case in the header branch of the keyboard switch, beside the Enter that sorts.
+
+That branch is the whole change. Everything inside the panel is ordinary focusable content in a
+container the grid's handler does not see, so Tab, arrows and Enter inside it belong to the controls
+they land on. `AutoFocusFirstElement` puts the caret where a user who opened it by keyboard expects it.
+
+### `CheckBoxList` stops being a mode
+
+§31: *"`FilterMode.CheckBoxList` stops being a mode and becomes the editor for `In`/`NotIn`. The
+parameter is still accepted and maps onto the new model."* This section is where the mapping lands,
+and the mapping is what closes the crash §32's browser pass recorded.
+
+**The crash, stated:** with a scalar filter applied - a `Contains` from the text box, or a restored
+one - switching `FilterMode` to `CheckBoxList` hands `RadzenDropDown<IEnumerable>.Value` the scalar
+that filter holds. A `Multiple` drop-down casts its value to a sequence, an `int` is not one, and the
+cast terminates the circuit. It is a mode/operator mismatch exactly as §31 diagnosed the mode itself
+to be: the *editor* changed and the *filter* did not.
+
+**The mapping:** a column whose effective `FilterMode` is `CheckBoxList` filters by `In`. A filter
+whose operator is not a sequence operator is not offered to a check-box list at all - it is cleared
+when the mode changes, the way §32 made a stored filter that cannot be rebuilt get dropped rather than
+handed on unexamined. The scalar never reaches the cast because it never reaches the control.
+
+This is an operator rule and not a menu one, so it fixes `FilterUI.Row` as well - which matters,
+because the row is where the crash was found and the row is the default.
+
+### What this section does not do
+
+- **The checklist.** `In` and `NotIn` are offered by the operator table but §35's panel edits them with
+  the multiselect the filter row already uses. §36 replaces it with the real check-box list, the
+  checklist-first rule for lookups and enums, and the *"Filter by value..."* on-demand distinct scan
+  that §10 measured the cost of leading with. *§36 refuses that last one and adds a third way for the
+  values to be known - the author declaring them - which is what makes the scan bounded.*
+- **The pills.** §31's ⑤.
+- **The row's one-value box.** Recorded above.
+- **§33's `Between`-in-a-compound hole.** Not reached, and now known not to be reached from here.
+
+### The gate
+
+**Per-row and per-cell allocation unchanged, and a closed menu costing nothing.** §31 set both and
+neither is a number to report afterwards - the first can fail the piece.
+
+Bench rows, following the drop-down's *"never opened"* precedent, which is what makes the second half
+measurable rather than asserted:
+
+- the header chrome with the icon on, against the same grid under `FilterUI.Row`;
+- a grid under `FilterUI.Menu` with the panel never opened, against `FilterUI.Row` with filtering on.
+
+**Swept over two row counts**, because §33's review is the reason that sweep exists: a fixed cost and a
+per-row cost look identical at one row count, and §34 shipped a bench pair that filtered nothing and
+read as beautifully flat. The sweep has to move something.
+
+The panel's own cost - one popup component, one draft, the editors of one column - is permitted per
+open and is not measured against a budget, because it is a control a user asked for by clicking.
+
+### How it is verified
+
+- **The operator table as a pure rule.** Which operators a column of a given type offers, and what
+  `Equals` on a date writes, are rules about a type and not about a rendered grid. §33's review
+  finding - a test one layer above a rule is not a test of the rule - is why they are tested where they
+  live rather than through a panel.
+- **Preset recognition as a pure rule**, both directions: each of the six pairs recognised, and a pair
+  that is not one of them not recognised.
+- **The panel through bUnit** for what only a render can answer: the icon's presence and active state,
+  the absence of the filter row under `Menu`, the panel's body re-keying when the target changes, Apply
+  committing and Escape not.
+- **The crash, as a test that fails first.** A scalar filter, then `FilterMode` set to `CheckBoxList`.
+  §32's finding had a browser to find it in; this one gets a test.
+- **The playground** - §9 layer 6, and not optional for behavioural change. A `FilterUI` toggle beside
+  the existing settings controls, so the two UIs can be compared on the same data, and Alt+Down tried
+  against a real browser's own handling of it.
+
+
+### What the build changed
+
+Four of this section's decisions did not survive, one rule turned out to be three-quarters missing, and
+the bug that mattered most was invisible to every test in the suite.
+
+**"Cleared when the mode changes" was two rules wearing one sentence.** The broad reading - clear
+whenever a filter and a set editor disagree - was built first and broke a contract this grid already
+has. A caller asking `ApplyFilters` or `Filter(column, value)` for `Equals 3` on a column that was
+*already* a check-box list has said what they want, and §14's lookup columns have answered by applying
+it and ticking nothing since they were built; dropping it is the silent disappearance §32 exists to
+refuse. Only a **transition** clears now, and telling one from the other needs the editor a column last
+*drew* rather than the one it is about to - recorded as the table draws, null until it has drawn once,
+so markup declaring both a `FilterValue` and `CheckBoxList` keeps what it declared.
+
+**`DefaultFilterOperator` is not `In` for a check-box-list column.** §31's *"the parameter maps onto
+the new model"* reads as though it should be, and it was built that way. That property answers for a
+*value* arriving with no operator - a descriptor with none set, a typed box, a declared `FilterValue` -
+and those are scalars whatever the editor is, so answering `In` turned `ApplyFilters`'s `Id = 3` into a
+`Contains` over a bare 3 and an existing test caught it. `LookupColumnBase` can answer `In`
+unconditionally because its values really are sets of ids. The mapping lives where the list actually
+edits, and the list already passed `In` itself; what the crash needed was the *guard*, not the mapping.
+
+**The editors are two controls, not a control per type.** This section argued the column-written editor
+against `RadzenNumeric<object>` and the boxing that widening costs. The reason it survives is a
+different one: a typed numeric control **cannot show empty for a non-nullable `TProp`** - it shows a
+zero - so a menu opening pre-filled on an unfiltered column would offer Apply on a value nobody chose.
+Upstream's own filter UI draws a `RadzenTextBox` for numbers for exactly this reason. So the base draws
+the text input the filter row already draws, converting through `FilterValueFromText` - which is the
+column's, and already reads enums, `Guid`s and §34's tokens - and `PropertyColumn` overrides for two
+types only. **The date picker is the whole argument**: `RadzenDatePicker` converts what was picked by
+asking its own `TValue`, so drawing it over `object`, as upstream does, is what hands a `DateOnly`
+column a `DateTime`. The empty-state problem is solved by flow rather than by generics: no operator
+picked, no editor.
+
+**The whole-day rule is four operators, not one.** This section argued it for `Equals` and the build
+found the other three by testing them. `After 5 March` at midnight keeps 5 March's afternoon; a range
+ending at `31 March` at midnight drops 31 March; and `Before 5 March 14:00`, read literally, keeps that
+morning. Every one is the failure §34 built `@end` to prevent, in the same direction, one layer up. All
+four operators on a date column name a day and mean a boundary, and the menu writes the boundary -
+which is one rule where leaving three of four literal would have been a rule applied where it was
+written down rather than where it is true.
+
+**And `ConfigureAwait(false)` on the commit path terminated the circuit.** Closing the panel is a
+JavaScript call, so that await genuinely suspends; discarding the synchronization context there resumed
+the reload on a thread-pool thread, and `RefreshAsync` reached `StateHasChanged` off the renderer's
+dispatcher. Picking *last 7 days* took the circuit down every time. **All 1,039 tests passed** - bUnit's
+renderer does not enforce the dispatcher the way a real one does - and the playground found it on the
+first click, which is what §9's sixth layer is for and why it is not optional for behavioural change.
+
+**Smaller, and all real:** `FilterNullable` had to exist, because "nullable" for a `Type` is
+`IsValueType` and `Nullable.GetUnderlyingType` rather than an annotation the runtime kept; the operator
+list needed an arm for a type that says nothing at all, since `PropertyColumn<T, object>` would
+otherwise have been offered a `Contains`; and the panel is written at sequence 300, after the bottom
+pager's 200, because it is the last of the grid's children and a run's numbers have to ascend.
+
+### What it cost
+
+`FastGridFeatureBench`, `--job short`, swept over two row counts. The control is the filter row,
+because both draw a filterable grid over the same columns and what separates them is the icon and a
+panel nobody has opened:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row | 52.30 KB | 159.57 KB |
+| a filter menu, never opened | **51.99** KB | **159.24** KB |
+| a filter row, filtering | 49.67 KB | 80.28 KB |
+| a filter menu, never opened, filtering | **49.16** KB | **79.65** KB |
+
+**All four deltas are negative** - between 0.31 and 0.63 KB - and flat across a tenfold change in rows.
+The menu is *cheaper* than the row it replaces, which on inspection is not a surprise: nine header
+icons against nine `<input>`s, their `onchange` binders and a whole extra `<tr>`. A per-row cost would
+have grown by ten, and the sweep is measuring rows - the filtering control itself goes from 49.67 to
+80.28 KB across the same change.
+
+The gate asked for *unchanged*, and it is unchanged in the direction that cannot fail it.
+
+**The time half, at full length.** The same five passes, the pair again read within each pass:
+
+| menu ÷ row | N=100 | N=1000 |
+| --- | --- | --- |
+| never opened | **1.001** (3 passes) | **1.002** (4 passes) |
+| never opened, filtering | **0.973** (3 passes) | **0.997** (5 passes) |
+
+**A menu nobody has opened costs no measurable time against the row it replaces**, and nothing that grows
+with rows: every one of the four figures is within 3% of parity, and the two that matter for the per-row
+question - the thousand-row rows, where the render is long enough to measure - are within 0.3%. The
+hundred-row pair is looser (0.973 is 2.7% under parity, not the "same" an earlier draft called it) and it
+is looser in the direction that cannot fail the gate. The counts differ because a block whose StdDev
+exceeded 3% of its mean was discarded rather than read, and the hundred-row blocks lost more of them -
+unfiltered, the discarded ones span 0.82 to 1.63, which is what noise looks like at that size. Time now
+says what allocation said, and for the same reason: nine header icons against nine `<input>`s, their
+binders and an extra `<tr>`.
+
+
+### What the review found that the build had not
+
+Two reviewers in parallel, and between them two faults that put wrong rows on the screen, one that
+undid the user's own selection, a promise made three times and implemented none of them, and two more
+that only the browser could show. **Both were right again.**
+
+**Ticking a box filtered at once, and Apply put it back.** The panel reused the filter row's
+multiselect, which is bound to the *committed* filter and whose change handler calls `Filter` directly.
+So on a set column the menu applied per tick - the thing §31 bans by name - and then Apply composed
+from a draft that had never seen the tick and wrote the old selection back over the new one. A menu
+that undoes the selection it is confirming. The row's control is right for a row, which has no Apply to
+wait for; the panel needed one bound to the draft. The same handler hard-codes `In`, so **`NotIn` was
+offered by the menu and unreachable through it**. Fixing it wanted `SelectionOf` split out of
+`FilterSelection` - the mapping from values to ticked entries, over a value rather than over the
+committed filter.
+
+**A lookup column offered "Less than" over its ids.** `MenuOperators` asks the column now, not only the
+type: a lookup's `EffectiveFilterType` is its *key* type, so a type-directed table handed the one column
+whose entire point is that it filters by `In` and shows names a numeric operator list, over integers the
+reader never sees. §31's table said *lookup* in the same row as *enum* and the build read the row
+through `Type.GetTypeCode`. Found in the browser, on the first lookup column anyone opened. Collection
+columns were left on the type-directed answer deliberately, and §31's table lumps them in with the
+other two: a collection of strings filters its elements with `Contains`, which is what
+`DefaultFilterOperator` has always said and what the README documents.
+
+**Enter was never implemented.** §31 says the menu applies on Apply or Enter, §35 repeated it twice, and
+a comment in the editor claimed it. There is no `<form>`, so Enter did nothing at all. Building it
+turned up why it is not one line: a `keydown` arrives *before* the `change` event, so a panel-level
+Enter would commit the value as it stood one keystroke ago. Both editors keep the draft current as the
+user types instead - `oninput` through the non-rendering receiver for the text box, `Immediate` for the
+numeric - which is not §31's rule being broken but its other half being read properly: the menu must not
+*filter* as you type, and reading what is typed is what makes Enter possible. The browser found the
+numeric half: Enter committed an empty draft and **cleared the column instead of filtering it**.
+
+**The icon claimed a menu and never said whether it was open.** No `aria-controls` and no
+`aria-expanded`, both of which §35 specifies. Not cosmetic: upstream's `setPopupAriaExpanded` maintains
+the second attribute for free and finds the anchor *by* the first, so with neither present it looked for
+nothing and set nothing. Writing the id both ends agree on is the whole fix.
+
+**An operator the menu does not offer could still be edited through it.** `SeedFilterDraft` took the
+operator from `CurrentFilter` unfiltered, so a `LessThanOrEquals` from markup, a settings restore or
+`ApplyFilters` landed in the draft on a date column. Two things went wrong at once: no item in the list
+matched it, so the panel showed an editor under no selection at all; and editing the value committed
+through the arm of the whole-day rule that leaves a date literal - the boundary loss `@end` exists to
+prevent, reached from inside the feature built to prevent it. The draft takes only an operator the menu
+lists now, and the stored filter is left alone until the user picks one.
+
+**And one rule was spelled twice again.** `EditedAsSet` was written, documented as the mapping, and
+never called - while `ScreenFilterEditors` spelled the same comparison inline. §34's review found this
+exact shape in `Filters`/`Resolve` and the section that fixed it grew a new one. `Menu`'s nullability
+guard was the same fault in miniature: `!nullable && Nullable.GetUnderlyingType(type) is null`, where
+the only production caller passes `FilterNullable`, which is already true for every `Nullable<T>` - two
+places deciding one thing, one of them unreachable.
+
+**Where §35 is still wrong, rather than fixed: Escape does not return focus to the grid.** The panel now
+asks for it, and upstream's own restore runs *after* on a `setTimeout` and wins. Worse, that restore is
+broken for this case by its own logic: on Escape it reassigns its remembered element to the event's
+target - a node *inside* the panel that is about to be hidden - and focuses that, so focus lands on
+`document.body`. §35 argued the trade-off ("the tab stop wins because it is the older promise") for a
+behaviour nothing implemented. The grid's request is kept, because it is right for every path that
+closes through C# - Apply, Clear, a preset - and the Escape path is upstream's to fix. Recorded rather
+than worked around: this branch does not patch `Radzen.Blazor`.
+
+**The reviewer was wrong about one thing, and it is worth keeping.** The date picker was said to open
+showing `DateTime.MinValue` on a non-nullable column. It does not: `RadzenDatePicker.HasValue` treats
+`default(DateTime)` as absent and `FormattedValue` returns the empty string for it. The *bool* editor
+had exactly that defect and now draws over `object`, where "neither" is a state it can hold.
+
+**Smaller, and all real:** `DraftPreset` was a property named like a field and read seven times per
+panel render, building a filter to ask about each time; `InputAttributes` was a fresh dictionary per
+render, which is a new parameter identity on a panel that is never removed from the tree; `Custom` fell
+into the catch-all arm and was labelled *"Between"*; `StartOfDay` and `EndOfDay` were `internal` for
+nobody; `FastGridFilterPresets.All` was a public array, which is a public setter on every element of the
+table `Recognize` reads; the filter icon's sequence numbers descended against the resizer's and now sit
+in a region of their own; and the screening and recording passes walked the columns whether or not the
+grid filters at all.
+
+### The mutation loop
+
+**Twenty-five of twenty-seven**, and one deletion.
+
+The two that survive are both worth naming rather than fixing:
+
+- **The icon's `stopPropagation` cannot be reached by a test.** Removing it leaves every test passing,
+  because bUnit dispatches an event to the element it names and does not simulate bubbling - so the
+  header's own click handler is never a candidate to be stopped. Verified in a browser instead: clicking
+  the icon opens the menu and leaves the sort glyph where it was, and clicking the title still sorts.
+  §34's `ProvideRows` stamp is the same shape, one layer out.
+- **Clearing the draft on commit is unobservable**, which is what the review write-up above already
+  says: reopening reseeds from `CurrentFilter`, so nothing stale is ever shown whether or not the fields
+  are nulled. It stays because a draft that outlives its panel holds a reference to a value for the
+  life of the grid, and that is a claim about the object graph rather than about the screen.
+
+**And one site was deleted rather than covered.** `PickFilterOperator` cleared the second value when
+leaving `Between` and both values when arriving at an operator that takes none, and no mutation of
+either could be caught. They genuinely cannot be: `Compose` reads only as many values as the operator
+takes, and the draft is discarded on commit, so a value the current operator ignores can neither be
+committed nor survive the panel. Deleting them left the tests green and the behaviour better - a detour
+through `Equals` and back now leaves a range's upper bound where the user typed it. §34's review found
+four `StampFilterClock` calls covering for each other; this is the same lesson arriving before the
+redundancy had a chance to hide a real fault.
+
+What the loop caught that the reviewers had not: recognising a preset by its lower bound alone would
+have called `Between today today` *today*; a lookup entry passed to the filter instead of its id; the
+`@end` tick arithmetic; `FilterNullable`'s reference-type arm, which is the whole reason a string column
+offers *Is null*; and the editor screening's first-sight arm, whose one reachable sequence is a grid that
+turns filtering on after a filter has been declared.
+
+### The numeric editor, which this section argued itself out of
+
+§35 said the editors were a text input plus two typed controls, and gave the reason: a typed control
+cannot show *empty* for a non-nullable `TProp`, so `RadzenNumeric<int>` opens showing a zero. That is
+true - `RadzenNumeric`'s formatter asks `_value != null` and a boxed zero is not null - and the
+conclusion drawn from it was wrong. **The type that cannot hold "nothing" is `TProp`, not the control.**
+`RadzenNumeric<decimal?>` shows empty, `decimal` holds every integral type exactly, and the column
+converts at the seam in both directions - so a number gets a spinner, a numeric soft keyboard and a
+control that parses, instead of a box that might not.
+
+Upstream's own filter UI draws a `RadzenTextBox` for numbers, which is what the build followed. Copying
+a decision without its constraint is how a limit that belongs to one design gets inherited by another.
+`TimeSpan` and `TimeOnly` stay on the text box, because they order like a number and are not decimals.
+
+### Where this could still be wrong
+
+- **`FilterUI` grid-wide against `FilterMode` per-column** is §31's separation and it has still never
+  been used. This section is the first thing that could find out, and it does not: nothing here wants a
+  menu on one column and a row cell on another. The first author who does will find out whether it
+  holds.
+- **A panel reparented to `document.body` is a contract with upstream's JavaScript**, not with Blazor.
+  Every upstream drop-down depends on it, so it is well-trodden - but the rule it imposes here, that the
+  panel is never removed from the render tree once built, is invisible at the place it would be broken.
+  A future section that makes the panel conditional would find out at run time.
+- **"At least as friendly as Excel" still has no number.** §31 flagged it and this section is where the
+  judgement is actually exercised - the operator list, the preset placement, apply-on-pick against
+  apply-on-Apply. Every one of those is defended by an argument and none by a measurement.
+- **Recognising a preset by shape reads a hand-authored range as a preset.** Argued above as harmless.
+  It stops being harmless the day something *writes* differently depending on which it thinks it is,
+  and ⑤'s pills are the first thing that will want to. *They do not: §37's pills read the recognition
+  to choose a word and write nothing that depends on it. The day arrives with a pill that edits its
+  preset in place, which ⑤ does not offer.*
+- **Escape returning focus to the grid rather than the icon** is right for §12's one-tab-stop model and
+  wrong for what a screen reader user is told: the thing they opened is not the thing they are returned
+  to. There is no third option that is both, and the tab stop wins because it is the older promise.
+- **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
+  that can fail the piece. *It is built: see What it cost, where the allocation half passes in the
+  direction that cannot fail it and the time half is now paid: within 0.3% of the filter row at a
+  thousand rows, and no worse than 2.7% under it at a hundred.*
+- **The editors' argument survived for a different reason than the one given**, which is worth keeping
+  separately from the correction above. The boxing this section objected to is real and small; what
+  actually makes a column-written editor necessary is that `RadzenDatePicker` converts by asking its own
+  `TValue`. An argument that reaches the right answer by the wrong route is one that stops working when
+  the route changes.
+
+## 36. The checklist is offered where something knows the values - the design
+
+§31's ④, second half, and the last of the six pieces before ⑤. **Nothing here is built when this
+section lands.**
+
+§35 took the panel, the operators, the editors, the dates and the keyboard, and left this one four
+things by name: the real check-box list, the checklist-first rule, the *"Filter by value..."* scan, and
+the blank entry a non-lookup nullable column has no equivalent for. Three of the four survive. The
+third does not, and refuting it is what makes this section small.
+
+### What does not survive of §31
+
+§31, and §35 repeating it:
+
+> Everywhere else the menu opens on operators and offers *"Filter by value..."* as an explicit action
+> that runs the distinct scan **once, on demand**.
+
+**Refuted.** The argument against it is the one §31 used to justify it, followed one step further.
+
+§31 leads with the cost: Excel offers the checklist on every column, and §10 measured what that costs
+here - one `SELECT DISTINCT` per check-box-list column per parameter set. §31's answer was to keep the
+offer everywhere and make the user ask for it. But **the grid cannot tell a `Status` column from a
+`Description` column without running the scan.** Cardinality is the scan's answer, not an input to it,
+so an action offered on every column is an action whose price is unknowable until it has been paid -
+on a source this grid exists to assume is remote and large. "Once, on demand" bounds how *often* the
+query runs and says nothing about what it costs when it does.
+
+**And §31 listed two ways a column's values can be known when there are three.** A lookup holds a map;
+an enum's type holds its members; and **the author knows.** `FilterMode.CheckBoxList` is that third
+knowing, already written down: it is upstream's own enum value, it is per-column through `FilterModeOf`,
+`EditedAsSet` already reads it, and §35's screening rule already honours it. `RadzenDataGrid` requires
+exactly that attribute to draw exactly this list.
+
+So the promise §31 made about carrying knowledge across is kept *better* by requiring the declaration
+than by inventing an action upstream has no equivalent for. A reader who knows how to get a check-box
+list out of `RadzenDataGrid` gets one here by doing the same thing.
+
+**The rule, in one sentence: the checklist is offered where something already knows the values, and the
+author counts as something.**
+
+**What this costs, stated rather than hidden.** A `PropertyColumn<Employee, string>` over `Country`,
+with twelve distinct values, is the commonest checklist there is and it does not get one until someone
+writes `FilterMode="FilterMode.CheckBoxList"` on it. That is one attribute in a vocabulary the reader
+already has, placed where the only party who knows the cardinality can put it. The alternative was a
+menu item that reads the same on twelve values and on four hundred thousand.
+
+### Where the checklist appears
+
+One rule, replacing a type-directed table with a knowledge-directed one:
+
+```
+EditedAsSet, or a lookup, or an enum  ->  In, NotIn   (+ IsNull / IsNotNull where nullable)
+otherwise                             ->  the type's own list, unchanged
+```
+
+Two of the three arms already answer:
+
+- **A lookup column** overrides `MenuOperators` to the set pair, and has since §35's review found it
+  being offered *"Less than"* over its ids.
+- **An enum column** reaches `SetOperators` through `Offered`'s `IsEnum` arm.
+
+**The declared arm is new.** `ColumnBase.MenuOperators` consults `EditedAsSet` before it consults the
+type, so a string or numeric column whose author asked for a check-box list is offered the operators
+that list can actually write. Without this the declaration is inert under `FilterUI.Menu`: the column
+would be handed `Contains` and `StartsWith` and no way to reach a set at all.
+
+The nullable append - `IsNull` and `IsNotNull` after whatever came before - is **factored out of
+`FastGridFilterOperators.Menu` rather than written a second time beside it.** §35's review found that
+exact shape twice in one section (`EditedAsSet` documented as the mapping and never called, and
+`Menu`'s own nullability guard deciding one thing in two places), and a set arm with its own copy of
+the append would be the third.
+
+### Where the values come from
+
+`FilterLookup`'s chain, which already reads `FilterValues`, then `FilterLookupData`, then the cache,
+then the scan. One new arm at the top of it:
+
+| kind | values | queries per open |
+| --- | --- | --- |
+| lookup | `FilterValues` - §14's map, complete and stable | 0 |
+| **enum** | **`FilterValues` - the type's members, built once** | **0** |
+| declared, with `FilterLookupData` | the author's | 0 |
+| declared | `DistinctValues`, through `LoadLookupsAsync` | 1, once |
+
+**The enum arm is the new one and it belongs on `ColumnBase.FilterValues`**, which returns null today
+and is already documented as *"the values this column's check-box list offers of its own accord"*. An
+enum column offering only the members present in the data is the same defect §14 rejected for lookups
+by name - a filter control whose options move as the data does moves under the reader - and it costs a
+query to be wrong in that direction.
+
+Built once and cached, not per render. §35's `FastGridFilterPresets` comment objects to
+`Enum.GetValues` for the presets and the objection is about a call *per render*; this one is per column
+for the life of the grid, which is where `FilterValues` already puts §14's entries.
+
+**Text through upstream's `EnumExtensions.GetDisplayDescription`**, which honours `[Display]` and
+`[Description]` and is what `RadzenDataGrid`'s own check-box list draws. Same reason as §35's operator
+strings: the wording is upstream's and an application that has already translated it gets it here for
+nothing.
+
+*The build got this free and then lost it on one path.* `DropDownBase` calls that helper itself for any
+item that **is** an `Enum`, so a non-nullable enum column had it and nothing here had to ask; a nullable
+one wraps its values in an entry, which upstream no longer recognises as an enum, so the same column
+read *Senior* or *Senior engineer* depending on whether its type had a `?` on it. One rule with two
+spellings, which is the fault §34's and §35's reviews each found once. It is spelled once now, in
+`ColumnBase.Text`, and the claim in this paragraph was a comment before it was code.
+
+### The control
+
+**`RadzenListBox`, `Multiple`, replacing the `RadzenDropDown` §35 left behind.**
+
+That drop-down was §35 saying so at the time - *"the check-box list proper is §36's"* - and the control
+this section wants is the one `RadzenDataGridHeaderCell` already draws for `FilterMode.CheckBoxList`:
+a scrolling list of check boxes with a search box over it. `AllowFiltering`, which is Excel's search
+within the list; `AllowSelectAll`; `AllowClear`; `AllowVirtualization`; a fixed height. §7's table is
+the argument, for the fourth time on this branch: it is public, it is upstream's, and writing it again
+to own it buys nothing a theme change would not take away.
+
+**Bound to the draft, and that is §35's work not this section's.** `SelectionOf` in, `DraftSelection`
+out, Apply and Enter commit. §35's review is what built that seam - the panel was reusing the row's
+control, which applies on every tick and reads the committed filter, so ticking a box filtered at once
+and Apply then wrote the old selection back over the new one. Nothing here revisits it; this section
+changes which component sits in the seam.
+
+**The filter row keeps its drop-down.** A three-hundred-pixel scrolling list does not go in a header
+row, and the panel has room the row does not. The two controls stay two, and the mapping that feeds
+both - `SelectionOf`, `FilterValueFromSelection` - stays one.
+
+### The blank
+
+§14's shape, generalised to a column that has no map.
+
+`FilterLookup` currently ends its materialization with `.Where(v => v != null)`. The strip is not
+arbitrary - a raw null in a list control draws as an empty row that means nothing - but it is also the
+reason a nullable non-lookup column cannot ask for the rows that have nothing in them, which is a
+question §31 named as the one a fixed range shape could not express.
+
+**A sentinel value, drawing `BlankFilterText`, first in the list, offered only where the column is
+nullable.** Rebuilt when a culture change changes the word, which is §14's own rule and its own reason:
+every other string this grid draws is read per render, and one baked into a list built once would
+otherwise stay on screen for good.
+
+**The null rides in the `In` list.** `SelectionOf` maps a null among the filter's values to the
+sentinel; `FilterValueFromSelection` maps the sentinel back to a null. That is exactly what
+`SelectedKeys` has done for a nullable lookup key since §14, composed through `List<TKey?>.Contains`,
+which Entity Framework translates as `x IN (...) OR x IS NULL`. One shape for both column kinds rather
+than a second mechanism for the case §14 already solved.
+
+**The alternative was a second condition** - `In [...] OR IsNull`, which §33 kept the model wide for
+and named as the reason. It is refused here, and the reason is that §35 wrote *"one condition per
+column"* for the menu and meant it: making the blank the menu's first compound would re-open a rule
+one section old to solve a problem the operator itself already solves. `In [1, 2, null]` and
+`In [1, 2] OR IsNull` select the same rows; one of them needs the model's second condition and one of
+them does not.
+
+**The named risk, because it is the part most likely to be wrong.**
+`ColumnBase.FilterValueFromSelection` builds its list over `Nullable.GetUnderlyingType(declared) ??
+declared` - it *strips* the nullability - so as written a null cannot go into it at all. That has to
+become the declared type where the column is nullable, and `FilterExpression`'s `Contains` has to bind
+against a `List<int?>`. It gets a test that fails first.
+
+**This reaches `FilterUI.Row`.** A nullable column declared as a check-box list gains a blank entry in
+the row as well as in the menu, because the mapping is the column's and the row draws through it.
+Fixing it only in the menu would be the rule applied where it was found rather than where it is true -
+which is the correction §35's whole-day rule already had to make once.
+
+### The gate
+
+**Queries per open.** §31 split this section off from §35 for this: the per-row allocation gate is
+§35's and this one is a different number, of the kind §10 already measured going wrong.
+
+**The failure mode is N queries where one is right**, and §10 measured it at three for one render. A
+counter tells one from three exactly, so this gate has what §33's clock did not: an instrument that
+out-resolves the failure it is watching for. That is the rule §33's review left in memory, applied
+before the measurement rather than after it.
+
+**The instrument exists.** `WalkCountingProvider` counts in the *provider* rather than on the query, so
+a composed `Select().Distinct()` is visible where a counter on the source object is not - which is the
+whole finding of the diagnosis section that built it - and it excludes the executor's own walk by an
+`AsyncLocal` that flows into its continuations rather than by which thread the walk arrived on.
+
+Asserted, per open of the panel:
+
+| column | first open | second open | after `Reload()` |
+| --- | --- | --- | --- |
+| lookup | 0 | - | - |
+| enum | 0 | - | - |
+| declared | 1 | 0 | 1 |
+| none of the three | 0, and no list drawn | - | - |
+
+Only the declared row needs all three columns, and only it has them. The other three assert their first
+open and nothing else: a column that runs no query on the open that could has nothing to re-run. An
+earlier draft of this table claimed twelve cells and had six, which is a table describing a design
+rather than a suite.
+
+A lookup's zero is zero *per open*: §14 resolves a `Query` lookup once at startup and that is not this
+gate's business.
+
+**No ceiling and no paging.** `AllowVirtualization` bounds what is rendered and the query stays one and
+whole. Paging the distinct query as the user scrolls - which is what upstream's `LoadData` does - would
+buy every value's reachability at the cost of making "queries per open" stop bounding anything, and the
+gate is the thing this section was split off to defend. A declared column whose values are enormous is
+a declaration its author made, and `FilterLookupData` is the lever they already have.
+
+What is measured rather than budgeted: **a bench row for what a wide open costs**, so that the sentence
+above becomes a result rather than a claim. §35's allocation rows are re-run rather than assumed -
+nothing here draws in a row, so per-row cost is unchanged by construction, and "by construction" is
+what §33's residual was also called.
+
+### What this section does not do
+
+- **`"Filter by value..."`** - refuted above, and struck where §31 and §35 wrote it.
+- **Narrowing the list by the other columns' filters.** Upstream's `AlwaysShowAllCheckBoxListData`
+  defaults to narrowing and Excel does too. §14 chose the opposite and gave the reason - *"a filter
+  control whose options move as the data does moves under the reader, and that is worth more than a
+  shorter list"* - and the same reason holds here, with a second one behind it: the cache key would
+  become every other column's filter state, so a scan would re-run whenever any of them changed, which
+  is the gate.
+- **The pills.** §31's ⑤, and the last piece.
+- **The row's drop-down**, apart from the blank it inherits.
+
+### How it is verified
+
+- **The operator rule as a pure rule.** Which operators a lookup, an enum, a declared and a plain
+  column each offer, asked of the rule and not of a rendered panel. §33's review finding is why: a test
+  one layer above a rule is not a test of the rule.
+- **The blank round-trip as a pure rule**, both directions and with a null in the list, plus the
+  non-nullable column that must not offer one.
+- **The gate through `WalkCountingProvider`**, the four rows of the table above, each mutated to
+  confirm it can fail - because a query counter that reads zero looks identical whether the scan was
+  avoided or never attempted.
+- **bUnit** for what only a render answers: the listbox drawn under a set operator, no list on a plain
+  column, a tick reaching the draft and not the filter, Apply committing it.
+- **The playground**, §9's layer 6 and not optional for behavioural change: a declared check-box-list
+  column and a nullable one, beside §35's `FilterUI` toggle, on the same data.
+- **The mutation loop**, on §35's precedent - and with §35's expectation, that what it finds is a
+  redundancy rather than a hole.
+
+### Where this could still be wrong
+
+- **Requiring the declaration is a friendliness cost with no measurement**, which is §31's own open
+  bullet arriving where the trade is actually made. A column with twelve values and no attribute on it
+  is a worse menu than Excel's, and the defence is a cost argument again rather than a usability one.
+- **`EditedAsSet` now decides two things** - which editor draws, and which operators are offered. It
+  was one thing when §35 wrote it. A column that declares `CheckBoxList` and then has its filter set
+  programmatically to `Contains` is a case the screening rule handles and the operator list now also
+  has an opinion about, and the two have never been exercised together.
+- **The blank now turns on `OffersBlank` rather than on `FilterNullable`**, so a column that cannot
+  compose its own predicate is not offered one - which is right, and is also a rule with four
+  implementations (`ColumnBase`, `LookupColumnBase`, `LookupCollectionColumn`, `CollectionColumn`,
+  `PropertyColumn`). §20 counted eight internal virtuals as a closed door; this makes a fifth column
+  kind able to get this wrong by not overriding.
+- **`ComposesItsOwnFilter` is `PropertyColumn`'s answer to a question the base asks generally**, and it
+  is a *proxy*: what `OffersBlank` needs to know is whether a null survives to the provider, and what it
+  actually asks is whether this column builds its own predicate. They coincide today because the
+  reflective route is the one that drops nulls. If that route ever learns to carry one, the proxy is
+  wrong in the direction that offers too little.
+- **The blank is offered wherever a column can carry one, not where a blank was seen.** Excel shows
+  *(Blanks)* only when the data has some, because its list comes from the data. A declared column with
+  no empty rows offers an entry that filters to nothing - visible on the playground's *Department*,
+  which has none. This is §14's rule exactly, and §14 chose it for a reason that does not hold for a
+  scan: a lookup cannot know without a query, and a scan already has the answer. One rule across four
+  value sources was judged worth more than the better answer on one of them, and that trade has no
+  measurement behind it.
+- **A string column's blank means null or empty and cannot be made to mean only one.** The empty string
+  collapses into it because `In` coalesces, which makes the entry honest about what it filters and
+  leaves the genuinely-null rows reachable only through the `Is null` operator beside it. The mapping is
+  also one-way: a filter arriving as `In [""]` from markup or a settings restore ticks nothing, because
+  the entry the empty string collapsed into is not found by looking for it.
+- **An `In` carrying a null still reaches upstream's OData formatter**, which §33 records as rendering
+  `ToString` over the list. The blank makes that reachable from the menu where before it needed markup.
+  Not fixed here and not measured.
+- **The wide-open figure is the filter row's, not the panel's.** Five lists rather than one, and derived
+  per value rather than measured at a single open, because the harness cannot click. The order of
+  magnitude is right; the figure for one open is inferred from it.
+- **The blank's translation is `List<int?>` reaching a provider**, which is asserted here from §14's
+  precedent over `TKey` and not from a run against a real database on a non-lookup column. §14's is
+  exercised; this one's first real test is the playground's Entity Framework switch. *It has a test:
+  `TheBlankRidesInTheInListAllTheWayToTheProvider` commits `In [null, 3]` against SQLite and reads 8
+  rows instead of 16 when the null is dropped. The playground found it first and could not keep it.*
+- **Nothing here is measured.** No part of this is built, so the gate is a budget - including the half
+  that can fail the piece. *It is built: see What it cost, where the declaration reads 0.12 KB flat
+  across a tenfold change in rows.*
+
+### What the build changed
+
+Two of this section's decisions did not survive, one of them found by a browser on the second click,
+and the gate's instrument turned out to be a different one from the one named.
+
+**The blank had to be every entry, not one sentinel among the values.** This section said *§14's shape,
+generalised* and the build generalised half of it: a lone object drawing *(Blank)* at the head of a
+list of raw values. `DropDownBase` infers a multiple selection's element type from **the first item in
+`Data`** and casts the whole selection to it - so with the blank first, ticking a second box asked
+upstream to cast an `int` to the sentinel's type and **took the circuit down**. §14 never meets this
+because every one of its entries is a `FastGridLookupEntry` including its blank; a homogeneous list is
+the whole of that shape and half of it was not enough. So `FastGridFilterEntry` wraps every value on a
+nullable column, `SelectionOf` finds the ticks again by scanning - which is §14's method and §14's
+stated reason for it - and a column that cannot hold a blank goes on offering the raw values it always
+did.
+
+**All 1,074 tests passed with the sentinel in place.** bUnit invokes the control's `Change` callback
+with whatever the test hands it and never runs upstream's own selection path, so the cast that fails is
+one no test in this suite executes. The playground found it on the second tick. That is §9's sixth
+layer catching a circuit-terminating bug the whole suite passed, for the second time on this branch -
+§35's `ConfigureAwait(false)` was the first, and both are in memory as
+`bunit-hides-dispatcher-and-bubbling`.
+
+**The gate's instrument is a counting executor, not `WalkCountingProvider`.** This section named the
+provider counter because it sees a *composed* query where a counter on the source object does not -
+which is true, and is an answer to a different question. That counter exists to ask **whether a query
+ran on the render thread**, and it excludes the executor's own walk by an `AsyncLocal` in order to do
+it - so it cannot see this scan at all, because the scan is what the executor runs.
+`CheckBoxListFilterTests`'s own `CountingExecutor` is what counts queries, and it is §10's control for
+the very defect this gate exists to prevent. The right instrument was already in the file that measured
+the failure.
+
+**Smaller, and all real:** the nullable append had to be factored out of `FastGridFilterOperators.Menu`
+rather than copied, and doing it let `LookupColumnBase` delete its two arrays - one rule where §35's
+review had already found two; `FilterValueFromSelection` built its list over
+`Nullable.GetUnderlyingType(declared) ?? declared`, which strips exactly the nullability a null needs to
+ride in, so a `List<decimal>` could not have carried a blank at all; `FilterExpression.Listed` dropped
+nulls under a comment saying a null was an untouched check box rather than a request to match the rows
+with nothing, which was true until this section gave it a way to be one; and a string column's blank
+collapses the scanned empty string into itself, because `In` coalesces a null string to the empty one
+and two entries that filter identically are worse than one.
+
+### What it cost
+
+`FastGridFeatureBench`, `--job short`, swept over two row counts. The control is §35's own pair, re-run
+rather than assumed:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row | 52.55 KB | 159.82 KB |
+| a filter menu, never opened | 52.96 KB | 160.23 KB |
+| a filter menu, never opened, over a **declared check-box list** | **53.08** KB | **160.35** KB |
+
+**The declaration costs 0.12 KB, at both row counts.** The gate is the *flatness*, not the 0.12: a
+per-row cost would have grown roughly tenfold between the two, and 0.12 to 0.12 says it did not. No
+magnitude was budgeted in advance and none is claimed to have been - what was written down before the
+run is "may not cost per row", and that is what passes.
+
+**And what a wide open costs, which this section declined to cap.** The harness renders rather than
+drives, so it cannot click a panel open; the filter row draws the same lists through the same
+`FilterLookup`, which is the work an open does. Five check-box lists, four of them over columns holding
+one distinct value per row:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row of check-box lists | 1,748 KB / 3.28 ms | 16,510 KB / 18.3 ms |
+
+The five lists hold **445 values at N=100 and 4,045 at N=1000** - four of the columns have one distinct
+value per row and `Age` has forty-five, which is the arithmetic the first write-up got wrong: it divided
+by five thousand and read 3.3 KB per value. The slope between the two points is **4.10 KB and 4.19 us
+per value**, and the single point at N=1000 agrees at 4.08 and 4.54 - which is also the linearity check
+this paragraph claimed from one point and can now make from two. So opening one column with a thousand
+distinct values costs on the order of **4 MB and 4.2 ms**.
+
+That is the number the budget was standing in for, and it is large. It is also precisely the argument
+for requiring the declaration: **the grid cannot learn that a column has a thousand distinct values
+without paying this, and the author already knows.** What it does not argue for is a ceiling the grid
+imposes - a declared column is a statement about the data, and `FilterLookupData` is the lever for a
+source that should not be scanned at all.
+
+**Measured on a machine at load average 3.1 of ten cores**, against §9's "quiet machine". The allocation
+figures are unaffected by that, being deterministic; the times above are quoted for the order of
+magnitude they establish and never as a ratio.
+
+### What the review found that the build had not
+
+Two reviewers in parallel, and between them **a box that filtered nothing while saying it filtered
+something, an arithmetic error that flattered the design by a quarter, and the invariant the whole
+build finding was about, unpinned.** Both were right again.
+
+**Nullable was necessary and not sufficient, and the two ends disagreed.** `FilterEntries` offered a
+blank wherever `FilterNullable` said the type could hold a null - every reference type - and
+`FilterExpression.Listed` kept the null only for a string or a `Nullable<T>`. So a column declared as
+`object` drew a blank that ticked, committed, and narrowed to **no rows at all** rather than to the rows
+with nothing in them: the silent disappearance §32 exists to refuse, reached from inside the feature
+built to ask that question. Two places deciding one thing, which is the fault §36 was already fixing in
+`FastGridFilterOperators`, in the same commit.
+
+The fix is not to widen `Listed` alone, because that only moves the disagreement. `Listed` now keeps a
+null wherever `default(TProp) is null`, which is the same set `FilterNullable` names - and the blank is
+gated on a **narrower** question than `FilterNullable`, because the two are asking different things.
+`FilterNullable` answers whether the *type* can hold a null, and that is exactly right for offering
+`IsNull`, an operator the grid composes itself. A blank in a check-box list is a null *travelling in an
+`In` list*, and only a column that composes its own predicate can carry one there. So `OffersBlank` -
+which `LookupColumnBase` has answered since §14 - is promoted to `ColumnBase`, and `PropertyColumn`
+answers it with the same condition its two filter routes already refuse under, named once as
+`ComposesItsOwnFilter` rather than spelled a third time.
+
+**And a collection column was offered a blank that no element could be.** `LookupCollectionColumn` has
+refused one since §14 for a reason that is about meaning rather than mechanism - *"has no brands at all"
+is a different question from "has an id that is null", and `In` over the elements does not ask it* - and
+`CollectionColumn` inherited the base's answer instead, because `FilterNullable` reads the *element*
+type. §36 had already met this and worked around it in a test helper rather than in the rule: the
+build's own change to `CollectionColumnMemberTests` says *"the blank - which a column of nullable
+elements, strings included, now leads with"* and strips it. **A workaround in a test is a design
+decision nobody made.**
+
+**The wide-open number was wrong by a quarter, in the flattering direction.** *"3.3 KB per value"*
+divided the bench's total by five thousand - five lists at one distinct value per row - and `Age` is
+`20 + (i % 45)`, so the five lists hold 4,045 values at N=1000 and not 5,000. The spec knew this two
+lines earlier, where it says *"four of them"*. Corrected above to 4.10 KB and 4.19 us, and the slope
+between the two row counts is now what says the cost is linear - which the paragraph asserted from a
+single point while the second point sat in the same table.
+
+**The invariant the crash was about had no test.** The build finding is that *every* value must be
+wrapped, not just the blank, because `DropDownBase` casts a selection to the type of the first item in
+`Data`. Every assertion written either read `offered[0]` or filtered through `OfType<FastGridFilterEntry>()`,
+which silently discards a raw value - so re-introducing the exact regression would have passed all 1,075
+tests. The browser cannot be a regression test; `Assert.All` can, and is.
+
+**And the claim that a null reaches a real provider was still prose.** §36 flagged it as the thing most
+likely to be wrong, and the correction appended to that bullet cited *the playground* - a session nobody
+can re-run. `EntityFrameworkTests` gains a nullable non-lookup column and commits `In [null, 3]` against
+SQLite; it fails, at 8 rows against 16, when `Listed` drops the null. A browser is how a fault is found
+and not how it stays fixed.
+
+**Smaller, and all real:** `SelectionOf`'s comment borrowed §14's bound - *"a few against a few
+hundred"* - which a lookup's map guarantees and a scanned column does not; what actually bounds it is
+that `FilterSelection` answers null unless a set filter is committed. `FilterLookupData` is handed
+straight to `FilterEntries`, whose cache is keyed on the reference, so a per-render markup expression
+rebuilds the entry list every render and hands the control a new `Data` identity with it - the lifetime
+rule §14 gives a `Lookup` and §10 gives `Data`, now written on the parameter. The async path returns
+`Array.Empty` under a comment claiming everything below it goes through `FilterEntries`. And the gate
+table claimed twelve assertions and had six.
+
+**One finding was investigated and left as a comment rather than fixed.** `SelectionOf` maps values onto
+entries that `FilterEntries` builds when the `Data` attribute is written, so `Data` has to precede
+`Value` in `RenderFilterMenuList` - a coupling invisible where it would be broken. It was worth a test
+and it cannot have one: §35's panel arms on click and opens after the render, so the list draws twice
+and the second draw heals a first that had nothing to map onto. Swapping the two lines leaves the whole
+suite green, which was checked rather than assumed. It is one frame on a column that opens already
+filtered, and the same shape as §35's unobservable draft clear.
+
+### What the mutation loop found
+
+Two loops: sixteen mutations on the build, and five more on the rules the review fix added.
+
+**Thirteen of sixteen caught**, one that ends the test host rather than failing a test, and one site
+that survives.
+
+- **The survivor is §10's, not §36's.** `LoadLookupsAsync` skips a column whose values arrived while its
+  batch was in flight, and `FilterLookup` never puts an already-cached column into `pendingLookups` in
+  the first place - so the two guards cover for each other, and removing either alone leaves the count
+  at one. The one sequence that reaches it is two overlapping batches, which is a race no test can
+  construct. §34's review found four `StampFilterClock` calls covering for each other and §35 deleted a
+  pair that genuinely could not be reached; this one *can* be, so it stays, named.
+- **Removing the cache write does not fail a test, it ends the process.** The scan re-runs, `loaded` is
+  set, `StateHasChanged` renders, the render asks again: an unbounded loop - and a crashed host reports
+  zero failures. The first reading of that run called the mutation caught and the second called it
+  survived; both were wrong. **A mutation harness has to check that the expected number of tests ran**,
+  not that a total was printed: `Total time:` matched the substring the check was looking for. That is
+  `mutation-verdicts-need-a-ran-check` arriving in a shape the rule as written did not cover.
+- **And the gate test had to be rewritten before it could discriminate.** As first written it asserted
+  one scan across three opens of one column, and no single-site mutation could move it: the caching half
+  is covered by §10's own control, and anything that removes the cache kills the host. What it pins now
+  is the shape §10 *measured* failing - two declared columns, one open, one scan - which the mutation
+  that warms every column's list fails at once. **A gate that cannot fail is not a gate**, and this one
+  could not until it was asked the question §10 had actually answered wrongly.
+
+**The second loop: three of five, and both survivors were worth more than the three.**
+
+- **A test named for a collection column was rendering a `PropertyColumn`.** `Columns.Property<Person,
+  List<string>>` is a `PropertyColumn` whose `IsCollection` is true; `CollectionColumn<TItem, TElement>`
+  derives from `ColumnBase` and is a different class refusing the blank in a different place. So the
+  test exercised one override twice and the other never, and mutating `CollectionColumn.OffersBlank`
+  changed nothing. It is a `[Theory]` over both kinds now. **The mutation did not find a missing test;
+  it found a test that named the wrong thing** - which no reading of the test would have shown, because
+  the name and the assertion both said "collection".
+- **`LookupColumnBase.OffersBlank` is redundant and stays.** Deleting it changes nothing: a lookup's
+  `FilterElementType` is `TKey`, so the base's `FilterNullable` reduces to exactly `KeyCanBeNull`. The
+  remark written on it during the review fix claimed the base *"would answer for the wrong one"*, which
+  was a guess and is false; that is corrected in place. It is kept because it says directly what the
+  base infers, and the inference runs through `EffectiveFilterType`, which a key typed `object` would
+  send elsewhere. §35's precedent deleted a site that could not be *reached*; this one is reached and
+  agrees, which is a different thing.
+
+## 37. The pills, and the placement argument demonstrated at last - the design
+
+§31's ⑤, and the last of the six pieces. **Nothing here is built when this section lands.**
+
+§31 left the pills four things by name: the placement, the plain-language phrase, the lookup ids
+resolving to names, and Clear all costing one reload. One of the four was an inference the section
+itself flagged, one was already true in code, and one turns out to promise English its own rule cannot
+produce. That is what this section is mostly about.
+
+### What the demonstration settled
+
+§31 placed the bar above the scroll container, called it *"the one place the design refuses what was
+asked for"*, and listed in *Where this could still be wrong*: **"inference from §10's frozen-column
+work, not a measurement of a pill bar."** It is a measurement now.
+
+Both candidates were injected into the running playground's own DOM - eleven columns, a 1910px table
+in a 950px scroller - and the grid was scrolled 960px to the right:
+
+| candidate | at rest | scrolled right |
+| --- | --- | --- |
+| above the scroller, in an `rz-datatable-header` band | visible | **visible, unmoved** |
+| below the headers, as a `thead` row | visible | **gone; an empty band remains** |
+| below the headers with `position: sticky; left: 0` | visible | **also gone** |
+
+The first two rows confirm §31. **The third is what §31 did not have.** §31 rejected sticky-on-both-axes
+as a clever alternative that "works until a theme changes"; it does not work under the theme that
+ships. `.rz-grid-table thead th` carries `overflow: hidden` - which is what gives a header cell its
+ellipsis - and an ancestor with `overflow: hidden` is a clipping container, which is what a
+`position: sticky` child resolves `left` against. Setting that one cell to `overflow: visible` pins the
+bar correctly: the chip list's left edge moves from off-screen to 17px against the scroller's 25px,
+which is the cell's own padding. That rule is `Radzen.Blazor`'s, this branch does not patch it, and the
+rule is right about the thing it is for.
+
+So the placement stands and its defence changes shape: not *this might break when a theme changes*, but
+*this is already broken by the theme we ship against, for a reason that theme is correct about*.
+
+### The surface
+
+`ShowFilterPills`, a grid parameter defaulting to off. `Show`, not `Allow`, because it displays a thing
+rather than permitting one - the family `ShowHeader`, `ShowPagingSummary` and `ShowLoadingIndicator`
+are already in. Independent of `FilterUI`, which is §31's rule and its reason: a pill bar explains
+*applied filters*, and tying an explanation to an input feature would mean a team that prefers the row
+can never have one.
+
+**The band is drawn only when something is filtered.** A permanently empty band on every grid that
+turns pills on costs a row of chrome forever to avoid one layout shift on the first filter, which is
+the wrong trade in a component whose whole argument is what it does not draw.
+
+**No new CSS, and that is a finding rather than a preference.** `rz-datatable-header` for the band,
+`rz-chip-list`, `rz-chip-list-item`, `rz-chip`, `rz-chip-text` for the pills, and `.rz-chip .rz-button`
+- which the themes already size at 1.25rem *because it is inside a chip* - for the `x`. Every one is
+styled in every shipped theme. `rz-datatable-header` is the interesting one: it is themed with a
+toolbar background, the grid's own header padding and a bottom border, and **no upstream component
+renders it**. It is the band this bar wants, already dressed.
+
+Written as a render tree rather than as `RadzenChipList`. That component is a `FormComponent<TValue>`
+carrying selection, focus and keyboard semantics for a list of chips a user picks from, which is not
+what this is; and it would cost a `RadzenChipList`, a `RadzenChip` and a `RadzenButton` per active
+filter where §3's third rule wants none. `RenderFilterIcon` made the same choice against `RadzenButton`
+and for the same reason.
+
+**The pills are real tab stops**, and this is the one place the grid's chrome disagrees with §35's
+icon. §12's *one tab stop* is a rule about the grid's **cells** - reached by `aria-activedescendant`,
+which is why the header icon sits at `tabindex="-1"`. This band is outside `role="grid"`, a sibling of
+the pager, and the pager's buttons have always been in the tab order. A removable filter that only a
+mouse can remove would be the mouse-only control §31 refused for the icon.
+
+### Which columns get one
+
+`HasFilter`, and nothing new. It already reads `CanFilter && CurrentFilter is { IsPresent: true }`,
+which is exactly the question - *is this column narrowing anything, and can that be undone* - and the
+second half is what stops a pill drawing an `x` that `Filter` would silently refuse.
+
+`CanFilter` does not consult `AllowFiltering`, so **a grid with the filter UI switched off still
+explains itself**. That is the case where an explanation is worth most: a filter applied by
+`ApplyFilters` or by a `RadzenDataFilter` is one the reader never authored and has no control to look
+at. The `x` works there too, because `Filter` gates on the column and not on the grid.
+
+### What a pill says
+
+`{HeaderText} {operator} {values}`, built from `CurrentFilter` - what the user **authored** - and never
+from `ActiveFilter`. §34 built that split for this: a pill rendering a relative filter as two resolved
+dates would be the staleness §34 exists to prevent, wearing the reader's own handwriting.
+
+- `Hired Last 7 days`, through `FastGridFilterPresets.Recognize`
+- `Hired Between 01/01/2026 and 31/03/2026`
+- `Department In Sales, Ops`
+- `Rating Is null`
+- `Tags In Remote, Contract, On call or 4 more`
+
+**§31's rule survives and §31's example does not.** The rule is *"a plain-language phrase built from the
+same strings as the operators, so a pill reads as one vocabulary rather than two"*, and it is right.
+The example it illustrated the rule with - *"Hired is between 1 Jan and 31 Mar"* - is not reachable
+from those strings: upstream's vocabulary is `Equals`, `Greater than`, `In`, `Is null`, and there is no
+*"is"* anywhere in it. Producing that sentence means a second set of operator words, untranslated,
+disagreeing with the menu two inches above. The pill reads `Hired Between ...`, which is stiffer
+English than §31 promised, and the promise is the half that goes.
+
+~~Three new strings, and only three: the **and** that joins a range's bounds, **Clear all**, and the
+**or {0} more** that ends a degraded list.~~ **Wrong in both directions, and the build settled it at
+four.** *Clear all* is not new - it is upstream's own `DataFilter_ClearFilterText`, already those two
+words in five cultures. The four with no upstream key are the **and** joining a range's bounds, the
+**or {0} more** ending a degraded list, and two this paragraph never budgeted for: the remove button's
+name and the bar's own, both of which §12 requires and neither of which a design counting *wording*
+strings thought to count. The operators and the presets are already localized by §35.
+
+**Past three named values a list becomes a count.** A pill is a label, not a list - four values is
+something a reader parses rather than recognises, and the bar has as many pills as there are filtered
+columns. Three is a judgement, stated as one, with no parameter behind it: configurability is not the
+bar §31 set, and a knob added before anyone has asked is a knob every later section argues with.
+
+### Naming a value costs no query
+
+**A pill names values through a map the column already holds, and never through a scan.** §36 split
+itself off to defend *queries per open*, and a bar that resolves ids by scanning would spend that gate
+on the render after the filter rather than on the open.
+
+The hook is one new virtual, `ColumnBase.FilterValueTextOf`. ~~The base names a value through
+`Entries` when one matches it, which covers the blank and the enum member;~~ **the build did the
+opposite and the design paragraph was wrong.** `Entries` exists only once a check-box list has been
+drawn, so naming through it would make one filter read one way before the menu was opened and another
+after. The base spells the blank and the enum member directly instead - the same word the list draws,
+reached by rule rather than by whatever list happens to be cached. `PropertyColumn` applies its `Format`,
+which lives there and not on the base, so `Salary Greater than $50,000` and `Hired Between 01/01/2026`
+read as their cells do; `LookupColumnBase` resolves a `TKey` through §14's map, which §14 resolved once
+at startup. A declared check-box-list column whose menu has never been opened has run no scan, so its
+pill shows the raw values - and on a plain column the raw values **are** the names. The gate holds by
+construction, and this time by construction means *the only route to a name is a map that is already
+in memory*.
+
+It is a sixth internal virtual on `ColumnBase`, which §20 counted as a closing door and §36's
+`OffersBlank` widened to five. The difference is which way a missing override fails: a column that does
+not override this gets `ToString`, which is a worse pill; a column that does not override `OffersBlank`
+gets a filter that narrows to nothing.
+
+### The pill's two clicks
+
+**`x` clears that column** - one reload, through the `Filter(column, null)` that already exists.
+
+**The body goes to where the filter can be adjusted**, which is §31's reason for it: *"the column's
+header may be scrolled out of view, and that is precisely when someone wants to adjust rather than
+remove."* §31 wrote that as *reopens that column's menu*, and under `FilterUI.Row` there is no menu to
+reopen - a gap §31 did not see because the same paragraph had just made pills independent of
+`FilterUI`. So the rule is the intent rather than the mechanism:
+
+- under `FilterUI.Menu`, it opens that column's menu seeded from `CurrentFilter`, which is
+  `OpenFilterMenu` unchanged;
+- under `FilterUI.Row`, it puts the cursor in that column's filter box, and focusing an off-screen
+  control scrolls it into view for nothing;
+- **where there is neither** - `AllowFiltering` off, a filter that came from `ApplyFilters` - the body
+  is text and only the `x` is interactive. A control that looks clickable and does nothing is the
+  affordance fault §27's review caught in the column picker, and refusing to draw it is cheaper than
+  inventing a third destination.
+
+The second of those needs an id on the filter row's editor and one export in `fastgrid.js`. Both are
+this branch's own files.
+
+### Clear all was already one reload
+
+§31 left it open - *"stated and not designed... every public clear currently reloads, so this needs a
+way to change several columns and compose once, which is the same shape as §23's owed-load problem"* -
+and the worry was about **the naive loop over columns calling the public clear**. `ClearFilters` was
+never that loop. It walks the columns calling `SetFilter` directly, which touches no query, and then
+reloads once. The bullet closes by pointing at code that was already right.
+
+It closes with a gate rather than with that sentence, because the sentence is exactly the shape §36
+named: *a query counter that reads zero looks identical whether the query was avoided or never
+attempted*. **One query for a Clear all over six filtered columns**, through §36's
+`WalkCountingProvider`, and mutated to confirm it can fail.
+
+### §35's warning does not land here
+
+§35 argued that recognising a preset by its shape is harmless, and named what would end that:
+
+> It stops being harmless the day something *writes* differently depending on which it thinks it is,
+> and ⑤'s pills are the first thing that will want to.
+
+**They are not that day.** A pill reads `Recognize` to choose a word. The `x` writes null whichever word
+was chosen. The body reopens the menu, which reseeds from `CurrentFilter` and cannot see what the pill
+printed. There is no write on ⑤ whose result depends on the recognition, so a hand-authored
+`Between today-6d today@end` displaying as *Last 7 days* remains what §35 said it was: the same range,
+resolved at the same instant by the same rule, spelled twice.
+
+What *would* be that day is a pill that edits its preset in place - a control on the bar that turns
+*last 7 days* into *last 30* without opening the menu - because that reads a shape, decides it is a
+name, and writes the name's other value back. ⑤ does not offer one, and the day is still coming.
+
+### The gate
+
+**§31's, unchanged: per-row and per-cell allocation must not move.** The bar may cost per active filter;
+it may not cost per row, and 1000 rows x 5 columns is where this grid's argument lives. The bar is
+outside the table, so nothing here draws in a row - and *"by construction"* is what §33's residual was
+also called, which is why it is measured rather than asserted:
+
+| row | what it holds |
+| --- | --- |
+| pills off | today, and the baseline the others are read against |
+| pills on, nothing filtered | the band that is not drawn |
+| pills on, one column filtered | the band, and one pill |
+| pills on, three columns filtered | the band, and three |
+
+§35's allocation rows are re-run beside them rather than assumed.
+
+**The one-filter pair is the review's, and the design did not have it.** Without it the per-pill number
+is the three-pill delta divided by three, which folds the band, the chip list and the *Clear all*
+button - every one of them fixed - into a rate no arm isolates. Two measured points on the pill axis is
+what makes it a difference instead of a division, and it is the same objection this section makes to a
+single row count on the row axis, one axis over.
+
+The second gate is Clear all's single query, above. It is a gate because it can fail: a loop calling
+the public clear per column reads six, and the mutation that writes that loop is the one that proves
+the instrument works.
+
+### What this section does not do
+
+- **A pill per condition.** A two-condition filter - §31's `In [...] OR IsNull` - is one column's
+  filter and gets one pill, because the `x` clears a column and there is no operation that removes half
+  a filter.
+- **Editing from the bar.** The body is a door to the editor, not a second one.
+- **Reordering, grouping or sorting the pills.** They are in column order, which is the order the
+  reader's eye already has.
+- **A pill for a sort.** Filters hide rows and sorts do not, so *"why is data missing"* is the question
+  this bar answers and a sort is not part of it.
+
+### How it is verified
+
+- **The phrase as a pure rule**, in its own file and with no render tree - §33's finding that a test one
+  layer above a rule is not a test of the rule. *What does an `In` over four lookup ids read as* needs
+  a column and a filter, not a panel.
+- **The naming rule against a column whose scan has never run**, which is the queries-per-open gate
+  restated where this section could break it.
+- **The Clear all gate through `WalkCountingProvider`**, mutated to confirm it can fail.
+- **bUnit** for what only a render answers: the band absent when nothing is filtered, one pill per
+  filtered column, the `x` clearing that column alone, and the body inert where there is nowhere for
+  it to go.
+- **The playground**, §9's layer 6 and not optional: a *Show filter pills* toggle beside §35's
+  `FilterUI` one, on §36's data, with a lookup column and a preset both filtered so the two naming
+  rules are visible at once.
+- **The mutation loop**, on §35's and §36's precedent.
+
+### Where this could still be wrong
+
+- **Three values before the count is a judgement with no measurement**, which is §31's *"at least as
+  friendly as Excel"* bullet arriving one level down. It is the third section in a row where the
+  friendliness bar is defended by an argument.
+- **A sixth internal virtual**, argued above as failing safely, which is a claim about today's five
+  column kinds and not about the next one.
+- **`Hired Between ...` is stiffer than the design promised.** Keeping one vocabulary and keeping
+  §31's sentence were not both available, and the one that reads worse was kept.
+- **Pills draw from `CurrentFilter` and the bar is rendered by the grid**, so a `FilterTemplate` column
+  gets a pill describing a filter its author composed and worded themselves. The phrase will be right
+  about the model and may be wrong about what their editor called it.
+- **The demonstration was one browser at one width.** Sticky positioning and clipping containers are
+  specified behaviour rather than a rendering detail, but the measurement is Chromium's.
+
+### What the build changed
+
+**The gate, and it did not pass on the first instrument.** Three arms, swept over two row counts:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| a filter row, nothing filtered | 52.62 KB | 159.89 KB |
+| a pill bar on, nothing filtered | 52.92 KB | 160.19 KB |
+| three filters, no pill bar (control) | 67.21 KB | 174.52 KB |
+| a pill bar on, three filters applied | 74.08 KB | 181.29 KB |
+
+**+6.87 KB at a hundred rows and +6.77 KB at a thousand** - flat to within 0.10 KB while the arms
+themselves moved 107 KB. About 2.3 KB per pill, and nothing per row. The bar with nothing filtered is
++0.30 KB at both counts, which is the parameter and the walk over the columns.
+
+**The first version of that table was 64.37 KB at both row counts and meant nothing.** The three
+filters were `Name contains "5"`, `Age equals 7` and `Salary equals 100`, which narrow a thousand rows
+to about one - so both arms rendered the same handful at both counts, the sweep moved nothing, and a
+per-row cost could not have shown even if there had been one. §34's `DateRangeColumns` states the rule
+six lines above the fragment that broke it: *the window has to keep every row at both row counts, or
+the sweep measures the same render twice*. The filters keep every row now, and the control's own
+67.21 → 174.52 is what says the instrument can see a per-row cost at all.
+
+**And the fixed instrument found a real cost.** With the sweep working, *bar on, nothing filtered* came
+in about 1 KB above the plain filter row - five string concatenations and five attribute frames, for
+the filter-cell ids the pill's body sends the cursor to, written on every column whether or not it had
+a pill. A column with no filter has no pill and needs no name; naming per column rather than per grid
+takes it to 0.30 KB.
+
+**Two other things the build settled:**
+
+- **`ClearFilters` was already one reload**, as predicted, and now has a test that counts it: six
+  filtered columns, one data query, through a counting executor rather than through a sentence.
+- **The pill's `x` needed `stopPropagation`.** It sits inside the body's own click target, so without
+  it removing a filter also opened the editor of the column it had just removed - the same rule §35's
+  header icon follows against the header cell's sort click.
+
+### What the browser found that the tests could not
+
+§9's layer 6, on the playground. Three behaviours confirmed there and nowhere else - the pill body
+under `FilterUI.Row` scrolled the grid from 960px back to 0 and put the cursor in the Name filter box;
+the body under `FilterUI.Menu` opened the panel with *Last 30 days* already highlighted; and a lookup
+pill read `Team In Growth` rather than an id. No console error and no circuit termination, which is
+what the last two pieces each needed the browser to say.
+
+**It also found a filter-row bug that is not §37's.** A lookup column filtered from the row's *Simple*
+box shows `System.Collections.Generic.List`1[System.Nullable`1[System.Int32]]` in the box afterwards:
+`ColumnBase.FilterBoxText` is `FirstCondition?.Value?.ToString()`, and a lookup column's first
+condition holds an `In` list. It predates this section - `git log -S` puts it in the commit that made
+the box speak one dialect - and it is left alone here rather than fixed in passing, because the filter
+row's text has its own rule and its own tests. Recorded in *Also open*.
+
+### Where this was wrong, found by the build
+
+- **The pill body under `FilterUI.Menu` does not scroll its column into view**, where under
+  `FilterUI.Row` it does. §31's whole reason for the body being a click target is that *"the column's
+  header may be scrolled out of view"*, and the menu path answers the second half of that - the panel
+  opens, seeded, clamped into the viewport - without answering the first. The reader edits a filter
+  whose column they cannot see. It is an asymmetry the design did not intend and did not specify;
+  closing it means a scroll on §35's open sequence, which is where the last two circuit-terminating
+  bugs came from, so it is recorded rather than added at the end of a build.
+
+### What the review found that the build had not
+
+**The gate's number was right and its rate was not earned.** The build reported *"about 2.3 KB per
+pill"* by dividing the three-pill delta by three, which folds the band, the chip list and the *Clear
+all* button - all fixed - into a per-pill rate that no arm isolated. It is the objection this section
+already makes about a single row count, one axis over, and the table had no second point on the pill
+axis. A one-filter pair now supplies one:
+
+| | N=100 | N=1000 |
+| --- | --- | --- |
+| one filter, no pill bar (control) | 57.59 KB | 164.80 KB |
+| a pill bar, one filter applied | 59.70 KB | 167.18 KB |
+| three filters, no pill bar (control) | 67.15 KB | 174.41 KB |
+| a pill bar, three filters applied | 74.08 KB | 181.29 KB |
+
+**The bar costs +2.11 KB for one pill and +6.93 KB for three at a hundred rows; +2.38 and +6.88 at a
+thousand.** Two points, so the per-pill cost is a difference rather than a division: **2.41 KB and
+2.25 KB per pill**, and the band's own fixed cost - the `rz-datatable-header`, the chip list, the
+*Clear all* button - falls out at **-0.30 KB and +0.13 KB**, which is zero within the measurement. The
+whole of the feature's cost is its pills. The naive division happened to land on the same number, which
+is luck and is not the reason to keep it.
+
+The allocation figures are read on a machine at load average 5, which changes the time column and
+cannot change these: an allocation count is deterministic. The time column from that run is not quoted
+anywhere, and its standard deviations - up to 2,093 us on one row - are why.
+
+**Five rules the tests named and could not have failed.** Found by mutation, all now pinned: the
+`Enter` and `Space` the pill's `role="button"` promises, its `tabindex="0"`, the `FilterUI.Row` half of
+the two-destination rule, a column with no header text, and the per-column `HasFilter` guard. The last
+of those is §36's lesson arriving again - **the first test written for it had one column**, so the
+band's own `AnyColumnFiltered` guard was what refused the pill and the per-column guard was never
+reached; the mutation stayed green and the test's name was the only thing that said otherwise.
+
+**Two sites the mutation loop showed redundant, both removed.**
+
+- `CanEditFilterOf` asked `AllowFiltering && (menu || column.CanFilter || column.FilterTemplate is not
+  null)`, and the last two can never be false where it is called: a pill is drawn only for a column
+  whose `HasFilter` is true, and that already reads `CanFilter &&`. It is `AllowFiltering`. **The
+  consequence corrects this section's prose**: a `FilterTemplate` column with no filter path does not
+  get an inert pill, it gets *no pill*, and `AllowFiltering` off is the only route to an inert body.
+- `FilterPill.Clause` took the whole filter for the first condition and `null` for the second, to stop
+  a preset-shaped half being read as a preset. `Recognize` already matches only a filter whose `Second`
+  is null, so the guard sat one layer below a rule that already held - §33's finding from the other
+  end. The parameter is gone and the test that named the rule now asks `Recognize` directly.
+
+**The `x`'s `stopPropagation` is verified in a browser, and the verification was made to fail.** bUnit
+does not bubble, so no test in the suite can see it - the same hole §35's header icon has carried since
+it was written, and which has never been closed by anything but an assertion. Under the menu UI, with
+the attribute on, clicking `x` removes the filter and leaves zero panels in the document; with it
+mutated off and the app rebuilt, the same click removes the filter **and builds a panel of ten menu
+items**. A browser check that has only been run in the passing direction is the same non-gate as a test
+that nothing can make fail.
+
+Three smaller corrections, made in place: a doc comment claiming a token belonging to one of the six
+presets *"never reaches"* `FilterValueTextOf` (it does, whenever the filter around it carries a second
+condition), a localization comment that counted six new strings and two reused where there are seven
+and three, and a remark claiming *"every class here is upstream's"* beside `rz-filter-pills`, which is
+this grid's own name for the band and carries no rule anywhere.
+
+### What the mutation loop found
+
+Eight mutations over the phrase rules and the bar. Five were caught by the tests the review had just
+added or fixed. Three are worth the space.
+
+**The range word and the conjunction are genuinely two strings.** Replacing `RangeFilterText` with
+`AndFilterText` turns three tests red, so the distinction §37 argued for on linguistic grounds is one
+the suite can also see. Likewise the guard that stops a string being walked one character at a time
+under a set operator, and the enum's `GetDisplayDescription`.
+
+**`PropertyColumn.FilterValueTextOf` excepted enums from the format, and the exception was both
+unobservable and wrong.** It was written against a column declaring `Format="C"` beside an enum
+property, on the reasoning that `C` is not one of the four specifiers an enum takes and would throw out
+of the pill. Deleting it changed no test, so a probe asked what actually happens: **the grid throws on
+the cell**, in `PropertyColumn.CellTextOf`, from `RenderCell` - thousands of renders before any pill
+exists. The guard defended a case it could never reach.
+
+What it *did* reach was the specifiers that are valid. A column declaring `Format="D"` drew `1` in
+every cell and `Senior engineer` in its pill - the exact disagreement this override exists to prevent,
+introduced by the line whose comment cited preventing a crash. The exception is gone, a test pins the
+cell and the pill to the same string, and putting the exception back turns it red.
+
+This is §36's rule with a second half: **a surviving mutation may mean redundant code - and redundant
+code may also be wrong.** The mutation said the line could go; only the probe said it should.
+
+## 37b. The menu is the default, and the icon was the wrong control
+
+Two changes asked for after §37 landed, once there was something to look at. Both are small; one of
+them is a correction to §35 rather than a preference.
+
+### The default
+
+**`FilterUI` defaults to `Menu`.** §31 promised *"everything defaults to today's behaviour, as
+`AutoFitColumns` and `PopupFit` do"*, and this is the one place that promise is deliberately broken -
+by the person whose grid it is, after using both. It is struck where §31 wrote it.
+
+Done with a parameter initialiser rather than by reordering the enum. The enum's numbering is public:
+`Row` stays 0, so nothing that stored or crossed a wire as a number changes meaning, and only the
+parameter's starting value moves. `FilterUI="Row"` is the whole migration, and a grid that never set
+`AllowFiltering` is unaffected either way.
+
+**`RadzenFastDropDownDataGrid` pins its inner grid to `Row`**, and that is a product decision the
+default change surfaced rather than a test accommodation. `AllowFiltering` defaults **true** on the
+drop-down, so every existing consumer would have silently got the icons - and a menu there is a popup
+opened out of a popup: `Radzen.openPopup` reparents both to `document.body`, so the panel would stack
+over the drop-down that owns it and close on the first click outside itself. A drop-down is a compact
+picker you type into, which is what the row is.
+
+Nothing else in the suite needed a behaviour change: 144 tests failed on the default and every one of
+them was a test written when the row was the only filter UI, reading boxes it no longer had. They say
+`FilterUI.Row` now, which is what they always meant. Two tests pin the new default itself, because a
+default nothing asserts is a default the next edit can silently move.
+
+### The icon
+
+**§35 claimed upstream's control and drew a different one.** Its comment says *"upstream's own class
+list, so a theme styles it unchanged"*, and what it wrote was
+
+```
+rz-filter-button rz-button rz-button-md rz-button-icon-only rz-variant-flat rz-base rz-shade-default
+```
+
+with a nested `<i class="notranslate rzi">` inside. `RadzenDataGridHeaderCell` draws neither. Its filter
+icon is a bare `<button>` carrying `notranslate rzi rz-grid-filter-icon` with the glyph as its own text,
+and every theme sizes it through `--rz-grid-header-filter-icon-font-size` for exactly this job. Ours
+rendered as a boxed button nearly a header row tall - **measured at 16x16 after the change, against a
+`rz-button-md` box before it** - which is what a button-sized control looks like where an icon-sized one
+belongs.
+
+`rz-filter-button` goes with it, and it was borrowed from a *third* control: the themes scope it to
+`.rz-cell-filter-content .rz-filter-button`, the operator button inside a **filter row** cell. One of
+those rules is `.rz-cell-filter-content .rz-filter-button .rzi { display: none }` - a rule that would
+have hidden this icon's glyph outright had the two ever met in the same cell.
+
+`rz-grid-filter-active` stays. It is upstream's state class and the one thing §35 took from the right
+control.
+
+This is §7's rule catching its own advocate: *use upstream's vocabulary* is only worth anything if the
+thing named is the thing upstream actually draws, and a comment asserting it is not a check.
+
+### The pill bar beside a grid header
+
+Asked, and answered by demonstration rather than by argument, because the honest first half of the
+answer is that **there is no grid header to conflict with**. `RadzenFastGrid` has no `HeaderTemplate`
+and no toolbar, and nothing in this solution renders `rz-datatable-header` except §37's pill bar -
+upstream's own `RadzenDataGrid` does not render it either.
+
+A toolbar of the shape a `HeaderTemplate` would produce, injected into the band above the bar, stacks:
+two siblings inside `.rz-data-grid`, in DOM order, **each dressed by the theme as its own band** - its
+own background, its own 16px padding, its own 1px bottom border. It works, and it reads as two
+toolbars, about 128px of chrome before the first row.
+
+That is fine for today and is a constraint on whoever adds a header later: the two want to be one band,
+or the pill bar wants to stop borrowing the toolbar's clothes. Recorded rather than solved, because
+designing an integration for a component that does not exist is how a rule gets written against a guess.
+
+---
+
+## 38. The consuming application's grid is four features, and one of them is already built - the survey
+
+§15 asked what shape this component should be from the inside. This one asks it from the outside: a
+production application has wrapped `RadzenDataGrid` for three years, and the wrapper is a list - written
+by someone who had to have the feature rather than argued for it - of what the grid did not do. That is
+a different instrument from a design review, and it reads a different set of gaps.
+
+The application is 91 grids, 511 column declarations and 27 drop-down grids over one domain. Its grid is
+`JakksRadzenDataGrid<T> : RadzenDataGrid<T>`, 231 lines, plus a small library of column subclasses. Read
+as a specification of what a grid is missing, it names four things:
+
+| # | What the wrapper built | Here |
+| --- | --- | --- |
+| 1 | A lookup column: id in the row, name in the cell, checklist off the dictionary | **built**, §14 |
+| 2 | Settings persisted to `localStorage` under a key | **built**, §39 |
+| 3 | A control to put the layout back | **built**, §39 - the band menu's *Reset layout* |
+| 4 | Excel export, with a per-column override | **built**, §40-§43 - its own package |
+
+**All four are built as of §43, and the list is closed.** What is below was written while three of them
+were still designs; it is left as it was, because the survey's value is the reading rather than the
+score. What a migration now meets is at the end of this section.
+
+**The first one is the finding, and it is a negative result about this section's own usefulness.** The
+wrapper's `RadzenDataGridLookupColumn<TItem>` takes an `IReadOnlyDictionary<int, string>` and assembles
+five things in `OnInitialized`: a `Template` that shows the name or `(unknown)`, three
+`FilterLookup*` parameters to point the check-box list at the dictionary, a `SortComparer` that orders
+by name, and a `FilterMode` default. §14 is that feature, designed - `FastGridLookup.Map` takes the same
+dictionary, and the four questions the wrapper answers by assembly are the four §14 argues: the
+checklist *is* the lookup rather than a distinct scan, sorting is by name, a null key and a missing key
+are different failures, and a cell has something to draw before the names arrive.
+
+So the wrapper independently reached §14's shape, badly, which is weak evidence that §14 is the shape.
+It is weak because the wrapper had `RadzenDataGrid`'s parameters to hand and its own domain to serve,
+and one convergence is not a proof of anything. It is recorded because the *disagreement* is where the
+value is: the wrapper collapses a null key and a missing key into one `(unknown)`, and §14 refuses to,
+which is a thing the application will notice on migration and should.
+
+**The second finding is a bug the survey found by reading rather than by running, and it is the
+wrapper's.** Its subclass `RadzenDataGridDropDownLookupColumn : RadzenDataGridLookupColumn<dynamic>`
+exists only because `RadzenDropDownDataGrid` renders `RadzenDropDownDataGridColumn` over `dynamic`; its
+own comment records that an actual type makes the column not render at all, and that `typeof(TItem)` on
+`dynamic` then answers null, so the constructor forces `Type ??= typeof(int)`. Neither workaround has
+anything to work around here: `RadzenFastDropDownDataGrid` is typed `<TValue, TItem>` and takes ordinary
+`ColumnBase<TItem>` children. The class and its four call sites are deletions, not ports.
+
+**What the survey did not find is as much of the result as what it did.** No `EditTemplate` anywhere in
+511 columns - every edit path is a dialog or a row-detail template. §1's central exclusion is not a
+compromise for this consumer, it is free. Grouping is one grid out of 91. The three features the
+wrapper actually wants are chrome, storage and export: none of them is on the render path, and none of
+them is refused by §3.
+
+### What this section does not do
+
+It does not price the migration. The column model is expressions and the application's is 511 string
+property names, and whether that is a codemod or a rewrite is a question about the application, not
+about this component. Nothing below depends on the answer.
+
+It does not treat the wrapper as a requirements document. A wrapper is a record of what one team needed
+under one grid's constraints, and two of its four features exist partly to work around
+`RadzenDataGrid`'s own behaviour - §39 has the clearest case. Read for the gap, not for the solution.
+
+### What a migration still meets, now that all four are built
+
+None of these is a missing feature. Each is a place this component deliberately answers differently from
+the wrapper, and every one of them is something the application sees on the day it migrates rather than
+later:
+
+- **A null key and a missing key stop being the same thing.** The wrapper draws `(unknown)` for both.
+  §14 draws an empty cell for a null key and offers it in the filter as *(none)*, and draws the raw id
+  for a key with no entry and never offers it. Cells that read `(unknown)` today will read two different
+  things, and that is the point of the divergence.
+- **`StorageKey` is required and has no default**, which is 91 grids to name. The wrapper defaults to
+  `typeof(T).Name`, so a list page and a picker over one `Order` share a blob and restore each other's
+  columns - a live fault, and the reason the default is refused rather than copied.
+- **An enum exports `ToString()`, not its `[Display]` name.** §42: the export says what the cell said,
+  and §36's `[Display]` name is the *filter* vocabulary. The wrapper's ClosedXML path exported the
+  display name, so an exported column changes wording.
+- **`RadzenDataGridDropDownLookupColumn` and its four call sites are deletions rather than ports.** Both
+  of its workarounds - `dynamic` columns and `Type ??= typeof(int)` - have nothing to work around under
+  `RadzenFastDropDownDataGrid`, which is typed `<TValue, TItem>` and takes ordinary `ColumnBase<TItem>`
+  children.
+- **The one grouped grid out of 91 has no path here.** Grouping is §1's exclusion and stays one.
+- **511 string property names against a column model of expressions**, still unpriced, still a question
+  about the application. Nothing above depends on the answer.
+
+---
+
+## 39. The settings can be stored, and the band that has no owner - the design
+
+**Nothing here is built when this section lands.**
+
+Two features that arrive together because the second exists to undo the first: a grid that remembers
+what its user changed needs somewhere to put it, and a user who cannot put it back is worse off than
+one who was never remembered. §38's ② and ③.
+
+### The storage half is plumbing, and the design is already done
+
+The expensive half of persistence is the shape of what is stored, and *Storing settings somewhere* in
+the README settled it: a stored filter value is an invariant-culture string, `FilterText` is kept beside
+it in the culture it was typed in, a value the column's type can no longer parse takes the whole filter
+with it rather than restoring a narrower answer as the user's own, and a compound is all-or-nothing for
+the same reason. `FastGridSettings` round-trips through `System.Text.Json` today because it was designed
+to.
+
+What is missing is a `StorageKey`, a read on first render and a write on `SettingsChanged`. §18's
+`Browser<TItem>` is where the two calls go - two more exports beside the ten, named once on this side,
+which is the whole point of that struct. It costs nothing on a grid that sets no key, which is §3's
+third rule and the only one this feature can plausibly break.
+
+**The key is required, and has no default.** The wrapper defaults its `StorageKey` to `typeof(T).Name`
+and composes `$"{nameof(JakksRadzenDataGrid<>)}-{StorageKey}"`, so two different grids over one entity -
+a list page and a picker over the same `Order` - share a blob and restore each other's columns. That is
+a live fault in the application rather than a hypothetical, and it is the kind a default causes: nobody
+chose it, so nobody checked it. A key that must be written is a key someone read.
+
+**Storage is a seam, not a dependency.** `localStorage` is the case everyone wants and the wrong thing
+to hard-code: the same application would want `sessionStorage` for a dialog's grid and a server round
+trip for settings that follow a user between machines. The parameter is a key; where the bytes go is a
+service the application can replace, defaulting to the browser. §14's `FastGridLookup` is the precedent
+for the shape - a closed set of provenances behind one parameter - though here two cases and an escape
+hatch is likely all there is.
+
+**What is *not* adopted from the wrapper is its reset path**, and the reason is now measured rather than
+suspected. `ClearSavedSettingsAsync` removes the key, sets `Settings = null`, and then re-sorts
+`ColumnsCollection` by `OrderIndex` by hand, because - its own comment says so - `RadzenDataGrid`'s
+setter rebuilds columns from `allColumns` without honouring `OrderIndex`.
+
+**The defect is real, it is upstream's, and it is unfixed.** The setter on `upstream/master` at
+`635307f0b` is byte-identical to the one this branch carries. `Settings = null` calls `Reset(true)`,
+which clears every column's runtime order override with `SetOrderIndex(null)` and sets `columns` to
+`allColumns.Where(c => c.Parent == null)` - declaration order - and then the setter repeats that same
+assignment and calls `Reload`. Nothing on that path calls `UpdateColumnsOrder`, which is the only method
+that sorts by `GetOrderIndex()`, and `GetOrderIndex()` is `orderIndex ?? OrderIndex` - so the *declared*
+parameter is sitting there, correct, unread. Its five callers are `AddColumn`, `RemoveColumn`, the
+reorder path, `LoadSettingsInternal` and the column's own `OrderIndex`-changed path; a reset is none of
+them. **The fix is one call**, and the setter's duplicate `columns = ...` line can go with it. Offered
+upstream on its own branch, per the precedent of #2696 and #2702.
+
+**This grid does not have the fault, because it does not hold the thing that has it.** `Settings = null`
+here does nothing at all - the parameter is read as `settingsPending = Settings is not null`, and there
+is no reset path yet for the fault to live in. More to the point, there is no ordered column list to
+rebuild: the layout pass walks `columns` in declaration order and derives placement from
+`EffectiveOrderIndex`, which is `reorderedIndex ?? OrderIndex`, on **every** pass. Clearing the drag's
+index restores the declared one by construction rather than by a second step someone has to remember.
+
+So the accommodation is not needed, and the rule it leaves behind is the one worth writing down: **a
+reset clears the overrides and nothing else.** It must not touch `columns`, and it must not compute an
+order - the moment it does either, this section has reintroduced the defect it declined to port.
+
+### An old `DataGridSettings` blob is not ours, and it is not inert either
+
+The migration question this raises is whether a grid that swaps `RadzenDataGrid` for this one under the
+same storage key can read what is already there. **It can, partially, and that is worse than not being
+able to.**
+
+The two shapes overlap by name and by JSON type at seven points - `Columns`, `CurrentPage`, `PageSize`,
+and per column `UniqueID`, `Visible`, `Width` and `OrderIndex` - and the overlap is not a coincidence
+that stops at the names. `RadzenDataGridColumn` **derives** `UniqueID` when none is declared:
+`UniqueID = !string.IsNullOrEmpty(Property) ? Property : FilterProperty`. So a column declared
+`Property="Customer.Name"` stores under `"Customer.Name"`, which is exactly the identity §27 gives the
+same column here. An old blob does not fail to match. It matches.
+
+What it then does is wrong in three ways, in descending order of how quietly:
+
+- **`FilterOperator` is one property name over two different enums.** `System.Text.Json` writes an enum
+  as a number by default, and the two enums agree only up to 6. `Radzen.FilterOperator` runs
+  `StartsWith, EndsWith, DoesNotContain` at 7-9 where `FastGridFilterOperator` runs
+  `DoesNotContain, StartsWith, EndsWith`; at 13-14 upstream has `IsEmpty, IsNotNull` and this has
+  `IsNotNull, IsEmpty`; 16 is `Custom` there and `Between` here. Most of that is saved by accident:
+  those operators take values, the values are under `FilterValue` - a name this side does not read - and
+  there is no `FilterText` in an old blob either, so `RestoredCondition` finds nothing to rebuild and
+  drops the filter. **The exception is the arity-`None` pair.** `IsEmpty` and `IsNotNull` need no
+  values, so `RestoredCondition` returns a live condition from the operator alone, and 13 and 14 are
+  precisely where the two enums swap them. A stored "is empty" comes back as "is not null": a filter the
+  user never wrote, narrowing to a different set, presented as theirs. That is the failure §33 exists to
+  prevent, reached by a route §33 did not consider.
+- **Multi-column sort precedence is lost silently.** Upstream stores it as `SortIndex` per column;
+  this grid stores it as the *order of the entries*, which is why `ApplySettings` walks
+  `settings.Columns` rather than `columns`. `SortIndex` is an unknown member here and is dropped, and
+  upstream's array is in column order, not sort order - so a two-column sort restores with its
+  precedence set by where the columns sit.
+- **Every column arrives claiming a choice nobody made.** The rule here is that `Visible`, `Width` and
+  `OrderIndex` are null until a user records something, so a grid whose user cannot change one stores
+  nothing for it and the markup stands. Upstream writes all three for every column unconditionally, and
+  `UpdateColumnsOrder` fills in an `OrderIndex` for every column that lacks one - so an old blob pins
+  the visibility and the position of every column against markup that may have moved since. `Width`
+  escapes only because upstream's default is `""` and `ApplySettings` guards on `{ Length: > 0 }`.
+
+**So the answer is that the settings are deliberately not compatible, and the code does not say so.**
+Two ways out, and this section takes the first:
+
+1. **Make the incompatibility explicit.** The stored shape carries a version, and a blob that does not
+   carry the current one is discarded rather than read. A user loses their layout once, on the release
+   that migrates them, and knows it happened because the grid is in its declared state.
+2. Write a converter. It is not hard - the operator table is a switch, `SortIndex` becomes an ordering,
+   and `Visible`/`OrderIndex` would have to be dropped rather than honoured to keep this side's rule -
+   but it is a second serialization format to keep correct forever, in a package whose consumer can
+   instead change a key once.
+
+**Whichever is chosen, the key is where this is actually settled.** A migrating application should write
+under a new key and leave the old one to expire, which costs nothing and cannot half-apply. The version
+stamp is for the case that is not a migration: an application that ships this grid, changes its columns,
+and meets its own older blob.
+
+### What the build changed
+
+Four things this section did not anticipate, three of them found by a test rather than by reading.
+
+- **A reset must not announce.** `ClearSettings` removed the key and then called `RefreshAsync`, which
+  raises and therefore stores - so the reset wrote the key straight back, with the markup's declared
+  sort in it, now recorded as a choice the user had made. `announce: false`, which is the idiom the
+  first page already uses for the same reason: the grid's declared state is not a setting anyone chose.
+- **A declared sort does not come back on its own, and width, visibility and position do.** The other
+  three are read as `override ?? declared` on every render, so clearing the override is the whole
+  restore. A declared `SortOrder` is seeded once, at the column's first parameter set, and its own
+  comment says why - *"a declared sort is the grid's starting state, not a live binding"*. Clearing
+  the sort list and stopping there leaves a grid whose markup declares a sort unsorted. `ClearSettings`
+  re-seeds it through `ApplyDeclaredSort`, in declaration order, which is the only order markup
+  expresses. **The test that caught this first did not**: it declared a descending sort whose leading
+  row was also the leading row of the unsorted data, so it could not tell the declared sort coming back
+  from nothing sorting at all. It declares an ascending one now.
+- **Storing must not be gated on `SettingsChanged`.** The capture was already conditional on a handler
+  being wired, which was right when a handler was the only consumer. A grid with a `StorageKey` and no
+  handler is the ordinary way to use this feature, and it would have stored nothing.
+- **Enums are stored by name.** `System.Text.Json` writes an enum as a number by default, which is a
+  position in a list a later edit can move - and this section's own forward-compatibility finding is
+  what that fault looks like when it happens. `UseStringEnumConverter` on the generated context makes
+  a stored blob say `"Ascending"`, and it makes a foreign blob's numeric operator fail to parse rather
+  than parse into the wrong one: a second guard behind the version stamp, arrived at from the other
+  side of the same argument.
+
+**What the two-axis review found, and one thing it got wrong.**
+
+- **A restore announced, and therefore stored.** On a grid the handler loads, `ApplySettings` owes a
+  reload, and that reload raised `SettingsChanged` - which since this section also *writes the key*. So
+  such a grid read its settings and immediately wrote them straight back, having done nothing. It is
+  `RefreshAsync(announce: false)` now, which is the argument *A reset must not announce* already made
+  and which the `loadOwed` branch two lines below had always made for itself.
+- **The seam shipped as an interface, not a closed type**, and *Where this could still be wrong*
+  predicted exactly that: *"if it ships as `localStorage` and a delegate, that is probably the honest
+  version, and the closed type is the thing to refuse."* Recorded here because the body of this section
+  still proposes the closed shape.
+- **A claim about the picker override did not survive being checked.** The review held that
+  `SetPicked(column.Visible)` in the reset pins the override and shadows a later markup edit. It does
+  not: `ColumnBase` clears `pickedVisible` itself whenever `declaredVisible != Visible`, on the rule
+  that *"markup that says `Visible="false"` is not asking to be overruled by what someone ticked
+  before"*. The two forms are equivalent. `SetPicked(null)` is kept because it says what a reset means
+  and matches `SetResizedWidth(null)` beside it - **not** because it fixes anything.
+
+  **The test written for it was deleted rather than kept.** It passed with the supposed fault
+  reinstated, which §9's first rule says makes it worse than no test. The mutation that survived was
+  surviving because the code was redundant, not because the suite had a hole - and that distinction is
+  only visible if a surviving mutation is investigated rather than patched over with a test that
+  cannot fail.
+
+**`ConfigureAwait(false)` on the read made the whole feature throw, and fourteen tests said it worked.**
+This is the section's largest finding and no test could have made it.
+
+The restore awaits the store, then writes component state and calls `StateHasChanged`. With
+`ConfigureAwait(false)` on that await the continuation resumes off the renderer's dispatcher, and
+`StateHasChanged` asserts: *"the current thread is not associated with the Dispatcher."* It is raised
+inside `OnAfterRenderAsync`, so the circuit logs it and nothing reaches the screen - the only symptom
+is a grid that quietly ignores what it has just read. Every test passed, including one written to drive
+the whole browser path, **because a module double answers synchronously**: the await never suspends, so
+the context is never lost.
+
+The playground is what found it, and the diagnostic that settled it was four `Console.Error` lines: the
+read logged, the line after `StateHasChanged` did not. Before that it had been mistaken twice - for a
+stale build, and for the `Settings` parameter clobbering the restore - and both were ruled out by
+experiment rather than by reading.
+
+`ConfigureAwait(false)` is gone from the two methods that touch component state after awaiting, and
+stays on the three browser helpers, which touch none. **And the gap is now closed by a test**:
+`ARestoreThatSuspendsStillReachesTheGrid` leaves the module's result unset until after the first
+render, which is the only way to make a doubled read actually suspend. Reinstating
+`ConfigureAwait(false)` fails that test **and no other** - fourteen still pass - which is the measured
+version of what this finding claims.
+
+**The serializer is source-generated, and it is affordable only because of what §32 and §33 made the
+stored shape.** Reflection-based `System.Text.Json` would take the *Trimming and Native AOT* claim with
+it - `TrimTest` publishes with warnings as errors. A generated context has no such problem over strings,
+enums and nullable primitives; it could not have been written at all over the `object? FilterValue` this
+type used to carry.
+
+### The band half is not plumbing, and §37b already recorded why
+
+§37b was asked for a toolbar and answered by demonstration: `RadzenFastGrid` has no `HeaderTemplate` and
+no toolbar, §37's pill bar is the only thing in this solution that renders `rz-datatable-header`, and a
+second band injected above it stacks - two siblings inside `.rz-data-grid`, each dressed by the theme as
+its own band with its own background, 16px padding and 1px bottom border, about 128px of chrome before
+the first row. Its verdict was *"the two want to be one band, or the pill bar wants to stop borrowing
+the toolbar's clothes"*, recorded rather than solved, with the note that designing an integration for a
+component that does not exist is how a rule gets written against a guess.
+
+The component now exists, so the rule can be written.
+
+**The control is a menu in the pill bar's band, not a toolbar above it.** Three reasons, in the order
+they decide it:
+
+- **It is the answer that does not create the two-band problem.** An icon-sized control inside the band
+  that already draws is one band; anything above it is two. §37b measured the failure and this is the
+  shape that avoids it rather than the shape that manages it.
+- **The band is already conditional and already correct about when.** §37 draws it only when something
+  is filtered, on the argument that a permanently empty band costs a row of chrome forever to avoid one
+  layout shift. A menu changes that: the band must now draw when there is a menu *or* a filter, and the
+  argument survives the change - a grid with a menu has a reason for the band on every render, which is
+  the case §37's rule was distinguishing itself from.
+- **It has somewhere to grow.** Reset layout is one item. Auto-fit is a second, export (§40) a third,
+  and each of them is a verb about the whole grid rather than about a column. A `HeaderTemplate` would
+  make each of those the application's problem to place; a menu makes them entries.
+
+**What goes in it is the grid's own verbs, and nothing else.** Not an extension point in this section.
+An application that wants its own actions in the band is asking for a `HeaderTemplate`, and that is the
+two-band question again with a different sponsor - it should be argued when someone needs it, against a
+band that by then has a menu in it and something to be measured against.
+
+**The trigger is upstream's control, checked rather than asserted.** §37b's correction is fresh and its
+lesson is the operative one here: §35 claimed *"upstream's own class list, so a theme styles it
+unchanged"* in a comment and drew a `rz-button-md` box where upstream draws a bare `<button>` with
+`notranslate rzi rz-grid-filter-icon`, sized by every theme through a variable made for the job. It
+rendered nearly a header row tall. So this control's classes come from whatever upstream component
+actually draws an overflow menu, read out of the rendered markup, and the check is part of the piece
+rather than a follow-up. §7's rule is only worth something if the thing named is the thing upstream
+renders.
+
+### Deliberately not proposed
+
+- **A `HeaderTemplate`.** Above.
+- **Persisting anything the user did not change.** The README's rule stands and this section does not
+  touch it: each of visibility, width and order is null until something records a choice, so a grid
+  whose user cannot change one stores nothing for it and the markup's value stands on the way back in.
+  A storage key does not make that safe to relax; it makes it easier to get wrong at more sites.
+- **Reset as a parameter rather than a menu item.** `ClearSettings()` is a method the application can
+  call, and it is needed anyway - the menu item is one caller of it. What is refused is a
+  `ShowResetButton` parameter, which is the toolbar question wearing a boolean.
+
+### How it is verified
+
+The storage half is bUnit's, and the module double reaches it the way §18 says it reaches everything
+else. Three tests carry the weight: a grid restores what a previous instance wrote under the same key;
+a grid under a *different* key restores nothing from it, which is the fault the required key exists to
+prevent; and a stored blob whose column types have moved restores unfiltered rather than throwing,
+which is the README's rule and is already tested at the settings level - here it must survive the trip
+through storage.
+
+The band half is not bUnit's. §37b's finding came out of the running playground with a ruler on it, and
+the two-band measurement is the reason this section chooses a menu; the menu's own chrome has to be
+measured the same way, against the same stage, or this section has replaced one guess with another.
+**A test asserting the menu renders is not a test that it looks like one control.**
+
+### Where this could still be wrong
+
+- **The band's conditional draw may not survive contact.** A menu makes the band unconditional in
+  practice, and if the menu is the only reason it draws on most grids, §37's argument for drawing it
+  conditionally has been quietly inverted rather than extended. That is a thing to look at once both are
+  on, not a thing to decide here.
+- **Nothing here is measured.** The claim that a menu in the existing band is one band and a toolbar is
+  two is §37b's measurement, taken for a different control. An icon-sized menu trigger inside
+  `rz-datatable-header` beside a chip list is a layout nobody has rendered.
+- **The storage seam may be one case too many.** Two cases and an escape hatch is a guess at what a
+  second consumer wants, made from one consumer. If it ships as `localStorage` and a delegate, that is
+  probably the honest version, and the closed type is the thing to refuse.
+
+### What the band half measured
+
+*Nothing here is measured* was the second of the three risks above, and it was the one blocking the
+build. It is measured now, on the running playground with a ruler on it - the same instrument §37b
+used, pointed at the control that did not exist when §37b was written.
+
+**The band, at 1200px, eleven columns, one filter applied:**
+
+| arm | band |
+| --- | --- |
+| pill bar alone - §37's bar as it shipped | **67px** |
+| pill bar with the menu in it, as a flex item | **67px** - unchanged |
+| pill bar with the menu as a block sibling | 86.5px, 88px or 103px, by control |
+| a toolbar above the pill bar - §37b's arrangement | 69px + 67px = **136px** |
+| the band with a menu and nothing filtered | **53px** |
+| the band with nothing in it at all | 33px |
+
+So **§39's choice holds and §37b's "about 128px" was close**: a menu in the band is one band, a
+toolbar is two, and the second costs twice the first. What the measurement added is three things the
+design did not have.
+
+- **The trigger has to be a flex item in the band's row.** `.rz-datatable-header` is `display:block`
+  and `.rz-chip-list` is a block-level flex container, so a trigger appended as the band's second child
+  wraps to a second line. It is a second *row* rather than a second band - 20px to 36px rather than
+  67px - but it is chrome bought for nothing, and it is what the obvious implementation does. The band
+  is laid out as a row **only on the render that draws the menu**: an inline style is the one thing a
+  consumer's own rule cannot override without `!important`, and §37 named this band `rz-filter-pills`
+  precisely so that it could be restyled. A grid using the bar alone keeps the block band it had.
+- **The band with a menu and nothing filtered costs 53px**, which is the number §37's conditional-draw
+  argument was missing. *"A permanently empty band costs a row of chrome forever to avoid one layout
+  shift"* is exactly what a grid with the menu on and no filter now pays, so the first risk above is
+  real rather than hypothetical - and the answer is that `ShowGridMenu` is a parameter, off by default
+  like everything else here. A grid that has not asked for it is untouched; a grid that has, has a
+  reason for the band on every render, which is the case §37's rule was distinguishing itself from.
+- **`rz-button-md` is the control that grows the band**, to 69px even as a flex item. §37b's warning,
+  reproduced.
+
+**The trigger is `rz-menu-toggle`, and the obvious borrow would have failed an audit.**
+
+§39 asked for *"whatever upstream component actually draws an overflow menu, read out of the rendered
+markup"*. That is `RadzenMenu`'s `Responsive` toggle, and the class carries no scope of its own:
+`appearance:none; background:none; border:none; display:inline-flex; padding:0;
+color:var(--rz-menu-top-item-color)`, with that variable defined at `:root`. Measured in the band:
+20x20, no padding, no margin. The `li.rz-menu-toggle-item` upstream wraps it in is `display:none`
+until a breakpoint and is deliberately not taken - that is `RadzenMenu`'s responsive machinery rather
+than part of the button.
+
+The borrow that suggests itself is **`rz-grid-filter-icon`** - it is the class §37b corrected §35's
+icon *to*, it is unscoped, and it renders at 16x16 here. It fails on a check §37b never had to make:
+its colour is `--rz-grid-filter-color`, rgb(175,175,178), which against this band's white is
+**2.19:1** - below WCAG 2.2 1.4.11's 3:1 for a user interface component. It is faint on purpose,
+because in a header cell it is a hint beside a title; in this band it would be the only control on its
+side. `rz-menu-toggle` measures **8.18:1**, in company with the band's own *Clear all filters* at 21:1
+and its chip text at 15.27:1. **The right class for one job is the wrong class for another, and only
+the rendered thing says which.**
+
+**The glyph is `more_horiz`, because `more_vert` is taken.** The themes draw the column drag handle
+with `.rz-column-drag:after { content: "more_vert" }`, so a vertical kebab already means *pick this
+column up* one band away in this same component. Upstream's own toggle uses `menu`, which reads as
+site navigation in a grid.
+
+### §37b's finding, a third time - and this one the tests could not see
+
+The panel's entries are upstream's command-menu vocabulary rather than §35's listbox vocabulary, and
+the distinction is what the two panels are: §35's is an operator picker, a list one of whose entries is
+chosen; this is a command menu, whose entries do things and none of which is selected afterwards.
+Upstream keeps the two apart the same way - `RadzenSplitButton`'s popup is
+`ul.rz-menu-list > li.rz-menuitem`.
+
+The entry is a real `button` inside a presentational `li`, which is where this departs from
+`RadzenSplitButtonItem` - that puts `role="menuitem"` and the click on the `li` and manages focus
+through `aria-activedescendant` on the list. A button is focusable, takes Enter and Space from the
+browser, and is what §35's panel already does one panel over.
+
+**And `rz-menuitem-link` on a `button` rendered the user agent's own control.** `.rz-menuitem
+.rz-menuitem-link` is `color:inherit; display:flex; align-items:center; text-decoration:none` and
+nothing else, because upstream only ever puts it on a `span` or a `NavLink` - neither of which needs a
+reset. Measured on a button: `border: 2px outset`, `background: rgb(239,239,239)`, Arial at 13.33px,
+inside a themed panel. The fix is `rz-filter-menu-item`, which is
+`width:100%; text-align:start; background:none; border:none; font:inherit; cursor:pointer` - upstream's
+own class for exactly this, applied by `RadzenDataGrid` to the buttons in its filter menu and by §35 to
+the operators in this component's other panel. Its name says *filter* and its rules say *button in a
+menu*; the rules are what is borrowed, and there is no more general class shipped.
+
+That is §37b's rule for the third time, and all three were the same shape: **a class is only
+upstream's if the element under it is the element upstream puts it on.** §35 claimed a control it did
+not draw. §37b corrected it. This took the right class and put it on the wrong tag. Every one of them
+was invisible to a test asserting the markup and obvious the moment it was on a screen - which is what
+*"a test asserting the menu renders is not a test that it looks like one control"* was written to
+predict, and it predicted correctly.
+
+### The defect the browser found in the half that was already built
+
+Driving the reset needed something to reset, so a column was dragged wider - and the width was never
+stored. Paging stored `CurrentPage` the same second; a drag from 260px to 540px left `Columns` at
+`[]`. Nothing threw. The suite was 1204 green while it was true.
+
+**It is this section's own finding, applied in one place out of three.** *Storing must not be gated on
+`SettingsChanged`* was recorded above and fixed where `RefreshAsync` announces. `RaiseColumnResized`
+and the reorder drop announce too, do not reload, and so were never on that path: both still read
+`if (SettingsChanged.HasDelegate)`. On a grid with a `StorageKey` and no handler - which this section
+calls *the ordinary way to use this feature* - **a dragged width and a moved column were the two
+settings that did not survive a reload**, which are the two a *remember my layout* feature exists for.
+
+The second half of the drift is quieter. Neither site set `raisedSettings`, so an application that
+stores what it is handed and passes it back - the whole point of the parameter - had a resize's echo
+read as an instruction where a sort's was not.
+
+All three sites go through one `AnnounceSettings` now. Three tests cover it, none of them wiring a
+handler, because a handler is the only arrangement the fault could not be seen in; all three fail with
+the fault reinstated and no others do.
+
+**And a rule of this section is weaker in practice than it reads.** *Each of visibility, width and
+order is null until something records a choice* is true per column, but the resize script reports
+every column's width on every drag and the grid records all of them - so one drag pins eleven widths,
+declared ones included. That is §37-era resize behaviour rather than anything this section introduced,
+and changing it would change what a resize means; recorded rather than solved.
+
+### What the two-axis review found
+
+Three, and one of them is a decision this section left to the build rather than a fault.
+
+- **The panel was declared twice and the second copy dropped an attribute.** §39's panel was written
+  from §35's with the numbers changed, and left `RadzenPopup.Close` out. `RadzenPopup.OnClose` sets its
+  own `IsOpen`, so nothing was stuck open - but nothing told the *grid* to render, so the trigger's
+  `aria-expanded` stayed as the last render wrote it. **A browser looks perfectly correct throughout**,
+  because `Radzen.setPopupAriaExpanded` writes that attribute into the DOM itself; the render tree and
+  the DOM disagree, and only where upstream's JavaScript does not run - which is every test - can
+  anyone see it. That is §35's own rule coming back: *two writers agreeing by luck is still one of them
+  being wrong.* The declaration is one `RenderOverlayMenu` now, which is what makes the omission
+  impossible to repeat, and a test reads the writer that was wrong.
+- **Routing three announce sites through one method decided a question they disagreed about.**
+  `RefreshAsync` does not await `SettingsChanged`, on the argument in its own comment - it is on the
+  path of every sort, filter and page. `RaiseColumnResized` and the reorder always did await it. The
+  extraction silently gave all three `RefreshAsync`'s answer, which makes a consumer's handler throwing
+  an unobserved task on two of them. `AnnounceSettings` returns the callback's task now and each caller
+  keeps its own answer. **The test written for this first did not work**: a handler that throws on the
+  way in throws at the call site whether the task is awaited or discarded, so it passed with the fault
+  reinstated. It yields before it throws now, and fails.
+- **`ShowGridMenu` is a decision this section did not make, and the review is right to say so.** §39
+  wrote *"the band must now draw when there is a menu **or** a filter"* as though the menu simply
+  exists, and it refused a `ShowResetButton` on the grounds that it is *"the toolbar question wearing a
+  boolean"*. This is a boolean that shows a control. The distinction it turns on: that refusal was
+  about **which control** the reset gets - a button in the band, or an entry in a menu - and this is
+  about **whether the band's menu exists at all**. The 53px above is what makes it a real question
+  rather than a stylistic one, and §3's rule that nothing is paid for when switched off is what settles
+  it. A grid that has not asked for the menu is exactly as it was.
+
+Not acted on: the review also noted that `gridMenuPopup`, its capture, the element, its capture,
+`gridMenuPending` and `gridMenuBuilt` travel as one concept and restate §35's fields one panel over.
+True, and it stays two copies rather than a `PopupHost`, because two is where it stops: §40's export is
+an entry in this menu rather than a third panel. A third would be the point to bundle them.
+
+### How the band half was actually verified
+
+The measurements above are the verification the section asked for, and the tests are the logic around
+them. Eighteen tests: five for the storage defect, thirteen for the band.
+
+**Eleven mutations, eleven caught - and four of them only after the test that should have caught them
+was written, repaired, or generalised.** Deleting the band's `display:flex` left every other test passing, because
+the menu still rendered and still opened: the whole finding of the first measurement, with nothing
+pinning it. Dropping `RadzenPopup.Close` was invisible until a test read `aria-expanded` across an
+open and a close. And the await test passed with its own fault reinstated until the handler learned to
+yield first. And the reorder's await survived while the resize's was covered, by two tests that should
+always have been one - they are a theory over both settles now. Each of the four is §9's first rule
+earning its keep: a test that cannot fail is worse
+than no test, and the only way to know which kind you have written is to break the thing on purpose.
+
+---
+
+## 40. The workbook was already in the box - the design
+
+**Nothing here is built when this section lands.**
+
+**Four of the claims below were overturned by what came after, and the section reads as settled without
+them.** Each is corrected where it stands, and they are gathered here so this section cannot be read
+alone and believed:
+
+| What §40 says | What is true |
+| --- | --- |
+| a `bool` is a deliberate demotion, because the file cannot keep one | §42: the file was always right - `XlsxWriter` writes ECMA-376's `t="b"` and `XlsxReader` drops it. Booleans are typed. |
+| a column's `Format` is not mapped, on §39's refusal of a settings-blob converter | §43: the analogy does not hold - that one was bidirectional persistence, this is one-way and allowed to give up. `ExportFormat` maps it. |
+| a download is the application's to own | §41: `AddRadzenFastGridExport()` downloads the file, because a menu entry that produces nothing a reader can open is not a feature. `OnExport` is where an application takes it back. |
+| the seconds in the measurement table | §42: taken with the playground and a browser running, about 2.4x too high. The allocation figures were always right. |
+
+§38's ④. The application exports a grid to `.xlsx` through a 463-line package over ClosedXML. The
+survey's finding is not that the feature is wanted - it obviously is - but that **the writer for it is
+already inside this component's own dependency.**
+
+### What is already there
+
+`Radzen.Documents.Spreadsheet` ships in `Radzen.Blazor`, which this package project-references. It is a
+headless workbook model: `Workbook` is public with `SaveToStream(Stream)`, and `XlsxWriter` under it is
+`System.IO.Compression` and `System.Xml.Linq` and nothing else - no Blazor, no JS interop, no component.
+
+Read against what the application's builder actually does, every feature is present:
+
+| ClosedXML, in the application | `Radzen.Documents.Spreadsheet` |
+| --- | --- |
+| bold header row | `Format.Bold` |
+| number format per column | `Format.NumberFormat` |
+| typed values, so Excel sorts and sums | `Cell.Value` with its inferred `ValueType` |
+| `FreezeRows(1)` | `Axis.Frozen` |
+| `SetAutoFilter()` | `Worksheet.AddTable(..., hasHeaders: true)` |
+| `AdjustToContents(...)` | `Axis.IsAutoFit`, and the writer measures the widths itself |
+
+So the argument for building this is not "we could write an exporter". It is that the exporter is
+written, the application is carrying a second one, and the seam between a grid and a workbook is about
+six methods wide.
+
+### The surface
+
+An extension method over the grid, in its own package:
+
+```csharp
+Workbook workbook = grid.ToWorkbook();          // or ToWorkbook(new FastGridExportOptions { ... })
+```
+
+**It answers a `Workbook`, not a stream and not a download.** Handing back the model is what makes the
+feature composable: an application that wants two grids in one file, a title row above the data, or its
+own sheet name gets them by writing to the object it was given, and one that wants a file calls
+`SaveToStream`. A method that wrote bytes would be a method that had already decided all three.
+
+**A column controls its own export through one interface**, which is the application's own shape and is
+better than the alternative this section considered:
+
+```csharp
+public interface IFastGridExportColumn<TItem>
+{
+    Func<TItem, object?>? ExportValue { get; }
+    string? ExportTitle { get; }
+    string? ExportFormat { get; }
+    bool ExportIgnore { get; }
+}
+```
+
+That is `IExcelExportColumn<TItem>` from the application, unchanged but for its name. It is adopted
+rather than redesigned because the survey found it doing exactly one job well: a lookup column exports
+its label instead of its raw id by implementing it, which is the case that motivates the interface and
+the case a `Func<TItem, object?>` parameter on the grid could not express.
+
+### What changes, and why it is a narrowing rather than a port
+
+The application's `ExcelColumnResolver` falls back to `PropertyAccess.GetValue(item, property)` - a
+string path, reflected once per cell - and **skips any column with neither a string `Property` nor an
+`ExportValue`**, so a template column silently exports as nothing.
+
+Neither is true here. §4's column already holds a compiled `Func<TItem, string>` for its cell text and
+already knows its own typed value without boxing it (§3's fifth rule), so:
+
+- **the fallback is not reflection**, it is the accessor the cell uses - `CellTextOf` is already public
+  and every bound column overrides it, so a lookup column exports its name and a collection column its
+  joined list without the application implementing anything;
+- **the resolver's `FormatDisplay` mostly goes**, with its enum `[Display]` handling and its
+  `string.Format` branch - the column formats already, and §3's fifth rule is why that is cheaper here
+  than there.
+
+**A template column is still unexportable without an `ExportValue`, and an earlier draft of this
+section said otherwise.** It claimed the grid could offer a template column's rendered text where the
+application's resolver had nothing to offer. It cannot: `TemplateColumn` does not override
+`CellTextOf` - it draws a `RenderFragment`, and the only way to text is to render that fragment to a
+string, which is a renderer pass per cell outside the one Blazor is running. So the improvement over
+the application's resolver is narrower than claimed: it removes the reflection and it covers the bound
+columns properly, and a template column needs the same `ExportValue` it needed before. Found while
+building the accessors, not while writing this.
+
+The one thing that does not simplify is ordering and visibility. The resolver reads `GetOrderIndex()`
+and `GetVisible()` to export what the user is looking at, in the order they arranged it, and that is
+right; it needs the grid's columns in view order, which is the accessor below.
+
+### What it exports, and the question that has to be settled first
+
+**`View`, not the page** - filtered and sorted, every matching row. That is what the application does and
+what a user means, and it is also the half of this feature that is not free.
+
+`View()` is private (`RadzenFastGrid.Data.cs`), the column list is a private field, and both have to
+become readable for this to exist at all. That is a small change and it is not only this section's:
+§39's menu needs the columns too. **But on a `LoadData` or async-executor grid, the view is one page**,
+and "export everything the filter matches" is then a query the grid has not run.
+
+Three answers, and this section takes the first:
+
+1. **Export what the grid holds**, and say so. On an in-memory grid that is everything; on a paged
+   server grid it is the page. Honest, cheap, and wrong-looking exactly where the application's own
+   version is wrong-looking today without anyone noticing.
+2. Ask the source for everything, by re-composing the query with no paging. One more round trip, and a
+   `LoadData` handler that cannot express "no page" makes it undefined.
+3. Refuse to export a server-paged grid. Defensible and unhelpful.
+
+The application's grids that export are in-memory, so ① is not a compromise for the consumer that
+prompted this. It is a compromise for the next one, and §11 is where that gets revisited.
+
+### Its own package
+
+`Radzen.Blazor.FastGrid.Export`, on §8's precedent (`Radzen.Blazor.EntityFrameworkAdapter`).
+
+Not tidiness. Rooting `XlsxWriter` pulls `System.IO.Compression` and `System.Xml.Linq` into the trim
+graph of **every** consumer of the grid, whether or not it exports - and §"Trimming and Native AOT" is a
+section here because that is a property this component claims. A separate package keeps the claim true
+and makes the payload opt-in. It also keeps a feature that has nothing to do with drawing rows out of
+the assembly whose argument is what it does not draw.
+
+### Deliberately not proposed
+
+- **A download.** Bytes to a browser is `IJSRuntime` and a data URL or a stream reference, it differs
+  between Server and WebAssembly, and it is the application's to own. `ToWorkbook` stops at the model.
+  **§41 reverses this.** `ToWorkbook` still stops at the model; the *service* registered beside it
+  downloads, because the menu entry §39 asked for has to produce something a reader can open. The half
+  of the reason that survives is that the Server/WebAssembly difference is handled once, by
+  `Radzen.downloadFile`, rather than by every application.
+- **A button.** §39's menu is where an export entry would live, and it should be argued there, once
+  there is a menu to put it in.
+- **CSV.** `Workbook.SaveAsCsv` exists and costs nothing to reach through the same `Workbook`. There is
+  no separate feature to design.
+- **Styling the sheet to match the grid.** Colours, borders and conditional formats are all in `Format`,
+  and none of them is what an export is for. An application that wants them has the `Workbook`.
+
+### How it is verified
+
+Round trip, not markup. `Workbook.LoadFromStream` is public and reads back what `SaveToStream` wrote -
+`XlsxReader` itself is internal, so that method is the seam - and a test writes a grid with a filter, a
+sort, a hidden column, a reordered column, a formatted decimal, a date and a lookup, saves it, loads it,
+and asserts the cells. That is an assertion about the file rather than about the code that made it.
+
+**The discriminating cases are the ones the application's version gets wrong**, and each needs a test
+that fails without the feature: a template column exports its text rather than a blank; a lookup column
+exports its name rather than its id; a hidden column is absent; a reordered column is in the user's
+order and not declaration order; a filtered grid exports the filtered rows.
+
+### Where this could still be wrong
+
+- **Nothing here is measured, and one thing should be.** `Workbook.AddSheet(name, rows, columns)` sizes
+  a sheet up front and `CellStore` is indexed per cell; whether building a 50,000-row workbook allocates
+  like the grid or like ClosedXML is unknown, and it is the only number that could change the shape of
+  this section. §3 does not bind an export - it is off the render path - but a feature that hangs the
+  circuit for six seconds is a feature nobody uses twice.
+- **`AddTable` may not be `SetAutoFilter`.** They are the same to a user and they are not the same in
+  the file: a table carries a name, a style and a structured range. If the application's consumers open
+  these in something other than Excel, that difference is theirs to find, and it should be checked
+  against one before this is called parity.
+- **`ValueType` inference is the writer's, not the grid's.** The application's builder is explicit about
+  keeping numbers, dates and bools typed so that Excel sorts and sums them, and it hand-maps `DateOnly`
+  through `DateTime` to get there. Whether `Cell.Value` infers the same set - and what it does with a
+  `DateOnly`, a `TimeSpan` or a nullable enum - is read from one file here and not tested.
+
+### What the build measured, and the three things the section had wrong
+
+*Nothing here is measured, and one thing should be* was the first of the risks above, and it named the
+right one. It is measured now, and two more went with it.
+
+**The number that was asked for.** A 50,000-row workbook over eleven columns, three interleaved passes,
+stable across all three:
+
+| step | time | allocated | live heap |
+| --- | --- | --- | --- |
+| building the workbook | ~610 ms | 212 MB | 209 MB |
+| `SaveToStream` | ~3.6 s | 417 MB | |
+| `SaveAsCsv` | ~280 ms | 71 MB | |
+
+**The times in this table are wrong and §42 corrects them** - they were taken with the playground and a
+browser running, and are about 2.4x too high. The allocation figures stand, and so does the ratio the
+argument below rests on.
+
+So the answer to *"like the grid or like ClosedXML"* is **like ClosedXML**: about 4.2 KB per row, which is
+a `Cell` object and a dictionary entry per cell, and `CellStore` is a `Dictionary<(int, int), Cell>` with
+no bulk path. §40 worried about "a feature that hangs the circuit for six seconds"; it is four, and 209 MB
+of live heap per concurrent export on a Server circuit.
+
+**What that changes is nothing about the shape and everything about the argument for it.** The section
+chose to answer a `Workbook` on composability grounds - *"a method that wrote bytes would be a method that
+had already decided all three"* - and the split of the four seconds turns that from a taste into a
+measurement: **the expensive step is the one `ToWorkbook` does not take.** A `ToXlsxBytes` would have
+baked 3.6 s into the seam. And *CSV costs nothing to reach through the same `Workbook`* is now a number:
+**thirteen times cheaper** than the same data as `.xlsx`.
+
+**The trimming argument, which nothing had tested either.** Published as a trimmed Blazor WebAssembly app,
+with and without one call to `ToWorkbook` rooted behind a flag the trimmer cannot fold away:
+
+| | raw | brotli |
+| --- | --- | --- |
+| the grid alone | 9,764 KB | 3,172 KB |
+| the grid with the export rooted | 11,052 KB | 3,572 KB |
+
+**+400 KB over the wire on every consumer**, and **four** assemblies rather than the two the section
+names: `System.Private.Xml` and `System.Private.Xml.Linq` arrive with `System.IO.Compression` and
+`System.Xml.Linq`. The separate package is worth what it claimed to be worth, and slightly more.
+
+### `Cell.Value` does not format oddly. It throws.
+
+The third risk read: *"Whether `Cell.Value` infers the same set - and what it does with a `DateOnly`, a
+`TimeSpan` or a nullable enum - is read from one file here and not tested."* Probed one type at a time
+against a real workbook, the answer is that `CellData`'s type switch ends in
+`throw new NotSupportedException`, and its whole accepted set is:
+
+> `null`, `string`, `bool`, `DateTime`, and the eleven numeric primitives - plus their nullable forms.
+
+**`DateOnly`, `TimeOnly`, `TimeSpan`, `DateTimeOffset`, `Guid` and every enum throw**, nullable or not.
+An enum column is an ordinary thing for a grid to draw, so without a coercion step an ordinary export does
+not export wrongly - **it crashes.** That is a different class of finding from the one the section
+expected, and it is the reason `ExportValue` exists at all rather than being a formatting nicety.
+
+The rule it settles is §40's own fallback rule, arrived at from the other side: **typed where a
+spreadsheet gains something, the column's text where it does not.** A `DateOnly` and a `DateTimeOffset`
+are dates, so they are converted to `DateTime` rather than stringified - which keeps them sortable and
+earns them the writer's own `mm/dd/yyyy`, measured. Everything the writer refuses becomes `CellTextOf`,
+which is what the reader was looking at.
+
+**A `bool` is the one deliberate demotion**, and it is the round trip that produced it: `Cell.Value`
+accepts a bool and the *file* cannot keep one. Written and read back, `true` is the number `1` carrying no
+format, so Excel shows a column of ones. §38's application is explicit about keeping bools typed so Excel
+sorts them; this writer cannot, so the column's own word wins.
+
+**That is wrong, and §42 has the bytes.** The file carries `<c r="A1" t="b"><v>1</v></c>`, which is
+ECMA-376's boolean; `XlsxReader` is what drops the attribute. Booleans are typed, and the demotion this
+paragraph argues for was made for a fault that was never in the file.
+
+**And text has to be insisted on, which is the finding a user would have made rather than a test.** Handed
+a string, `CellData` runs `TryConvertFromString` and keeps whatever it infers - so the text a column drew
+does not survive being written. It was found by a test expecting *True* from a bool column and getting
+**1**: the coercion had already turned the bool into the word, and the writer turned the word back into a
+number. `"02:00:00"` comes back a `DateTime` the same way. The case nobody would have caught until it
+shipped is a product code: **`"007"` stored as the number 7.** `Cell.SetValue` with a leading apostrophe
+is the writer's own answer and its comment names this exact case; it is applied only where the inference
+actually bit, so an ordinary word carries no flag.
+
+### The interface could not reach the columns it was designed for
+
+*"A column controls its own export through one interface"* - `IFastGridExportColumn<TItem>`, adopted from
+the consuming application unchanged but for its name, on the grounds that it was *"doing exactly one job
+well"*.
+
+**In that application the columns are the application's own types. Here every built-in column is
+`sealed`.** `PropertyColumn`, `LookupColumn`, `CollectionColumn` and `TemplateColumn` cannot be derived
+from, so nobody can implement the interface on a column they actually declare - and the section's one
+worked example, *a lookup column exports its label instead of its raw id by implementing it*, is a case
+this grid already handles natively through `CellTextOf` without anyone implementing anything. What the
+interface was actually needed for was the template column, which is the one it can least reach.
+
+The interface is kept, because a custom column deriving from `ColumnBase` or `LookupColumnBase` can
+implement it and that is the shape the surveyed application had. Beside it,
+`FastGridExportOptions<TItem>.Columns` says the same four things from outside, keyed by the `UniqueID`
+§27 gave every column and the stored settings already key on. A column that implements the interface wins,
+because the type is the more specific statement.
+
+**Unsealing was the alternative and is refused.** Sealed is what lets the JIT devirtualise `CellTextOf` on
+the render path, which is §3's argument, and an export is not a reason to spend it.
+
+### Two smaller corrections
+
+- **`Axis.IsAutoFit` is not the lever the table said it was.** §40 mapped ClosedXML's `AdjustToContents`
+  onto it and added *"and the writer measures the widths itself"*. `IsAutoFit` is a read-only query of a
+  flag the `.xlsx` reader sets, and the only method that sets it - `Axis.SetAutoFit` - is `internal` to
+  `Radzen.Blazor`. **Nothing outside that assembly can ask for auto-fit at all.** The width is computed
+  here instead, from text the writer already has in hand while filling each cell, so it costs no second
+  pass.
+- **The columns and the view did not have to be opened up.** The section said *"`View()` is private, the
+  column list is a private field, and both have to become readable for this to exist at all"*. §39's
+  storage half made `VisibleColumns`, `DrawnRows` and `FilteredRows` public while this section was still a
+  design, and `FilteredRows` is precisely answer ①. The one thing the grid did have to gain is
+  `CellValueOf` - the companion to `CellTextOf`, null on every column whose text *is* its meaning, which
+  is what makes a lookup column export its name without the export knowing what a lookup is.
+
+### How it was verified
+
+Round trip, as the section asked: every assertion is made after a `SaveToStream` and a `LoadFromStream`,
+because the writer is where the surprises were. Twenty-six tests, and the section's own list of
+discriminating cases is covered one for one - a hidden column absent, a reordered column in the reader's
+order, a filtered grid exporting the filtered rows, a lookup column exporting its name, a template column
+exporting blank.
+
+Two of those tests read differently from how the section wrote them, and both are the sample data being
+honest: a lookup id with no name in the map exports as the id, which is also what the cell draws; and an
+enum exports `Senior` rather than its `[Display]` name `Senior engineer`, because the `[Display]` name is
+§36's *filter* vocabulary and a cell draws `ToString`. The export says what the cell said, which is the
+rule, and both are pinned so that a later edit unifying the two names has to argue for it.
+
+`ANumberIsStillANumberAndADateIsStillADate` is the counterweight to the four tests about text. Without it,
+an exporter that turned everything into strings would pass all of them and be worse than the one §38
+surveyed: a spreadsheet that cannot sum a salary column has lost the argument.
+
+### What the two-axis review found, and one thing the sweep did
+
+Both axes read the built package against the section. Nine findings; the three that changed behaviour:
+
+- **The column's own `Format` never reached the file, and now that is a decision rather than an
+  oversight.** A column declaring `Format="C"` draws *$4,000.00* and exported **4000** with no format at
+  all. The two format languages are not the same - `C`, `N2` and `P` are .NET's, `$#,##0.00` and `0.00%`
+  are the file's - so bridging them means a translation table, which is a second format vocabulary to
+  keep correct forever. **§39 refused exactly that for the settings blob and the same argument holds.**
+  What survives is the half that matters, a column of numbers Excel can sum; `ExportFormat` says the
+  other half in the language the file speaks. Both are pinned, because exporting the formatted text
+  instead is a one-line change that would look like an improvement and would quietly make the column
+  unsummable.
+  **§43 closes this**: the argument was borrowed rather than applied, the mapper is 62 lines, and
+  `ExportFormat.ToNumberFormat` now carries the column's `Format` into the file - answering null, and
+  falling back to the column's text, where there is no honest equivalent.
+- **Every table was called `Export`.** Nothing in the model objects - `AddTable` checks uniqueness within
+  one worksheet, and two sheets each carrying an `Export` save and load without complaint, which is
+  measured - but Excel wants the name unique across the workbook, and putting two exported grids in one
+  file is the first thing the README shows. The name comes from the sheet's now, with the characters
+  Excel refuses replaced.
+- **A header-only export lost its filter buttons**, because the table was written only when there were
+  rows. An empty result is where a reader most needs the control that clears the filter.
+
+And the sweep found the one that mattered most: **swapping `FilteredRows` for `DrawnRows` changed no
+test.** That is §40's central decision - *"`View`, not the page - filtered and sorted, every matching
+row"* - and every grid in the file had paging off, so the two were the same list. One test with
+`AllowPaging` and a page size of two now separates them, which is the *make the arms move* rule reaching
+the one place it had not been applied.
+
+Fifteen mutations, fourteen caught. **The survivor is redundant code rather than a hole**, and
+investigating it rather than writing a test for it is §39's own finding repeating: making
+`ColumnBase.CellValueOf` return `CellTextOf(item)` instead of `null` changes nothing observable, because
+every caller reads it as `CellValueOf(item) ?? CellTextOf(item)`. Null stays, because null is the
+statement - *this column has no value distinct from its text* - and a caller that ever needs to tell
+those apart cannot reconstruct the distinction later.
+
+Not acted on: the review noted that `bool` demoted to text leaves booleans unsortable as booleans with no
+opt-out short of `ExportValue`. True, and it is the file format's constraint rather than this seam's.
+
+### §39's menu and §40's package cannot both have what they asked for
+
+*"A button. §39's menu is where an export entry would live, and it should be argued there, once there is
+a menu to put it in."* There is a menu now, and the entry cannot be built.
+
+The menu is rendered by `RadzenFastGrid`, in `Radzen.Blazor.FastGrid`. The export is in
+`Radzen.Blazor.FastGrid.Export`, which references the grid and not the other way round - and it has to be
+that way round, because the whole packaging argument is that nothing in the core roots `XlsxWriter`, now
+measured at 400 KB over the wire. So the core cannot call `ToWorkbook`, and:
+
+- **§39 refused an extension point** on the menu - *"an application that wants its own actions in the band
+  is asking for a `HeaderTemplate`, and that is the two-band question again with a different sponsor"*.
+- **§40 requires the separate package**, and a core that referenced it would undo the 400 KB.
+
+**Both decisions are individually right and jointly unsatisfiable.** The three shapes it could take, in
+the order they look least bad: an extension point on the menu narrower than a `HeaderTemplate` - a list
+of items an application adds, which is the thing §39 argued should be argued when someone needs it, and
+someone now does; a `ToWorkbook` entry the application wires to `ClearSettings`'s neighbour by handing
+the grid a callback; or the export moving into the core behind a feature switch, which trades a measured
+400 KB for a convenience and is the one to refuse first.
+
+---
+
+## 41. The deadlock, decided - and the seam that costs nothing
+
+**Sponsored, which the section above said it needed.** The instruction was to enable the export entry
+globally *by depending on the package*, with the download as the default and an override available. So
+§40's refusal of a download is reversed on purpose, and the first of the three shapes is the one taken -
+narrowed as far as it will go.
+
+### One slot, not a list, and the difference is one property
+
+The shape is §40's ① with the list reduced to a single slot, and the slot filled from the service
+provider rather than declared per grid. `IFastGridExporter` lives in the core, `AddRadzenFastGridExport`
+in the export package registers an implementation, and the grid asks its service provider once - which is
+`IFastGridQueryExecutor`'s resolution, the pattern this grid already had for a capability that may or may
+not be registered. An application that never references the export package resolves nothing and draws a
+menu with one entry.
+
+**The first draft crossed §39's line and the review caught it.** The interface had a `Text` property, so
+the implementation could name the entry. That sounds like courtesy and is not: a registration could then
+label the entry *Send to SAP*, and at that point this is a one-slot menu extension point wearing a
+suggestive name, which is exactly the thing §39 refused - *"an application that wants its own actions in
+the band is asking for a `HeaderTemplate`"*. The property is gone. `IFastGridExporter` now has **one
+member and no properties**, and a test asserts that. The entry is named by `RadzenFastGrid.ExportText`,
+a parameter on the grid, localized like every other word it draws and settable per grid.
+
+### The seam costs nothing, measured
+
+The whole reason the deadlock existed is that the core must not root `XlsxWriter`. So the question the
+seam has to answer is what *it* costs. Published trimmed, before and after adding `IFastGridExporter` to
+the core: **9,764 KB raw and 3,172 KB brotli, both times, byte for byte, with no compression or XML
+assembly present.** An interface with a generic method and no implementation roots nothing.
+
+### §7 deleted the module this section first shipped
+
+The download was written as an `export.js` of this package's own - which meant a `wwwroot`, the Razor
+SDK, a module import, a module reference, an `IAsyncDisposable` and the synchronous `Dispose` that an
+`IAsyncDisposable`-only service needs to keep a container from throwing on it.
+
+**None of that was necessary.** `Radzen.Blazor.js` already carries
+`downloadFile(fileName, data, mimeType)`; it already unwraps a `DotNetStreamReference` through
+`arrayBuffer()`; and this grid already calls `Radzen.*` globals from C# - `Radzen.startColumnResize` and
+`Radzen.startColumnReorder`. §7's rule is that upstream's is the default and a divergence is argued
+rather than written silently, and there was no argument written. All of it is gone; the exporter is a
+constructor, one method and a `Task.Run`.
+
+**One thing about upstream's looked worth fixing and was not.** It calls `URL.revokeObjectURL` in the
+same tick as the anchor's click - timed in the playground at **0.1 ms after the click** - and a browser
+that had not finished reading the blob by then would lose the file, on the one caller that routinely
+produces megabytes: 2.5 MB at 50,000 rows. It was offered upstream on its own branch with #2696, #2702
+and #2705, rather than forking a module over a one-line timing bug.
+
+**It is withdrawn, and the reason it should not have been sent is written into it above.** The
+measurement said the export *works today in Chromium, verified end to end* - a real click producing a
+37,301-byte file with the right name and a valid `PK` header. That is a run in which nothing failed. The
+0.1 ms was offered as the margin by which it nearly did, and a margin is not a failure; the review on
+#2706 asked the question the section never asked itself - *in which browser did you see a download
+fail?* - and the answer is none. The bugs that made an immediate revoke lose a download were fixed in
+Firefox 50 and in WebKit in 2020, and the anchor-not-in-the-document bug in Firefox 70. **This is §42's
+lesson in a third costume**: a round trip through your own code tests your code, a timing gap beside
+working code tests nothing at all, and both read as evidence until someone asks what failed.
+
+### What the review found besides
+
+- **Two grids on one page downloaded two files with the same name.** Registration is application-wide, so
+  a `FileName` taking no arguments has nothing to distinguish them by - and the first draft's own remark
+  claimed the per-grid case was what `OnExport` was for, when `OnExport` could not see the grid either.
+  Both take the grid now, typed `object`, because these options are shared by grids of every row type and
+  there is no one `RadzenFastGrid<TItem>` to name.
+- **Only `SheetName` reached the workbook.** An application registering globally could not turn off the
+  table or the header that it can turn off when calling `ToWorkbook` directly. All five are forwarded.
+- **The stream leaked on the throwing paths**, and a stale comment above `using var reference` described
+  the opposite of the code beneath it.
+- **Two tests asserted nothing.** One had a comment saying so - *"the assertion is that this returns"* -
+  and would have passed with the whole save deleted.
+
+### What the sweep found that the review did not
+
+**`TheBrowserIsToldTheNameTheGridEarned` exists because the test written for the same rule proved
+nothing.** `TwoGridsCanNameTheirFilesDifferently` calls `FileName` itself from inside `OnExport`, so it
+exercises the option rather than the line that uses it - and making the exporter ignore the grid entirely
+left it green. The replacement reads the argument handed to `Radzen.downloadFile`, which is the only
+place the name is really used. Nine mutations, nine caught.
+
+### Still open
+
+**The first two are closed in §43**, and the seconds in them are §42's error: the export blocks for
+about **1.7 s** at 50,000 rows, not four.
+
+- ~~**No busy state.**~~ The export blocks and the page looks idle throughout. The grid has `IsLoading`
+  and this does not use it. *§43: its own `exporting` flag, and the scrim reads `IsLoading || exporting`.*
+- ~~**No opt-out per grid.**~~ A grid can decline the entry only by declining `ShowGridMenu`, which takes
+  *Reset layout* with it. *§43: `ShowExport`, default true.*
+- **An export that throws takes the circuit down**, as any unhandled exception in a Blazor event handler
+  does - and this one is still open. `JSDisconnectedException` is caught because a second and a half of
+  writing makes a lost circuit ordinary; nothing else is, deliberately, because swallowing a failed
+  export would leave a user waiting for a file that is never coming.
+
+---
+
+## 42. Measured against the exporter it replaces - and the timings above were wrong
+
+§38 surveyed a consuming application's 463-line ClosedXML package and §40 built a replacement without
+ever running the two side by side. Asked directly whether the application's version is more efficient,
+the answer at the time was **yes, about twice over** - and that answer did not survive either the
+harness being rebuilt or `SetValues` existing. It is corrected below; finding it out corrected something
+else on the way.
+
+### The timings in §40 and §41 were taken under load
+
+**Allocation figures are right; time figures were roughly 2.4x too high.** They were measured with the
+playground and a Chromium instance running, which is exactly what this project's own note about the
+bench machine warns against - *the machine drifts, alternate the arms, prefer ratios over constants* -
+and they were then quoted as constants.
+
+| | as published in §40 | measured clean | allocation |
+| --- | --- | --- | --- |
+| `ToWorkbook` | 610 ms | **~210 ms** | 212 MB, unchanged |
+| `SaveToStream` | 3.6 s | **~1.5 s** | 430 MB, unchanged |
+| the two together | ~4.2 s | **~1.74 s** | 642 MB, unchanged |
+
+The *ratio* between the two halves - about one to seven - was stable across both runs, which is why the
+conclusion drawn from it survives: the expensive step is the one `ToWorkbook` does not take. But the
+absolute seconds were wrong wherever they were written, and they are corrected in the code, the README
+and here. Allocation never drifted, because allocation does not care what else is running.
+
+### ClosedXML against `Radzen.Documents.Spreadsheet`, same process, same data
+
+50,000 rows over eleven columns, both engines filled the way their own consumer fills them - this package
+cell by cell, the application's through `InsertData` with formats applied per column range.
+
+| | fill | fill allocation | total time | total allocation |
+| --- | --- | --- | --- | --- |
+| `Radzen.Documents.Spreadsheet` | 203 ms | 218 MB | 1,378 ms | 635 MB |
+| ClosedXML, as the application drives it | 124 ms | **77 MB** | **563 ms** | **327 MB** |
+
+**About half the allocation and, warm, about two-fifths of the time.** The allocation ratio is the
+trustworthy one - stable at 1.9-2.0x across passes - while the time ratio ranged 1.4x to 2.4x depending
+on warmth.
+
+**That table put this package's slowest path against ClosedXML's fastest, and the comparison it was
+being used for is a different one.** *"Both engines filled the way their own consumer fills them"* is a
+fair description of the two consumers and an unfair one of the two libraries: cell-by-cell against
+`InsertData` measures whether a bulk entrance exists, which is what §41's upstream branch then went and
+added. Re-run once it did, on the harness that is now kept, six arms interleaved in one process,
+medians of three passes, ClosedXML 0.104.2:
+
+| | this package | ClosedXML |
+| --- | --- | --- |
+| a cell at a time | 113.7 MB | **344.8 MB** |
+| bulk - `SetValues` against `InsertData` | 94.0 MB | **75.1 MB** |
+| fill and save | 536.0 MB | **353.8 MB** |
+
+**Like for like the gap is much smaller than the first table said, and one of the two comparisons runs
+the other way.** Bulk against bulk is **1.25x**. Cell against cell this package is **three times
+cheaper**, because ClosedXML's per-cell path is the expensive one - which is the part the original table
+could not see, having never run it.
+
+**What is left is the writer.** Subtracting the fill, the save alone is **442 MB against 279 MB**: four
+fifths of this package's export allocation and nine tenths of its time. On the whole export the ratio is
+**1.51x**, down from the 1.94x the first table reported. So the honest form of §38's question - *is the
+application's exporter more efficient?* - is now: its fill is 25% cheaper, its per-cell path is three
+times dearer, and its writer is the reason it still wins overall.
+
+That last point is the one worth acting on. Every improvement in §41's branch was to the *model*, and
+the model was never where the export's cost was. `XlsxWriter` is.
+
+Three reasons, in the order they matter:
+
+- **ClosedXML has a bulk path and this model has none.** `InsertData` takes a jagged array and fills a
+  range; `CellStore` is a `Dictionary<(int, int), Cell>` whose only entrance is `Cells[r, c].Value = x`,
+  at a measured **418 bytes per cell** - a `Cell`, a `CellData`, a boxed value and a dictionary entry to
+  hold one integer. The dictionary alone is 65 of those bytes; the object graph is the rest.
+- **Formats per column range rather than per cell.** The application's comment says why - *"per-cell
+  styling bloats ClosedXML's style table"* - and this package does apply `Format.NumberFormat` per cell
+  for a column that declares one. Measured here it costs **4% more allocation and about 25% more time**,
+  which is real but small, and there is no range-level format API on this model to move it to.
+- **Auto-fit measured over the first 100 rows, clamped**, against every cell here. Measured at 4%.
+
+### Three things the application's version does better, and one of them contradicts §40
+
+- **It maps .NET format strings to Excel number formats**, in 62 lines, returning null where there is no
+  safe equivalent so the caller writes the display string instead. §40 declined to do this and justified
+  it by analogy to §39's refusal of a settings-blob converter - *"a second format vocabulary to keep
+  correct forever"*. **The analogy does not hold.** That converter had to be bidirectional and lossless
+  forever because it was persistence; this is one-way, best-effort, and has a null escape hatch. A
+  column declaring `Format="C"` still exports a bare `4000` here, and the honest description of that is a
+  gap rather than a decision.
+- **A `bool` stays a bool.** ClosedXML writes a real boolean cell; this writer stores the number 1 with
+  no format, which is why booleans are demoted to text here. That is the writer's limit, not the
+  consumer's choice. **Wrong, and corrected below**: the number 1 is what the *reader* answers, and the
+  file carries a real boolean cell.
+- **An enum exports its `[Display]` name.** This package exports `ToString()`, on the rule that the
+  export says what the cell said. Defensible either way, and a difference anyone migrating will see.
+
+### Two things this version does better
+
+- **No reflection per cell.** The application's resolver falls back to
+  `PropertyAccess.GetValue(item, property)` - a string path, reflected once per cell - where §4's column
+  already holds the compiled accessor its cells are drawn from. §38's survey claimed this and it is
+  confirmed at `ExcelColumnResolver.cs:50`.
+- **No third-party dependency.** The writer was already in the box, which was §40's whole argument and
+  is untouched by any of the above.
+
+### What this changes
+
+**Nothing about the shape, and one thing about the honesty of the record.** The seam is still six methods
+wide, the workbook is still the right thing to hand back, and the packaging argument still holds. What
+was wrong was quoting seconds measured under load, and calling a 62-line format mapper a cost that could
+not be paid.
+
+If the export ever has to be cheaper, the lever is not this package: it is a bulk path on `CellStore`,
+which is upstream's to add and would take the 418 bytes per cell down to something nearer ClosedXML's
+140.
+
+### The bool was demoted for a fault that was never in the file
+
+§40 recorded *"a `bool` is the one deliberate demotion"* on the evidence of a round trip: written and
+read back, `true` came back as the number 1 with no format. Reading the **bytes** instead says
+`<c r="A1" t="b"><v>1</v></c>` - ECMA-376's boolean, exactly what Excel shows as TRUE.
+
+**`XlsxWriter` was always right and `XlsxReader` drops the attribute**: every cell type but a shared
+string falls through to `SetValueInvariant`, which re-infers from the text. So the demotion was made for
+a reader bug, and the export was writing words where it could have written booleans Excel can filter.
+Booleans are typed again, the test reads the workbook and the file rather than the reader that loses the
+answer, and the reader is fixed on the upstream branch below.
+
+The lesson is the one §37b keeps teaching in a different costume: **a round trip through your own code
+tests your code, not the format.** Two writers agreeing is not evidence, and neither is one writer and
+one reader agreeing to be wrong together.
+
+### Offered upstream
+
+Branch `upstream/spreadsheet-bulk-and-bool`, six commits, 5,135 tests green:
+
+- **Read a boolean cell back as a boolean.** The above.
+- **Do not walk the dependency graph for a cell nothing depends on.**
+  `Worksheet.OnCellValueChanged` runs per write and asks for dependents; the walk allocates a `HashSet`,
+  a `List` and a `Stack` before it can say there are none. `HasDependents` answers off the dictionary.
+  **197.6 MB to 130.5 MB** over 550,000 cells, no API change, and callers already batching are
+  unaffected.
+- **Share one `CellData` for every empty cell.** `Cell` initialised its `Data` with a
+  `new CellData(null)`, so constructing a cell allocated an object to represent nothing - and a cell
+  then given a value threw it away and allocated a second. `CellData` has no setters, so one instance
+  does. **130.5 MB to 113.7 MB**, again with no API change.
+- **`CellStore.SetValues`, a bulk entrance.** One dictionary sizing for the block instead of rehashing
+  up to it, and one bounds check for the block instead of one per cell. **113.7 MB to 94.0 MB.** No
+  update batch, which is the review's finding and is measured in its own right below.
+- ~~**Do not revoke a download's object URL in the same tick as the click.**~~ Timed at 0.1 ms and
+  **withdrawn on review**: the browser bugs it guards against were fixed in Firefox 50, Firefox 70 and
+  WebKit in 2020, and no download was ever observed to fail. See the paragraph in §41.
+- **Keep a quote-prefixed cell as text when reading.** §43's finding, added after this list was first
+  written: the `quotePrefix` flag was written and not honoured on read, so `4.00E+003` came back as the
+  number 4000. Same root as the boolean.
+
+**197.6 MB to 94.0 MB over 550,000 cells - 52% less** - and the drop to 113.7 MB arrives without any
+caller changing a line.
+
+**These are not the figures this section first published, and the difference is the harness rather than
+the code.** It said 217 → 150 → 133 → 114 MB. Those came from a throwaway program that no longer exists,
+and rebuilding it produced a ladder about 20% lower at every rung because the rebuilt one **constructs
+the test values before the measured region** rather than inside it - so it reports what the sheet costs
+and not what the strings do. The new harness is kept, in `gridbench/spreadsheet/`, which is the actual
+correction: a number nobody can reproduce is not a measurement, and §42 of all sections should not have
+had one.
+
+**"The rest of that gap is the model, not the API" was written one measurement too early, and it is
+about the fill rather than the export.** It was said before the shared `CellData`, which was worth
+another 13%. Within the fill it is now true: 94.0 MB over 550,000 cells is 179 bytes each, and the `Cell`
+object is most of that - ten fields and a 24-byte `CellRef`, one object per cell. Getting under it means
+cells that are not objects, which is a different library.
+
+**Within the export it is not true, and the ClosedXML re-run above is what says so.** The fill is 94 MB
+of a 536 MB export. Whatever is left of the model is 17% of the problem, and `XlsxWriter` is the other
+83%.
+
+### The saving is the pre-sizing, and the first account of it was wrong
+
+Asked why `SetValues` had measured *slower* than the indexer loop on one harness, the answer turned out
+to be that it had not: the same binary reports it faster or slower depending on the harness's shape,
+while its allocation is identical to the tenth of a megabyte every time. The timing difference was
+inside this machine's noise and should never have been reported - §26's own rule, arriving again: **if
+the failure mode is the size of the delta, the instrument excluded nothing.**
+
+What the question did find is that the *stated mechanism* was wrong. Commenting out the one line:
+
+| | allocated |
+| --- | --- |
+| a cell at a time | 113.7 MB |
+| `SetValues` | 94.0 MB |
+| `SetValues`, `EnsureCapacity` commented out | **113.7 MB** |
+
+**All of it is the dictionary pre-sizing** - the rehashing on the way to 550,000 entries - and none of it
+is the lookups. The first account claimed `SetValues` saved *"two bounds checks and two dictionary
+lookups per cell"*; tracing the code, the indexer does two bounds checks, a `TryGetValue` and an insert,
+and `SetValues` does one bounds check, a `TryGetValue` and an insert. It saves one bounds check per cell
+and no dictionary operations, because the `GetOrAdd` the review asked for routes its insert back through
+the indexer's setter. Three claims, one of them true, and the true one was the only one measured.
+
+### What the batch cost, measured
+
+The review's finding on `SetValues`, which the first version of it got wrong in both directions - it
+wrapped the fill in `Worksheet.Batch`, and then a first attempt at the fix *gated* the batch on the sheet
+having formulas, which is the expensive case rather than the cheap one.
+
+`Batch` suspends formula evaluation and `EndUpdate` then walks **every formula cell on the sheet** with
+no dirty tracking. A 10x10 block written to a sheet carrying 5,000 unrelated formulas:
+
+| | allocated |
+| --- | --- |
+| `SetValues`, no batch | **0.02 MB** |
+| the same inside a batch | **1.94 MB** |
+
+A hundredfold, for a hundred cells, all of it re-evaluating formulas that never read the block. On a
+sheet with no formulas the two are identical to the byte - 94.0 MB either way over 550,000 cells - which
+is why no test could see the difference and why the gate survived a mutation before the measurement
+found it. `Worksheet.Batch` itself is untouched and still used by `Sort`, `DeleteRow` and `InsertRow`;
+what changed is that `SetValues` does not call it.
+
+## 43. The three that were left open
+
+§41 and §42 each ended with a list. All three are closed, and one of them was a gap I had described as a
+decision.
+
+### The export says it is working
+
+An export of a large grid takes about 1.7 s and the page looked idle throughout, which invites a second
+click and therefore a second export. The band's own `ExportAsync` raises the grid's loading scrim around
+the call.
+
+**Its own flag rather than `IsLoading`.** That one belongs to the data load and has a state machine
+around it; an export is not a load, and borrowing the flag would mean an export could be cleared by a
+load finishing, or vice versa. The scrim reads `IsLoading || exporting`, which is the one place the two
+meet.
+
+The test asserts from **inside** the exporter, because by the time the call returns the scrim is gone -
+and it only works because the fake exporter awaits `Task.Yield()` first. Without that the await never
+suspends, the render queued by `StateHasChanged` never runs, and the assertion sees the state as it was
+before the click. That is §39's doubled-module blindness one layer out, and it broke a neighbouring test
+that had been reading the same callback synchronously.
+
+### A grid can decline the entry and keep the menu
+
+`ShowExport`, default true. Registering still enables the entry everywhere, which is the point of
+registering; before this a grid that should not offer it could only decline `ShowGridMenu`, which took
+*Reset layout* with it.
+
+### A column's `Format` reaches the file, and §40's reason for skipping it was borrowed
+
+§40 exported a bare `4000` from a column drawing *$4,000.00* and called it a decision:
+
+> bridging them means a translation table, which is a second format vocabulary to keep correct forever.
+> §39 refused exactly that for the settings blob and the same argument holds here.
+
+**It does not hold.** §39's refusal was of a *bidirectional, lossless, forever* converter, because that
+one was persistence - a blob written by one version and read by another, where a wrong answer is
+someone's stored layout. This is one-way, best-effort, and allowed to give up. The consuming application
+§38 surveyed had already written it in 62 lines. Reasoning by analogy to a rule is not the same as the
+rule applying.
+
+`ExportFormat.ToNumberFormat` maps `N`, `F`, `C`, `P` and `Dn`, passes through custom patterns already
+in the file's language, and **answers null everywhere else** - at which point the column exports the text
+it drew rather than a number wearing the wrong format. Losing the sum on one column is a smaller loss
+than a figure that disagrees with the screen.
+
+Two things the mapper had to be told:
+
+- **A single letter is a standard specifier and never a custom pattern**, and the two are disjoint in
+  .NET. `d` is the case that made it explicit: .NET's short date and Excel's day-of-month. Falling
+  through from the standard table to the pattern check exported one as the other.
+- **`C` cannot be right for everyone.** A spreadsheet number format carries a literal currency symbol
+  where .NET carries "the current culture's". The current culture's symbol is what the grid drew for
+  this reader, so that is what goes in - and an application that means something else has
+  `ExportFormat`.
+
+### The reader keeps taking the blame
+
+Two tests here assert against the workbook rather than a round trip, for the same reason the boolean's
+does: `XlsxReader` re-infers a quote-prefixed string, so text that looks like a number - `4.00E+003`
+from an `E2` column - comes back as the number 4000. The file is correct and the reader loses it, which
+is the third time that has been the answer. It is the same root as the boolean: **everything but a
+shared string, and in fact including one, goes through `SetValueInvariant` and is re-typed from its
+text.** The `quotePrefix` flag is written and not honoured on read.
+
+Written up here before it was fixed; it is now the sixth commit on the upstream branch and in the PR,
+`3908e9fce`, which is where the boolean commit already was.
+
+### Verified
+
+1285 green. Eight mutations, eight caught - the opt-out ignored and inverted, the scrim gone, the busy
+flag never cleared, the column format never mapped, an unmappable format still typed, currency losing
+its symbol, and a single letter falling through to the pattern check.
+
+---
+
+## 44. The survey, taken again against the application as it is now - what is left
+
+§38 read the consuming application's *wrapper* as a specification, and all four things it found are
+built. This one reads the **91 grids and 635 column declarations themselves** rather than the wrapper -
+which parameters they actually set - and asks what a grid here would refuse to compile.
+
+Taken at `986e5cd3ac` on `main`. Every count below is tag-scoped: a parameter is counted where it sits
+on a grid or column open tag, not wherever its name appears in a file. The instrument agrees with §38
+where they overlap - it finds `Data` on exactly 91 grids - and disagrees on one number: §38 said 27
+drop-down grids and there are **19**.
+
+The four features of §38 are not repeated here. What follows is only what the parameter census turned
+up, which is a different instrument again: §38 read what one team *wrote*, this reads what 91 grids
+*declare*.
+
+### The census
+
+| On a grid | Grids | Here |
+| --- | --- | --- |
+| `Data` | 91 | ✓ |
+| `IsLoading` | 39 | **read-only here** |
+| `AllowSorting`, `AllowPaging`, `AllowFiltering`, `PageSize` | 34, 34, 32, 27 | ✓ |
+| `Density`, `AllowColumnResize` | 21, 21 | ✓ |
+| `RowClick`, `EmptyText` | 20, 19 | ✓ / **no equivalent** |
+| `FilterMode`, `SelectionMode`, `RowRender` | 14, 13, 13 | ✓ / ✓ / **partly** |
+| `ExpandMode`, `AllowVirtualization`, `StorageKey`, `CellRender` | 12, 10, 9, 9 | ✓ |
+| `AllowColumnPicking`, `RowExpand` | 7, 7 | ✓ |
+| `AllowGrouping` | 1 | §1's exclusion, stands |
+
+| On a column | Columns | Here |
+| --- | --- | --- |
+| `Title`, `Property`, `Width` | 605, 528, 332 | ✓ / **expressions, not strings** |
+| `TextAlign`, `Filterable`, `Visible` | 53, 39, 39 | ✓ |
+| `FormatString` | 34 | `Format` - a rename |
+| `Sortable`, `SortOrder`, `WhiteSpace`, `OrderIndex`, `Pickable` | 30, 20, 13, 8, 6 | ✓ |
+| `FilterLookupAllowFiltering` | 6 | always on here |
+| `HeaderCssClass` | 3 | **no equivalent** |
+| `Groupable` | 2 | §1's exclusion, stands |
+| `ExportValue`, `ExportTitle`, `ExportFormat`, `ExportIgnore` | interface | ✓, adopted unchanged |
+
+### Three gaps worth closing, and one of them is a fault rather than a gap
+
+**① A filter on a hidden column is invisible, and so is the control that clears it.** This is the fault.
+`RenderFilterPills` walks `visibleColumns`, and so does `AnyColumnFiltered` - which is what decides
+whether the band is drawn at all. So a grid whose *only* filtered column has been hidden through the
+picker is filtered, says nothing anywhere on screen, and does not draw the *Clear all filters* button
+that would fix it. `ClearFilters()` itself walks every column and would clear it; there is just no way
+to reach `ClearFilters()` from that state.
+
+The wrapper works around exactly this, and its workaround is the strongest evidence the behaviour is
+wrong: `PickedColumnsChanged` clears the filter of every column the picker just hid. Two answers, and
+they are not the same feature:
+
+- **Clear the filter when the column is hidden**, as the wrapper does. Simple, and it silently discards
+  something a reader authored.
+- **Count hidden columns in `AnyColumnFiltered` and pill them**, so the band appears and the pill says
+  which column. Honest, and it puts a pill on the screen for a column that is not there - §37's pill is
+  a chip that scrolls its column into view, and there is no column to scroll to.
+
+The first is what the application already relies on. The second is what §37 would have wanted if the
+question had come up. **§45 takes the second.**
+
+**② An application-driven loading state.** *(§45 builds it.)* 39 of 91 grids set `IsLoading`. Here `IsLoading` is
+`{ get; private set; }` and only ever true on the grid's own asynchronous path, on the argument that
+*"there is nothing to pass, and nothing to forget to reset on the failure path"* - which is a good
+argument for not *requiring* it and not an argument against allowing it. A page that fetches its own
+rows and assigns `Data` has no way to raise the scrim it can see the grid already draw. §43 built the
+second source for exactly this shape: the scrim reads `IsLoading || exporting`, and this is a third
+term on the same expression.
+
+**③ An empty message.** *(§45 builds it.)* `RenderEmpty` returns without writing anything when `EmptyTemplate` is null, so
+a grid with no rows renders an empty table body and no explanation. `RadzenDataGrid` writes *"No records
+to display."* by default and takes `EmptyText` to change it; 19 grids here change it, and the other 72
+are relying on the default they would silently lose. A localized `EmptyText` beside the existing
+template - template wins, text is the default - is the whole feature.
+
+### Smaller, and real - all three built in §45
+
+- **`HeaderCssClass`**, 3 columns. There is `CssClass` and `FooterCssClass` and no header one.
+- **Row hover without selection.** `rz-selectable` is bound to `ShowsSelection`, so a grid that only
+  reads gets no hover affordance. The wrapper has a `ShowRowHover` parameter whose implementation is to
+  assign an empty `ValueChanged` - a hack against `RadzenDataGrid`'s version of the same coupling, which
+  says the want is real even though the workaround is not portable.
+- **Per-row expandability.** `RowRender` is 13 grids and almost all of them write `args.Expandable =
+  true` unconditionally, which needs nothing here. One site is genuinely conditional -
+  `args.Expandable = args.Data.ValidationFailed` - and there is no per-row predicate to carry it.
+
+### Not gaps, and worth saying so
+
+- **`FormatString` is `Format`**, 34 columns, a rename and a codemod.
+- **`FilterLookupAllowFiltering`** is 6 columns asking for the search box inside the check-box list.
+  It is hard-coded on here, so the answer is yes and there is nothing to declare.
+- **`AutoApplyCheckBoxListFilter`** is a `FilterUI` difference rather than a parameter: the row editor
+  applies as it is ticked, and the menu has Apply and Clear because it also has an operator beside it.
+- **`ClearFilterText`** and the rest of the wording are all localized parameters here already.
+- **`KeyProperty` is `ItemKey`**, one grid.
+- **`Property` as a string is 528 columns and still not priced.** §38 declined to and this section
+  declines to as well; `PropertyPathResolver` is the reason it is a codemod rather than a rewrite, since
+  the string identity a column needs is derived from the expression rather than declared beside it.
+
+
+---
+
+## 45. §44's list, closed
+
+### ① The pill for a column nobody can see
+
+**The second answer, sponsored.** Clearing a hidden column's filter is what the wrapper does and it
+throws away something a reader authored, silently, on an action that says nothing about filtering. So
+`AnyColumnFiltered` and the pill loop walk every column rather than the drawn ones, and a filter on a
+column that is not drawn gets a pill of its own.
+
+`ClearFilters` already walked every column. What was missing was any way to reach it: the band is drawn
+only when something is filtered, that test asked the drawn columns, and the *Clear all filters* button
+lives in the band. A grid whose only filtered column had been hidden was filtered, said nothing, and hid
+the control that would have fixed it.
+
+**The pill is the same pill with the door closed.** Same phrase, same remove button - the escape hatch is
+one click either way. What changes is the body: there is no filter cell to focus and no header to open a
+menu on, so it is a **disclosure** rather than a door. `aria-expanded` and `aria-controls` over a notice
+that says the column is hidden, which is §39's menu trigger one element away.
+
+Four things the review found and one it did not:
+
+- **The pill's accessible name was a drawn pill's.** The glyph that distinguishes them is
+  `aria-hidden` and the class carries no rule, so to a screen reader the two were the same control. The
+  name is the phrase *and* the sentence now, so nobody has to open the notice to be told.
+- **`aria-controls` named an element that was not in the document** until the pill was clicked, which is
+  precisely the fault §35 found in `Radzen.setPopupAriaExpanded`. The notice element is always written
+  and its *text* is not; empty, it is a zero-width flex item and the band is the 67px §39 measured.
+- **`role="status"` written at the same instant as its text** is a live region many readers do not
+  announce. It is gone: the pill's own name is what says it, and the notice is the sighted reader's echo.
+- **The notice outlived its column.** `RemoveColumn` already drops the sort and the column's check-box
+  values for the reason that they *"would hold the column and everything it listed for as long as the
+  grid lives"*; the notice held the same reference and would have gone on answering for a pill that was
+  no longer drawn. It is dropped there too.
+- **The class inventory in `RenderFilterPills` had gone stale.** It said `rz-filter-pills` was this
+  grid's only class that paints nothing. There are three now, and the paragraph names all three.
+
+### The button that was counted as a filter
+
+*Clear all filters* was a bare `button` inside the `role="list"` that holds the pills. The list is named
+*Active filters* and a screen reader counts what a list owns, so it announced one item more than the grid
+had filters. It is a sibling of the list now.
+
+**That cost the band its unstyled state, and the trade is worth naming.** §39 left the band without an
+inline style unless the menu was on, because an inline style is the one thing a consumer's own rule
+cannot override without `!important` and §37 named this band so it could be restyled. The chip list was
+doing the laying out for the two children that were inside it. Three of the band's four children are now
+outside it - the list, the button and the notice - so the band lays them out itself, on every grid that
+draws it rather than only the ones with a menu. Measured either way, with the menu and without: **67px**,
+the pills and the button on one line, which is what it was.
+
+**Measured in the playground**, which is where §37 and §39 took the numbers this has to not move: pills
+on, menu on, a filter on *Name*, then *Name* hidden through the picker. The band is **67px** with the
+notice element present and empty, which is §39's figure unchanged; clicking the pill takes it to
+**122px**, the notice on a line of its own below the pills, and `aria-expanded` flips to true. No console
+errors, and the only server-log entries are the three prerender `DisposeAsync` throws
+`RadzenFastDropDownDataGrid` has always made, one per page load.
+
+### ② The application's own loading state
+
+`IsLoading` was `{ get; private set; }` on the argument that *"there is nothing to pass, and nothing to
+forget to reset on the failure path"* - which is a good argument for not **requiring** it and not an
+argument against allowing it. A page that awaits its own fetch and then assigns `Data` does the loading
+outside the grid entirely, and 39 of §38's 91 grids do exactly that.
+
+`Loading` is the parameter, `loadingRows` is what the grid's own asynchronous paths set, and `IsLoading`
+is the two of them together - `Visible`/`pickedVisible`'s shape, for `Visible`'s reason: a component must
+not assign to its own parameter. Everything that asks whether the grid is busy asks `IsLoading`, so the
+scrim and the keyboard guard both honour it without either learning a second question. `ShowLoadingIndicator`
+still turns the scrim off, which a second way to raise it must not be a way around.
+
+### ③ The empty message
+
+`RenderEmpty` wrote nothing without an `EmptyTemplate`, so a grid with no rows drew a header over an empty
+body - which reads as a grid that has not finished loading, the one thing it is not. `EmptyText` carries
+`RadzenDataGrid`'s own key and therefore its five translations; the template still wins where there is
+one, and the empty string is how a grid asks for neither.
+
+`HasEmptyMessage` is one rule in one place because two things read it - the row `RenderEmpty` writes and
+the `EmptyContent` handed to `Virtualize`. §10b is what happens when those two disagree, and they did:
+the guard on the virtualized path asked only about the template.
+
+The row now carries upstream's `rz-datatable-emptymessage-row`, `role="row"` and `role="gridcell"`, none
+of which it had - a row and a cell without their roles inside `role="grid"` is a hole a screen reader
+walks. The one thing of upstream's not taken is its `@onkeydown:stopPropagation`, and that is argued
+rather than dropped: its handler is on the row, and this grid's keyboard is one handler on the scroll
+container reading a cursor that cannot be on a row that is not there.
+
+The class is also what let the six tests this broke be fixed honestly rather than worked around: each was
+counting `tbody tr` where it meant rows of data, and each now says `tbody tr.rz-data-row`.
+
+**It draws under the scrim while an asynchronous grid is loading**, because `RenderEmpty` asks only
+whether anything was rendered. That is upstream's behaviour and it is why `MarkLoading` raises the scrim
+before the deferred load rather than when the load starts - the message is covered rather than
+suppressed, and the paragraph in `Data.cs` that explains the ordering is the one that keeps it covered.
+
+`RadzenFastDropDownDataGrid` forwards it. Null forwards null, which leaves the inner grid on its own
+default.
+
+### The smaller three
+
+- **`HeaderCssClass`**, folded between the grid's base class and the frozen class, which is where
+  `CssClass` and `FooterCssClass` put theirs. The header was the one section of four with no way to say
+  this.
+- **`ShowRowHover`.** The themes nest their row-hover rules inside `rz-selectable` along with their
+  selected-row rules, so a grid that selects nothing gets neither. §38's application works around exactly
+  this by assigning an empty `ValueChanged`. `Selectable` is the class's two reasons; nothing is
+  highlighted by it, because nothing is selected.
+- **`RowExpandable`.** A row that answers false keeps its cell in the toggle column - so the columns
+  beside it do not shift by one on those rows - and draws no button in it. Upstream keeps the button and
+  writes `visibility:hidden` on its icon, which leaves a focusable, labelled, `aria-expanded` control
+  that does nothing; the divergence is the whole button. The keyboard is gated with it, or Enter on that
+  cell would expand a row through a control no pointer can reach - and what it does instead is activate
+  the row, which is what a pointer click on that cell now does too. `ToggleRow` is not gated: a caller
+  that expands a row itself has said what it means more directly than a predicate can contradict.
+
+### What it cost, measured against the section before it
+
+`FastGridFeatureBench` at 1,000 rows, `1eafef5ee` against here, allocation rather than wall-clock: this
+machine's `--job short` error bars run to thousands of microseconds on a 450 µs mean, and the same arm
+came back at 1.36x, 1.40x and 1.79x of baseline across three runs of the identical binary. Allocation
+does not drift, which is the whole reason §26's ladder is an allocation ladder.
+
+| Arm | Before | After |
+| --- | --- | --- |
+| bare | 156.21 KB | 156.29 KB |
+| + row detail available, none expanded | 157.30 KB | 157.42 KB |
+| + row detail, no toggle column | 156.55 KB | 156.63 KB |
+| + one filter, no pill bar | 165.26 KB | 165.34 KB |
+| + a pill bar, one filter | 168.01 KB | 168.12 KB |
+| + a pill bar, three filters | 179.91 KB | 179.98 KB |
+
+**Every arm moves by 0.07 to 0.12 KB and the instrument's own floor is 0.1 KB** - `fast-ladder` over ten
+renders of the unchanged binary reports 156.3 nine times and 156.4 once. So the honest reading is that
+nothing here is resolved as a cost, and that a per-render cost below about a tenth of a kilobyte is *not*
+excluded by this measurement. `bare` runs none of the new code at all, which is the control that says so:
+its 0.08 KB cannot be anything this section wrote.
+
+**The pill bar did move before it was gated**, and that is the one real finding. The first draft wrote the
+notice element on every render of the bar - +0.29 KB with one filter and +0.38 KB with three, three to
+four times the floor and the same shape as an element frame, two attributes and the `id` string that
+`HiddenColumnNoticeElementId` composes fresh each time. The element is now written only where a hidden
+pill was, which is the only thing that names it in `aria-controls`, so the two are driven by one walk and
+a bar with nothing hidden is the bar §37 measured.
+
+### Verified
+
+1312 green, twenty-seven of them new. Twelve mutations, twelve caught - the five on the pill, plus the
+scrim ignoring the application's word, the empty message needing a template, the text winning over the
+template, hover not reaching the class, the predicate inverted, the keyboard toggling a row with no
+toggle, and the header taking no class of its own.
+
+The review found three comments that had come to say the opposite of the code - `ShowLoadingIndicator`'s
+summary, `RenderLoading`'s, and the README's *"there is no flag to forget to clear"* - which is what
+`Loading` now is for the pages that pass it. It also found `HeaderCssClass` proved only through the fold
+and never through a `th`, and a helper parameter added for a render test that was never written; that
+test exists now. The stray playground screenshot committed with the previous change is gone.
+
+## 46. The writer, profiled - three faults and what is left
+
+§42 ended by saying the save was 83% of the export's allocation and that `XlsxWriter` had never been
+profiled. It has been now. The instrument is `gridbench/spreadsheet/SaveTypes.cs`, kept beside the other
+four: a `GCAllocationTick` histogram armed around `SaveToStream` alone, so nothing is subtracted and the
+answer is a list of types rather than a total.
+
+**The baseline is 458 MB, not 442.** §42 reached 442 by subtracting a `SetValues` fill from a
+fill-and-save on the branch where `SetValues` exists; this arms the window directly on
+`upstream/master`, where the fill is the indexer. Same quantity, measured two ways, and the direct one
+is the one to quote about the writer.
+
+### What the histogram said
+
+| type | est MB | | type | est MB |
+| --- | --- | --- | --- | --- |
+| XElement | 91.9 | | SortedDictionary node | 30.2 |
+| **Format** | **71.9** | | char[] | 29.1 |
+| XAttribute | 55.3 | | StringBuilder | 28.4 |
+| String | 55.1 | | boxed Int32 | 8.0 |
+| **Action** | **36.2** | | | |
+
+**`Format` and `Action` are the finding, and neither belongs in a writer at all.** Nothing about
+serialising a file should construct a format or subscribe to an event. Both were one fault:
+`Cell.Format`'s getter is lazy *and* mutating - it allocates a `Format`, hangs `OnFormatChanged` off it
+and keeps it - and `XlsxWriter.HasCellFormatting` asked `!cell.Format.IsDefault` once per populated cell
+to find out whether the cell had one. So **saving a workbook gave most of its cells a format object and
+an event handler they had never had**, at 136 and 64 bytes each. The model already had the read-only
+accessor: `Cell.FormatOrNull`.
+
+The `StringBuilder` and `char[]` rows are a second fault with nothing to do with the first.
+`StringBuilderCache` is a one-slot `[ThreadStatic]`; `CellRef.ToString` acquired it and then called
+`ColumnRef.ToString(int)`, which acquired again, **found the slot empty and allocated** - a builder, its
+char array and an intermediate string, once per call, on the path that writes every `r="A1"`.
+
+The third is the shape of `ProcessSheetData`. `GetPopulatedCells` is `Dictionary.Values`, so the writer
+recovered ECMA-376's row-and-column ordering with a `SortedDictionary` of `SortedDictionary` - **one
+tree node per cell**, plus a `KeyCollection` and two enumerators per row for the `spans` attribute.
+
+### The ladder
+
+Three commits on `upstream/xlsx-writer-save`, off `upstream/master` 76088c1e8, each interleaved over two
+passes:
+
+| | allocated |
+| --- | --- |
+| `upstream/master` | 458 MB |
+| read the format without creating one | **341 MB** |
+| write the column reference into the caller's builder | **272 MB** |
+| sort the cells once instead of a tree per row | **217 MB** |
+
+**53% of the save, and each step attributed by type rather than by total** - which is §42's own rule
+arriving again. `Format` and `Action` leave the histogram entirely at the first step. At the third, the
+tree machinery - `SortedDictionary`, its three node types, `TreeSet`, and the enumerators and stacks
+that walk them - is **62.8 MB before and nothing after**, against a measured step of 55 MB; the gap is
+the sampler's ~100 KB granularity and the boxed `Int32` that went with it.
+
+### The one thing that is not byte-identical, and why it is better
+
+The first two commits change no byte of the file. The third renumbers the **shared string table and
+`cellXfs`**, because both are now built in the order the cells are written rather than the order the
+store happened to enumerate. Three things had to be true before that was acceptable, and all three were
+checked rather than assumed:
+
+- **Every index still selects what it selected.** A normalising comparison resolves each cell's shared
+  string and the full meaning of its `<xf>` - attributes and children - and reported all 80 lines
+  identical across a sheet carrying merges, hidden rows, custom heights, a quote prefix, dates, borders,
+  fills and number formats. **The comparison was then proved able to fail**, by mutating one value and
+  one `numFmtId`.
+- **Something that is not this library agrees.** ClosedXML opens the file and reads back nineteen
+  assertions - bold, fill, the built-in `numFmtId`, a date, the quote-prefixed text, the merge -
+  identically on both arms. Two of your own components agreeing is not evidence; §42 learned that from
+  the boolean.
+- **The new order is the more defensible one.** Dictionary order is a function of a sheet's edit
+  history, so two workbooks with identical contents could serialise differently. Document order is a
+  function of the contents alone.
+
+It is stated in the commit rather than smuggled: *"byte-identical"* is the default reading of a
+performance commit and it would have been false.
+
+### What is left, and what it would take
+
+The remaining 217 MB is **XElement, XAttribute, String and boxed Int32, and nothing else** - the sheet
+is still built as a whole `XDocument` in memory and then serialised. No further tidying reaches it; only
+writing the sheet through an `XmlWriter` instead of a tree does, and that is a rewrite of `SaveSheet`
+rather than a hunk, because everything after `sheetData` - merges, filters, conditional formats,
+validations, protection, hyperlinks, drawings, page margins, table parts - is appended to the same root
+afterwards. It is not attempted here.
+
+### One pre-existing fault, found and not fixed
+
+A merge anchor that carries formatting but no value gets no `<c>` at all, so its style is lost - the
+placeholders inside the range are written, the anchor is not. It is on `upstream/master`, it is
+unchanged by any of these three commits, and it is unrelated to them, which is why it is recorded here
+rather than folded in.
+
+### It is not, any more - and the gap that is left is the fill
+
+The section above stopped one measurement short of the question §38 asked and §42 answered twice.
+`gridbench/spreadsheet/SaveVersusClosedXml.cs` arms the window on each engine's *write* with the fill
+done and paid for outside it, so neither number is a difference of two larger ones - which is what
+§42's 279 MB for ClosedXML was. Interleaved, medians of three:
+
+| | fill | save | export |
+| --- | --- | --- | --- |
+| this package, `upstream/master` + the three writer commits | 197.6 MB | **215.4 MB** | 413.0 MB |
+| the same, with §41's model commits merged in as well | **94.0 MB** | **215.4 MB** | **309.4 MB** |
+| ClosedXML 0.104.2 | 75.1 MB | 278.7 MB | 353.8 MB |
+
+**On the save this package is now cheaper than ClosedXML, 215 against 279.** §42 measured that pair at
+442 against 279 and concluded *"its writer is the reason it still wins overall"*. That is no longer
+true, and the three commits are the whole of the difference.
+
+Three checks that these are the same quantities §42 was talking about: the indexer fill reads 197.6 MB
+on master and 113.7 MB with the model commits, which are §42's own ladder rungs to the tenth; the
+`SetValues` fill reads 94.0 MB, likewise; and ClosedXML's fill-and-save reads 353.8 MB, which is §42's
+figure exactly. The export rows are measured in their own arms rather than added up.
+
+**Whole export, both branches landed: 309.4 MB against 353.8 - 1.14x the other way, having been
+1.51x.** So §38's question now answers: the fill is dearer, the writer is cheaper, and the export is
+cheaper overall.
+
+**What is still ClosedXML's is the fill and the clock.** 75.1 MB against 94.0 is a bulk entrance that
+copies a jagged array into a range against one that fills a `Dictionary` of `Cell` objects, and §42
+already said where the floor on that is - *"getting under it means cells that are not objects, which is
+a different library"*. The clock is the more interesting one, and it runs the opposite way to the
+allocation: ClosedXML saves in 460 ms against 653, and exports in 629 against 785, while allocating
+more. **The obvious reading is that its allocation is transient and this one is not** - 215 MB of
+`XElement` and `XAttribute` is a graph that has to live until the document is serialised, where a
+streaming writer's buffers die in gen0 - but that is a hypothesis about a collection cost, and nothing
+here has measured GC time. It is written down as one.
+
+## 47. The tail §46 declined, taken - the sheet is written rather than built
+
+§46 named the remaining 217 MB as *"XElement, XAttribute, String and boxed Int32, and nothing else"*,
+said only an `XmlWriter` would reach it, and stopped: *"It is not attempted here."* It is attempted
+here, on `upstream/xlsx-writer-stream` off `upstream/xlsx-writer-save`, so the two can be judged apart.
+
+| | allocated |
+| --- | --- |
+| `upstream/xlsx-writer-save` | 217 MB |
+| stream the sheet's cells | **82 MB** |
+| write the shared string table from the table | **65 MB** |
+
+**458 MB to 65 MB over 550,000 cells, seven times less, against ClosedXML's 278.7 MB for the same
+save.** After the second, the histogram has no `XElement` row at all: 92.6% of what is left is
+`String`, which is the `r="A1"` of every cell and the text of its value.
+
+### The shape that made it a hunk after all
+
+§46 expected a rewrite of `SaveSheet` *"because everything after `sheetData` - merges, filters,
+conditional formats, validations, protection, hyperlinks, drawings, page margins, table parts - is
+appended to the same root afterwards"*. That turned out to be the wrong way round. Everything except
+the cells is small, so it stays a document; `WriteSheetXml` walks that document and, at the empty
+`sheetData` it carries, **writes the rows into the gap instead of the element**. No caller of the eight
+`Add` methods changed, and their order and content are untouched.
+
+The second commit is the same observation about a different graph. The strings were held twice - a
+dictionary from text to index, and an `XDocument` of `si` and `t` elements accumulated beside it and
+threaded through six signatures. The dictionary already says everything the part contains.
+
+### Byte for byte, and this time it is claimed
+
+§46 had to say out loud that its third commit renumbered two tables. These two change **no byte**, and
+the instrument that says so is kept: `gridbench/spreadsheet/SavedParts.cs` builds one workbook carrying
+every child element a worksheet can have - a drawing, a table, hyperlinks, merges, conditional
+formatting, data validations, an autofilter, sheet protection, shared formulas with a master and a
+follower, error cells, a formula with a text result, a quote prefix, hidden and custom sized rows and
+columns, text needing escaping including a surrogate pair, an embedded newline and a tab, and a second
+sheet with no cells at all - and unpacks its sixteen parts. `compare-parts.py` normalises the revision
+uid and the timestamp, and nothing else. Sixteen parts, none differing, at both commits.
+
+**The comparison was proved able to fail before it was believed**, by mutating one text part and one
+byte of the embedded PNG - which is not ceremony here, because **an earlier version of this comparison
+reported a clean pass over two empty directories**: the program behind it had failed to build, and a
+run that never happened looks exactly like nothing differing. The same shape twice in one session, and
+the guard against it both times was to make the instrument fail on purpose.
+
+### Two faults the review found that the tests could not
+
+Both were byte-identity faults, invisible to 5,137 passing tests because none of them compares bytes:
+
+- **`NewLineChars = "\n"` was platform-specific.** `XmlWriterSettings.NewLineChars` defaults to
+  `Environment.NewLine` on .NET Core rather than to `"\r\n"`, so pinning it to a line feed matched
+  `XDocument.Save` **only because this machine is macOS**; on Windows the indenting would have changed,
+  and with `NewLineHandling.Replace` so would newlines inside text. The settings now set `Indent` and
+  nothing else, which is the honest way to say "whatever the document would have written".
+- **`WriteFullEndElement` on `sheetData` gave `<sheetData></sheetData>`** where an empty `XElement`
+  serialises to `<sheetData />`. `WriteEndElement` writes the short form for an element with no content
+  and the long form otherwise, which is what an `XElement` does. A sheet with no cells was the only
+  shape that reached it, and the fixture now carries one.
+
+### What is left, and it is not the writer's to spend
+
+~60 MB over 550,000 cells is about 114 bytes a cell, and it is two strings: `cell.Address.ToString()`
+for the `r` attribute and the value's own text. Getting under it means writing the reference and the
+digits into the writer as characters rather than as strings - `WriteStartAttribute`, a pooled buffer,
+`WriteRaw` - which neither a cell reference nor a decimal integer needs escaping for. That is a real
+lever and it is a different kind of change from these; it is named here rather than taken.
+
+## 48. The lever §47 named, taken - and what C# actually offers here
+
+§47 ended with *"a real lever and it is a different kind of change from these; it is named here rather
+than taken"*. Taken, in two commits on `upstream/xlsx-writer-stream`.
+
+| | allocated |
+| --- | --- |
+| after the shared string table | 64.7 MB |
+| format a reference into the caller's span | 64.4 MB |
+| write a reference and a number to the stream as characters | **25.8 MB** |
+
+**458 MB to 25.8 MB over 550,000 cells - seventeen times less - and no allocation is left that a cell
+makes.** The histogram is down to twenty ticks and every row of it is a large array: the deflate
+buffers, the shared string dictionary's entries, and the list the cells are sorted in. Nothing is per
+cell any more.
+
+### What the language actually gives, and what it does not
+
+The question was whether recent C# or runtime features help. The honest inventory:
+
+- **`Utf8String` never shipped.** It was prototyped and abandoned. What did land is `u8` literals, which
+  give a `ReadOnlySpan<byte>`, and `Utf8.TryWrite` and `IUtf8SpanFormattable` in .NET 8, which format
+  straight to UTF-8 bytes. **None of them helps here**, because the sink is `XmlWriter`, which is a
+  char and string API from 2005.
+- **`XmlWriter` has no span overload at all.** Checked rather than assumed: `WriteRaw(char[], int, int)`,
+  `WriteRaw(string)`, `WriteString(string)`, `WriteValue(...)`, `WriteChars(char[], int, int)`. And
+  `WriteValue(int)` is no help either - it calls `XmlConvert.ToString` and allocates the string anyway.
+  So the one span-shaped exit is a `char[]` handed to `WriteRaw`, which is what the writer keeps.
+- **`ISpanFormattable.TryFormat` is the feature that does the work**, with a reusable buffer. Available
+  on the net8.0 floor this library targets, so no conditional compilation.
+- **`Dictionary.GetAlternateLookup<ReadOnlySpan<char>>`** would let the shared string table be probed
+  without a string, but it is .NET 9 and the floor is net8.0. It would not help anyway: the text is
+  already a string on the cell.
+
+**The ceiling is the sink, not the language.** Going further means writing UTF-8 bytes to the stream
+directly, at which point `u8` literals and `Utf8.TryWrite` become the right tools and the char to UTF-8
+transcode disappears too - but so does `XmlWriter`'s escaping, which would have to be hand rolled. That
+is a correctness risk this package should not take for the bytes it would buy.
+
+### `WriteRaw` does not escape, so what reaches it is the whole argument
+
+Two things and nothing else: a cell reference, which is letters, digits and the absolute markers; and a
+number formatted with the invariant culture, which is digits, a sign, a point and an exponent. Every
+cell whose value is text still goes through `WriteString`. `TryFormatNumber` names the types it will
+spell and answers false for everything else, which falls back to the string path.
+
+**That `TryFormat` spells a number the way `ToString(InvariantCulture)` did is not read off the
+documentation.** `SpanFormatAgreement.cs` asks it of sixty values a fixture would never carry - negative
+zero, denormals, `1e21`, `9007199254740993.0`, `int.MinValue`, both decimal extremes - and they agree.
+A disagreement would have changed a saved file silently, which is the one failure the suite cannot see.
+
+### The bound that was one character short
+
+The review found it, and the first test written for it did not: `CellRef.MaxLength` was
+`2 + 7 + 10`, on the reasoning that a row is at most ten digits. The row is written as `Row + 1` in
+**signed** arithmetic, so the last row wraps to `int.MinValue` and takes **eleven** characters. At the
+old bound `TryFormat` returns false, the length is zero, and `ToString` silently drops the row.
+
+**The first test for it passed against the broken bound.** It used `new CellRef(int.MaxValue, 0)` -
+one column letter, no absolute markers, twelve characters, nowhere near the limit. The real worst case
+needs all three at once: both markers, a column that takes every letter, and the wrapping row. Written
+that way it fails at the old bound and passes at the new one. **A gate aimed at the wrong extreme is
+not a gate**, and the only way to find that out was to break the code deliberately and watch the test
+not notice - which is §46's rule arriving for the third time in this work.
+
+### Against ClosedXML, and a hypothesis that got its answer
+
+| the save alone | allocated | time |
+| --- | --- | --- |
+| this package | **25.7 MB** | 267 ms |
+| ClosedXML 0.104.2 | 278.7 MB | 475 ms |
+
+**Ten times less than ClosedXML, and now faster as well.** §47 wrote down a hypothesis for why this
+package allocated less but ran slower - *"a retained XElement graph against transient buffers"* - and
+noted no GC time had been measured. It is still not measured, but the prediction it implies has come
+true: removing the graph reversed the ranking. That is evidence for the hypothesis and not proof of it,
+and the time figures stay where §42 put them, below the allocation ones.
+
+### What is left
+
+The floor, and it is not the writer's to spend: deflate buffers, the shared string dictionary's growth,
+and the `List<Cell>` the sort needs. The dictionary is the only one with an obvious lever - pre-sizing
+it, which is the single line §42 found was the whole of `SetValues`' saving - and it is worth one
+measurement rather than one reading.
+
+## 49. 25.8 MB was not the floor, and a third of it was the harness
+
+§48 closed on *"the floor, and it is not the writer's to spend"*, and named the deflate buffers, the
+shared string dictionary and the sort list. Asked whether that was really the floor, the answer is no,
+and the first correction is to the instrument rather than to the writer.
+
+**Eight of the 25.8 MB is the harness's own `MemoryStream` growing by doubling.** The save writes 2.8 MB
+and a `MemoryStream` reaches that through a chain of doublings, all of it charged to the save. Writing
+to `Stream.Null` instead reports **17.7 MB**, and a `MemoryStream` handed its capacity up front reports
+the same. Every rung of §46 to §48's ladder carried this, and every *delta* in it is untouched - the
+sink is identical in both arms of every pair, because both write the same 2.8 MB - but the absolute
+figures were the writer plus a sink, and only the writer's half is the writer's.
+
+### Two levers, both real, measured by ablation
+
+| | writer's own allocation |
+| --- | --- |
+| §48's tip | 17.7 MB |
+| the sort array rented rather than allocated | 13.5 MB |
+| the shared string table sized rather than grown | 13.8 MB |
+| both | **9.6 MB** |
+
+Additive to the tenth of a megabyte, and each figure identical across three passes and two runs.
+
+The table is sized by **the string cells a sheet holds, not the distinct strings among them**, which is
+the one case where this can cost rather than save. Asked of the extreme - every string cell carrying the
+same text, so the table holds one entry - it is 8.5 MB against 12.7. That extreme is not a real sheet,
+and the case that is was measured too: a column distinct per row, a column of five statuses, and a
+constant column reports the same **3.9 MB saving**, because the distinct column is what the sizing is
+driven by. The sizing follows the shape `CellStore.SetValues` already uses upstream,
+`EnsureCapacity(Count + incoming)`.
+
+### Pooling was already happening, in the runtime rather than in this package
+
+`System.IO.Compression` rents its deflate buffers from `ArrayPool`, which is why no `byte[]` appears in
+the histogram of a save into `Stream.Null` at all. Nothing in `Radzen.Blazor` pooled anything; the sort
+array is the first thing that does, rented and returned in a `finally`.
+
+### BenchmarkDotNet, asked directly
+
+The question was whether this work should have used it. Half of it should, and now does -
+`benchmarks/Spreadsheet` on the review branch runs the ClosedXML comparison under `[MemoryDiagnoser]`:
+
+| | Mean | Allocated | Alloc ratio | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| this package | 707.7 ms ± 979.3 | **17.67 MB** | 1.00 | – | – | – |
+| ClosedXML 0.104.2 | 774.7 ms ± 164.0 | 278.71 MB | 15.78 | 21000 | 1000 | 1000 |
+
+Three things come out of it. **It confirms the console harness to two decimal places** - 17.67 MB
+against 17.7, and 278.71 against 278.7 - which is two instruments agreeing rather than one being
+trusted. **It answers §47's hypothesis with data neither section had**: the save now causes *no
+collection of any generation*, where ClosedXML causes twenty-one thousand gen-0 collections per thousand
+operations. §47 guessed at a retained graph against transient buffers and said no GC time had been
+measured; the collection counts are that measurement, and they say the guess was right. And **it shows
+why time is not quoted here**: 707.7 ms with an error of 979.3 ms is the instrument saying it cannot
+resolve the question, from the tool whose whole purpose is resolving it.
+
+**The other half of the work it cannot do, which is the part that found everything.** The ladder across
+commits compares two builds of `Radzen.Blazor`, and one process cannot hold both - that is why the
+harnesses are console programs whose project reference is repointed at each checkout. And every finding
+in §46 to §48 came from a histogram of allocation *by type*: a `Format` per cell, an `Action` per cell,
+a tree node per cell, an `XElement` per cell. BenchmarkDotNet reports a total, and a total names nothing.
+
+**So the answer is not "use BenchmarkDotNet instead" but "use it for the comparison it is right for".**
+It is right for two libraries in one build with a claim about time. It is wrong for a ladder across
+commits and blind to which object the bytes went to.
+
+## 50. The ladder was measured through an instrument that was inside it
+
+Asked whether the figures were the save and not the fill, both halves of the question check out and a
+third thing does not.
+
+**The fill is untouched by any of this work, and the windows partition it exactly.** On `upstream/master`
+and on the branch alike the fill measures **113.7 MB** by the indexer and **94.0 MB** by `SetValues` -
+identical to the tenth of a megabyte, which it should be, because nothing here is on the fill's path even
+though `CellRef` and `ColumnRef` were changed and `Worksheet` and `Table` use them. And a fill and a save
+measured in one window equal the two measured separately: 527.9 against 527.9 on master, 103.6 against
+103.6 on the branch. Nothing is double counted and no deferred work leaks across, which is also what
+says the writer starts no recalculation.
+
+**The fill's method does not change what the save costs either** - 434.0 MB after a `SetValues` fill and
+434.0 MB after an indexer fill - so the ladder's habit of using whichever fill the branch had is harmless.
+
+### What was wrong: the listener was inside the window it was reporting on
+
+`SaveTypes.cs` armed the `GCAllocationTick` listener, then measured allocation across the save. Every
+tick runs `OnEventWritten`, which allocates - and **the ticks are proportional to the allocation being
+measured**. So the instrument overstated a large arm and barely touched a small one: **16 MB on a 434 MB
+save and nothing at all on a 9.6 MB one.** The rung that suffered most is the first, and the error runs
+in the direction that flatters the work.
+
+| | as published | measured without the listener | the writer alone |
+| --- | --- | --- | --- |
+| `upstream/master` | 458 | **442.0** | 434.0 |
+| read the format without creating one | 341 | **337.1** | 329.1 |
+| write the column reference into the caller's builder | 272 | **270.0** | 261.9 |
+| sort the cells once | 217 | **215.4** | 207.4 |
+| stream the sheet's cells | 82 | **81.1** | 73.1 |
+| write the shared string table from the table | 65 | **64.0** | 55.9 |
+| format a reference into the caller's span | 64 | **64.0** | 55.9 |
+| write references and numbers as characters | 26 | **25.7** | 17.7 |
+| rent the sort array, size the string table | 18 | **17.7** | 9.6 |
+
+**The first step was 117 MB and is 105 MB.** Everything below it moves by one or two, because those arms
+tick less. The third column is the same save into `Stream.Null`: a `MemoryStream` reaches 2.8 MB through
+a chain of doublings and the save is charged for all of it, a constant 8 MB in every row and the sink's
+rather than the writer's.
+
+**One claim reverses.** §48 recorded the span-formatting commit as *"a simplification rather than a
+saving: 64.7 MB to 64.4 MB"*. Without the listener it is 64.0 MB either way - **no saving at all**, and
+the 0.3 MB was the instrument standing down as the arm got smaller. The commit stays, because it deletes
+the `StringBuilderCache` constraint and is what the next one formats through, but it buys nothing on its
+own and its message now says so.
+
+### The rule this is a case of
+
+§26's rule is *if the failure mode is the size of your delta, the instrument excluded nothing.* This is
+its neighbour: **an instrument whose cost scales with the quantity it measures does not add noise, it
+adds bias, and the bias points the way the work wants.** Nothing about the run looked wrong - the figures
+repeated to a tenth of a megabyte across passes and runs, which is exactly what a systematic error does.
+What found it was a number that would not reconcile: 458 against 442 for the same save, and chasing 16 MB
+rather than rounding it away.
+
+`SaveTypes.cs` now takes its total from an unarmed save and its type histogram from a second, armed one.
+The type *shares* it reports were never affected in kind - `Format`, `Action`, the tree nodes and the
+`XElement`s were really there and really left - but a share of an inflated total is an inflated estimate,
+so the megabyte figures beside the percentages are worth reading as the estimates the header calls them.
+
+**None of the conclusions change and every ratio is close to what it was**: 442 to 17.7 into the same
+sink is twenty-five times less, against ClosedXML's 278.7, and BenchmarkDotNet's independent 17.67 MB
+agrees with the corrected figure rather than the published one - which it did all along, and which
+should have been the tell.
+
+## 51. Runtime, and the control that said the two runs were not comparable
+
+§42 put time below allocation and §47 to §50 kept it there. Asked directly for it, and with the
+benchmark now configured for it, here it is - along with the reason it took a control to get it.
+
+**The first BenchmarkDotNet run was configured wrongly for time.** `[IterationSetup]` pins
+`InvocationCount` to 1, so each measured invocation carried the whole per-iteration overhead: it reported
+the save at **707.7 ms with an error of 979.3 ms**, an interval wide enough to contain both engines and
+settle nothing. That is not the machine being noisy, it is the harness asking the wrong thing.
+
+A workbook can be filled once in `[GlobalSetup]` and saved many times **only because the writer leaves
+it alone**, which is what the first commit of this work made true. Before it the first save gave every
+cell a format object, and a second save of the same workbook allocated **119 MB less than the first** -
+448.4 MB then 329.1 - so a benchmark that filled once would have measured a re-save and understated
+`master` by a quarter. The bug fixed for allocation is what makes the timing honest.
+
+### Two runs, one control
+
+One process cannot hold two builds of `Radzen.Blazor`, so the comparison is two runs of the whole export
+with **ClosedXML as the control**: the same code in both, so what it does between them says whether the
+machine held still.
+
+| run | | Mean | Allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| on `upstream/master` | this package | 1,396.0 ms | 535.99 MB | 65000 | 33000 | 3000 |
+| on `upstream/master` | ClosedXML *(control)* | 630.8 ms | 353.81 MB | 29000 | 6000 | 3000 |
+| on the branch | this package | 556.2 ms | 111.65 MB | 10000 | 5000 | 1000 |
+| on the branch | ClosedXML *(control)* | 783.8 ms | 353.81 MB | 29000 | 6000 | 3000 |
+
+**The control did not hold still.** Its allocation is identical to the hundredth of a megabyte in both
+runs, as identical code must be - and its *time* moved 630.8 ms to 783.8 ms, a factor of **1.24** between
+runs. Had the two Radzen figures been read against each other directly they would have said 2.51x
+faster; against the control in each run they say:
+
+| | export time as a multiple of ClosedXML measured beside it |
+| --- | --- |
+| `upstream/master` | **2.21x** |
+| the branch | **0.71x** |
+
+**About three times quicker relative to the control, and a reversal**: the export was slower than
+ClosedXML's and is now faster than it. The 2.51x that ignoring the control would have produced is not far
+from the 3.1x that respecting it produces - which is the trap, because a wrong number close to the right
+one is the one nobody checks.
+
+### Collections need no normalising
+
+They are counts, not times. On `master` the export causes 65,000 gen-0, 33,000 gen-1 and 3,000 gen-2
+collections per thousand operations; on the branch, 10,000, 5,000 and 1,000. And the save measured on its
+own - 316.0 ms, error 6.24, against the 707.7 ± 979.3 the misconfigured run gave for the same thing -
+**causes no collection of any generation at all**.
+
+That is the answer §47 guessed at and §48 said was still a guess. It wrote *"a retained XElement graph
+against transient buffers"* and admitted no GC time had been measured. The collection counts are that
+measurement, and they say the guess was right.
+
+### One thing that could not be measured, and why it is worth knowing
+
+There is no ClosedXML row beside the save-only figure. `XLWorkbook.SaveAs` **closes the stream it is
+given and keeps hold of it**, so a second save of the same workbook throws `ObjectDisposedException`. It
+cannot be filled once and saved repeatedly. An arm that throws is not an arm that is slow, and the
+difference is worth stating rather than leaving as an `NA` in a table.
+
+## 52. The collections left in the export are the fill's, and the fill is the model
+
+§51 published collection counts for the whole export and left an apparent contradiction standing: the
+save is said to cause none, and the export's row shows ten thousand gen-0 per thousand operations. Both
+are true and they are different arms. Measured apart:
+
+| | allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- |
+| fill only, `CellStore.SetValues` | 93.97 MB | 10667 | 5667 | 1000 |
+| fill and save | 111.64 MB | 10000 | 5000 | 1000 |
+| **save only** | **17.67 MB** | **none** | **none** | **none** |
+| ClosedXML, save only | 278.70 MB | 21000 | 1000 | 1000 |
+
+**Filling and then saving collects what filling alone collects.** The save adds 17.67 MB and no
+collection of any generation, so nothing in the export's GC figures is the writer's. That is what makes
+the save-only pair the table that describes this work, and §51 should have shown it rather than the
+export's.
+
+**The save-only pair is also the only one that means the same thing on every build**, because before this
+work's first commit a save mutated the workbook it was given: the first save gave every cell a format
+object, so a second save of the same workbook allocated 119 MB less - 448.4 then 329.1. Both arms build a
+workbook per invocation for that reason, and it is why the comparison could be made at all.
+
+### Asked whether the fill's collections can go too
+
+By type, the fill's 94 MB over 550,000 cells is:
+
+| type | est MB | per object | per cell |
+| --- | --- | --- | --- |
+| `Cell` | 68.5 | 112 B | 131 B |
+| `CellData` | 20.5 | 32 B | 39 B |
+| boxed `Double` | 4.1 | 24 B | 8 B |
+
+One object per cell, and a second for every cell that holds anything. The boxed double is
+`CellData.cs:150` - `Value = (Type == CellDataType.Number) ? Convert.ToDouble(data, InvariantCulture) :
+data` - which re-boxes a number that arrived boxed, deliberately, because a spreadsheet number is a
+double.
+
+**These allocations survive.** The workbook is the point of the fill and is kept, so what a gen-1 and
+gen-2 count reports here is promotion rather than garbage - the collector walking a large live graph, not
+sweeping up after a wasteful one. A save's allocations were garbage and could go to zero; a fill's are the
+object graph the caller asked for, and the only way to collect less is to allocate fewer or smaller
+objects per cell.
+
+That is a change to `CellStore` and to the public `Cell`, not to the writer, and §42 already reached it
+from the other side: *"getting under it means cells that are not objects, which is a different library."*
+Two contained things would reduce it without redesigning anything - folding `CellData` into `Cell` to
+save a header and a reference per cell, and skipping the re-box when the value is already a double -
+and neither removes a collection, they only make the graph smaller. **The writer's side of the export is
+finished; the model's side is a different piece of work and is not started here.**
+
+## 53. A cell that is not an object, priced on both sides
+
+§52 left the fill's 94 MB standing on §42's sentence - *"getting under it means cells that are not
+objects, which is a different library"* - and said to test it rather than inherit it. `FillFloor.cs`
+builds the same 550,000-cell block into six stores in one process, three interleaved passes, values
+built outside the measured region.
+
+| store | allocated | B / cell | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- |
+| `CellStore.SetValues` | 94.0 MB | 179 | 10 | 5 | 1 |
+| ClosedXML `InsertData` | 73.1 MB | 139 | 7 | 3 | 1 |
+| struct in a dictionary | 54.5 MB | 104 | 1 | 1 | 1 |
+| **struct in a sized dictionary** | **23.5 MB** | **45** | **none** | **none** | **none** |
+| through a `readonly` handle | 23.5 MB | 45 | none | none | none |
+| through a `ref` return | 23.5 MB | 45 | none | none | none |
+| chunked slot blocks | 12.9 MB | 25 | 1 | 0 | 0 |
+| columnar arrays | 8.9 MB | 17 | none | none | none |
+
+Collection counts here are per fill and reconcile with §52's per-thousand figures: 10/5/1 against
+10667/5667/1000. **A sized struct store causes no collection of any generation**, which is the same
+verdict the save reached, and it reaches it at 45 bytes a cell against 179.
+
+The prototypes run the same inference `CellData` runs - a string parsed for number, date and boolean
+before it is accepted as text, a number widened to double - because a store that skipped it would be
+measuring a different program.
+
+### The floor is not the answer; the sparse column is
+
+| store | dense | sparse | |
+| --- | --- | --- | --- |
+| `CellStore` indexer | 113.7 MB | 113.7 MB | |
+| struct in a dictionary | 54.5 MB | 54.5 MB | shape-independent |
+| columnar arrays | 8.9 MB | 89.2 MB | **10x worse** |
+| chunked slot blocks | 12.9 MB | 128.3 MB | **worse than the incumbent** |
+
+Sparse is the same 550,000 values one row in ten over 500,000 rows. The two stores that reach the floor
+get there by allocating for rows that hold nothing, and the chunked one ends up **allocating more than
+the store it replaces**. That is the objection the maintainer raises by habit, and it is fatal to the
+columnar family: 8.9 MB is a real floor and it is only a floor for one shape. **The dictionary of structs
+is the only arm that is never worse than what exists**, and it is unchanged between the two shapes.
+
+### What it costs the public API, checked by the compiler
+
+`Cell` is a public class and `Cells[r, c]` returns the stored instance, which is why
+`sheet.Cells[r, c].Format.Bold = true` works. Replacing it with a handle was not argued but compiled:
+
+| written as | result |
+| --- | --- |
+| `store[r, c].Value = x` | **CS1612**, cannot modify the return value because it is not a variable |
+| `store[r, c].SetValue(x)` | compiles |
+| `store[r, c].Format.Bold = true` | compiles - `Format` returns a class, so the chain is unaffected |
+| `ref CellSlot` return | compiles, and the ref is void after the next insert resizes the dictionary |
+
+So a `readonly struct` handle costs nothing to allocate - 23.5 MB and 21 ms, identical to writing into
+the store directly - and preserves every property chain that ends in a reference. **What it cannot
+preserve is assignment to a property of the indexer's result**, which is the pattern the library
+documents. `ref` returns get that back and hand a consumer a reference that a later insert silently
+invalidates, which is worse than the problem.
+
+`CellData` is public too. Converting it to a `readonly struct` breaks **242 distinct call sites in the
+library alone** (deduplicated by file and line across three target frameworks; 126 files reference it,
+702 uses, plus 26 test files), almost all of them because `CellData?` quietly becomes
+`Nullable<CellData>`. Two further changes are forced and are not mechanical: `CompareTo(CellData?)`
+loses its null branch, and `default(CellData)` has `Type` = `Number`, because `CellDataType.Empty` is
+the fourth member of the enum - so the fold implies reordering a public enum.
+
+### The two contained wins, measured rather than predicted
+
+| | before | after | |
+| --- | --- | --- | --- |
+| **re-box, the mixed block this ladder is built on** | **94.0 MB** | **94.0 MB** | **nothing** |
+| re-box, a block of all `double` | 103.1 MB | 90.5 MB | −12.6 MB |
+| re-box, a block of all `int` | 103.1 MB | 103.1 MB | unchanged, and the control |
+| `CellData` folded into `Cell` (calibration graph) | 82.1 MB | **65.3 MB** | −16.8 MB |
+
+The first row is the one to quote. **The re-box fix is worth nothing on the canonical block**, whose
+numeric column is `int`, and 12.6 MB on a block of `double`; neither figure is a property of the change,
+both are properties of what the caller passes. It reaches only `double` and `double?` - `int`, `long`,
+`decimal`, `float`, `short` and `byte` all still allocate a box, because widening them produces a
+different value. A grid exporting `decimal` money columns gets nothing.
+
+The two baselines differ because of the boxing itself and reconcile to within half a megabyte: the mixed
+block boxes 150,000 ints (3.6 MB), an all-numeric block boxes 550,000 (13.2 MB), and 94.0 − 3.6 + 13.2 =
+103.6 against 103.1 measured, 103.1 − 13.2 = 89.9 against 90.5.
+
+The re-box is `data is not double` at `CellData.cs:150`; the suite passes 5,144 with it and **fails 64
+with the condition inverted**, so the semantics are guarded. It is worth nothing at all to a caller
+passing `int`, which is the arm that was kept in both runs so the cross-build comparison had a control.
+The fold is measured on the calibration graph rather than by rewriting 242 sites - §52 predicted ~13 MB
+by arithmetic and the experiment says 16.8 MB.
+
+### The instrument that had to be thrown away
+
+`FillFloor.cs` first carried a live-size column, and it reported the incumbent's store at **173 MB
+against the 94 MB its own fill allocated**, which cannot happen. The calibration arm settled it: a graph
+of known shape, 81.8 MB by arithmetic, measured 82.1 MB allocated and 149 MB by `GC.GetTotalMemory`.
+`GetTotalMemory` over-reports graphs of small objects by about 1.8x and array-shaped stores by nothing -
+**a bias pointing the way the work wanted**, inflating the incumbent and none of the prototypes. Four of
+the seven traps in this work's handoff produced a wrong number that looked right; this is the fifth, and
+what caught it was again a figure that would not reconcile rather than one that looked wrong.
+
+### Where this leaves the model
+
+A cell that is not an object is worth **94.0 → 23.5 MB and every collection the export still causes**,
+holds that in both shapes, and does not need a columnar rewrite to get there. It costs a public `Cell`
+that can no longer be assigned through, a public `CellData` that is 242 call sites and a reordered enum,
+and a `CellStore` whose `virtual` indexer and `protected` dictionary are inheritance surface someone may
+be standing on. **That is a proposal to put as a question, not a branch to build** - and §52's maintainer
+note applies: the honest answer to "what failure does this prevent" is still none.
+
+The re-box fix is the one piece that is contained, measured, guarded by the suite, and invisible in the
+public API. It is on `spike/cellstore-model` off `upstream/master` and is not pushed anywhere.
+
+## 54. The storage change that breaks nothing public, and what it costs instead
+
+§53 priced two designs and both are public breaks. A third is not: **keep `Cell` a class and keep every
+signature, but stop storing one per cell.** The store holds slots; `Cells[r, c]` materialises a `Cell`
+that holds only where the cell is and reads through to the slot. No `CS1612`, no `CellData` struct, no
+reordered enum, no change to `TryGet`, `Clone` or `CopyFrom`.
+
+What the save pays to see 550,000 cells, over stores built outside every window:
+
+| reading the cells back | allocated | B / cell | Gen0 | Gen1 | ms |
+| --- | --- | --- | --- | --- | --- |
+| `Cell` objects, as today | none | 0 | none | none | 12 |
+| materialised façades | 16.8 MB | 32 | 2 | 1 | 57 |
+| slots read in place | none | 0 | none | none | 11 |
+
+A façade is 32 bytes, not the 112 a `Cell` is, because all of its state has moved to the store. So the
+worst case is not that the fill's 94 MB reappears in the writer - it is that 16.8 MB does, along with the
+collections and a **5x slower read**, every property being a dictionary lookup.
+
+Composed from parts measured separately, not measured end to end:
+
+| | fill | read | write | export |
+| --- | --- | --- | --- | --- |
+| today | 94.0 | none | 17.7 | **111.6 MB** |
+| façades, writer untouched | 23.5 | 16.8 | 17.7 | ~58 MB |
+| slots, writer taught to read them | 23.5 | none | 17.7 | **~41 MB** |
+
+**Both beat what exists**, so the writer can be taught slots second rather than first.
+
+### What it costs is internal, and two things are not optional
+
+`GetPopulatedCells` has ten call sites - the writer four, the CSV writer, three row and column commands,
+and two in `RadzenSpreadsheet` - and each either materialises or learns to read slots. That is the work.
+Two others are correctness rather than effort:
+
+- **`Cell` must gain value equality on worksheet and address.** `CellDependencyGraph` keys
+  `Dictionary<Cell, HashSet<Cell>>` on cells and `FormulaEvaluator` holds a `HashSet<Cell>`; a
+  per-access instance would never match an entry and every lookup would silently miss. Equality by
+  address is **behaviour-preserving rather than a break**, because today one address is one object, so
+  reference equality already answers what address equality would - provided `==` is overloaded too, and
+  provided the worksheet is part of it so two sheets' A1 stay distinct.
+- **`Cell.Changed` must move from the instance to the store**, keyed by address, since a façade cannot
+  carry subscriptions. `FormulaEditor` subscribes to a bound cell. The event is `internal`, so this is
+  allowed.
+
+`Clone()` still has to hand back something detached, which a façade is not.
+
+### Where that leaves it
+
+The break in §53 was in the storage design, not in the goal. **A cell that is not an object is reachable
+without breaking a public signature**, for 111.6 → ~41 MB and every collection the export causes, at the
+price of ten internal call sites, value equality on `Cell`, and moving one internal event. That is a
+proposal that answers "existing patterns and existing API" rather than one that argues with it - and the
+answer to "what failure does this prevent" is still none, which is the sentence it has to lead with.
+
+## 55. The export measured end to end, and the identity §54 got wrong
+
+§54 composed its figures from parts and asked to be checked. Two of the three answers moved.
+
+### The composition was right; the sink in it was not
+
+Measured end to end on `upstream/xlsx-writer-perf` `84200d156`, into `Stream.Null`:
+
+| | allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- |
+| fill only | 94.0 MB | 9 | 4 | 0 |
+| fill and save | **103.6 MB** | 10 | 5 | 1 |
+| the save's share | **9.6 MB** | | | |
+
+94.0 + 9.6 = 103.6 exactly, so **composing separately measured parts is sound here** - which is what
+§54's variant rows rely on. What was not sound is that §54 used **17.7 MB** for the save, and that is the
+figure through a `MemoryStream`. 17.7 − 9.6 = 8.1 MB is the sink's chain of doublings, the constant 8 MB
+this work has charged the writer for before. §54 mixed a `MemoryStream` save with a `Stream.Null` fill.
+
+Restated, all into `Stream.Null`:
+
+| | fill | read | write | export |
+| --- | --- | --- | --- | --- |
+| today, with #2708 | 94.0 | none | 9.6 | **103.6 MB** |
+| façades, writer untouched | 23.5 | 16.8 | 9.6 | ~50 MB |
+| slots, writer taught to read them | 23.5 | none | 9.6 | **~33 MB** |
+
+Every library-independent arm reproduced to the tenth of a megabyte across the branch switch, and the
+fill read 94.0 on both, so the writer branch changes nothing about the fill.
+
+### None of the ten sites needs a detached cell
+
+All ten read `Address`, `Value`, `Formula` or `Hyperlink` and nothing else. Five take `.ToList()`, and
+in every case the reason is that the store is mutated during the iteration - `GetAutoFitMeasureItems`
+says so in a comment, *"computing effective formats can populate cells in the store"*. **That is a
+snapshot of the key set, not of cell contents**, and a slot store satisfies it more cheaply than a list
+of 550,000 objects does today.
+
+### §54's equality is wrong, and this is the real blocker
+
+§54 said `Cell` should gain value equality on worksheet and address, and called it behaviour-preserving.
+It is not. **`Cell.Address` is mutable**: `CellStore.UpdateCellAddress` rewrites it in place as
+`DictionaryShift.Remap` moves cells for a row or column insert. `CellDependencyGraph` holds
+`Dictionary<Cell, HashSet<Cell>>` and is **never rebuilt after a shift** - it survives one precisely
+because reference equality is the only equality that stays stable while the address changes.
+
+Value equality on a mutable address would key those dictionaries on a field that changes under them, and
+every entry would be orphaned by the first inserted row. Silently.
+
+So a per-access façade needs a stable identity that is not its address. Either
+
+- a per-cell id in the slot, plus a way to reach a cell by id, which is a second dictionary and gives
+  back some of what was saved; or
+- the dependency graph becomes address-keyed and is remapped during a shift, using the same
+  `DictionaryShift.Remap` the store already uses.
+
+The second is the smaller change and is internal. **It is also the piece that decides whether the
+variant is viable**, and it is not measured here.
+
+### On the order of the two PRs
+
+The fill is 91% of a 103.6 MB export **only because #2708 took the save from 442 MB to 9.6**. Before it,
+the same fill is 18% of 536 MB and this work would be noise. #2708 also rewrites `XlsxWriter`'s per-cell
+read path, which is the exact code a slot-reading writer would change again. **The model work is
+downstream of the writer work in both senses**, and nothing here should reach a pull request until
+#2708 is reviewed.
+
+## 56. The dependency graph can be rekeyed, and doing it moves the cost onto the editor
+
+§55 named this the piece that decides whether the model change is viable. It was built and run rather
+than argued: `CellDependencyGraph` keyed on `CellKey(Worksheet, CellRef)` instead of on `Cell`, with the
+four shift sites in `Worksheet` remapping it through the `DictionaryShift.Remap` the store already uses.
+The worksheet is part of the key because a formula can name another sheet.
+
+**It works.** 5,169 tests pass. **And the suite can see it**: with the remap disabled, ten fail -
+
+| |
+| --- |
+| `InsertRow_ShiftsReferencesAndValues`, `InsertColumn_ShiftsReferencesAndValues` |
+| `InsertRow_AdjustsFormulaReferences`, `InsertColumn_AdjustsFormulaReferences` |
+| `DeleteRow_InvalidatesFormulasReferencingDeletedRow`, and the column twin |
+| `DeleteRow_DoesNotAdjustFormulas_RefsBecomeError`, and the column twin |
+| `InsertRowBeforeCommand_ExecuteAndUndo_RestoresState`, and the column twin |
+
+All four directions and the undo path. **This is not a change that could have passed by being unreached.**
+
+### What it costs, and it is the wrong pocket
+
+A row insert on 10,000 range formulas over 100,000 edges, control carried in both builds:
+
+| row insert | baseline | rekeyed | |
+| --- | --- | --- | --- |
+| at the top, every formula rewritten | 63.28 MB / 91.6 ms | 80.52 MB / 97.3 ms | +17.2 MB, +6% |
+| **at the bottom, no formula changes** | **14.91 MB / 17.8 ms** | **26.27 MB / 26.1 ms** | **+11.4 MB, +76% alloc** |
+| no formulas - the control | 0.23 MB / 0.5 ms | 0.23 MB / 0.3 ms | unchanged |
+
+About 120-170 bytes per edge, every shift. The bottom row is the one that matters: today a shift that
+changes no formula text costs the graph **nothing**, because the objects move themselves and the graph
+never learns of it. Keyed on an address it pays for every edge whether or not anything it names moved.
+
+**So the trade is 103.6 → ~33 MB on an export the user runs occasionally, against 14.9 → 26.3 MB on a
+row insert the user runs while typing.** That is precisely the shape of change the maintainer objects to
+by habit, and he would be right to.
+
+### The way out is a stable id, and it is not free either
+
+The remap exists only because an address is not a stable name for a cell. Give the slot a 4-byte id and
+key the graph on that, and a shift needs **no graph work at all** - ids do not move, and the store's own
+address index is remapped exactly as it is today. The cost moves to storage: an id per slot plus an
+id-to-slot dictionary is roughly another 28 bytes a cell, which takes the fill from 23.5 MB back toward
+~40. Still far under 94, and with no editor regression.
+
+A second option is to stop expanding a range into one edge per cell. `DependencyVisitor.VisitRange`
+turns `SUM(A1:A10000)` into 10,000 edges today, which is a scalability problem that exists **without**
+any of this work and is what makes the remap expensive.
+
+**Neither is measured.** What is measured is that the rekey is correct, is guarded, and is a regression
+where it hurts most. The spike is on `spike/graph-rekey`, one commit, not pushed.
+
+## 57. The stable id is the shape that survives every objection raised so far
+
+§56 ended with the rekey correct and paying for itself out of the editor's pocket, and named a stable
+per-cell id as the way out. Measured:
+
+| store | allocated | B / cell | Gen0 | Gen1 | Gen2 | dense | sparse |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `CellStore.SetValues` | 94.0 MB | 179 | 10 | 5 | 1 | 94.0 | 113.7 |
+| struct in a sized dictionary | 23.5 MB | 45 | none | none | none | 23.5 | 54.5 |
+| **stable id, sized** | **31.8 MB** | **61** | **none** | **none** | **none** | **31.8** | **31.8** |
+
+An address index onto ids, slots addressed by id, each slot carrying its own address. It costs 16 bytes
+a cell more than the plain struct dictionary and **is the only arm in this work that is identical dense
+and sparse** - 31.8 both, against the incumbent's 94.0 and 113.7.
+
+What the graph pays to turn a key back into a cell:
+
+| | allocated | ms |
+| --- | --- | --- |
+| materialised façades | 16.8 MB | 59 |
+| **resolved by stable id** | **none** | **0** |
+
+An id is an array index. §54's 16.8 MB façade cost applies only to a design that has to construct
+something; this one does not.
+
+### Every objection this work has raised, against this one design
+
+| objection | where | answer |
+| --- | --- | --- |
+| public API break | §53 | none - `Cell` stays a class, every signature intact |
+| makes a sparse sheet worse | §53 | 31.8 MB either way; the incumbent is 94.0 dense, 113.7 sparse |
+| the save has to materialise cells | §54 | resolution is an array index, and allocates nothing |
+| shift regresses the editor | §56 | no remap - an id does not move, so the graph is untouched |
+| `Cell` identity is not stable | §55 | the id **is** the stable identity the graph needs |
+
+Composed the way §55 validated (94.0 + 9.6 = 103.6 measured exactly):
+
+| | fill | read | write | export |
+| --- | --- | --- | --- | --- |
+| today, with #2708 | 94.0 | none | 9.6 | **103.6 MB** |
+| stable id, writer reads slots | 31.8 | none | 9.6 | **~41 MB** |
+
+### What is argued rather than measured
+
+**The shift figure is by construction, not by experiment.** An id is isomorphic to an object reference
+for keying: it does not change when a row moves, so an id-keyed graph needs exactly the maintenance
+today's object-keyed one needs, which is none, and the 14.91 MB baseline of §56 stands. The extra work a
+shift does is rewriting each moved slot's address, which is what `UpdateCellAddress` already does per
+cell today. That reasoning is sound but it is reasoning; the library has no ids to measure yet.
+
+Nothing else here is new risk, and the 61 bytes are not tight - the slot's `Row`, `Column`,
+`QuotePrefix` and `Type` occupy 14 bytes that pack into 8.
+
+**This is the design to put to akorchev as a question**, and the sentence it leads with is unchanged
+from §52: it prevents no failure. It makes an export of 550,000 cells cost 41 MB instead of 104 and
+collect nothing, and it does it without changing a public signature or making any other operation worse.
+
+## 58. What was built, and why it is not §57
+
+§57's stable id measured 31.8 MB and needed the indexer to stop returning a live object. What went into
+`pianomanjh/radzen-blazor#13`, stacked on #12, is the shape that gets most of it and breaks nothing:
+**a cell keeps its value and type inline and its six rare fields behind one reference**, allocated only
+when a cell first has one of them. `CellData.Infer` exposes the inference the constructor already ran,
+so an assignment no longer builds a `CellData` to unpack and discard.
+
+| | allocated | B / cell | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- |
+| `SetValues`, before | 94.0 MB | 179 | 10 | 5 | 1 |
+| `SetValues`, after | **56.2 MB** | 107 | 6 | 3 | 1 |
+| a cell at a time, before | 113.7 MB | 217 | 10 | 5 | 1 |
+| a cell at a time, after | 75.9 MB | 145 | 6 | 3 | 1 |
+| export, before / after | 103.6 → **65.8 MB** | | | | |
+
+The save's share is 9.6 MB on both sides, so nothing here is the writer's. Sparse improves in the same
+proportion as dense. BenchmarkDotNet read the fill at **56.21 MB** against the harness's 56.2, and
+ClosedXML's bulk fill at 75.10 against its historical 75.1 - **two instruments and two builds agreeing
+to the hundredth of a megabyte**, which is the strongest cross-check this work has had.
+
+### Why not the stable id
+
+| | fill | needs |
+| --- | --- | --- |
+| shipped | 56.2 MB | nothing public |
+| slim calibration predicted | ~46 MB | - |
+| stable id (§57) | 31.8 MB | façades, `Clone` redesign, graph rekey, writer change |
+
+The remaining 24 MB is behind `Cells[r, c]` no longer returning a live object. §55 and §56 priced that:
+`Clone` has no detached backing once a cell is a façade, and a per-access instance has no stable
+identity, which is what `CellDependencyGraph` keys on. **It is a public change and a large one, and it
+belongs in a question to akorchev rather than in a branch stacked on an unreviewed PR.**
+
+### One test was restated rather than deleted
+
+`Cell.Data` is built on demand, so two reads are no longer the same instance.
+`HyperlinkCommand_UndoRestoresExactCellData` asserted that identity with `Assert.Same`; it now asserts
+the value and the type, which is what it was written to protect. **Verified by breaking the undo path to
+rebuild from text and watching it fail**, rather than by assuming the weaker assertion still bites.
+
+5,169 pass, at each of the three commits on its own. No `Claude-Session` trailer and no reference to
+Claude in the branch or the PR, following the convention #2708 and #12 set, since this is stacked on
+them and aimed the same way.
+
+## 59. Zero collections is a count of objects, not a count of bytes
+
+The goal for the fill is what the save reached: no collection of any generation. #13 does not get there
+and no amount of further slimming will.
+
+| cells | `Cell` objects | Gen0 | Gen1 | Gen2 | stable id | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 49,995 | 7.7 MB | none | none | none | 2.9 MB | none | none | none |
+| 137,500 | 18.4 MB | **1** | none | none | 8.4 MB | none | none | none |
+| 275,000 | 37.4 MB | **2** | **1** | none | 17.1 MB | none | none | none |
+| 550,000 | 75.9 MB | **5** | **2** | none | 31.8 MB | **none** | **none** | **none** |
+
+**Bytes are not what decides it.** The struct-dictionary arm allocates 54.5 MB, within 2 MB of what #13's
+fill allocates, and collects nothing - because those bytes are a few large arrays and #13's are 550,000
+small objects that all survive. An object per cell crosses the gen-0 budget between 50,000 and 137,500
+cells and the count scales from there.
+
+Staying under a budget of ~8-16 MB at 550,000 cells means **under 15 to 30 bytes a cell including its
+dictionary entry**, which is less than an object header and an entry. **No cell that is an object can be
+zero-GC at this scale.** #13 moved the threshold; only a store of values removes it.
+
+### The shape that reaches zero without a public break
+
+§55 and §56 rejected the façade because a per-access instance has no stable identity, which is what
+`CellDependencyGraph`, `Clone` and reference-comparing callers rely on. **Caching the façade removes
+that objection**: the slot holds the `Cell` once anything asks for it, so `Cells[r, c]` returns the same
+object every time, identity is stable, and nothing that keys on a cell has to change.
+
+| path | what it touches | cost |
+| --- | --- | --- |
+| `SetValues` | slots only, no `Cell` ever built | 31.8 MB, **no collections** |
+| the save | slots, once the writer's ten sites read them | adds nothing |
+| the editor | materialises only the cells a user touches | one 48-byte object each |
+
+The fill is zero-GC because a bulk fill never asks for a cell. The 16.8 MB of §54 was the cost of
+materialising **every** cell for the save; reading slots there costs nothing, and that is an `internal`
+change.
+
+What is left to solve is `Clone`, which returns a detached cell that has no slot to point at - answered
+by letting a `Cell` carry its own inline slot when it has no store. **Nothing in this needs a public
+signature to change.**
+
+## 60. The fill reaches zero, and the export cannot follow until the writer does
+
+§59's shape was built on `spreadsheet-cell-slots`. A slot holds **either** the value **or** the cell that
+has taken over from it - a cell value is never a `Cell`, so one reference answers both and the slot
+stays two words. A bulk fill writes values and builds nothing; the first thing to ask for a cell at an
+address gets one and it is kept.
+
+**The invariant that made it small**: a cell nothing has asked for cannot have dependents, because a
+formula reference materialises the cell it names, and cannot have a subscriber, because subscribing
+needs a cell. So a bulk write to an unmaterialised slot needs no notification and **the dependency
+graph does not change at all** - no rekey, none of §56's editor regression.
+
+| 550,000 cells | allocated | B / cell | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- | --- |
+| `SetValues`, before this work | 94.0 MB | 179 | 10 | 5 | 1 |
+| `SetValues`, after #13 | 56.2 MB | 107 | 6 | 3 | 1 |
+| **`SetValues`, on slots** | **22.7 MB** | **43** | **none** | **none** | **none** |
+
+**The fill collects nothing of any generation**, which is what the save reached in #2708 and what this
+was for. It is below every prototype in §53 except the two that fail on sparse sheets.
+
+### It is not shippable, and the two reasons were measured
+
+| | #13 | on slots | |
+| --- | --- | --- | --- |
+| fill and save | 65.8 MB | **98.7 MB** | the writer materialises all 550,000 |
+| a cell at a time | 75.9 MB | **85.8 MB** | a materialised cell pays for its slot and its object |
+
+Both are the objection this work has applied to everything else, and they apply here too.
+
+The first is the blocker. `WriteRows` collects cells into a `Cell[]`, sorts it and streams from it, so
+it holds every cell for the length of the write and no flyweight can serve it. Teaching it slots is
+possible - an unmaterialised cell provably has no format, formula or hyperlink, so the fast path is the
+common one - but **that is a rewrite of the writer currently under review in #12**, and §52 closed the
+writer for a reason.
+
+The second is answered by holding materialised cells in a second dictionary, so a slot is not kept
+beside them; unmeasured.
+
+### Where the prize is
+
+| | fill | save | export | collections |
+| --- | --- | --- | --- | --- |
+| today, with #2708 | 94.0 | 9.6 | 103.6 MB | 10 / 5 / 1 |
+| #13 | 56.2 | 9.6 | 65.8 MB | 6 / 3 / 1 |
+| slots, once the writer reads them | 22.7 | 9.6 | **~32 MB** | **none** |
+
+**~32 MB and no collection of any generation, against 536 MB when this work started.** The order is
+forced: #2708, then #12, then the writer learns slots, then this. Pushed as `spreadsheet-cell-slots`
+with no pull request, because opening one now would propose a 33 MB export regression.
+
+## 61. The export collects nothing
+
+`CellView` lets the writer read a cell it does not have to build. A view of an unmaterialised slot
+carries no format, formula or hyperlink by §60's invariant, so the hyperlink and shared-formula sweeps
+skip it and auto-fit builds cells only for the columns that asked to be measured.
+
+| 550,000 cells, into `Stream.Null` | allocated | Gen0 | Gen1 | Gen2 |
+| --- | --- | --- | --- | --- |
+| before this work, on master | 536 MB | | | |
+| with #2708 | 103.6 MB | 10 | 5 | 1 |
+| **with #13** | **28.1 MB** | **none** | **none** | **none** |
+| of which the fill | 22.7 MB | none | none | none |
+
+**A bulk fill and the export it feeds cause no collection of any generation**, which is what §59 set out
+to reach and what the save reached in #2708. 19x less than where this started.
+
+§60 called the two regressions blockers. Against the branch base they are not regressions at all - a
+cell at a time is 113.7 → 85.8 MB - they were regressions only against an intermediate commit inside
+the same branch, which is not a thing a reviewer sees. The one real cost stands and is disclosed: the
+fourth commit costs the cell-at-a-time path 10 MB, because a materialised cell pays for its slot as
+well as for itself, and a second dictionary would remove it.
+
+`pianomanjh#13` is five commits, 5,173 tests, green at each on its own.
+
+### Review found what the record did not
+
+`CellData` overrode `GetHashCode` as `HashCode.Combine(Type, Value)` and inherited reference equality.
+Nothing could observe it while `Cell.Data` returned one instance per cell; building it on demand made
+two reads unequal while hashing them into the same bucket. **The PR description asserted it compared by
+value, and the assertion was never tested.** Equality is now strict on type and value with four tests
+that fail if it goes back to references.
+
+A claim in a description is not a measurement, and this work has otherwise been careful to know the
+difference.
+
+## 62. A template column can be told how to filter, and the reason is the check-box list
+
+`FastGridFilterBy<TItem>` on `TemplateColumn`, built for the Jakks portal integration — where 67 of 512
+columns carry both a `Property` and a `<Template>`, a shape `RadzenDataGrid` allows and `PropertyColumn`
+does not, since it has no `Template`.
+
+### The claim that was wrong
+
+This section was written as *"a template column can never filter by construction: `CanFilter` reads
+`FilterPropertyPath`, and `TemplateColumn` never sets it."* It is false. `ColumnBase`'s default
+`FilterPropertyPath` is `SortPath`, so a template column given a `SortProperty` **has always filtered**,
+reflectively, by that path. Four tests said so within a minute of the override landing —
+`ATemplateColumnWithASortPropertyFiltersOnItsRealTypeToo` and three in `FilterCompositionTests`.
+
+The lesson is §9's, again, in a new place: **a claim about what a base class does is a claim to be
+traced, not inferred from the derived class's silence.** Reading `TemplateColumn` end to end and finding
+no `FilterPropertyPath` looked conclusive; it is exactly what inheriting the base's answer looks like.
+
+Consequence for the design: **`FilterBy` only ever adds.** Every override falls through to `base` when
+no carrier is given, and the reflective path route is untouched.
+
+### What it does buy
+
+- **The check-box list.** `ColumnBase.DistinctValues` answers null, so a path column offers nothing to
+  tick. Under `FilterMode.CheckBoxList` that is a column the reader cannot filter at all, whatever the
+  row filter would have done — and it is the portal's default mode, which is what made this decisive
+  rather than a refinement. A carrier composes `Queryable.Distinct(source.Select(key))`, so an EF source
+  runs one `SELECT DISTINCT` rather than pulling every row.
+- **A filter key that is not the sort path.** One path served sort, filter and settings identity
+  together, so a column ordering by `Customer.Name` could not filter by `Customer.Id`.
+- **A typed expression rather than a reflected one**, which is what a provider translates cleanly and
+  what AOT can emit.
+
+### The shape, and why it is the sort carrier's
+
+`FastGridSort<TItem>.By<TKey>` already solves the identical problem for ordering: capture `TKey` in a
+static generic factory, close the delegates over it, and expose a `Path`. `FastGridFilterBy<TItem>` is
+that, with three delegates instead of four — expression, in-memory predicate, distinct — and a
+`PropertyType` the sort carrier has no need of, because the filter editor and the operator list are
+chosen from it.
+
+A second type parameter on `TemplateColumn<TItem>` was the alternative and is worse: Razor infers a
+column's type parameters from its `Property`, and a template column has none to infer from, so every
+call site would write both out.
+
+### Boundaries, recorded
+
+- **A computed key does not filter.** `Path` is null for one, `CanFilter` reads the path. Stricter than
+  the sort carrier, where a computed key still sorts in memory — and deliberately: a filter has a menu
+  and a list to populate, both keyed by the path.
+- **`FilterPropertyType` falls back to the base's `object`**, which is what keeps a path column on the
+  route that discovers its real type by reflection.
+
+### Budget
+
+At 1000 rows over five columns, against a template column with no carrier: **174.96 KB vs 174.74 KB, and
+1.00x on time.** 0.22 KB, fixed, nothing per row. The selector is not compiled until the in-memory route
+asks, and no `DISTINCT` runs until a list is opened — so a declared carrier nobody has filtered by costs
+a reference. `gridbench` rows `+ template column` and `+ template column with an unused FilterBy`.
+
+### The test that was written twice
+
+The first `ApplyFilterInMemory` test asserted rendered rows, over a list. **Removing the override left it
+green**: `ComposeInMemory` returning null does not change the answer, it makes the caller fall back to
+the queryable route, and the same rows come out through `AsQueryable`. The discriminating assertion is
+`Composed.InMemory`, which `InMemoryCompositionTests.BothRoutesAgree` already returns — so the test moved
+there. **A route is not observable in its output when both routes are correct**; that is what the flag
+is for, and it is the second time on this branch that a green test over rendered rows proved nothing.
+
+## 63. An export can be handed its rows
+
+`FastGridExportOptions<TItem>.Rows`, null meaning the grid's own `FilteredRows`.
+
+§40 recorded "a `LoadData` grid exports its page" as the answer rather than a limitation, and that is
+still right for the *default*: the exporter cannot run a query the grid never ran. What it cannot claim
+is that the **caller** cannot — the application owns that query, and handing the result over is one
+property.
+
+Nothing is re-filtered or re-sorted: the rows are written as they arrive, in the order they arrive,
+through the same columns. Rows that do not match what the reader is looking at export something they did
+not ask for, and this will not notice — stated in the API docs rather than guarded, because guarding it
+would mean re-running the filter the caller just ran.
+
+## 64. A lookup column can draw its own cell
+
+`Template` on `LookupColumn`, added for the portal integration: **7 of its 21 lookup columns carry a
+`<Template>`**, which is a third of them and includes both browse pages.
+
+Without it those seven become `TemplateColumn`s, and that trades away the thing the lookup column is
+for. The check-box list stops offering the lookup's **names** and offers the **ids** the row carries -
+a list of integers where the reader expects stage names. Filtering, sorting and the settings key go the
+same way.
+
+So the template replaces the cell's markup **and nothing else**: `CellTextOf` still answers the resolved
+name, so the export and the cell tooltip are unchanged, and every filter and sort route is untouched.
+
+### Why a parameter rather than unsealing the column
+
+Unsealing `LookupColumn` and letting an application override `RenderCell` was the other option, and it
+was rejected on two counts. It would put seven new C# types in the consumer where seven markup templates
+do, and it would give up the devirtualized render path §8 sealed the built-in columns for. A parameter
+keeps both. Unsealing stays available for a case that needs *behaviour* rather than markup; none has
+appeared.
+
+The template takes the **row**, not the resolved name, which also makes it a copy-paste migration from
+`RadzenDataGridLookupColumn`'s own `<Template Context="data">`.
+
+### Cost
+
+A null check per cell when unset, and **nothing allocated** - the unset path calls the base's own write,
+unchanged. Not separately benchmarked, because there is no new allocation to measure.
+
+## 65. The export streams, and the three things written before the rows are why it is not free
+
+§61 took the export to 28.1 MB and no collection of any generation over 550,000 cells. That is
+`O(rows)` with a very small constant, not `O(1)`: the workbook is still the model, every cell still has
+an address, and eleven columns over a million rows is still about 370 MB of slots before a byte is
+written. §60's own table names the ceiling — *fill 22.7, save 9.6* — and the fill is the half that
+grows.
+
+This section removes the fill.
+
+### What the grid hands over, and why it cannot be `FilteredRows`
+
+`Composed()` answers `Array.Empty` on the `AsyncOwnsData` path, deliberately: composing there
+enumerates an unpaged query synchronously on the render thread, for rows the awaited load is about to
+replace. So `FilteredRows` is not the streaming source and cannot be made into one without undoing
+that.
+
+`RadzenFastGrid<TItem>.FilteredQuery` is: `Compose(Data)` where `Data is IQueryable<TItem>` and no
+`LoadData` handler is attached, and null otherwise. The same composition `FilteredRows` uses, handed
+out rather than walked — **the grid never enumerates it**. Enumerating it runs an unpaged query, which
+is the caller's act and is said in the API docs, exactly as `FilteredRows` already says it.
+
+That is the whole grid-side change. §63 said the exporter cannot run a query the grid never ran; this
+does not change that. It lets the *exporter* run the query the grid **composed** and then declined to
+run.
+
+### The row source, in order
+
+`IFastGridQueryExecutor` gains `AsAsyncEnumerable<T>(IQueryable<T>)` as a **default interface method**.
+Its `IsSupported` is already `queryable is IAsyncEnumerable<T>`, so the default body is that cast and
+no application implementation breaks — which is the whole reason it is a default method and not a new
+member.
+
+`FastGridExportOptions<TItem>.RowsAsync` is §63's `Rows` with an `await` in it. Resolution:
+
+| | source |
+| --- | --- |
+| 1 | `RowsAsync`, the caller's own |
+| 2 | the executor over `FilteredQuery` |
+| 3 | `Rows`, §63's |
+| 4 | `FilteredRows`, §40's |
+
+The executor is the default so the band-menu entry streams with no application code; the override is
+first so §63's rule — *the caller owns a query the grid never ran* — outranks it.
+
+### The streamed sheet, and the three elements written before `sheetData`
+
+`XlsxWriter` is `internal` and takes a built `Workbook`, so this lives in `Radzen.Blazor`. It reuses
+the shape `WriteSheetXml` already has — a skeleton document, `sheetData` streamed into an `XmlWriter`
+over the zip entry — and replaces the sorted `Cell[]` §60 called the blocker with a row source that is
+never retained. Entered through `Workbook.SaveToStreamAsync(Stream, StreamedSheet, CancellationToken)`,
+static, because there is no workbook.
+
+What is free, and it is more than expected: **the shared-string table and the table part are both
+written after the sheet**, so the table's range gets the final row count without a second pass, and
+freeze panes are static.
+
+What is not free is `<cols>` and `<dimension>`, which precede `sheetData` in the same entry. Two knobs,
+because the answer differs by grid:
+
+- **`WidthMode`** — `Declared` takes the caller's widths and is `O(1)`. `Sampled(n)` buffers the first
+  *n* rows (200 by default), measures, writes `<cols>`, replays the buffer and streams the rest. Bounded
+  by *n*, not by the data, so it is still a streaming mode. §40's `WidthFor` is the measurement either
+  way.
+- **`InlineStrings`** — off keeps the shared-string table, whose memory is `O(distinct strings)` and for
+  a grid is usually small. On writes `t="inlineStr"` and makes the whole write `O(1)` in rows, for a
+  larger file.
+
+**Defaults reproduce today's file**: shared strings, sampled widths. A streamed sheet and a built one
+differ because they were asked to, or not at all.
+
+### The download is the remaining `O(rows)` buffer
+
+`WorkbookExporter` writes into a `MemoryStream` for `DotNetStreamReference` — 2.5 MB at 50,000 rows,
+measured in §40. Streaming into that buffer caps the win at the buffer, so the streaming path also takes
+a caller-supplied destination stream. The consuming application already chose a file-backed sink for
+this reason (its PR review #2032), and `OnExport` is the seam that already exists for it.
+
+### What is claimed, and how it is held
+
+Round-trip through `XlsxReader`: cells, formats, widths, table range, freeze, and inline against shared
+strings. Cell-for-cell equivalence against §40's `ToWorkbook` + `SaveToStream` over the same rows, which
+is what makes "defaults reproduce today's file" a test rather than a sentence. A benchmark arm showing
+**allocation flat as rows grow** — the claim this section makes, in the form §59 through §61 made
+theirs. And a cancelled or faulting source leaving no zip that Excel will open.
+
+§61 closed by noting that a claim in a description is not a measurement. The flat-allocation arm is the
+measurement this one stands on, and nothing here quotes a number before it exists.
+
+### Sequencing, which is the awkward part
+
+The writer change stacks on `spreadsheet-cell-storage` (`pianomanjh#13`) — #12 and #13 own
+`XlsxWriter.cs` and `CellStore.cs`, and anything else conflicts. The grid and export changes are on this
+branch. So the streaming export cannot land here until #13 is in this branch's base, and the two halves
+are reviewable separately in the meantime: `FilteredQuery` and the row source are useful with §40's
+builder and no writer change at all.
+
+### One thing that does not check out
+
+`pianomanjh#7` is closed as *"a version of this was merged upstream"*. At `radzenhq/master`
+`c7d91536c` there is no `IAsyncQueryExecutor`, no async materialisation on `PagedDataBoundComponent`,
+and upstream issue #2688 is closed with nothing visible. Not a blocker — this grid carries its own
+executor and depends on nothing upstream — but recorded, because §61's rule cuts both ways.
