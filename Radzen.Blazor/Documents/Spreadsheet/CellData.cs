@@ -125,10 +125,6 @@ public class CellData : IComparable, IComparable<CellData>, IEquatable<CellData>
         Type = inferredType;
     }
 
-    /// <summary>
-    /// Infers a value and its type without constructing a <see cref="CellData"/>, so a caller that
-    /// stores the two separately does not allocate one to unpack it.
-    /// </summary>
     internal static void Infer(object? data, CultureInfo culture, out object? value, out CellDataType type)
     {
         if (data is null)

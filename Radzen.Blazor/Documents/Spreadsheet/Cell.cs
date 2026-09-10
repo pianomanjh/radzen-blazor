@@ -17,8 +17,6 @@ public class Cell
     /// </summary>
     public Worksheet Worksheet { get; private set; }
 
-    // Most cells carry a value and nothing else. The six things only some of them have live here, so
-    // a cell that has none of them costs one reference rather than six.
     private sealed class Extras
     {
         public Format? Format;
