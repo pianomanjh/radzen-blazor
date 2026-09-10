@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using System.Xml.Linq;
 
 using CellXf = (int FontId, int FillId, int BorderId, Radzen.TextAlign? TextAlign,
@@ -355,10 +356,62 @@ static class XlsxReader
         {
             using var s = sharedEntry.Open();
             var doc = XDocument.Load(s);
-            sharedStrings = doc.Descendants().Where(e => e.Name.LocalName == "t").Select(e => e.Value).ToList();
+            var ns = doc.Root!.Name.Namespace;
+
+            sharedStrings = doc.Root.Elements(ns + "si").Select(si => RstText(si, ns)).ToList();
         }
 
         return sharedStrings;
+    }
+
+    private static string RstText(XElement element, XNamespace ns)
+    {
+        var textName = ns + "t";
+        var runName = ns + "r";
+
+        string? first = null;
+        StringBuilder? builder = null;
+
+        for (var node = element.FirstNode; node is not null; node = node.NextNode)
+        {
+            if (node is not XElement child)
+            {
+                continue;
+            }
+
+            if (child.Name == textName)
+            {
+                Collect(child.Value, ref first, ref builder);
+            }
+            else if (child.Name == runName)
+            {
+                for (var runNode = child.FirstNode; runNode is not null; runNode = runNode.NextNode)
+                {
+                    if (runNode is XElement text && text.Name == textName)
+                    {
+                        Collect(text.Value, ref first, ref builder);
+                    }
+                }
+            }
+        }
+
+        return builder?.ToString() ?? first ?? string.Empty;
+    }
+
+    private static void Collect(string value, ref string? first, ref StringBuilder? builder)
+    {
+        if (builder is not null)
+        {
+            builder.Append(value);
+        }
+        else if (first is null)
+        {
+            first = value;
+        }
+        else
+        {
+            builder = new StringBuilder(first).Append(value);
+        }
     }
 
     private static List<WorksheetInfo> ParseSheetDefinitions(ZipArchive archive)
@@ -638,13 +691,21 @@ static class XlsxReader
 
         var valueElem = cellElem.Element(sNs + "v");
         var formulaElem = cellElem.Element(sNs + "f");
+        var inlineElem = cellElem.Element(sNs + "is");
 
-        if (valueElem is null && formulaElem is null)
+        if (valueElem is null && formulaElem is null && inlineElem is null)
         {
             return;
         }
 
         var cellType = (string?)cellElem.Attribute("t") ?? "n";
+
+        if (valueElem is null && inlineElem is not null)
+        {
+            valueElem = new XElement(sNs + "v", RstText(inlineElem, sNs));
+
+            cellType = "inlineStr";
+        }
 
         var style = ResolveStyle(cellElem, styleInfo);
 

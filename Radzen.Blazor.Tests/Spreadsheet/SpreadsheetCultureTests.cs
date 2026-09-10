@@ -341,7 +341,10 @@ public class SpreadsheetCultureTests
 
         command.Unexecute();
 
-        Assert.Same(before, sheet.Cells["A1"].Data);
+        // The value and its type are carried through the undo rather than rebuilt from the text,
+        // which under this culture would re-infer 31.12.2024 as a date.
+        Assert.Equal(before.Type, sheet.Cells["A1"].Data.Type);
+        Assert.Equal(before.Value, sheet.Cells["A1"].Data.Value);
         Assert.Equal(CellDataType.String, sheet.Cells["A1"].ValueType);
     }
 
