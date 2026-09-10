@@ -12903,3 +12903,73 @@ Cancellation was ignored at the end of enumeration, and numeric table headings f
 Both were found reviewing fork PR #14. `FastGridExport.ToWorkbook` additionally stores a
 numeric-looking heading as a number where the streamed path is already correct — unfixed, in no PR, and
 now subject to the same question as everything else on the workbook path.
+
+## 68. The read path, measured for the first time, and the DOM is 60% of it
+
+Every allocation figure in this document before now is about writing. `XlsxReader` appears above only
+for correctness — the dropped `t="b"`, the round-trip seam, the inline strings of #2710 — and never for
+what a load costs. This is the first measurement of it, and it came out of reviewing the #2710 fixes
+rather than out of looking for it.
+
+### A 49x regression, caught by review and not by any test
+
+akorchev asked for one change before merging #2710: `inlineElem.Descendants(sNs + "t")` also picks up
+the `<t>` of an `<rPh>` phonetic run, so a cell with furigana reads as its text with the reading
+appended. Fixing it turned up the same bug one function up, in `ParseSharedStrings`, where it is worse:
+that flattened **every** `<t>` in `sharedStrings.xml` into one list, one entry per element and none per
+`<si>`, so a rich-text item became several entries and **every index after it referred to the wrong
+string**. Cells carrying no rich text of their own read as fragments of other cells. Pre-existing on
+master, unrelated to #2710.
+
+The first fix for both was a LINQ expression per `<si>` — and it allocated six iterators an item.
+
+| arm, 200,000 `<si>` | single `<t>` | rich text, two runs |
+| --- | --- | --- |
+| the old flattening (wrong output) | 1.53 MB | 3.05 MB |
+| per-item LINQ | **74.77 MB** | 83.85 MB |
+| walking the nodes | **1.53 MB** | 30.44 MB |
+
+On a real workbook of 100,000 shared strings the load went **157.36 MB to 120.74 MB** when the LINQ was
+replaced by a walk over `FirstNode`/`NextNode` that hoists the two `XName`s and returns the DOM's own
+string by reference when an item holds a single `<t>`. That is the common shape, and on it the walk is
+byte for byte with the code it replaced.
+
+**Nothing in the suite could see this.** A 49x allocation regression on the load path is invisible to
+2,000 passing correctness tests, and it was going upstream on top of #2708 — an allocation-reduction PR
+by the same author. The gate that caught it was reading the code, not running it.
+
+### Where a load's allocation goes
+
+`GCAllocationTick` over `LoadFromStream`, 100,000 shared strings, **120.7 MB** across 1,052 ticks.
+
+| type | est MB | | type | est MB |
+| --- | --- | --- | --- | --- |
+| **XElement** | **35.1** | | Cell | 13.0 |
+| String | 28.6 | | CellData | 3.1 |
+| **XAttribute** | **23.9** | | Int32[] | 1.1 |
+| `<GetElements>` iterator | 13.4 | | everything else | < 1 each |
+
+`XElement`, `XAttribute` and the `Elements()` iterators are **72.4 MB of 120.7 — 60% of a load is the
+XDocument, not the data in it.** The `String` row is the floor: those strings are what `Cell.Value`
+stores, so they have to exist.
+
+### Spans do not help here, and the reason is the same one §-above gave for the writer
+
+Asked directly whether span work helps the fix. Measured, both arms asserted to agree:
+
+| shape | `StringBuilder` | `string.Create` and a span |
+| --- | --- | --- |
+| single `<t>` | 1.53 MB | 1.53 MB |
+| rich text, two runs | 30.44 MB | 10.61 MB |
+
+**On the common path there is nothing to win — it already allocates nothing**, because the string the
+DOM made is returned by reference. `string.Create` cannot beat zero. The rich branch improves 2.9x, and
+that is the whole of it: `RstText` has no formatting and no parsing for a span to remove, only joining,
+which is why only the joining branch moves.
+
+This is the read-side restatement of the inventory the writer already has: **the ceiling is the shape of
+the API, not the language.** And the conclusion carries across too. The writer's equivalent — dropping
+the whole-`XDocument` save for an `XmlWriter` — was scoped and declined as *"a rewrite of `SaveSheet`
+rather than a hunk"*, and taken only on the streamed path, where it is worth 94.1 MB to 3.6. An
+`XmlReader` rewrite of the load is the same trade in the same proportion, and has the same answer:
+**not attached to a PR that is under review for something else.**
