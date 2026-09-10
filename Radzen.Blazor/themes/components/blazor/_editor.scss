@@ -41,12 +41,18 @@ $editor-image-size-color: var(--rz-on-primary) !default;
   }
 }
 
+.rz-html-editor-image-clip {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .rz-html-editor-image-handles {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;
   outline: var(--rz-editor-image-handles-border);
-  z-index: 1;
 }
 
 .rz-html-editor-image-handle {

@@ -4880,7 +4880,29 @@ window.Radzen = {
     }
   },
   createEditor: function (ref, uploadUrl, paste, instance, shortcuts) {
-    var imageHandlePositions = ['nw', 'n', 'ne', 'w', 'e', 'sw', 's', 'se'];
+    function trackDrag(move, end, key) {
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', end);
+
+      if (key) {
+        document.addEventListener('keydown', key);
+      }
+
+      return function () {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', end);
+
+        if (key) {
+          document.removeEventListener('keydown', key);
+        }
+      };
+    }
+
+    var imageHandleDirections = {
+      nw: [-1, -1], n: [0, -1], ne: [1, -1],
+      w: [-1, 0], e: [1, 0],
+      sw: [-1, 1], s: [0, 1], se: [1, 1]
+    };
     var minImageSize = 24;
 
     ref.getSelectedImage = function () {
@@ -4888,14 +4910,20 @@ window.Radzen = {
     };
 
     ref.getEditorContainer = function () {
-      return ref.closest('.rz-html-editor') || ref.parentElement;
+      return ref.closest('.rz-html-editor');
     };
 
     ref.removeImageHandles = function () {
-      if (ref.imageHandles) {
-        ref.imageHandles.remove();
-        ref.imageHandles = null;
+      if (!ref.imageHandles) {
+        return;
       }
+
+      window.removeEventListener('resize', ref.positionImageHandles);
+      ref.imageHandlesClip.remove();
+      ref.imageHandlesClip = null;
+      ref.imageHandles = null;
+      ref.imageSizeLabel = null;
+      ref.imageSizeLabelSpace = 0;
     };
 
     ref.positionImageHandles = function () {
@@ -4912,12 +4940,26 @@ window.Radzen = {
       }
 
       var containerRect = container.getBoundingClientRect();
+      var contentRect = ref.getBoundingClientRect();
       var imgRect = img.getBoundingClientRect();
 
-      ref.imageHandles.style.left = (imgRect.left - containerRect.left) + 'px';
-      ref.imageHandles.style.top = (imgRect.top - containerRect.top) + 'px';
+      // Absolutely positioned children start at the padding box, past the border.
+      ref.imageHandlesClip.style.left = (contentRect.left - containerRect.left - container.clientLeft) + 'px';
+      ref.imageHandlesClip.style.top = (contentRect.top - containerRect.top - container.clientTop) + 'px';
+      ref.imageHandlesClip.style.width = contentRect.width + 'px';
+      ref.imageHandlesClip.style.height = contentRect.height + 'px';
+
+      ref.imageHandles.style.left = (imgRect.left - contentRect.left) + 'px';
+      ref.imageHandles.style.top = (imgRect.top - contentRect.top) + 'px';
       ref.imageHandles.style.width = imgRect.width + 'px';
       ref.imageHandles.style.height = imgRect.height + 'px';
+
+      var label = ref.imageSizeLabel;
+
+      if (label && !label.hidden) {
+        label.textContent = Math.round(imgRect.width) + ' × ' + Math.round(imgRect.height);
+        label.classList.toggle('rz-inside', imgRect.bottom + ref.imageSizeLabelSpace > contentRect.bottom);
+      }
     };
 
     ref.createImageHandles = function () {
@@ -4926,15 +4968,18 @@ window.Radzen = {
       var img = ref.getSelectedImage();
       var container = ref.getEditorContainer();
 
-      if (!img || !container) {
+      if (!img || !container || !ref.isContentEditable) {
         return;
       }
 
+      var clip = document.createElement('div');
+      clip.className = 'rz-html-editor-image-clip';
+      clip.setAttribute('contenteditable', 'false');
+
       var handles = document.createElement('div');
       handles.className = 'rz-html-editor-image-handles';
-      handles.setAttribute('contenteditable', 'false');
 
-      imageHandlePositions.forEach(function (position) {
+      Object.keys(imageHandleDirections).forEach(function (position) {
         var handle = document.createElement('div');
         handle.className = 'rz-html-editor-image-handle rz-' + position;
         handle.dataset.position = position;
@@ -4942,121 +4987,94 @@ window.Radzen = {
         handles.appendChild(handle);
       });
 
-      var size = document.createElement('div');
-      size.className = 'rz-html-editor-image-size';
-      size.hidden = true;
-      handles.appendChild(size);
+      ref.imageSizeLabel = document.createElement('div');
+      ref.imageSizeLabel.className = 'rz-html-editor-image-size';
+      ref.imageSizeLabel.hidden = true;
+      handles.appendChild(ref.imageSizeLabel);
 
-      container.appendChild(handles);
+      clip.appendChild(handles);
+      container.appendChild(clip);
+      ref.imageHandlesClip = clip;
       ref.imageHandles = handles;
+
+      window.addEventListener('resize', ref.positionImageHandles);
       ref.positionImageHandles();
     };
 
     ref.showImageSizeLabel = function (visible) {
-      var label = ref.imageHandles && ref.imageHandles.querySelector('.rz-html-editor-image-size');
+      var label = ref.imageSizeLabel;
 
-      if (label) {
-        label.hidden = !visible;
-      }
-    };
-
-    ref.updateImageSizeLabel = function () {
-      var label = ref.imageHandles && ref.imageHandles.querySelector('.rz-html-editor-image-size');
-      var img = ref.getSelectedImage();
-      var container = ref.getEditorContainer();
-
-      if (!label || label.hidden || !img || !container) {
+      if (!label) {
         return;
       }
 
-      label.textContent = Math.round(img.offsetWidth) + ' × ' + Math.round(img.offsetHeight);
+      label.hidden = !visible;
 
-      // The overlay lives inside .rz-html-editor, which clips its overflow, so a
-      // badge below the image would be cut off near the bottom edge.
-      var containerRect = container.getBoundingClientRect();
-      var imgRect = img.getBoundingClientRect();
-
-      label.classList.toggle('rz-inside', imgRect.bottom + 28 > containerRect.bottom);
+      if (visible) {
+        label.textContent = '0 × 0';
+        ref.imageSizeLabelSpace = label.offsetHeight + parseFloat(getComputedStyle(label).marginTop || 0);
+      }
     };
 
     ref.imageResizeStartListener = function (e) {
       var img = ref.getSelectedImage();
 
-      if (!img) {
+      if (!img || ref.imageResize) {
         return;
       }
 
       e.preventDefault();
       e.stopPropagation();
 
+      // Pasted content often carries an inline width/height, which would outrank
+      // the attributes a drag writes.
       ref.imageResize = {
         img: img,
-        position: e.currentTarget.dataset.position,
+        direction: imageHandleDirections[e.currentTarget.dataset.position],
         startX: e.clientX,
         startY: e.clientY,
         startWidth: img.offsetWidth,
         startHeight: img.offsetHeight,
-        startAttrWidth: img.getAttribute('width'),
-        startAttrHeight: img.getAttribute('height'),
+        startAttributes: { width: img.getAttribute('width'), height: img.getAttribute('height') },
+        startStyles: { width: img.style.width, height: img.style.height },
         ratio: img.offsetHeight ? img.offsetWidth / img.offsetHeight : 1
       };
 
-      document.addEventListener('mousemove', ref.documentImageResizeMoveListener);
-      document.addEventListener('mouseup', ref.documentImageResizeEndListener);
+      img.style.width = '';
+      img.style.height = '';
 
+      ref.releaseImageDrag = trackDrag(
+        ref.documentImageResizeMoveListener,
+        ref.documentImageResizeEndListener,
+        ref.documentImageResizeKeyListener);
       ref.showImageSizeLabel(true);
-      ref.updateImageSizeLabel();
-    };
-
-    ref.stopImageResize = function () {
-      ref.showImageSizeLabel(false);
-      ref.imageResize = null;
-      document.removeEventListener('mousemove', ref.documentImageResizeMoveListener);
-      document.removeEventListener('mouseup', ref.documentImageResizeEndListener);
+      ref.positionImageHandles();
     };
 
     ref.restoreImageSize = function (state) {
-      if (state.startAttrWidth !== null) {
-        state.img.setAttribute('width', state.startAttrWidth);
-      } else {
-        state.img.removeAttribute('width');
-      }
+      Object.keys(state.startAttributes).forEach(function (name) {
+        var value = state.startAttributes[name];
 
-      if (state.startAttrHeight !== null) {
-        state.img.setAttribute('height', state.startAttrHeight);
-      } else {
-        state.img.removeAttribute('height');
-      }
+        if (value !== null) {
+          state.img.setAttribute(name, value);
+        } else {
+          state.img.removeAttribute(name);
+        }
+
+        state.img.style[name] = state.startStyles[name];
+      });
     };
 
     ref.documentImageResizeKeyListener = function (e) {
-      if (e.key !== 'Escape') {
+      if (e.key !== 'Escape' || !ref.imageResize) {
         return;
       }
 
-      // While a drag is running, cancel it and leave the editor value untouched.
-      if (ref.imageResize) {
-        e.preventDefault();
-        e.stopPropagation();
-        ref.restoreImageSize(ref.imageResize);
-        ref.stopImageResize();
-        ref.positionImageHandles();
-        return;
-      }
-
-      // Once a drag has finished, undo the last resize for as long as that same
-      // image is still selected.
-      var last = ref.lastImageResize;
-
-      if (last && last.img === ref.getSelectedImage()) {
-        e.preventDefault();
-        e.stopPropagation();
-        ref.restoreImageSize(last);
-        ref.lastImageResize = null;
-        ref.positionImageHandles();
-
-        try { instance.invokeMethodAsync('OnChange', ref.innerHTML); } catch { }
-      }
+      e.preventDefault();
+      e.stopPropagation();
+      ref.restoreImageSize(ref.imageResize);
+      ref.stopImageDrag();
+      ref.positionImageHandles();
     };
 
     ref.documentImageResizeMoveListener = function (e) {
@@ -5068,59 +5086,103 @@ window.Radzen = {
 
       e.preventDefault();
 
-      var position = state.position;
-      var horizontal = position.indexOf('w') !== -1 || position.indexOf('e') !== -1;
-      var vertical = position.indexOf('n') !== -1 || position.indexOf('s') !== -1;
-      var toLeft = position.indexOf('w') !== -1;
-      var toTop = position.indexOf('n') !== -1;
-      var deltaX = toLeft ? state.startX - e.clientX : e.clientX - state.startX;
-      var deltaY = toTop ? state.startY - e.clientY : e.clientY - state.startY;
-
+      var horizontal = state.direction[0];
+      var vertical = state.direction[1];
       var width = state.startWidth;
       var height = state.startHeight;
 
-      if (horizontal && vertical) {
-        width = Math.max(Math.round(state.startWidth + deltaX), minImageSize);
-        height = e.shiftKey
-          ? Math.max(Math.round(state.startHeight + deltaY), minImageSize)
-          : Math.max(Math.round(width / state.ratio), minImageSize);
-      } else if (horizontal) {
-        width = Math.max(Math.round(state.startWidth + deltaX), minImageSize);
-      } else {
-        height = Math.max(Math.round(state.startHeight + deltaY), minImageSize);
+      if (horizontal) {
+        width = Math.max(Math.round(state.startWidth + horizontal * (e.clientX - state.startX)), minImageSize);
+      }
+
+      if (vertical && (!horizontal || e.shiftKey)) {
+        height = Math.max(Math.round(state.startHeight + vertical * (e.clientY - state.startY)), minImageSize);
+      } else if (horizontal && vertical) {
+        height = Math.max(Math.round(width / state.ratio), minImageSize);
       }
 
       state.img.setAttribute('width', width);
       state.img.setAttribute('height', height);
 
       ref.positionImageHandles();
-      ref.updateImageSizeLabel();
     };
 
     ref.documentImageResizeEndListener = function () {
-      if (!ref.imageResize) {
+      var state = ref.imageResize;
+
+      if (!state) {
         return;
       }
 
-      ref.lastImageResize = ref.imageResize;
-      ref.stopImageResize();
+      var img = state.img;
+      var width = img.getAttribute('width');
+      var height = img.getAttribute('height');
 
-      try { instance.invokeMethodAsync('OnChange', ref.innerHTML); } catch { }
+      ref.stopImageDrag();
+
+      if (width === state.startAttributes.width && height === state.startAttributes.height) {
+        ref.restoreImageSize(state);
+        ref.positionImageHandles();
+        return;
+      }
+
+      // Rewound first so the undo entry records the size from before the drag.
+      ref.restoreImageSize(state);
+
+      var replacement = img.cloneNode(true);
+      replacement.classList.remove('rz-state-selected');
+
+      if (!replacement.getAttribute('class')) {
+        replacement.removeAttribute('class');
+      }
+
+      replacement.setAttribute('width', width);
+      replacement.setAttribute('height', height);
+      replacement.style.width = '';
+      replacement.style.height = '';
+
+      var range = document.createRange();
+      range.selectNode(img);
+      var selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      ref.focus();
+      document.execCommand('insertHTML', false, replacement.outerHTML);
+
+      ref.selectImage(ref.querySelector('img[width="' + width + '"][height="' + height + '"]'));
     };
 
-    ref.imageHandlesScrollListener = function () {
-      ref.positionImageHandles();
+    ref.selectImage = function (img) {
+      if (!img) {
+        ref.removeImageHandles();
+        return;
+      }
+
+      img.classList.add('rz-state-selected');
+
+      var range = document.createRange();
+      range.selectNode(img);
+      var selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      ref.createImageHandles();
     };
 
-    ref.imageHandlesResizeListener = function () {
-      ref.positionImageHandles();
-    };
+    ref.imageHandlesObserver = new MutationObserver(ref.positionImageHandles);
 
-    ref.imageHandlesObserver = new MutationObserver(function () {
-      ref.positionImageHandles();
-    });
+    ref.stopImageDrag = function () {
+      ref.imageResize = null;
+      ref.showImageSizeLabel(false);
+
+      if (ref.releaseImageDrag) {
+        ref.releaseImageDrag();
+        ref.releaseImageDrag = null;
+      }
+    };
 
     ref.inputListener = function () {
+      ref.positionImageHandles();
       try { suppressDisposed(instance.invokeMethodAsync('OnChange', ref.innerHTML)); } catch { }
     };
     ref.keydownListener = function (e) {
@@ -5229,15 +5291,9 @@ window.Radzen = {
         }
 
         ref.removeImageHandles();
-        ref.lastImageResize = null;
 
         if (e.target.matches('img')) {
-          e.target.classList.add('rz-state-selected');
-          var range = document.createRange();
-          range.selectNode(e.target);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          ref.createImageHandles();
+          ref.selectImage(e.target);
         } else {
           var clickedCell = e.target.closest && e.target.closest('td,th');
           if (clickedCell && ref.contains(clickedCell)) {
@@ -5296,8 +5352,7 @@ window.Radzen = {
         ref.isResizingColumn = true;
         ref.resizeStartX = e.clientX;
         ref.resizeStartWidth = ref.resizeTargetCell.getBoundingClientRect().width;
-        document.addEventListener('mouseup', ref.mouseupResizeListener);
-        document.addEventListener('mousemove', ref.documentMouseMoveResizeListener);
+        ref.releaseColumnDrag = trackDrag(ref.documentMouseMoveResizeListener, ref.mouseupResizeListener);
       }
     };
 
@@ -5305,8 +5360,8 @@ window.Radzen = {
       if (ref.isResizingColumn) {
         ref.isResizingColumn = false;
         ref.style.cursor = '';
-        document.removeEventListener('mouseup', ref.mouseupResizeListener);
-        document.removeEventListener('mousemove', ref.documentMouseMoveResizeListener);
+        ref.releaseColumnDrag();
+        ref.releaseColumnDrag = null;
         try { instance.invokeMethodAsync('OnChange', ref.innerHTML); } catch { }
       }
     };
@@ -5434,10 +5489,8 @@ window.Radzen = {
     ref.addEventListener('contextmenu', ref.contextMenuListener);
     ref.addEventListener('mousemove', ref.mousemoveListener);
     ref.addEventListener('mousedown', ref.mousedownResizeListener);
-    ref.addEventListener('scroll', ref.imageHandlesScrollListener);
-    document.addEventListener('keydown', ref.documentImageResizeKeyListener);
-    window.addEventListener('resize', ref.imageHandlesResizeListener);
-    ref.imageHandlesObserver.observe(ref, { attributes: true, attributeFilter: ['hidden'], childList: true });
+    ref.addEventListener('scroll', ref.positionImageHandles);
+    ref.imageHandlesObserver.observe(ref, { attributes: true, attributeFilter: ['hidden'] });
     document.addEventListener('selectionchange', ref.selectionChangeListener);
     document.execCommand('styleWithCSS', false, true);
     return {
@@ -5451,17 +5504,16 @@ window.Radzen = {
           ref.removeEventListener('contextmenu', ref.contextMenuListener);
           ref.removeEventListener('mousemove', ref.mousemoveListener);
           ref.removeEventListener('mousedown', ref.mousedownResizeListener);
-          ref.removeEventListener('scroll', ref.imageHandlesScrollListener);
-          window.removeEventListener('resize', ref.imageHandlesResizeListener);
+          ref.removeEventListener('scroll', ref.positionImageHandles);
           ref.imageHandlesObserver.disconnect();
-          ref.imageResize = null;
-          document.removeEventListener('mousemove', ref.documentImageResizeMoveListener);
-          document.removeEventListener('mouseup', ref.documentImageResizeEndListener);
-          document.removeEventListener('keydown', ref.documentImageResizeKeyListener);
+          ref.stopImageDrag();
           ref.removeImageHandles();
           ref.isResizingColumn = false;
-          document.removeEventListener('mouseup', ref.mouseupResizeListener);
-          document.removeEventListener('mousemove', ref.documentMouseMoveResizeListener);
+
+          if (ref.releaseColumnDrag) {
+            ref.releaseColumnDrag();
+            ref.releaseColumnDrag = null;
+          }
           document.removeEventListener('selectionchange', ref.selectionChangeListener);
         }
       }
