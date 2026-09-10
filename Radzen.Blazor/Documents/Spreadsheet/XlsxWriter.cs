@@ -1468,6 +1468,8 @@ partial class XlsxWriter(Workbook sourceWorkbook)
         }
     }
 
+    private const double PointsPerPixel = 72.0 / 96.0;
+
     private void WriteRowStart(XmlWriter writer, Worksheet sheet, int row, int firstColumn, int lastColumn)
     {
         writer.WriteStartElement("row", Main);
@@ -1475,7 +1477,7 @@ partial class XlsxWriter(Workbook sourceWorkbook)
 
         if (Math.Abs(sheet.Rows[row] - sheet.Rows.Size) > 1e-6)
         {
-            writer.WriteAttributeString("ht", XmlConvert.ToString(sheet.Rows[row]));
+            writer.WriteAttributeString("ht", XmlConvert.ToString(sheet.Rows[row] * PointsPerPixel));
             writer.WriteAttributeString("customHeight", "1");
         }
 
