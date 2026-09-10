@@ -13053,8 +13053,10 @@ struct, not a hex string, so an entry costs about 48 B. A record is `row, column
 first time an image is seen the record also carries `length, bytes`. What the journal keeps
 in memory is that map, the anchor count, and a string reference per distinct image naming its extension, which
 the rels and the content types are both produced from. **With `SpillImages`
-on, memory is `O(distinct images)` × ~56 B, and nothing grows with the image bytes or with the number
-of rows holding an image.** With it off, memory grows by the distinct image bytes, and that is the
+on, what the write holds grows with the number of distinct images and not with their bytes.** The
+journal's own share is about 56 B per distinct image, but `ZipArchive` also keeps a `ZipArchiveEntry`
+per media part until it is disposed, so no per-image figure is promised in the docs. The measurement
+is below. With it off, memory grows by the distinct image bytes, and that is the
 choice the caller made.
 
 When the last row has been written, the anchor count is known, so `<drawing r:id>` goes in after
@@ -13123,3 +13125,79 @@ The five Northwind photos are written through the streamed path and opened in Nu
 only spreadsheet app on this machine. Excel has not been checked until Josh opens the file, and that
 is stated rather than implied. Before any push, `Radzen.Blazor` and its tests are built in Debug, as
 upstream CI does. Nothing goes to GitHub without asking.
+
+### Built, and what the measurements said
+
+Five commits on `upstream/xlsx-streaming-images`, off the #2716 tip `e041dad58`:
+
+| commit | piece |
+| --- | --- |
+| `d3de1fcf0` | `ht` written in points |
+| `aefc6be8d` | `StreamedImage` and the sniffer |
+| `8928c24bd` | image columns, the journal, the drawing parts, media stored uncompressed |
+| `3a8fe2391` | `DataRowHeight` |
+| `2c9ac05bc` | `SpillImages` |
+
+The full suite in Debug, as upstream CI runs it, passes **5,281**, the tip's 5,236 plus 45 new. The
+library builds for net8, net9 and net10 with no warnings. Each piece was red before it was green, and
+each was reviewed on both axes before it was committed. **38 mutations all failed their tests**, each
+one built first. Two that did not compile the first time (CS8518, CA1508) were rewritten until they
+did, not counted as killed.
+
+**The media are stored, not deflated.** This was added during Task 3, after asking what a grid with
+100,000 thumbnails would cost. JPEG and PNG do not compress further, deflating them is most of the
+replay's CPU, and the replay runs on the renderer's dispatcher with no yield. A 10 KB compressible
+payload now stores 10,008 bytes where it used to deflate to 39, and a test holds it.
+
+**The byte gate** over the built path reads 16 parts, 1 differing, at both the first commit and the
+tip: `sheet1.xml` row 33, `ht="44.25"` becoming `ht="33.1875"`, which is the fixture's 44.25 px now
+written in points. The fixture's own image and drawing parts are unchanged, so the built path's
+`SaveDrawing` was not touched. The gate was shown to be able to fail by changing one byte of
+`xl_styles.xml`, after which it reported 2 differing.
+
+**The allocation sweep** (`StreamedImageFloor.cs` on `gridbench/spreadsheet-perf`, `56f3d502a`) runs
+distinct images, both arms interleaved, median of three passes, with growth per added image in KB:
+
+| image size | memory, per image | spill, per image |
+| --- | --- | --- |
+| 8 KB | 17.7 | 1.23–1.27 |
+| 32 KB | 66.8 | 1.22–1.27 |
+| 128 KB | 263.3 | 1.12–1.18 |
+
+The memory arm is the known shape. It grows by 2.06× the image each time, which is `MemoryStream`
+doubling its buffer, so the instrument does see growth. **The spill arm is flat in image size: about
+1.2 KB of allocation per image whether the image is 8 KB or 128 KB.** Before running it the plan said
+"under 1 KB". That was about 25% low. It is the `ZipArchive` entry for each media part and a few short
+strings for each anchor, and it is recorded as a miss, not rounded into a pass.
+
+**Nine Northwind photos** were streamed with no content type given, so the sniffer ran, and with
+`SpillImages` on, `DataRowHeight = 64` and a 64 px column. The file has nine `xl/media/image*.jpeg`
+entries, each stored at its own length and each starting `FFD8FF`. Opened in Numbers and exported to
+PDF, the file draws every photo filling its own cell in its own row, and it matches the same photos
+written through the built path, which was run beside it as a control. Quick Look was tried first and
+draws **no** pictures for either file, the control included, so Quick Look cannot see this failure
+and its blank column meant nothing. **Excel has not opened this file.** That is still Josh's to check.
+
+Two things came up that are not image work, and are recorded rather than fixed:
+
+- The built path writes `defaultRowHeight="14.25"` points, which reads back as 19 px, while a new
+  sheet's rows are 22 px. So a row at the default height does not round-trip either.
+- In Numbers, the auto-fit Name column clips "Margaret Peacock" by a letter. The width is measured with
+  Excel's font metrics and drawn in Numbers' fonts, so Excel may show it correctly.
+
+### What a grid with 100,000 thumbnails would still need
+
+This is the grid-side section's problem, but it was worked through here and the answers belong
+somewhere:
+
+- **The download buffer.** `WorkbookExporter.SaveAsync` writes into a `MemoryStream` for
+  `DotNetStreamReference`, and images do not compress, so the buffer is the whole file, capped at 2 GB.
+  At this size `Destination` stops being optional, and memory mode needs a clear failure before the
+  2 GB wall, not an `IOException` from inside the zip.
+- **The replay does not yield.** Storing the media removed most of its CPU, but it is still
+  synchronous on the dispatcher.
+- **Excel may be the ceiling.** Each anchored picture is a shape, and 100,000 shapes on one sheet is
+  likely to open slowly or not at all. This is unmeasured. If it holds, the answer is Excel's
+  picture-in-cell format (rich values, `xl/richData`), which is a separate mechanism.
+- **Thumbnails held as URLs do not stream.** `Image` is synchronous, so a URL needs a prefetch or an
+  asynchronous accessor. Bytes from the query and data URIs are fine.
