@@ -123,6 +123,25 @@ static class Program
                 Error = "Enter 0 to 100 & no more",
             });
 
+        // An auto-fitted column, which is the only path that reaches ComputeAutoFitWidths, and a
+        // conditional format over one of its cells - the one input to the computed width that does not
+        // live on the cell itself.
+        SetAutoFit(sheet.Columns, 7);
+
+        sheet.Cells[36, 7].SetValue("short");
+        sheet.Cells[37, 7].SetValue("a bit longer");
+        sheet.Cells[38, 7].Format.WrapText = true;
+        sheet.Cells[38, 7].SetValue("wrapped\ntext");
+        sheet.Cells[39, 7].Value = 12345678901234.5;
+
+        sheet.ConditionalFormats.Add(
+            new RangeRef(new CellRef(39, 7), new CellRef(39, 7)),
+            new GreaterThanRule { Value = 10, Format = new Format { Bold = true, FontSize = 20 } });
+
+        static void SetAutoFit(Axis axis, int index) =>
+            typeof(Axis).GetMethod("SetAutoFit", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(axis, new object[] { index });
+
         sheet.Protection.IsProtected = true;
         sheet.Protection.AllowFormatCells = true;
 
