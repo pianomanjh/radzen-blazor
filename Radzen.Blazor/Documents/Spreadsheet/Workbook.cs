@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Radzen.Documents.Spreadsheet;
 
@@ -140,6 +142,42 @@ public class Workbook
     public void SaveToStream(Stream stream)
     {
         new XlsxWriter(this).Write(stream);
+    }
+
+    /// <summary>
+    /// Writes a single sheet to the specified stream in the Open XML Spreadsheet format (XLSX),
+    /// reading its rows once and retaining none of them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Static because there is no workbook: what a streamed sheet needs is its columns and a row
+    /// source, and building the cells to hold the rows is the cost this exists to avoid. The rows are
+    /// written in the order they arrive, through the columns given, and nothing is filtered, sorted or
+    /// counted on the way through.
+    /// </para>
+    /// <para>
+    /// The XML is written synchronously into the archive; what is awaited is the row source. A source
+    /// that faults or is cancelled leaves nothing that opens: the archive's central directory is never
+    /// written, so whatever reached the destination is not a readable package. A seekable destination
+    /// is truncated back to where it started; one that cannot seek keeps the bytes already written,
+    /// so a caller streaming to a response body should treat a fault as a failed download.
+    /// </para>
+    /// </remarks>
+    /// <param name="stream">Destination stream.</param>
+    /// <param name="sheet">The sheet to write.</param>
+    /// <param name="cancellationToken">Cancels the write between rows.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The sheet declares more than 16,384 columns.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The source yields more than the 1,048,576 rows a worksheet holds, or a number that disagrees
+    /// with <see cref="StreamedSheet.RowCount"/>. Both are caught as they happen, so the destination is
+    /// left with nothing that opens rather than with a file no reader will accept.
+    /// </exception>
+    public static Task SaveToStreamAsync(Stream stream, StreamedSheet sheet, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(sheet);
+
+        return XlsxWriter.WriteStreamedAsync(stream, sheet, cancellationToken);
     }
 
     /// <summary>

@@ -224,15 +224,17 @@ public class Cell
     /// </summary>
     public string? GetValueAsString() => FormatValue(Culture);
 
-    private string? FormatValue(CultureInfo culture)
+    private string? FormatValue(CultureInfo culture) => FormatValue(Value, culture);
+
+    internal static string? FormatValue(object? value, CultureInfo culture)
     {
-        return Value switch
+        return value switch
         {
             null => null,
             CellError error => error.ToString(),
             string str => str,
             IFormattable formattable => formattable.ToString(null, culture),
-            _ => Value.ToString()
+            _ => value.ToString()
         };
     }
 
