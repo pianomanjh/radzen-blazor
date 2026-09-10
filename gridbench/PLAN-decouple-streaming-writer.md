@@ -454,7 +454,16 @@ rebuild — both sides must exist to be compared.
 - Create: a console harness from `gridbench/spreadsheet/README.md`'s "Rebuilding one" recipe, measuring
   a streamed export rather than a fill.
 
-- [ ] **Step 1: Write the harness**
+**Where the harness lives.** `gridbench/spreadsheet/` is on the **`gridbench/spreadsheet-perf`** branch,
+not on this one — that branch's `gridbench/` tree contains nothing else, and it is not checked out in
+any worktree. The harness is written there and committed there (Step 7), so the next session finds it
+beside the other eleven instead of rebuilding it from the README.
+
+```bash
+git worktree add ../radzen-spreadsheet-bench gridbench/spreadsheet-perf
+```
+
+- [ ] **Step 1: Write the harness as `gridbench/spreadsheet/StreamedExportFloor.cs`**
 
 50,000 rows × 11 columns as in `BulkVsIndexer.cs`, values built **outside** the measured region, three
 passes, arms interleaved, `GC.GetTotalAllocatedBytes(precise: true)` around a forced collect. Include
@@ -489,6 +498,20 @@ and stop — that is a finding that changes the plan.**
 git add gridbench/SLIM-GRID-SPEC.md
 git commit -m "Measure the streamed export against both storage shapes"
 ```
+
+- [ ] **Step 7: Commit the harness on the branch that holds the others**
+
+In `../radzen-spreadsheet-bench`, add the program and a row to the table in
+`gridbench/spreadsheet/README.md` describing what it answers, in the voice of the existing rows:
+
+> | `StreamedExportFloor.cs` | What a streamed export allocates, run against a checkout with the slot store and one without. |
+
+```bash
+git add gridbench/spreadsheet/StreamedExportFloor.cs gridbench/spreadsheet/README.md
+git commit -m "Add the harness that prices a streamed export against both stores"
+```
+
+Note `.gitignore:352` ignores `*.md`, so the README edit needs `git add -f` if git refuses it.
 
 ---
 
