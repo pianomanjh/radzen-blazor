@@ -315,4 +315,136 @@ public class StreamedSheetImageTests
 
         Assert.Equal(409 * 96.0 / 72.0, spec.DataRowHeight);
     }
+
+    private sealed class Scratch : IDisposable
+    {
+        public string Path { get; } = Directory.CreateDirectory(
+            System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.IO.Path.GetRandomFileName())).FullName;
+
+        public int Files => Directory.GetFiles(Path).Length;
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
+    private static async IAsyncEnumerable<Item> Watched(Scratch scratch, Action<int> seen, Item first, Item second)
+    {
+        await Task.Yield();
+
+        yield return first;
+
+        seen(scratch.Files);
+
+        yield return second;
+    }
+
+    [Fact]
+    public async Task Spilling_holds_the_images_in_a_file_while_the_rows_stream()
+    {
+        using var scratch = new Scratch();
+        var during = -1;
+
+        var spec = Sheet();
+        spec.Rows = Watched(scratch, n => during = n, With("a", 1), With("b", 2));
+        spec.SpillImages = true;
+        spec.SpillDirectory = scratch.Path;
+
+        await Stream(spec);
+
+        Assert.Equal(1, during);
+        Assert.Equal(0, scratch.Files);
+    }
+
+    [Fact]
+    public async Task Spilling_a_sheet_without_images_opens_no_file()
+    {
+        using var scratch = new Scratch();
+        var during = -1;
+
+        var spec = Sheet();
+        spec.Rows = Watched(scratch, n => during = n, new Item("a", null), new Item("b", null));
+        spec.SpillImages = true;
+        spec.SpillDirectory = scratch.Path;
+
+        await Stream(spec);
+
+        Assert.Equal(0, during);
+    }
+
+    [Fact]
+    public async Task A_failed_write_leaves_no_spill_behind()
+    {
+        using var scratch = new Scratch();
+
+        var spec = Sheet();
+        spec.Rows = Faulting();
+        spec.SpillImages = true;
+        spec.SpillDirectory = scratch.Path;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Workbook.SaveToStreamAsync(new MemoryStream(), spec));
+
+        Assert.Equal(0, scratch.Files);
+
+        static async IAsyncEnumerable<Item> Faulting()
+        {
+            await Task.Yield();
+
+            yield return With("a", 1);
+
+            await Task.Yield();
+
+            throw new InvalidOperationException("the source failed");
+        }
+    }
+
+    [Fact]
+    public async Task Spilling_writes_the_same_file()
+    {
+        using var scratch = new Scratch();
+
+        Item[] items = [With("a", 1), With("b", 2), With("c", 1), new Item("d", null)];
+
+        var memory = await Stream(Sheet(items));
+
+        var spilled = Sheet(items);
+        spilled.SpillImages = true;
+        spilled.SpillDirectory = scratch.Path;
+
+        var disk = await Stream(spilled);
+
+        Assert.Equal(Parts(memory), Parts(disk));
+    }
+
+    private static SortedDictionary<string, string> Parts(MemoryStream stream)
+    {
+        XNamespace revision = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision";
+
+        stream.Position = 0;
+
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+
+        var parts = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var entry in zip.Entries.Where(e => e.FullName != "docProps/core.xml"))
+        {
+            using var content = entry.Open();
+            using var copy = new MemoryStream();
+
+            content.CopyTo(copy);
+
+            parts[entry.FullName] = entry.FullName == "xl/worksheets/sheet1.xml"
+                ? WithoutUid(copy.ToArray(), revision)
+                : Convert.ToBase64String(copy.ToArray());
+        }
+
+        return parts;
+    }
+
+    private static string WithoutUid(byte[] xml, XNamespace revision)
+    {
+        var document = XDocument.Load(new MemoryStream(xml));
+
+        document.Root!.Attribute(revision + "uid")?.Remove();
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
 }

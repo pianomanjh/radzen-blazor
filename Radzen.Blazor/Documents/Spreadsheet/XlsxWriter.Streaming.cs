@@ -72,7 +72,9 @@ partial class XlsxWriter
         {
             var styleTracker = CreateStylesDocument();
             using var sharedStrings = new SharedStringTable();
-            using var journal = new StreamedImageJournal(static () => new MemoryStream());
+            using var journal = new StreamedImageJournal(spec.SpillImages
+                ? () => Spill(spec.SpillDirectory)
+                : static () => new MemoryStream());
 
             var table = await SaveStreamedSheetAsync(archive, spec, sheet, styleTracker, sharedStrings, journal, cancellationToken)
                 .ConfigureAwait(false);
@@ -106,6 +108,10 @@ partial class XlsxWriter
             throw;
         }
     }
+
+    private static FileStream Spill(string directory) =>
+        new(Path.Combine(directory, Path.GetRandomFileName()), FileMode.CreateNew, FileAccess.ReadWrite,
+            FileShare.None, bufferSize: 81_920, FileOptions.DeleteOnClose);
 
     private const int MaxRows = 1_048_576;
 

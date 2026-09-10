@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -112,7 +113,7 @@ public sealed class StreamedColumn<T>
 /// <summary>
 /// A sheet written from a row source rather than built. The rows are read once, in order, and never
 /// retained, so what is written costs the same in memory whether the source has a hundred rows or a
-/// million.
+/// million. Images are the exception unless <see cref="SpillImages"/> is set.
 /// </summary>
 /// <remarks>
 /// Passed to <see cref="Workbook.SaveToStreamAsync(System.IO.Stream, StreamedSheet, CancellationToken)"/>.
@@ -149,6 +150,19 @@ public abstract class StreamedSheet
     /// the whole write <c>O(1)</c> in rows at the cost of a larger file.
     /// </summary>
     public bool InlineStrings { get; set; }
+
+    /// <summary>
+    /// Holds the images in a temporary file until the sheet has been written, instead of in memory. Off,
+    /// what the write holds grows with the bytes of the distinct images it is given; on, it grows with
+    /// how many there are but not with their size. A sheet that yields no image opens no file.
+    /// </summary>
+    /// <remarks>
+    /// The file is deleted when the write ends, whether it completes, faults or is cancelled. A process
+    /// killed during the write can leave it behind in <see cref="Path.GetTempPath"/>.
+    /// </remarks>
+    public bool SpillImages { get; set; }
+
+    internal string SpillDirectory { get; set; } = Path.GetTempPath();
 
     /// <summary>
     /// Whether the column titles are written as the first row, and counted in the table range when it
