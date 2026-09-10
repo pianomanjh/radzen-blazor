@@ -87,6 +87,8 @@ partial class XlsxWriter
 
     private const int MaxColumns = 16_384;
 
+    private const int MaxCellCharacters = 32_767;
+
     private static int HeaderRows(StreamedSheet spec) => spec.IncludeHeader ? 1 : 0;
 
     private static bool HasTable(StreamedSheet spec, int written) =>
@@ -469,6 +471,12 @@ partial class XlsxWriter
         if (type == CellDataType.String)
         {
             var text = content as string ?? string.Empty;
+
+            if (text.Length > MaxCellCharacters)
+            {
+                throw new InvalidOperationException(
+                    $"A cell holds at most {MaxCellCharacters} characters, and {address} was given {text.Length}.");
+            }
 
             if (inlineStrings)
             {

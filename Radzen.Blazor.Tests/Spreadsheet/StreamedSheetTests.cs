@@ -413,6 +413,63 @@ public class StreamedSheetTests
     }
 
     [Fact]
+    public async Task A_cell_longer_than_the_format_can_hold_is_refused()
+    {
+        var spec = Text(new string('x', 32_768));
+
+        var stream = new MemoryStream();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Workbook.SaveToStreamAsync(stream, spec));
+
+        Assert.Contains("32767", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, stream.Length);
+    }
+
+    [Fact]
+    public async Task A_cell_of_exactly_the_longest_the_format_holds_is_written()
+    {
+        var spec = Text(new string('x', 32_767));
+
+        var stream = new MemoryStream();
+
+        await Workbook.SaveToStreamAsync(stream, spec);
+
+        Assert.Equal(32_767, Read(stream).Cells[0, 0].Value as string is { } text ? text.Length : 0);
+    }
+
+    [Fact]
+    public async Task A_title_longer_than_the_format_can_hold_is_refused()
+    {
+        var spec = Text("short");
+        spec.IncludeHeader = true;
+        spec.Columns[0].Title = new string('t', 32_768);
+
+        var stream = new MemoryStream();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Workbook.SaveToStreamAsync(stream, spec));
+
+        Assert.Equal(0, stream.Length);
+    }
+
+    private static StreamedSheet<string> Text(string value) => new()
+    {
+        Name = "Sheet1",
+        IncludeHeader = false,
+        WidthMode = ColumnWidthMode.Declared,
+        Rows = One(value),
+        Columns = { new StreamedColumn<string> { Title = "t", Value = v => v } },
+    };
+
+    private static async IAsyncEnumerable<string> One(string value)
+    {
+        await Task.CompletedTask;
+
+        yield return value;
+    }
+
+    [Fact]
     public async Task A_row_count_the_source_does_not_keep_is_refused()
     {
         var spec = Sheet(People(3));
