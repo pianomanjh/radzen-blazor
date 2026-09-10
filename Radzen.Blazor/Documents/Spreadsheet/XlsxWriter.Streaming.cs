@@ -585,7 +585,7 @@ partial class XlsxWriter
             }
         }
 
-        WriteRowStart(writer, sheet, row, first, last);
+        WriteRowStart(writer, sheet, row, first, last, spec.DataRowHeight);
 
         for (var column = 0; column < columns; column++)
         {

@@ -195,6 +195,33 @@ public abstract class StreamedSheet
     /// </exception>
     public int? RowCount { get; set; }
 
+    private const double MaxRowHeight = 409 * 96.0 / 72.0;
+
+    private double? dataRowHeight;
+
+    /// <summary>
+    /// The height of every row below the header, in pixels, as <see cref="StreamedColumn{T}.Width"/> is.
+    /// Null leaves them at the default height. A column of images fills its cells, so this is what sizes
+    /// the pictures.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The height is not greater than zero, or is taller than the 409 points (about 545 pixels) a row can be.
+    /// </exception>
+    public double? DataRowHeight
+    {
+        get => dataRowHeight;
+        set
+        {
+            if (value is not (null or (> 0 and <= MaxRowHeight)))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value,
+                    "A row is more than zero and at most 409 points, about 545 pixels, tall.");
+            }
+
+            dataRowHeight = value;
+        }
+    }
+
     internal abstract int ColumnCount { get; }
 
     internal abstract string TitleAt(int column);

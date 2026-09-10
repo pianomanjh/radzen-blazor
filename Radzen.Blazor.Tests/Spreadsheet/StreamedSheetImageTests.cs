@@ -270,4 +270,49 @@ public class StreamedSheetImageTests
         Assert.Equal(new[] { "xl/media/image1.jpeg" }, Entries(stream, "xl/media/"));
         Assert.Equal("image/jpeg", Read(stream).Images.Single().ContentType);
     }
+
+    [Fact]
+    public async Task Every_data_row_takes_the_declared_height()
+    {
+        var spec = Sheet(With("a", 1), new Item("b", null));
+        spec.DataRowHeight = 48;
+
+        var stream = await Stream(spec);
+        var sheet = Read(stream);
+
+        Assert.Equal(48, sheet.Rows[1]);
+        Assert.Equal(48, sheet.Rows[2]);
+        Assert.Null(Part(stream, "xl/worksheets/sheet1.xml")!.Descendants(Main + "row").First().Attribute("ht"));
+    }
+
+    [Fact]
+    public async Task A_declared_height_equal_to_the_default_is_still_written()
+    {
+        var spec = Sheet(With("a", 1));
+        spec.DataRowHeight = 22;
+
+        var row = Part(await Stream(spec), "xl/worksheets/sheet1.xml")!
+            .Descendants(Main + "row").Single(r => (string?)r.Attribute("r") == "2");
+
+        Assert.Equal("16.5", (string?)row.Attribute("ht"));
+        Assert.Equal("1", (string?)row.Attribute("customHeight"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(546)]
+    [InlineData(double.NaN)]
+    public void Refuses_a_height_a_row_cannot_have(double height)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new StreamedSheet<Item> { DataRowHeight = height });
+    }
+
+    [Fact]
+    public void Accepts_the_tallest_row_there_is()
+    {
+        var spec = new StreamedSheet<Item> { DataRowHeight = 409 * 96.0 / 72.0 };
+
+        Assert.Equal(409 * 96.0 / 72.0, spec.DataRowHeight);
+    }
 }

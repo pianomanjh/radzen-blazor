@@ -1485,14 +1485,16 @@ partial class XlsxWriter(Workbook sourceWorkbook)
 
     private const double PointsPerPixel = 72.0 / 96.0;
 
-    private void WriteRowStart(XmlWriter writer, Worksheet sheet, int row, int firstColumn, int lastColumn)
+    private void WriteRowStart(XmlWriter writer, Worksheet sheet, int row, int firstColumn, int lastColumn, double? height = null)
     {
         writer.WriteStartElement("row", Main);
         WriteNumberAttribute(writer, "r", row + 1);
 
-        if (Math.Abs(sheet.Rows[row] - sheet.Rows.Size) > 1e-6)
+        var size = height ?? sheet.Rows[row];
+
+        if (height is not null || Math.Abs(size - sheet.Rows.Size) > 1e-6)
         {
-            writer.WriteAttributeString("ht", XmlConvert.ToString(sheet.Rows[row] * PointsPerPixel));
+            writer.WriteAttributeString("ht", XmlConvert.ToString(size * PointsPerPixel));
             writer.WriteAttributeString("customHeight", "1");
         }
 
