@@ -356,7 +356,9 @@ static class XlsxReader
         {
             using var s = sharedEntry.Open();
             var doc = XDocument.Load(s);
-            sharedStrings = doc.Descendants().Where(e => e.Name.LocalName == "t").Select(e => e.Value).ToList();
+            var ns = doc.Root!.Name.Namespace;
+
+            sharedStrings = doc.Root.Elements(ns + "si").Select(si => RstText(si, ns)).ToList();
         }
 
         return sharedStrings;

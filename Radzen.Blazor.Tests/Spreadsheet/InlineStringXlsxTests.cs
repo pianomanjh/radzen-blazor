@@ -48,6 +48,29 @@ public class InlineStringXlsxTests
         return ms;
     }
 
+    private static MemoryStream BuildXlsxWithSharedStrings(string sheetDataXml, string sharedStringsXml)
+    {
+        var ms = BuildXlsxWithSheetData(sheetDataXml);
+
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true))
+        {
+            zip.GetEntry("xl/sharedStrings.xml")?.Delete();
+
+            var sst = XElement.Parse(sharedStringsXml);
+            foreach (var element in sst.DescendantsAndSelf())
+            {
+                element.Name = Ns + element.Name.LocalName;
+            }
+
+            var entry = zip.CreateEntry("xl/sharedStrings.xml");
+            using var output = entry.Open();
+            new XDocument(sst).Save(output);
+        }
+
+        ms.Position = 0;
+        return ms;
+    }
+
     [Fact]
     public void Read_InlineString_ReadsTheTextTheCellCarries()
     {
@@ -176,6 +199,55 @@ public class InlineStringXlsxTests
 
         Assert.Equal("東京", sheet.Cells["A1"].Value);
         Assert.Equal("大阪", sheet.Cells["B1"].Value);
+    }
+
+    [Fact]
+    public void Read_SharedString_KeepsOneEntryPerItemSoIndexesDoNotShift()
+    {
+        using var ms = BuildXlsxWithSharedStrings("""
+            <sheetData>
+              <row r="1">
+                <c r="A1" t="s"><v>0</v></c>
+                <c r="B1" t="s"><v>1</v></c>
+                <c r="C1" t="s"><v>2</v></c>
+              </row>
+            </sheetData>
+            """, """
+            <sst count="3" uniqueCount="3">
+              <si><t>Hello</t></si>
+              <si><r><t>Wor</t></r><r><t>ld</t></r></si>
+              <si><t>Last</t></si>
+            </sst>
+            """);
+
+        var sheet = Workbook.LoadFromStream(ms).Sheets[0];
+
+        Assert.Equal("Hello", sheet.Cells["A1"].Value);
+        Assert.Equal("World", sheet.Cells["B1"].Value);
+        Assert.Equal("Last", sheet.Cells["C1"].Value);
+    }
+
+    [Fact]
+    public void Read_SharedString_LeavesPhoneticRunsOutOfTheValue()
+    {
+        using var ms = BuildXlsxWithSharedStrings("""
+            <sheetData>
+              <row r="1">
+                <c r="A1" t="s"><v>0</v></c>
+                <c r="B1" t="s"><v>1</v></c>
+              </row>
+            </sheetData>
+            """, """
+            <sst count="2" uniqueCount="2">
+              <si><t>東京</t><rPh sb="0" eb="2"><t>トウキョウ</t></rPh><phoneticPr fontId="1"/></si>
+              <si><t>Next</t></si>
+            </sst>
+            """);
+
+        var sheet = Workbook.LoadFromStream(ms).Sheets[0];
+
+        Assert.Equal("東京", sheet.Cells["A1"].Value);
+        Assert.Equal("Next", sheet.Cells["B1"].Value);
     }
 
     [Fact]
