@@ -1184,14 +1184,19 @@ partial class XlsxWriter(Workbook sourceWorkbook)
     {
         var widths = new Dictionary<int, double>();
 
-        foreach (var cell in sheet.Cells.GetPopulatedCells().ToList())
+        var measured = new List<Cell>();
+
+        foreach (var cell in sheet.Cells.GetPopulatedCells())
+        {
+            if (sheet.Columns.IsAutoFit(cell.Address.Column) && !sheet.MergedCells.Contains(cell.Address))
+            {
+                measured.Add(cell);
+            }
+        }
+
+        foreach (var cell in measured)
         {
             var col = cell.Address.Column;
-
-            if (!sheet.Columns.IsAutoFit(col) || sheet.MergedCells.Contains(cell.Address))
-            {
-                continue;
-            }
 
             string? text;
             Format? format;

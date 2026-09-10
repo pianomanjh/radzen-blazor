@@ -138,6 +138,51 @@ public class AutoFitXlsxRoundTripTests
         Assert.Equal(78, sheet.Columns[0]);
     }
 
+    // A Top 10 rule reads every address in its range through the indexer, which adds the cells it does
+    // not find and throws past the sheet's bounds. Measuring an auto fitted column asks that rule for a
+    // format, so the width pass has to survive both.
+    [Fact]
+    public void Write_AutoFitColumn_SurvivesATop10RuleOverUnpopulatedCells()
+    {
+        var wb = Build();
+        var sheet = wb.Sheets[0];
+
+        for (var row = 0; row < 4; row++)
+        {
+            sheet.Cells[row, 0].Value = row * 1.5;
+        }
+
+        sheet.Columns.SetAutoFit(0);
+        sheet.ConditionalFormats.Add(
+            new RangeRef(new CellRef(0, 0), new CellRef(9, 0)),
+            new Top10Rule { Count = 2, Format = new Format { Bold = true } });
+
+        using var ms = Save(wb);
+
+        Assert.Single(ReadSheetXml(ms).Descendants(Ns + "col"));
+    }
+
+    [Fact]
+    public void Write_AutoFitColumn_SurvivesATop10RulePastTheSheetBounds()
+    {
+        var wb = Build();
+        var sheet = wb.Sheets[0];
+
+        for (var row = 0; row < 4; row++)
+        {
+            sheet.Cells[row, 0].Value = row * 1.5;
+        }
+
+        sheet.Columns.SetAutoFit(0);
+        sheet.ConditionalFormats.Add(
+            new RangeRef(new CellRef(0, 0), new CellRef(40, 0)),
+            new Top10Rule { Count = 2, Format = new Format { Bold = true } });
+
+        using var ms = Save(wb);
+
+        Assert.Single(ReadSheetXml(ms).Descendants(Ns + "col"));
+    }
+
     [Fact]
     public void Write_AutoFitColumn_KeepsWiderModelWidth()
     {
