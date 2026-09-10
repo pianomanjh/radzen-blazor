@@ -167,9 +167,14 @@ public class Workbook
     /// <param name="sheet">The sheet to write.</param>
     /// <param name="cancellationToken">Cancels the write between rows.</param>
     /// <exception cref="ArgumentOutOfRangeException">The sheet declares more than 16,384 columns.</exception>
+    /// <exception cref="ArgumentException">
+    /// A column reads images and also sets <see cref="StreamedColumn{T}.Value"/> or
+    /// <see cref="StreamedColumn{T}.AutoFit"/>.
+    /// </exception>
     /// <exception cref="InvalidOperationException">
     /// The source yields more than the 1,048,576 rows a worksheet holds, or a number that disagrees
-    /// with <see cref="StreamedSheet.RowCount"/>. Both are caught as they happen, so the destination is
+    /// with <see cref="StreamedSheet.RowCount"/>, or an image that was given no content type and whose
+    /// bytes are not a format it recognizes. Both are caught as they happen, so the destination is
     /// left with nothing that opens rather than with a file no reader will accept.
     /// </exception>
     public static Task SaveToStreamAsync(Stream stream, StreamedSheet sheet, CancellationToken cancellationToken = default)

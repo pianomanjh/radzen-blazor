@@ -625,7 +625,7 @@ partial class XlsxWriter(Workbook sourceWorkbook)
         return group;
     }
 
-    private void SaveContentTypes(ZipArchive archive, bool includeSharedStrings, int tableCount = 0)
+    private void SaveContentTypes(ZipArchive archive, bool includeSharedStrings, int tableCount = 0, IReadOnlyList<string>? streamedImageExtensions = null)
     {
         var ctNs = "http://schemas.openxmlformats.org/package/2006/content-types";
         var contentTypes = new XDocument(
@@ -683,6 +683,14 @@ partial class XlsxWriter(Workbook sourceWorkbook)
             }
         }
 
+        if (streamedImageExtensions is not null)
+        {
+            foreach (var ext in streamedImageExtensions)
+            {
+                imageExtensions.Add(ext);
+            }
+        }
+
         foreach (var ext in imageExtensions)
         {
             contentTypes.Root!.Add(new XElement(XName.Get("Default", ctNs),
@@ -707,11 +715,18 @@ partial class XlsxWriter(Workbook sourceWorkbook)
             }
         }
 
+        if (streamedImageExtensions is { Count: > 0 })
+        {
+            contentTypes.Root!.Add(new XElement(XName.Get("Override", ctNs),
+                new XAttribute("PartName", "/xl/drawings/drawing1.xml"),
+                new XAttribute("ContentType", "application/vnd.openxmlformats-officedocument.drawing+xml")));
+        }
+
         using var entry = archive.CreateEntry("[Content_Types].xml").Open();
         contentTypes.Save(entry);
     }
 
-    private static string ContentTypeToExtension(string contentType)
+    internal static string ContentTypeToExtension(string contentType)
     {
         return contentType switch
         {

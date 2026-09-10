@@ -25,6 +25,28 @@ partial class XlsxWriter
                 $"A worksheet holds at most {MaxColumns} columns.");
         }
 
+        for (var column = 0; column < spec.ColumnCount; column++)
+        {
+            if (!spec.IsImageAt(column))
+            {
+                continue;
+            }
+
+            if (spec.HasValueAt(column))
+            {
+                throw new ArgumentException(
+                    $"The column '{spec.TitleAt(column)}' reads both an image and a value, and the cell under a picture holds nothing.",
+                    nameof(spec));
+            }
+
+            if (spec.AutoFitAt(column))
+            {
+                throw new ArgumentException(
+                    $"The column '{spec.TitleAt(column)}' reads images and asks to be auto-fit, and a picture has no text to measure.",
+                    nameof(spec));
+            }
+        }
+
         var scaffold = new Workbook();
 
         if (spec.Culture is not null)
@@ -50,8 +72,9 @@ partial class XlsxWriter
         {
             var styleTracker = CreateStylesDocument();
             using var sharedStrings = new SharedStringTable();
+            using var journal = new StreamedImageJournal(static () => new MemoryStream());
 
-            var table = await SaveStreamedSheetAsync(archive, spec, sheet, styleTracker, sharedStrings, cancellationToken)
+            var table = await SaveStreamedSheetAsync(archive, spec, sheet, styleTracker, sharedStrings, journal, cancellationToken)
                 .ConfigureAwait(false);
 
             SaveStreamedWorkbookRelationships(archive, sharedStrings.Count > 0);
@@ -61,7 +84,8 @@ partial class XlsxWriter
             SaveTheme(archive);
             SaveDocPropsCore(archive);
             SaveDocPropsApp(archive);
-            SaveContentTypes(archive, includeSharedStrings: sharedStrings.Count > 0, tableCount: table ? 1 : 0);
+            SaveContentTypes(archive, includeSharedStrings: sharedStrings.Count > 0, tableCount: table ? 1 : 0,
+                streamedImageExtensions: journal.Extensions);
             SaveRelationships(archive);
         }
         catch
@@ -117,6 +141,7 @@ partial class XlsxWriter
         Worksheet sheet,
         StyleTracker styleTracker,
         SharedStringTable sharedStrings,
+        StreamedImageJournal journal,
         CancellationToken cancellationToken)
     {
         var columns = spec.ColumnCount;
@@ -163,7 +188,7 @@ partial class XlsxWriter
 
         using (var entry = archive.CreateEntry("xl/worksheets/sheet1.xml").Open())
         {
-            written = await WriteStreamedSheetXmlAsync(entry, spec, sheet, styleTracker, sharedStrings, buffered, rows, declaredRows is not null, cancellationToken)
+            written = await WriteStreamedSheetXmlAsync(entry, spec, sheet, styleTracker, sharedStrings, journal, buffered, rows, declaredRows is not null, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -174,31 +199,159 @@ partial class XlsxWriter
                 + "dimension written before them does not describe the sheet.");
         }
 
-        if (spec.TableName is not { } tableName || written <= headerRows)
-        {
-            return false;
-        }
+        var relationships = new List<(string Id, string Type, string Target, bool External)>();
+        var table = HasTable(spec, written);
 
-        sheet.Rows.Count = Math.Max(written, 1);
-
-        if (spec.IncludeHeader)
+        if (table)
         {
-            for (var column = 0; column < columns; column++)
+            sheet.Rows.Count = Math.Max(written, 1);
+
+            if (spec.IncludeHeader)
             {
-                sheet.Cells[0, column].SetText(spec.TitleAt(column));
+                for (var column = 0; column < columns; column++)
+                {
+                    sheet.Cells[0, column].SetText(spec.TitleAt(column));
+                }
             }
+
+            var range = new RangeRef(new CellRef(0, 0), new CellRef(written - 1, Math.Max(columns - 1, 0)));
+
+            SaveTable(archive, sheet.AddTable(spec.TableName!, range, hasHeaders: spec.IncludeHeader), tableId: 1);
+
+            relationships.Add(("rId1", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table", "../tables/table1.xml", false));
         }
 
-        var range = new RangeRef(new CellRef(0, 0), new CellRef(written - 1, Math.Max(columns - 1, 0)));
+        if (journal.Count > 0)
+        {
+            SaveStreamedDrawing(archive, journal);
 
-        SaveTable(archive, sheet.AddTable(tableName, range, hasHeaders: spec.IncludeHeader), tableId: 1);
+            relationships.Add((DrawingRelationshipId(spec, written), "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing", "../drawings/drawing1.xml", false));
+        }
 
-        SaveSheetRelationships(archive, "sheet1.xml",
-        [
-            ("rId1", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table", "../tables/table1.xml", false),
-        ]);
+        if (relationships.Count > 0)
+        {
+            SaveSheetRelationships(archive, "sheet1.xml", relationships);
+        }
 
-        return true;
+        return table;
+    }
+
+    private static string DrawingRelationshipId(StreamedSheet spec, int written) => HasTable(spec, written) ? "rId2" : "rId1";
+
+    private const string SpreadsheetDrawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+
+    private const string DrawingMain = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+    private const string OfficeRelationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    private const string PackageRelationships = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+    private void SaveStreamedDrawing(ZipArchive archive, StreamedImageJournal journal)
+    {
+        var extensions = journal.Extensions;
+
+        journal.CopyMedia(index => archive
+            .CreateEntry($"xl/media/image{index + 1}.{extensions[index]}", CompressionLevel.NoCompression)
+            .Open());
+
+        using (var entry = archive.CreateEntry("xl/drawings/drawing1.xml").Open())
+        using (var writer = XmlWriter.Create(entry, PartXmlSettings))
+        {
+            writer.WriteStartDocument();
+            writer.WriteStartElement("xdr", "wsDr", SpreadsheetDrawing);
+            writer.WriteAttributeString("xmlns", "a", null, DrawingMain);
+            writer.WriteAttributeString("xmlns", "r", null, OfficeRelationships);
+
+            var id = 1;
+
+            foreach (var (row, column, media) in journal.Anchors())
+            {
+                id++;
+
+                writer.WriteStartElement("twoCellAnchor", SpreadsheetDrawing);
+                WriteDrawingMarker(writer, "from", column, row);
+                WriteDrawingMarker(writer, "to", column + 1, row + 1);
+
+                writer.WriteStartElement("pic", SpreadsheetDrawing);
+                writer.WriteStartElement("nvPicPr", SpreadsheetDrawing);
+                writer.WriteStartElement("cNvPr", SpreadsheetDrawing);
+                WriteNumberAttribute(writer, "id", id);
+                writer.WriteAttributeString("name", string.Create(CultureInfo.InvariantCulture, $"Image {id - 1}"));
+                writer.WriteEndElement();
+                writer.WriteStartElement("cNvPicPr", SpreadsheetDrawing);
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+
+                writer.WriteStartElement("blipFill", SpreadsheetDrawing);
+                writer.WriteStartElement("blip", DrawingMain);
+                writer.WriteAttributeString("embed", OfficeRelationships, ImageRelationshipId(media));
+                writer.WriteEndElement();
+                writer.WriteStartElement("stretch", DrawingMain);
+                writer.WriteStartElement("fillRect", DrawingMain);
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+
+                writer.WriteStartElement("spPr", SpreadsheetDrawing);
+                writer.WriteStartElement("prstGeom", DrawingMain);
+                writer.WriteAttributeString("prst", "rect");
+                writer.WriteStartElement("avLst", DrawingMain);
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+
+                writer.WriteEndElement();
+
+                writer.WriteStartElement("clientData", SpreadsheetDrawing);
+                writer.WriteEndElement();
+
+                writer.WriteEndElement();
+            }
+
+            writer.WriteEndElement();
+            writer.WriteEndDocument();
+        }
+
+        using (var entry = archive.CreateEntry("xl/drawings/_rels/drawing1.xml.rels").Open())
+        using (var writer = XmlWriter.Create(entry, PartXmlSettings))
+        {
+            writer.WriteStartDocument();
+            writer.WriteStartElement("Relationships", PackageRelationships);
+
+            for (var media = 0; media < extensions.Count; media++)
+            {
+                writer.WriteStartElement("Relationship", PackageRelationships);
+                writer.WriteAttributeString("Id", ImageRelationshipId(media));
+                writer.WriteAttributeString("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image");
+                writer.WriteAttributeString("Target", $"../media/image{media + 1}.{extensions[media]}");
+                writer.WriteEndElement();
+            }
+
+            writer.WriteEndElement();
+            writer.WriteEndDocument();
+        }
+    }
+
+    private static string ImageRelationshipId(int media) =>
+        string.Create(CultureInfo.InvariantCulture, $"rId{media + 1}");
+
+    private void WriteDrawingMarker(XmlWriter writer, string name, int column, int row)
+    {
+        writer.WriteStartElement(name, SpreadsheetDrawing);
+        WriteDrawingNumber(writer, "col", column);
+        writer.WriteElementString("colOff", SpreadsheetDrawing, "0");
+        WriteDrawingNumber(writer, "row", row);
+        writer.WriteElementString("rowOff", SpreadsheetDrawing, "0");
+        writer.WriteEndElement();
+    }
+
+    private void WriteDrawingNumber(XmlWriter writer, string name, int value)
+    {
+        value.TryFormat(scratch, out var length, provider: CultureInfo.InvariantCulture);
+
+        writer.WriteStartElement(name, SpreadsheetDrawing);
+        writer.WriteRaw(scratch, 0, length);
+        writer.WriteEndElement();
     }
 
     private void SaveStreamedWorkbookRelationships(ZipArchive archive, bool includeSharedStrings)
@@ -239,6 +392,7 @@ partial class XlsxWriter
         Worksheet sheet,
         StyleTracker styleTracker,
         SharedStringTable sharedStrings,
+        StreamedImageJournal journal,
         List<object?[]>? buffered,
         IAsyncEnumerator<object?[]> rows,
         bool hasDimension,
@@ -270,7 +424,7 @@ partial class XlsxWriter
             {
                 writer.WriteStartElement(SheetDataElement.LocalName, Main);
 
-                written = await WriteStreamedRowsAsync(writer, spec, sheet, styleTracker, sharedStrings, buffered, rows, cancellationToken)
+                written = await WriteStreamedRowsAsync(writer, spec, sheet, styleTracker, sharedStrings, journal, buffered, rows, cancellationToken)
                     .ConfigureAwait(false);
 
                 writer.WriteEndElement();
@@ -281,12 +435,18 @@ partial class XlsxWriter
             }
         }
 
+        XNamespace rNs = OfficeRelationships;
+
         CreatePageMargins().WriteTo(writer);
+
+        if (journal.Count > 0)
+        {
+            new XElement(XName.Get("drawing", Main), new XAttribute(rNs + "id", DrawingRelationshipId(spec, written)))
+                .WriteTo(writer);
+        }
 
         if (HasTable(spec, written))
         {
-            XNamespace rNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-
             new XElement(XName.Get("tableParts", Main),
                 new XAttribute("count", "1"),
                 new XElement(XName.Get("tablePart", Main), new XAttribute(rNs + "id", "rId1")))
@@ -305,13 +465,20 @@ partial class XlsxWriter
         Worksheet sheet,
         StyleTracker styleTracker,
         SharedStringTable sharedStrings,
+        StreamedImageJournal journal,
         List<object?[]>? buffered,
         IAsyncEnumerator<object?[]> rows,
         CancellationToken cancellationToken)
     {
         var columns = spec.ColumnCount;
         var styles = new Dictionary<(int Column, CellDataType Type), int?>();
+        var images = new bool[columns];
         var row = 0;
+
+        for (var column = 0; column < columns; column++)
+        {
+            images[column] = spec.IsImageAt(column);
+        }
 
         if (spec.IncludeHeader)
         {
@@ -323,7 +490,7 @@ partial class XlsxWriter
         {
             foreach (var line in buffered)
             {
-                WriteStreamedRow(writer, spec, sheet, styleTracker, sharedStrings, styles, line, row++, columns);
+                WriteStreamedRow(writer, spec, sheet, styleTracker, sharedStrings, styles, images, journal, line, row++, columns);
             }
         }
 
@@ -337,7 +504,7 @@ partial class XlsxWriter
                     $"The row source yielded more than the {MaxRows} rows a worksheet can hold.");
             }
 
-            WriteStreamedRow(writer, spec, sheet, styleTracker, sharedStrings, styles, rows.Current, row++, columns);
+            WriteStreamedRow(writer, spec, sheet, styleTracker, sharedStrings, styles, images, journal, rows.Current, row++, columns);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -396,6 +563,8 @@ partial class XlsxWriter
         StyleTracker styleTracker,
         SharedStringTable sharedStrings,
         Dictionary<(int Column, CellDataType Type), int?> styles,
+        bool[] images,
+        StreamedImageJournal journal,
         object?[] line,
         int row,
         int columns)
@@ -405,7 +574,7 @@ partial class XlsxWriter
 
         for (var column = 0; column < columns; column++)
         {
-            if (line[column] is not null)
+            if (line[column] is not null && !images[column])
             {
                 if (first < 0)
                 {
@@ -420,12 +589,21 @@ partial class XlsxWriter
 
         for (var column = 0; column < columns; column++)
         {
-            if (line[column] is null)
+            var value = line[column];
+
+            if (value is null)
             {
                 continue;
             }
 
-            CellData.Infer(line[column], sheet.Workbook!.Culture, out var content, out var type);
+            if (images[column])
+            {
+                journal.Add(new CellRef(row, column), (StreamedImage)value);
+
+                continue;
+            }
+
+            CellData.Infer(value, sheet.Workbook!.Culture, out var content, out var type);
 
             if (content is null)
             {

@@ -70,6 +70,8 @@ public readonly struct ColumnWidthMode : IEquatable<ColumnWidthMode>
 /// <typeparam name="T">The row type.</typeparam>
 public sealed class StreamedColumn<T>
 {
+    private static readonly Func<T, object?> NoValue = static _ => null;
+
     /// <summary>
     /// The heading written in the header row.
     /// </summary>
@@ -79,7 +81,16 @@ public sealed class StreamedColumn<T>
     /// Reads the cell value from a row. The value is typed exactly as it would be if it were assigned
     /// to a <see cref="Cell.Value"/>, so a streamed column and a built one produce the same cell.
     /// </summary>
-    public Func<T, object?> Value { get; set; } = static _ => null;
+    public Func<T, object?> Value { get; set; } = NoValue;
+
+    /// <summary>
+    /// Reads a picture from a row, drawn to fill the row's cell in this column. A row that yields null
+    /// leaves the cell empty. A column that reads images writes no values, so it cannot also set
+    /// <see cref="Value"/> or <see cref="AutoFit"/>, and its <see cref="Format"/> is not used.
+    /// </summary>
+    public Func<T, StreamedImage?>? Image { get; set; }
+
+    internal bool HasValue => Value is not null && !ReferenceEquals(Value, NoValue);
 
     /// <summary>
     /// The format applied to every data cell of the column. Null leaves them unformatted.
@@ -194,6 +205,10 @@ public abstract class StreamedSheet
 
     internal abstract bool AutoFitAt(int column);
 
+    internal abstract bool IsImageAt(int column);
+
+    internal abstract bool HasValueAt(int column);
+
     internal abstract IAsyncEnumerable<object?[]> Read(CancellationToken cancellationToken);
 }
 
@@ -231,6 +246,10 @@ public sealed class StreamedSheet<T> : StreamedSheet
 
     internal override bool AutoFitAt(int column) => Columns[column].AutoFit;
 
+    internal override bool IsImageAt(int column) => Columns[column].Image is not null;
+
+    internal override bool HasValueAt(int column) => Columns[column].HasValue;
+
     internal override async IAsyncEnumerable<object?[]> Read(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -239,7 +258,7 @@ public sealed class StreamedSheet<T> : StreamedSheet
 
         for (var i = 0; i < count; i++)
         {
-            readers[i] = Columns[i].Value ?? (static _ => null);
+            readers[i] = Columns[i].Image ?? Columns[i].Value ?? (static _ => null);
         }
 
         var line = new object?[count];
