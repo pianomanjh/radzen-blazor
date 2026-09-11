@@ -4838,9 +4838,26 @@ window.Radzen = {
   deleteTable: function (context) {
     context.table.remove();
   },
+  getEditorHtml: function (ref) {
+    if (!ref.querySelector('img.rz-state-selected')) {
+      return ref.innerHTML;
+    }
+
+    var copy = document.implementation.createHTMLDocument('').importNode(ref, true);
+
+    for (var img of copy.querySelectorAll('img.rz-state-selected')) {
+      img.classList.remove('rz-state-selected');
+
+      if (!img.getAttribute('class')) {
+        img.removeAttribute('class');
+      }
+    }
+
+    return copy.innerHTML;
+  },
   queryCommands: function (ref) {
     return {
-      html: ref != null ? ref.innerHTML : null,
+      html: ref != null ? this.getEditorHtml(ref) : null,
       fontName: document.queryCommandValue('fontName'),
       fontSize: document.queryCommandValue('fontSize'),
       formatBlock: document.queryCommandValue('formatBlock'),
@@ -5041,6 +5058,8 @@ window.Radzen = {
 
       img.style.width = '';
       img.style.height = '';
+      img.setAttribute('width', ref.imageResize.startWidth);
+      img.setAttribute('height', ref.imageResize.startHeight);
 
       ref.releaseImageDrag = trackDrag(
         ref.documentImageResizeMoveListener,
@@ -5120,19 +5139,14 @@ window.Radzen = {
       var index = Array.prototype.indexOf.call(ref.querySelectorAll('img'), img);
 
       ref.stopImageDrag();
+      ref.restoreImageSize(state);
 
-      if (width === state.startAttributes.width && height === state.startAttributes.height) {
-        ref.restoreImageSize(state);
+      if (width === String(state.startWidth) && height === String(state.startHeight)) {
         ref.positionImageHandles();
         return;
       }
 
-      ref.restoreImageSize(state);
-      img.classList.remove('rz-state-selected');
-
-      if (!img.getAttribute('class')) {
-        img.removeAttribute('class');
-      }
+      ref.deselectImage(img);
 
       var target = img;
 
@@ -5150,6 +5164,10 @@ window.Radzen = {
       replacementImg.style.width = '';
       replacementImg.style.height = '';
 
+      if (!replacementImg.style.length) {
+        replacementImg.removeAttribute('style');
+      }
+
       var range = document.createRange();
       range.selectNode(target);
       var selection = getSelection();
@@ -5159,6 +5177,16 @@ window.Radzen = {
       document.execCommand('insertHTML', false, replacement.outerHTML);
 
       ref.selectImage(ref.querySelectorAll('img')[index]);
+    };
+
+    ref.deselectImage = function (img) {
+      img.classList.remove('rz-state-selected');
+
+      if (!img.getAttribute('class')) {
+        img.removeAttribute('class');
+      }
+
+      ref.removeImageHandles();
     };
 
     ref.selectImage = function (img) {
@@ -5192,7 +5220,7 @@ window.Radzen = {
 
     ref.inputListener = function () {
       ref.positionImageHandles();
-      try { suppressDisposed(instance.invokeMethodAsync('OnChange', ref.innerHTML)); } catch { }
+      try { suppressDisposed(instance.invokeMethodAsync('OnChange', Radzen.getEditorHtml(ref))); } catch { }
     };
     ref.keydownListener = function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
@@ -5296,7 +5324,7 @@ window.Radzen = {
         }
 
         for (var img of ref.querySelectorAll('img.rz-state-selected')) {
-          img.classList.remove('rz-state-selected');
+          ref.deselectImage(img);
         }
 
         ref.removeImageHandles();
@@ -5393,6 +5421,12 @@ window.Radzen = {
 
     ref.selectionChangeListener = function () {
       if (document.activeElement == ref) {
+        var selectedImage = ref.getSelectedImage();
+
+        if (selectedImage && !ref.imageResize && !getSelection().containsNode(selectedImage)) {
+          ref.deselectImage(selectedImage);
+        }
+
         try { suppressDisposed(instance.invokeMethodAsync('OnSelectionChange')); } catch { }
       }
     };
