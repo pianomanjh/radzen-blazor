@@ -13346,8 +13346,8 @@ our own reader. Excel has not opened it.
 
 ### A cell that holds its value, as a commit that can be dropped
 
-`0468eb6e4` sits on top of the rework and depends on nothing else, so it can go if akorchev does
-not want it. Without it, the branch is exactly `92c23de8f`, which was verified and pushed.
+`e55e0dc43` sits on top of the rework and depends on nothing else, so it can go if akorchev does
+not want it. Without it, the branch ends at `3bead2965`, the fix below.
 
 The first `StreamedCell` wrapped a `CellData`, so it cost the same 232 B/row as his signature. This
 one holds the value itself. A string is a reference; a number, date or boolean is a `double` in the
@@ -13382,3 +13382,29 @@ background, number format and bold, with **0 cells differing**.
 
 The 88 left are v12's own getters boxing the decimal, DateTime and bool (32 + 24 + 24). That boxing
 happens before the value reaches the writer.
+
+### Streamed text was held in the shared string table, found in review
+
+A review of the fork PR (pianomanjh#15) found that streamed strings went through `WriteValueCell` and
+into `sharedStrings`. That table keeps every distinct string until the save ends, so unique text (an
+id, a description) made the save grow with its source, which broke the flat claim above. The rig had
+missed it because its strings repeat: 500 customers and 40 cities.
+
+Measured with five fresh unique strings per row, held memory at the source's last row:
+
+| | held B/row |
+| --- | --- |
+| before, shared string table | **580, growing** |
+| after, inline, 2,000 to 20,000 rows | 84 |
+| after, inline, 20,000 to 200,000 rows | **15, falling as the range grows** |
+
+`3bead2965` writes streamed text inline (`t="inlineStr"`). The frame's own text stays in the shared
+table, which is valid mixed in one sheet, and the reader has taken `inlineStr` since #2710, including
+its quote prefix. A test streams 2,000 distinct strings and checks that the shared table holds only
+the three header titles. The fix sits below the droppable commit, so dropping that commit keeps it.
+Typed rows still allocate 0 B/row, and the two paths still write identical XML, now 199,302
+characters where it was 155,458: the inline text costs file size, not memory.
+
+Found on the way, and not fixed here: neither the shared-string writer nor the inline one writes
+`xml:space="preserve"`, so a reader that trims leading or trailing spaces will. That was already so
+on master.
