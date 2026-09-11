@@ -13343,3 +13343,42 @@ our own reader. Excel has not opened it.
   under a date format. This is unchanged, and the test asserts parity, not a `DateTime`.
 - **A row wider than 16,384 cells is refused**, alongside the row and character limits. This check is
   beyond the plan: without it the file is one no reader accepts.
+
+### A cell that holds its value, as a commit that can be dropped
+
+`397c3f852` sits on top of the rework and depends on nothing else, so it can go if akorchev does
+not want it. Without it, the branch is exactly `92c23de8f`, which was verified and pushed.
+
+The first `StreamedCell` wrapped a `CellData`, so it cost the same 232 B/row as his signature. This
+one holds the value itself. A string is a reference; a number, date or boolean is a `double` in the
+struct. The factories are `FromString`, `FromNumber`, `FromDate` and `FromBoolean`, and `From(object?)`
+takes a value whose type is known only at run time, typed as `Cell.Value` types it except that a
+string stays text. The `CellData` constructor stays. The struct grew from 16 bytes to about 32.
+
+| arm, 5 columns, slope 2,000 to 20,000 rows | allocated B/row |
+| --- | --- |
+| rows from the typed factories | **0.0** |
+| the same, with two alternating formats | **0.0** |
+| `CellData` rows, his signature | 232 |
+| calibration, 104.0 by arithmetic | 104.0 |
+
+Before any arm was believed, the typed rows and the `CellData` rows were written side by side and
+their sheet XML compared: identical, with formats and without. Nine of eleven mutations are killed.
+The two survivors remove the `int` and `decimal` fast paths in `From`. They fall through to
+`CellData.Infer`, which writes the same file, so they are performance only and only the rig can see
+them. A test found that a zeroed struct wrote a 0, because `CellDataType`'s zero value is `Number`,
+and that was fixed before the commit.
+
+**Would v12 take it?** Its `CreateWorkbookAsync` was mapped onto this API in a scratch program. The
+header is a built row. The rows come from the same generic `object?` getters. The number formats come
+from the column's `FormatString`, and the backgrounds, colors and borders are set up once per column
+and row parity instead of once per cell. Over 301 rows it matches v12 as written on every value,
+background, number format and bold, with **0 cells differing**.
+
+| arm | allocated B/row |
+| --- | --- |
+| v12 export as written today | 3,196.6, all held until the save |
+| v12's loop on this API | **88.1**, none held |
+
+The 88 left are v12's own getters boxing the decimal, DateTime and bool (32 + 24 + 24). That boxing
+happens before the value reaches the writer.
