@@ -13201,3 +13201,69 @@ somewhere:
   picture-in-cell format (rich values, `xl/richData`), which is a separate mechanism.
 - **Thumbnails held as URLs do not stream.** `Image` is synchronous, so a URL needs a prefetch or an
   asynchronous accessor. Bytes from the query and data URIs are fine.
+
+## 70. #2716 declined in its shape, and reworked into the one the maintainer asked for
+
+On 2026-09-11 akorchev declined #2716 as written, and invited a rework. The idea stands: building a
+`Cell` for every value is the cost, and a bulk export should not pay it. The objection is the shape.
+#2716 is a second writer, with its own archive, sheet assembly and row loop and three public types, so
+every later writer feature is done twice or left out. And the v12 DataGrid export (`RadzenDataGrid
+.Export.cs`), the library's largest XLSX producer and exactly the case that suffers, cannot use it: it
+needs a format per cell and strings kept as text.
+
+### The design, in his words, mapped to commits
+
+- **Keep the first two commits**, `d52ad10a9` and `52bb1fca4`: type inference and the cell writers
+  take a value, a type and a format, not a `Cell`.
+- **One writer.** The `Workbook` is the frame: the caller builds the header, widths, freeze and a table
+  as usual, and passes a row source to save.
+- **`WriteSheetData` loops the source after the last built row**, with a style cached per column and
+  type.
+- **The writer chain becomes async once**, awaiting only the source. The synchronous `SaveToStream`
+  runs the same code with no source.
+- **Tables are written after the sheet XML**, so a range can close on the rows actually written.
+  `dimension` is left out when there is a source, so there is no `RowCount` to break.
+- **No sampling.** A caller who wants measured widths builds the first rows as real cells, and the
+  existing auto-fit measures them.
+- **Rows yield `CellData`**, so text stays text through `CellData.FromString`. That factory is
+  already public on master.
+
+The public surface, agreed with Josh on 2026-09-11:
+
+```csharp
+Task SaveToStreamAsync(Stream stream, IAsyncEnumerable<CellData?[]> rows, CancellationToken cancellationToken = default);
+Task SaveToStreamAsync(Stream stream, IAsyncEnumerable<(CellData? Data, Format? Format)[]> rows, CancellationToken cancellationToken = default);
+```
+
+The second overload is our answer to his "optionally with a `Format`". The signature he wrote has no
+slot for one, and his own export sets a background, a border and a number format on every cell. The
+tuple is a struct, so it allocates nothing per cell, and a caller alternating two `Format` instances
+hits the style cache by reference. The first overload feeds the same loop through one reused array.
+
+### Decided here, where his comment is silent
+
+- **Append point:** the row after the last row the writer emitted for the frame, counting cells, merge
+  placeholders and styled rows. Not `Rows.Count`, which the caller may have sized generously.
+- **Which tables extend:** a table whose last row is the frame's last row and which has no totals row.
+  Its range is widened for the write only. The workbook's `Table` is not mutated by a save.
+- **Only sheet:** a workbook with more than one sheet throws, as "appending to the workbook's only
+  sheet" implies.
+- **Limits:** 1,048,576 rows and 32,767 characters per streamed string, both carried over from #2716.
+  The character limit applies to streamed cells only, so a built save does not start refusing
+  anything it wrote before.
+- **A fault leaves nothing that opens.** The source can fault after the archive has started, so a
+  seekable destination is truncated and the central directory is never written, as in #2716.
+- **Left out:** `InlineStrings`, the generic `IAsyncEnumerable<T>` convenience he said was possible,
+  and the #2716 fixes that are not part of this design (`c470e4cda` auto-fit, `f492868a4` re-box, the
+  `ht` fix). Each can be its own small PR.
+
+### How it is held
+
+A save with no source must not move a byte, and every save in the library now runs the changed code.
+So the byte gate (`SavedParts` against `/tmp/parts-before`) runs after every commit. The `ht` fix is
+not on this branch, so the expectation is **16 parts, 0 differing**, not 1. Every new test is red
+before it is green and mutation-checked. The allocation rig from §69's follow-up gets a row for the new
+API, and it must be flat in rows.
+
+Not in scope: the image columns of §69, which were built on the declined API and need their own design
+against this one, and moving FastGrid's export onto it. Both come after the fork re-cascade.
