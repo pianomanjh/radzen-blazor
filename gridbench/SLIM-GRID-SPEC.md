@@ -13346,7 +13346,7 @@ our own reader. Excel has not opened it.
 
 ### A cell that holds its value, as a commit that can be dropped
 
-`397c3f852` sits on top of the rework and depends on nothing else, so it can go if akorchev does
+`0468eb6e4` sits on top of the rework and depends on nothing else, so it can go if akorchev does
 not want it. Without it, the branch is exactly `92c23de8f`, which was verified and pushed.
 
 The first `StreamedCell` wrapped a `CellData`, so it cost the same 232 B/row as his signature. This
