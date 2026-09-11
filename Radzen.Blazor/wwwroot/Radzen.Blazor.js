@@ -4885,7 +4885,7 @@ window.Radzen = {
       document.addEventListener('mouseup', end);
 
       if (key) {
-        document.addEventListener('keydown', key);
+        document.addEventListener('keydown', key, true);
       }
 
       return function () {
@@ -4893,7 +4893,7 @@ window.Radzen = {
         document.removeEventListener('mouseup', end);
 
         if (key) {
-          document.removeEventListener('keydown', key);
+          document.removeEventListener('keydown', key, true);
         }
       };
     }
@@ -4934,7 +4934,7 @@ window.Radzen = {
       var img = ref.getSelectedImage();
       var container = ref.getEditorContainer();
 
-      if (!img || !container || ref.hidden) {
+      if (!img || !container || ref.hidden || !ref.isContentEditable) {
         ref.removeImageHandles();
         return;
       }
@@ -4942,10 +4942,11 @@ window.Radzen = {
       var containerRect = container.getBoundingClientRect();
       var contentRect = ref.getBoundingClientRect();
       var imgRect = img.getBoundingClientRect();
+      var clipLeft = contentRect.left - containerRect.left - container.clientLeft;
+      var clipTop = contentRect.top - containerRect.top - container.clientTop;
 
-      // Absolutely positioned children start at the padding box, past the border.
-      ref.imageHandlesClip.style.left = (contentRect.left - containerRect.left - container.clientLeft) + 'px';
-      ref.imageHandlesClip.style.top = (contentRect.top - containerRect.top - container.clientTop) + 'px';
+      ref.imageHandlesClip.style.left = clipLeft + 'px';
+      ref.imageHandlesClip.style.top = clipTop + 'px';
       ref.imageHandlesClip.style.width = contentRect.width + 'px';
       ref.imageHandlesClip.style.height = contentRect.height + 'px';
 
@@ -5026,8 +5027,6 @@ window.Radzen = {
       e.preventDefault();
       e.stopPropagation();
 
-      // Pasted content often carries an inline width/height, which would outrank
-      // the attributes a drag writes.
       ref.imageResize = {
         img: img,
         direction: imageHandleDirections[e.currentTarget.dataset.position],
@@ -5118,6 +5117,8 @@ window.Radzen = {
       var width = img.getAttribute('width');
       var height = img.getAttribute('height');
 
+      var index = Array.prototype.indexOf.call(ref.querySelectorAll('img'), img);
+
       ref.stopImageDrag();
 
       if (width === state.startAttributes.width && height === state.startAttributes.height) {
@@ -5126,30 +5127,38 @@ window.Radzen = {
         return;
       }
 
-      // Rewound first so the undo entry records the size from before the drag.
       ref.restoreImageSize(state);
+      img.classList.remove('rz-state-selected');
 
-      var replacement = img.cloneNode(true);
-      replacement.classList.remove('rz-state-selected');
-
-      if (!replacement.getAttribute('class')) {
-        replacement.removeAttribute('class');
+      if (!img.getAttribute('class')) {
+        img.removeAttribute('class');
       }
 
-      replacement.setAttribute('width', width);
-      replacement.setAttribute('height', height);
-      replacement.style.width = '';
-      replacement.style.height = '';
+      var target = img;
+
+      while (target.parentElement && target.parentElement !== ref && getComputedStyle(target.parentElement).display === 'inline') {
+        target = target.parentElement;
+      }
+
+      var replacement = target.cloneNode(true);
+      var replacementImg = target === img
+        ? replacement
+        : replacement.querySelectorAll('img')[Array.prototype.indexOf.call(target.querySelectorAll('img'), img)];
+
+      replacementImg.setAttribute('width', width);
+      replacementImg.setAttribute('height', height);
+      replacementImg.style.width = '';
+      replacementImg.style.height = '';
 
       var range = document.createRange();
-      range.selectNode(img);
+      range.selectNode(target);
       var selection = getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
       ref.focus();
       document.execCommand('insertHTML', false, replacement.outerHTML);
 
-      ref.selectImage(ref.querySelector('img[width="' + width + '"][height="' + height + '"]'));
+      ref.selectImage(ref.querySelectorAll('img')[index]);
     };
 
     ref.selectImage = function (img) {
@@ -5362,7 +5371,7 @@ window.Radzen = {
         ref.style.cursor = '';
         ref.releaseColumnDrag();
         ref.releaseColumnDrag = null;
-        try { instance.invokeMethodAsync('OnChange', ref.innerHTML); } catch { }
+        ref.inputListener();
       }
     };
 
@@ -5490,7 +5499,7 @@ window.Radzen = {
     ref.addEventListener('mousemove', ref.mousemoveListener);
     ref.addEventListener('mousedown', ref.mousedownResizeListener);
     ref.addEventListener('scroll', ref.positionImageHandles);
-    ref.imageHandlesObserver.observe(ref, { attributes: true, attributeFilter: ['hidden'] });
+    ref.imageHandlesObserver.observe(ref, { attributes: true, attributeFilter: ['hidden', 'contenteditable'], childList: true });
     document.addEventListener('selectionchange', ref.selectionChangeListener);
     document.execCommand('styleWithCSS', false, true);
     return {
