@@ -13267,3 +13267,79 @@ API, and it must be flat in rows.
 
 Not in scope: the image columns of §69, which were built on the declined API and need their own design
 against this one, and moving FastGrid's export onto it. Both come after the fork re-cascade.
+
+### Built, and what it measured
+
+`upstream/xlsx-stream-rows`, off master `778839fb3`:
+
+| commit | piece |
+| --- | --- |
+| `032940bed`, `317dca1e0` | the two commits kept from #2716 |
+| `e15108d35` | table and media counters on the writer, since an async method takes no `ref` |
+| `cf67bf498` | tables written after the sheet |
+| `bb7f9920d` | rows from a source, appended to the only sheet |
+| `b270d74fc` | `StreamedCell`, a value with its own format |
+| `92c23de8f` | the EF demo, on the new API |
+
+The per-cell format became a `public readonly struct StreamedCell(CellData? data, Format? format = null)`
+instead of a tuple, at Josh's suggestion. It is the same 16 bytes and allocates nothing, and it is
+named, documented and immutable.
+
+**A save with no source did not move a byte.** The gate read 16 parts, 0 differing, after every
+commit and at the tip, and was shown to be able to fail. This is the claim that matters most, because
+every save in the library now runs the changed code. The full suite in Debug passes **5,230**.
+
+**Mutations: 27 distinct.** Each built before it counted, and each new test was red first except where
+noted. Four survived the first time:
+
+- The two cancellation checks each survived alone, because each covered for the other. Both were
+  real: without the check inside the loop, a save keeps reading a source that ignores its token; without
+  the one after it, a source that ends quietly when cancelled is saved as though it were complete. Two
+  tests now kill them.
+- The per-column style cache is performance only, since `GetOrCreateCellStyle` dedups. It is equivalent.
+- A lookup-only change to the format cache is equivalent too. The mutation that ignores the format on
+  both lookup and store is killed.
+
+**Allocation**, measured by slope from 2,000 to 20,000 rows over 5 columns, median of 5 interleaved
+passes. The calibration arm read 104.1 against 104.0 by arithmetic.
+
+| arm | allocated B/row |
+| --- | --- |
+| #2716, `StreamedColumn` boxing (§70 follow-up, same rig) | 104 |
+| this, `CellData?[]` rows from the typed factories | **232** |
+| this, `StreamedCell` with two formats reused | **232** |
+| this, a new `Format` for every cell | 368 |
+| built workbook, `SaveToStream` | 1,273 |
+
+The struct costs nothing, and neither does a format. The gap to #2716 is the `CellData` object per
+value, which his shape asks for. Held memory, sampled at the source's last row, did **not** calibrate:
+its known 104 B/row read 181.6. So it is used for direction only, at about ±80 B/row. At that resolution
+every streamed arm holds nothing per row, and the built workbook holds all of it.
+
+**The style cache has a cap, and the cap is what keeps a new format per cell flat.** With no cap, that
+arm allocated 940 B/row and held **525 B/row, growing with the rows**, because every `Format` a caller
+allocates stays alive as a cache key. Capped at 1,024 entries and cleared when full, it allocates 368
+and holds about nothing. The uncapped run is also what showed the instrument can see this failure. His
+own v12 export sets a format on every cell, so this is the path it would take.
+
+**Rendered.** A demo-shaped export with 60 rows, a frame table, a frozen header, date and money formats
+and alternating shading was written both ways. Numbers draws the streamed file identically to the
+built one. That includes the table styling across all 60 rows, so the widened range is honored outside
+our own reader. Excel has not opened it.
+
+### Found on the way, for the maintainer
+
+- **"Build the first rows and the existing measurement works" has no public switch.** Auto-fit on a
+  built column is `Axis.SetAutoFit`, which is internal. The only public route is the editor's
+  `ResizeColumnCommand(…, isAutoFit: true)`. The demo declares its widths instead. Making `SetAutoFit`
+  public, or adding a `Columns.AutoFit(column)`, would make his suggestion work as he described it.
+- **Text stays text in the file, and in our own reader only with a quote prefix.** A shared string is
+  text to Excel. But `XlsxReader` re-types an unquoted one through `SetValueInvariant`, so "00123"
+  written plainly comes back as 123, from the built path and the streamed path alike. The built path
+  keeps text with `SetValue("'00123")`, which sets `QuotePrefix`. So a streamed string that
+  `TryConvertFromString` would convert is written with the quote prefix too, and ordinary text gets
+  no style.
+- **A date reads back as its serial number** from either path. `XlsxReader` keeps dates as numbers
+  under a date format. This is unchanged, and the test asserts parity, not a `DateTime`.
+- **A row wider than 16,384 cells is refused**, alongside the row and character limits. This check is
+  beyond the plan: without it the file is one no reader accepts.
