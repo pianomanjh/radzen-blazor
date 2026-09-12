@@ -5,13 +5,16 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
 namespace Radzen.Documents.Spreadsheet;
 
 #nullable enable
 
-class XlsxWriter(Workbook sourceWorkbook)
+partial class XlsxWriter(Workbook sourceWorkbook)
 {
     private const double EmuPerPixel = 9525.0;
 
@@ -24,32 +27,113 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private readonly char[] scratch = new char[ScratchLength];
 
-    public void Write(Stream stream)
+    private readonly Dictionary<string, string> mediaMap = [];
+
+    private int mediaIndex = 1;
+
+    private int tableIndex;
+
+    private const int MaxRows = 1_048_576;
+
+    private const int MaxColumns = 16_384;
+
+    private const int MaxCellCharacters = 32_767;
+
+    private const int MaxCachedStyles = 1_024;
+
+    public void Write(Stream stream) => WriteAsync(stream, null, CancellationToken.None).GetAwaiter().GetResult();
+
+    public async Task WriteAsync(Stream stream, IAsyncEnumerable<StreamedCell[]>? rows, CancellationToken cancellationToken)
     {
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+        if (rows is not null && sheets.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"Rows from a source are appended to a workbook's only sheet, and this workbook has {sheets.Count}.");
+        }
 
-        var styleTracker = CreateStylesDocument();
+        var start = stream.CanSeek ? stream.Position : -1L;
 
-        using var sharedStrings = new SharedStringTable();
+        var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
-        var totalTables = 0;
-        SaveSheets(archive, styleTracker, sharedStrings, ref totalTables);
-        SaveStyles(archive, styleTracker);
-        SaveSharedStrings(archive, sharedStrings);
-        SaveWorkbook(archive);
-        SaveTheme(archive);
-        SaveDocPropsCore(archive);
-        SaveDocPropsApp(archive);
+        try
+        {
+            var styleTracker = CreateStylesDocument();
 
-        SaveContentTypes(archive, includeSharedStrings: sharedStrings.Count > 0, tableCount: totalTables);
-        SaveRelationships(archive);
+            using var sharedStrings = new SharedStringTable();
+
+            await SaveSheetsAsync(archive, styleTracker, sharedStrings, rows, cancellationToken).ConfigureAwait(false);
+            SaveStyles(archive, styleTracker);
+            SaveSharedStrings(archive, sharedStrings);
+            SaveWorkbook(archive);
+            SaveTheme(archive);
+            SaveDocPropsCore(archive);
+            SaveDocPropsApp(archive);
+
+            SaveContentTypes(archive, includeSharedStrings: sharedStrings.Count > 0, tableCount: tableIndex);
+            SaveRelationships(archive);
+        }
+        catch
+        {
+            Discard(stream, start);
+
+            throw;
+        }
+
+        try
+        {
+            archive.Dispose();
+        }
+        catch
+        {
+            Discard(stream, start);
+
+            throw;
+        }
     }
 
-    private static void SaveTable(ZipArchive archive, Table table, int tableId)
+    internal static async IAsyncEnumerable<StreamedCell[]> WithoutFormats(
+        IAsyncEnumerable<CellData?[]> rows, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        StreamedCell[] line = [];
+
+        await foreach (var row in rows.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (line.Length != row.Length)
+            {
+                line = new StreamedCell[row.Length];
+            }
+
+            for (var column = 0; column < row.Length; column++)
+            {
+                line[column] = new StreamedCell(row[column]);
+            }
+
+            yield return line;
+        }
+    }
+
+    private static void Discard(Stream destination, long start)
+    {
+        if (start < 0)
+        {
+            return;
+        }
+
+        try
+        {
+            destination.SetLength(start);
+            destination.Position = start;
+        }
+        catch
+        {
+        }
+    }
+
+    private static void SaveTable(ZipArchive archive, Table table, int tableId, RangeRef range)
     {
         XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
-        var refStr = $"{table.Range.Start}:{table.Range.End}";
+        var refStr = $"{range.Start}:{range.End}";
 
         var tableElement = new XElement(ns + "table",
             new XAttribute("id", tableId.ToString(CultureInfo.InvariantCulture)),
@@ -65,10 +149,10 @@ class XlsxWriter(Workbook sourceWorkbook)
         {
             // AutoFilter range covers headers + data (excludes totals row).
             var afEnd = table.ShowTotals
-                ? new CellRef(table.Range.End.Row - 1, table.Range.End.Column)
-                : table.Range.End;
+                ? new CellRef(range.End.Row - 1, range.End.Column)
+                : range.End;
             tableElement.Add(new XElement(ns + "autoFilter",
-                new XAttribute("ref", $"{table.Range.Start}:{afEnd}")));
+                new XAttribute("ref", $"{range.Start}:{afEnd}")));
         }
 
         // <tableColumns count="N">
@@ -235,7 +319,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         public XElement? NumFmtsElement { get; set; }
     }
 
-    private static void SaveDrawing(ZipArchive archive, Worksheet sheet, int drawingIndex, Dictionary<string, string> mediaMap, ref int globalMediaIndex)
+    private void SaveDrawing(ZipArchive archive, Worksheet sheet, int drawingIndex)
     {
         XNamespace xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
         XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -258,7 +342,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             if (!mediaMap.TryGetValue(hash, out var mediaPath))
             {
                 var ext = ContentTypeToExtension(image.ContentType);
-                mediaPath = $"xl/media/image{globalMediaIndex++}.{ext}";
+                mediaPath = $"xl/media/image{mediaIndex++}.{ext}";
                 mediaMap[hash] = mediaPath;
 
                 using (var mediaEntry = archive.CreateEntry(mediaPath).Open())
@@ -868,7 +952,8 @@ class XlsxWriter(Workbook sourceWorkbook)
                 new XAttribute("builtinId", "0")));
     }
 
-    private void SaveSheets(ZipArchive archive, StyleTracker styleTracker, SharedStringTable sharedStrings, ref int globalTableIndex)
+    private async Task SaveSheetsAsync(ZipArchive archive, StyleTracker styleTracker, SharedStringTable sharedStrings,
+        IAsyncEnumerable<StreamedCell[]>? rows, CancellationToken cancellationToken)
     {
         var workbookRels = CreateWorkbookRelationships();
         var workbookRelsElement = workbookRels.Root!;
@@ -879,10 +964,6 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XAttribute("Id", "rId2"),
             new XAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"),
             new XAttribute("Target", "styles.xml")));
-
-        // Media deduplication map (hash -> media path in archive)
-        var mediaMap = new Dictionary<string, string>();
-        var globalMediaIndex = 1;
 
         for (var i = 0; i < sheets.Count; i++)
         {
@@ -896,7 +977,8 @@ class XlsxWriter(Workbook sourceWorkbook)
                 new XAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"),
                 new XAttribute("Target", $"worksheets/{sheetName}")));
 
-            SaveSheet(archive, sheet, sheetName, sheetId, relId, styleTracker, sharedStrings, mediaMap, ref globalMediaIndex, ref globalTableIndex);
+            await SaveSheetAsync(archive, sheet, sheetName, sheetId, relId, styleTracker, sharedStrings, rows, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         workbookRelsElement.Add(new XElement(XName.Get("Relationship", pkgNs),
@@ -923,9 +1005,15 @@ class XlsxWriter(Workbook sourceWorkbook)
             new XElement(XName.Get("Relationships", "http://schemas.openxmlformats.org/package/2006/relationships")));
     }
 
-    private void SaveSheet(ZipArchive archive, Worksheet sheet, string sheetName, int sheetId, string relId, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<string, string> mediaMap, ref int globalMediaIndex, ref int globalTableIndex)
+    private async Task SaveSheetAsync(ZipArchive archive, Worksheet sheet, string sheetName, int sheetId, string relId, StyleTracker styleTracker, SharedStringTable sharedStrings,
+        IAsyncEnumerable<StreamedCell[]>? rows, CancellationToken cancellationToken)
     {
         var sheetDoc = CreateSheetDocument(sheet, sheetId, relId);
+
+        if (rows is not null)
+        {
+            sheetDoc.Root!.Element(XName.Get("dimension", Main))?.Remove();
+        }
 
         AddMergedCells(sheet, sheetDoc);
 
@@ -956,12 +1044,14 @@ class XlsxWriter(Workbook sourceWorkbook)
 
             sheetRelEntries.Add((drawingRelId, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing", $"../drawings/drawing{drawingIndex}.xml", false));
 
-            SaveDrawing(archive, sheet, drawingIndex, mediaMap, ref globalMediaIndex);
+            SaveDrawing(archive, sheet, drawingIndex);
         }
 
         // pageMargins is appended last; ECMA-376 puts it before drawing,
         // but Excel and downstream readers tolerate trailing position too.
         sheetDoc.Root!.Add(CreatePageMargins());
+
+        var tableParts = new List<(Table Table, int Id)>();
 
         if (sheet.Tables.Count > 0)
         {
@@ -974,8 +1064,8 @@ class XlsxWriter(Workbook sourceWorkbook)
             var nextRelIndex = sheetRelEntries.Count + 1;
             foreach (var table in sheet.Tables)
             {
-                globalTableIndex++;
-                var tableId = globalTableIndex;
+                tableIndex++;
+                var tableId = tableIndex;
                 var tableRelId = $"rId{nextRelIndex++}";
 
                 tablePartsElement.Add(new XElement(XName.Get("tablePart", ns),
@@ -986,15 +1076,23 @@ class XlsxWriter(Workbook sourceWorkbook)
                     $"../tables/table{tableId}.xml",
                     false));
 
-                SaveTable(archive, table, tableId);
+                tableParts.Add((table, tableId));
             }
 
             sheetDoc.Root!.Add(tablePartsElement);
         }
 
+        (int Frame, int Last) written;
+
         using (var entry = archive.CreateEntry($"xl/worksheets/{sheetName}").Open())
         {
-            WriteSheetXml(entry, sheetDoc, sheet, styleTracker, sharedStrings);
+            written = await WriteSheetXmlAsync(entry, sheetDoc, sheet, styleTracker, sharedStrings, rows, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        foreach (var (table, id) in tableParts)
+        {
+            SaveTable(archive, table, id, WrittenRange(table, written.Frame, written.Last));
         }
 
         if (sheetRelEntries.Count > 0)
@@ -1002,6 +1100,11 @@ class XlsxWriter(Workbook sourceWorkbook)
             SaveSheetRelationships(archive, sheetName, sheetRelEntries);
         }
     }
+
+    private static RangeRef WrittenRange(Table table, int frame, int last) =>
+        last > frame && !table.ShowTotals && table.Range.End.Row == frame
+            ? new RangeRef(table.Range.Start, new CellRef(last, table.Range.End.Column))
+            : table.Range;
 
     private static List<(string Id, string Url)> AddHyperlinks(Worksheet sheet, XDocument sheetDoc)
     {
@@ -1305,9 +1408,11 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private static readonly XName SheetDataElement = XName.Get("sheetData", Main);
 
-    private void WriteSheetXml(Stream stream, XDocument sheetDoc, Worksheet sheet, StyleTracker styleTracker, SharedStringTable sharedStrings)
+    private async Task<(int Frame, int Last)> WriteSheetXmlAsync(Stream stream, XDocument sheetDoc, Worksheet sheet, StyleTracker styleTracker, SharedStringTable sharedStrings,
+        IAsyncEnumerable<StreamedCell[]>? rows, CancellationToken cancellationToken)
     {
         var root = sheetDoc.Root!;
+        var written = (Frame: -1, Last: -1);
 
         using var writer = XmlWriter.Create(stream, PartXmlSettings);
 
@@ -1324,7 +1429,8 @@ class XlsxWriter(Workbook sourceWorkbook)
             if (element.Name == SheetDataElement)
             {
                 writer.WriteStartElement(SheetDataElement.LocalName, Main);
-                WriteSheetData(writer, sheet, styleTracker, sharedStrings);
+                written = await WriteSheetDataAsync(writer, sheet, styleTracker, sharedStrings, rows, cancellationToken)
+                    .ConfigureAwait(false);
                 writer.WriteEndElement();
             }
             else
@@ -1335,27 +1441,164 @@ class XlsxWriter(Workbook sourceWorkbook)
 
         writer.WriteEndElement();
         writer.WriteEndDocument();
+
+        return written;
     }
 
-    private void WriteSheetData(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker, SharedStringTable sharedStrings)
+    private async Task<(int Frame, int Last)> WriteSheetDataAsync(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker, SharedStringTable sharedStrings,
+        IAsyncEnumerable<StreamedCell[]>? rows, CancellationToken cancellationToken)
     {
         var sharedFormulas = BuildSharedFormulaGroups(sheet);
 
         var cells = ArrayPool<Cell>.Shared.Rent(sheet.Cells.PopulatedCount);
 
+        int frame;
+
         try
         {
-            WriteRows(writer, sheet, cells, styleTracker, sharedStrings, sharedFormulas);
+            frame = WriteRows(writer, sheet, cells, styleTracker, sharedStrings, sharedFormulas);
         }
         finally
         {
             ArrayPool<Cell>.Shared.Return(cells, clearArray: true);
         }
+
+        if (rows is null)
+        {
+            return (frame, frame);
+        }
+
+        var last = await WriteSourceRowsAsync(writer, sheet, styleTracker, rows, frame + 1, cancellationToken)
+            .ConfigureAwait(false);
+
+        return (frame, last);
     }
 
-    private void WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
+    private async Task<int> WriteSourceRowsAsync(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker,
+        IAsyncEnumerable<StreamedCell[]> rows, int row, CancellationToken cancellationToken)
+    {
+        var styles = new Dictionary<(Format? Format, CellDataType Type, bool Quoted), int?>();
+        var last = row - 1;
+
+        await foreach (var line in rows.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (row == MaxRows)
+            {
+                throw new InvalidOperationException($"Row {row + 1} is past the {MaxRows} rows a worksheet holds.");
+            }
+
+            if (line.Length > MaxColumns)
+            {
+                throw new InvalidOperationException(
+                    $"Row {row + 1} has {line.Length} cells, and a worksheet holds at most {MaxColumns} columns.");
+            }
+
+            var firstColumn = -1;
+            var lastColumn = -1;
+
+            for (var column = 0; column < line.Length; column++)
+            {
+                if (line[column].IsWritten)
+                {
+                    if (firstColumn < 0)
+                    {
+                        firstColumn = column;
+                    }
+
+                    lastColumn = column;
+                }
+            }
+
+            WriteRowStart(writer, sheet, row, firstColumn, lastColumn);
+
+            for (var column = firstColumn; column >= 0 && column <= lastColumn; column++)
+            {
+                ref readonly var cell = ref line[column];
+
+                if (!cell.IsWritten)
+                {
+                    continue;
+                }
+
+                var address = new CellRef(row, column);
+                var type = cell.Type;
+                var format = cell.Format;
+
+                if (!cell.HasValue)
+                {
+                    WritePlaceholder(writer, address, StreamedStyle(styles, format, CellDataType.Empty, quoted: false, styleTracker));
+
+                    continue;
+                }
+
+                if (cell.Value is not { } value)
+                {
+                    WriteScalarCell(writer, address, cell.Number, type, StreamedStyle(styles, format, type, quoted: false, styleTracker));
+
+                    continue;
+                }
+
+                var quoted = false;
+
+                if (value is string text)
+                {
+                    if (text.Length > MaxCellCharacters)
+                    {
+                        throw new InvalidOperationException(
+                            $"A cell holds at most {MaxCellCharacters} characters, and {address} was given {text.Length}.");
+                    }
+
+                    quoted = type == CellDataType.String
+                        && CellData.TryConvertFromString(text, CultureInfo.InvariantCulture, out _, out _);
+                }
+
+                var style = StreamedStyle(styles, format, type, quoted, styleTracker);
+
+                if (type == CellDataType.String)
+                {
+                    WriteInlineStringCell(writer, address, (string)value, style);
+                }
+                else
+                {
+                    WriteTypedCell(writer, address, value, type, style);
+                }
+            }
+
+            writer.WriteEndElement();
+
+            last = row++;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return last;
+    }
+
+    private int? StreamedStyle(Dictionary<(Format? Format, CellDataType Type, bool Quoted), int?> styles, Format? format, CellDataType type, bool quoted, StyleTracker styleTracker)
+    {
+        if (!styles.TryGetValue((format, type, quoted), out var style))
+        {
+            style = format?.IsDefault == false || type == CellDataType.Date || quoted
+                ? GetOrCreateCellStyle(format ?? DefaultFormat, type, quoted, styleTracker)
+                : null;
+
+            if (styles.Count == MaxCachedStyles)
+            {
+                styles.Clear();
+            }
+
+            styles[(format, type, quoted)] = style;
+        }
+
+        return style;
+    }
+
+    private int WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
         var count = 0;
+        var last = -1;
 
         foreach (var cell in sheet.Cells.GetPopulatedCells())
         {
@@ -1392,6 +1635,8 @@ class XlsxWriter(Workbook sourceWorkbook)
             {
                 row = Math.Min(row, styledRows[styledRowIndex]);
             }
+
+            last = row;
 
             var cellEnd = cellIndex;
 
@@ -1461,6 +1706,8 @@ class XlsxWriter(Workbook sourceWorkbook)
 
             writer.WriteEndElement();
         }
+
+        return last;
     }
 
     private void WriteRowStart(XmlWriter writer, Worksheet sheet, int row, int firstColumn, int lastColumn)
@@ -1493,15 +1740,19 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private void WritePlaceholder(XmlWriter writer, CellRef address, int? styleId)
     {
+        WriteCellStart(writer, address, styleId);
+        writer.WriteEndElement();
+    }
+
+    private void WriteCellStart(XmlWriter writer, CellRef address, int? style)
+    {
         writer.WriteStartElement("c", Main);
         WriteReferenceAttribute(writer, address);
 
-        if (styleId is not null)
+        if (style is not null)
         {
-            WriteNumberAttribute(writer, "s", styleId.Value);
+            WriteNumberAttribute(writer, "s", style.Value);
         }
-
-        writer.WriteEndElement();
     }
 
     private void WriteReferenceAttribute(XmlWriter writer, CellRef address)
@@ -1538,41 +1789,104 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private void WriteCell(XmlWriter writer, Cell cell, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)
     {
-        var isFormula = !string.IsNullOrEmpty(cell.Formula);
+        var style = HasCellFormatting(cell) ? GetOrCreateCellStyle(cell, styleTracker) : (int?)null;
 
-        writer.WriteStartElement("c", Main);
-        WriteReferenceAttribute(writer, cell.Address);
-
-        if (HasCellFormatting(cell))
+        if (string.IsNullOrEmpty(cell.Formula))
         {
-            WriteNumberAttribute(writer, "s", GetOrCreateCellStyle(cell, styleTracker));
+            WriteValueCell(writer, cell.Address, cell.Value, cell.ValueType, style, sharedStrings);
+
+            return;
         }
 
-        var type = CellTypeAttribute(cell, isFormula);
+        WriteCellStart(writer, cell.Address, style);
+
+        var type = CellTypeAttribute(cell.ValueType, isFormula: true);
 
         if (type is not null)
         {
             writer.WriteAttributeString("t", type);
         }
 
-        if (isFormula)
+        WriteFormula(writer, cell, sharedFormulas);
+        WriteTypedValue(writer, cell.Value, cell.ValueType);
+
+        writer.WriteEndElement();
+    }
+
+    private void WriteInlineStringCell(XmlWriter writer, CellRef address, string text, int? style)
+    {
+        WriteCellStart(writer, address, style);
+
+        writer.WriteAttributeString("t", "inlineStr");
+        writer.WriteStartElement("is", Main);
+        writer.WriteStartElement("t", Main);
+
+        if (text.Length > 0 && (XmlConvert.IsWhitespaceChar(text[0]) || XmlConvert.IsWhitespaceChar(text[^1])))
         {
-            WriteFormula(writer, cell, sharedFormulas);
-            WriteTypedValue(writer, cell);
+            writer.WriteAttributeString("xml", "space", null, "preserve");
         }
-        else if (cell.ValueType == CellDataType.String)
+
+        writer.WriteString(text);
+        writer.WriteFullEndElement();
+        writer.WriteFullEndElement();
+        writer.WriteEndElement();
+    }
+
+    private void WriteTypedCell(XmlWriter writer, CellRef address, object value, CellDataType valueType, int? style)
+    {
+        WriteCellStart(writer, address, style);
+
+        if (CellTypeAttribute(valueType, isFormula: false) is { } type)
         {
-            WriteNumberValue(writer, sharedStrings.GetOrAdd(cell.Value as string ?? string.Empty));
+            writer.WriteAttributeString("t", type);
+        }
+
+        WriteTypedValue(writer, value, valueType);
+        writer.WriteEndElement();
+    }
+
+    private void WriteScalarCell(XmlWriter writer, CellRef address, double number, CellDataType valueType, int? style)
+    {
+        WriteCellStart(writer, address, style);
+
+        if (valueType == CellDataType.Boolean)
+        {
+            writer.WriteAttributeString("t", "b");
+            WriteValue(writer, number != 0 ? "1" : "0");
         }
         else
         {
-            WriteTypedValue(writer, cell);
+            number.TryFormat(scratch, out var length, default, CultureInfo.InvariantCulture);
+            WriteRawValue(writer, length);
         }
 
         writer.WriteEndElement();
     }
 
-    private static string? CellTypeAttribute(Cell cell, bool isFormula) => cell.ValueType switch
+    private void WriteValueCell(XmlWriter writer, CellRef address, object? value, CellDataType valueType, int? style, SharedStringTable sharedStrings)
+    {
+        WriteCellStart(writer, address, style);
+
+        var type = CellTypeAttribute(valueType, isFormula: false);
+
+        if (type is not null)
+        {
+            writer.WriteAttributeString("t", type);
+        }
+
+        if (valueType == CellDataType.String)
+        {
+            WriteNumberValue(writer, sharedStrings.GetOrAdd(value as string ?? string.Empty));
+        }
+        else
+        {
+            WriteTypedValue(writer, value, valueType);
+        }
+
+        writer.WriteEndElement();
+    }
+
+    private static string? CellTypeAttribute(CellDataType valueType, bool isFormula) => valueType switch
     {
         CellDataType.String => isFormula ? "str" : "s",
         CellDataType.Boolean => "b",
@@ -1609,28 +1923,28 @@ class XlsxWriter(Workbook sourceWorkbook)
         writer.WriteFullEndElement();
     }
 
-    private void WriteTypedValue(XmlWriter writer, Cell cell)
+    private void WriteTypedValue(XmlWriter writer, object? value, CellDataType valueType)
     {
-        switch (cell.ValueType)
+        switch (valueType)
         {
             case CellDataType.Number:
             case CellDataType.String:
-                if (TryFormatNumber(cell.Value, out var length))
+                if (TryFormatNumber(value, out var length))
                 {
                     WriteRawValue(writer, length);
                 }
                 else
                 {
-                    WriteValue(writer, FormatValueInvariant(cell.Value));
+                    WriteValue(writer, FormatValueInvariant(value));
                 }
                 break;
 
             case CellDataType.Boolean:
-                WriteValue(writer, cell.Value is true ? "1" : "0");
+                WriteValue(writer, value is true ? "1" : "0");
                 break;
 
             case CellDataType.Date:
-                if (cell.Value is DateTime dateValue)
+                if (value is DateTime dateValue)
                 {
                     dateValue.ToNumber().TryFormat(scratch, out var digits, provider: CultureInfo.InvariantCulture);
 
@@ -1639,7 +1953,7 @@ class XlsxWriter(Workbook sourceWorkbook)
                 break;
 
             case CellDataType.Error:
-                WriteValue(writer, cell.Value is CellError error ? CellErrorToString(error) : "#NAME?");
+                WriteValue(writer, value is CellError error ? CellErrorToString(error) : "#NAME?");
                 break;
 
             case CellDataType.Empty:
@@ -1775,22 +2089,23 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private static readonly Format DefaultFormat = new();
 
-    private int GetOrCreateCellStyle(Cell cell, StyleTracker styleTracker)
-    {
-        var format = cell.FormatOrNull ?? DefaultFormat;
+    private int GetOrCreateCellStyle(Cell cell, StyleTracker styleTracker) =>
+        GetOrCreateCellStyle(cell.FormatOrNull ?? DefaultFormat, cell.ValueType, cell.QuotePrefix, styleTracker);
 
+    private int GetOrCreateCellStyle(Format format, CellDataType valueType, bool quotePrefix, StyleTracker styleTracker)
+    {
         var fontId = GetOrCreateFontStyle(format, styleTracker);
         var fillId = GetOrCreateFillStyle(format, styleTracker);
-        var numFmtId = GetOrCreateNumberFormat(cell, format, styleTracker);
+        var numFmtId = GetOrCreateNumberFormat(valueType, format, styleTracker);
         var borderId = GetOrCreateBorderStyle(format, styleTracker);
 
-        var styleKey = new CellStyleKey(fontId, fillId, borderId, format.TextAlign, format.VerticalAlign, format.WrapText, numFmtId, format.Locked, format.FormulaHidden, cell.QuotePrefix);
+        var styleKey = new CellStyleKey(fontId, fillId, borderId, format.TextAlign, format.VerticalAlign, format.WrapText, numFmtId, format.Locked, format.FormulaHidden, quotePrefix);
 
         if (!styleTracker.CellStyles.TryGetValue(styleKey, out int styleId))
         {
             styleId = styleTracker.CellStyles.Count + 1;
             styleTracker.CellStyles[styleKey] = styleId;
-            CreateCellStyleElement(cell, format, fontId, fillId, borderId, numFmtId, styleTracker);
+            CreateCellStyleElement(format, fontId, fillId, borderId, numFmtId, quotePrefix, styleTracker);
         }
 
         return styleId;
@@ -1888,12 +2203,12 @@ class XlsxWriter(Workbook sourceWorkbook)
         borderElement.Add(sideElement);
     }
 
-    private static int GetOrCreateNumberFormat(Cell cell, Format format, StyleTracker styleTracker)
+    private static int GetOrCreateNumberFormat(CellDataType valueType, Format format, StyleTracker styleTracker)
     {
         var formatCode = format.NumberFormat;
 
         // Auto-apply default date format for date values without explicit format
-        if (string.IsNullOrEmpty(formatCode) && cell.ValueType == CellDataType.Date)
+        if (string.IsNullOrEmpty(formatCode) && valueType == CellDataType.Date)
         {
             return 14; // mm/dd/yyyy
         }
@@ -1987,7 +2302,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         styleTracker.FillsElement.Attribute("count")!.Value = (styleTracker.FillStyles.Count + 2).ToString(CultureInfo.InvariantCulture);
     }
 
-    private void CreateCellStyleElement(Cell cell, Format format, int fontId, int fillId, int borderId, int numFmtId, StyleTracker styleTracker)
+    private void CreateCellStyleElement(Format format, int fontId, int fillId, int borderId, int numFmtId, bool quotePrefix, StyleTracker styleTracker)
     {
         var xfElement = new XElement(XName.Get("xf", "http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
             new XAttribute("numFmtId", numFmtId.ToString(CultureInfo.InvariantCulture)),
@@ -2022,7 +2337,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             xfElement.Add(new XAttribute("applyProtection", "1"));
         }
 
-        if (cell.QuotePrefix)
+        if (quotePrefix)
         {
             xfElement.Add(new XAttribute("quotePrefix", "1"));
             xfElement.Add(new XAttribute("applyQuotePrefix", "1"));
