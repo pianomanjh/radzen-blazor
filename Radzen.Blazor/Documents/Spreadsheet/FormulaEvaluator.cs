@@ -109,22 +109,21 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
             return;
         }
 
-        // Treat empty values as zero for arithmetic
-        if (left.IsEmpty)
-        {
-            left = CellData.FromNumber(0d);
-        }
-
-        if (right.IsEmpty)
-        {
-            right = CellData.FromNumber(0d);
-        }
-
         // For comparison operators, we don't need both sides to be numeric
         var isComparisonOperator = binaryExpressionSyntaxNode.Operator is
             BinaryOperator.Equals or BinaryOperator.NotEquals or
             BinaryOperator.LessThan or BinaryOperator.LessThanOrEqual or
             BinaryOperator.GreaterThan or BinaryOperator.GreaterThanOrEqual;
+
+        if (left.IsEmpty)
+        {
+            left = isComparisonOperator ? EmptyAs(right) : CellData.FromNumber(0d);
+        }
+
+        if (right.IsEmpty)
+        {
+            right = isComparisonOperator ? EmptyAs(left) : CellData.FromNumber(0d);
+        }
 
         // Coerce Date and Boolean to Number for arithmetic operations (Excel semantics)
         if (!isComparisonOperator)
@@ -149,10 +148,13 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
             }
         }
 
-        if (!isComparisonOperator && (left.Type != CellDataType.Number || right.Type != CellDataType.Number))
+        if (!isComparisonOperator)
         {
-            value = CellData.FromError(CellError.Value);
-            return;
+            if (!TryCoerceOperand(ref left) || !TryCoerceOperand(ref right))
+            {
+                value = CellData.FromError(CellError.Value);
+                return;
+            }
         }
 
         if (binaryExpressionSyntaxNode.Operator == BinaryOperator.Divide)
@@ -238,12 +240,12 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
 
         if (unaryExpressionSyntaxNode.Operator == UnaryOperator.Negate)
         {
-            if (operand.Type == CellDataType.Boolean)
+            if (operand.Type == CellDataType.Date)
             {
-                operand = CellData.FromNumber(operand.GetValueOrDefault<bool>() ? 1d : 0d);
+                operand = CellData.FromNumber(operand.GetValueOrDefault<DateTime>().ToNumber());
             }
 
-            if (operand.Type != CellDataType.Number)
+            if (!TryCoerceOperand(ref operand))
             {
                 value = CellData.FromError(CellError.Value);
                 return;
@@ -251,6 +253,32 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
             value = CellData.FromNumber(-operand.GetValueOrDefault<double>());
             return;
         }
+    }
+
+    private static CellData EmptyAs(CellData other)
+    {
+        return other.Type switch
+        {
+            CellDataType.String => CellData.FromString(string.Empty),
+            CellDataType.Boolean => CellData.FromBoolean(false),
+            _ => CellData.FromNumber(0d)
+        };
+    }
+
+    private static bool TryCoerceOperand(ref CellData operand)
+    {
+        if (operand.Type == CellDataType.Number)
+        {
+            return true;
+        }
+
+        if (operand.TryCoerceToNumber(out var number, allowBooleans: true, nonNumericTextAsZero: false))
+        {
+            operand = CellData.FromNumber(number);
+            return true;
+        }
+
+        return false;
     }
 
     private static string ToText(CellData data)

@@ -253,6 +253,38 @@ public class FormulaEvaluationTests
     }
 
     [Fact]
+    public void ArithmeticShouldCoerceNumericTextLikeExcel()
+    {
+        sheet.Cells["A1"].SetText("45");
+        sheet.Cells["A2"].Value = "abc";
+        sheet.Cells["B1"].Formula = "=A1+1";
+        sheet.Cells["B2"].Formula = "=\"3\"*\"4\"";
+        sheet.Cells["B3"].Formula = "=-A1";
+        sheet.Cells["B4"].Formula = "=A2+1";
+
+        Assert.Equal(46d, sheet.Cells["B1"].Value);
+        Assert.Equal(12d, sheet.Cells["B2"].Value);
+        Assert.Equal(-45d, sheet.Cells["B3"].Value);
+        Assert.Equal(CellError.Value, sheet.Cells["B4"].Value);
+    }
+
+    [Fact]
+    public void EmptyCellShouldCompareEqualToEmptyStringAndZero()
+    {
+        sheet.Cells["B1"].Formula = "=A1=\"\"";
+        sheet.Cells["B2"].Formula = "=A1=0";
+        sheet.Cells["B3"].Formula = "=A1<>\"\"";
+        sheet.Cells["B4"].Formula = "=IF(A1=\"\",\"empty\",\"filled\")";
+        sheet.Cells["B5"].Formula = "=A1=FALSE";
+
+        Assert.Equal(true, sheet.Cells["B1"].Value);
+        Assert.Equal(true, sheet.Cells["B2"].Value);
+        Assert.Equal(false, sheet.Cells["B3"].Value);
+        Assert.Equal("empty", sheet.Cells["B4"].Value);
+        Assert.Equal(true, sheet.Cells["B5"].Value);
+    }
+
+    [Fact]
     public void ShouldReturnNameErrorForUnknownFunction()
     {
         sheet.Cells["A1"].Formula = "=UNKNOWN()";
