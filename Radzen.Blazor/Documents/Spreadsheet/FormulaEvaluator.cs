@@ -41,10 +41,11 @@ public enum CellError
     Circular // #CIRCULAR - Circular reference
 }
 
-class FormulaEvaluator(Worksheet sheet, Cell currentCell) : IFormulaSyntaxNodeVisitor
+class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellData>? evaluated = null) : IFormulaSyntaxNodeVisitor
 {
     private object? value;
     private readonly HashSet<Cell> evaluationStack = [];
+    private readonly Dictionary<Cell, CellData> evaluated = evaluated ?? [];
 
     public void VisitNumberLiteral(NumberLiteralSyntaxNode numberLiteralSyntaxNode)
     {
@@ -256,22 +257,25 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell) : IFormulaSyntaxNodeVi
 
     private CellData EvaluateCell(Cell cell)
     {
+        if (cell.FormulaSyntaxTree is null)
+        {
+            return cell.Data;
+        }
+
+        if (evaluated.TryGetValue(cell, out var cached))
+        {
+            return cached;
+        }
+
         if (!evaluationStack.Add(cell))
         {
             return CellData.FromError(CellError.Circular);
         }
 
-        CellData result;
-        if (cell.FormulaSyntaxTree is not null)
-        {
-            cell.FormulaSyntaxTree.Root.Accept(this);
-            result = (CellData)value!;
-        }
-        else
-        {
-            result = cell.Data;
-        }
+        cell.FormulaSyntaxTree.Root.Accept(this);
+        var result = (CellData)value!;
         evaluationStack.Remove(cell);
+        evaluated[cell] = result;
         return result;
     }
 

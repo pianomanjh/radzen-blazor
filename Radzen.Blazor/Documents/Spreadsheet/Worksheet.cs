@@ -344,7 +344,17 @@ public partial class Worksheet
         return new CellRef(Rows.NextVisible(0, 1, 0), Columns.NextVisible(0, 1, 0));
     }
 
-    private void EvaluateFormula(Cell cell)
+    private void EvaluateFormulas(IEnumerable<Cell> cells)
+    {
+        var evaluated = new Dictionary<Cell, CellData>();
+
+        foreach (var cell in cells)
+        {
+            EvaluateFormula(cell, evaluated);
+        }
+    }
+
+    private void EvaluateFormula(Cell cell, Dictionary<Cell, CellData> evaluated)
     {
         var tree = cell.FormulaSyntaxTree;
 
@@ -362,9 +372,10 @@ public partial class Worksheet
             isEvaluating = true;
             try
             {
-                var visitor = new FormulaEvaluator(this, cell);
+                var visitor = new FormulaEvaluator(this, cell, evaluated);
                 var eval = visitor.Evaluate(tree.Root);
                 cell.Data = eval;
+                evaluated[cell] = eval;
             }
             finally
             {
@@ -400,12 +411,7 @@ public partial class Worksheet
         // itself is not a formula node, so it would never be notified - fire its event here.
         if (!IsUpdating && graph.HasDependents(cell))
         {
-            var dependents = graph.GetTopologicallySortedDependencies(cell);
-
-            foreach (var dependentCell in dependents)
-            {
-                EvaluateFormula(dependentCell);
-            }
+            EvaluateFormulas(graph.GetTopologicallySortedDependencies(cell));
         }
 
         cell.OnChanged();
@@ -417,14 +423,7 @@ public partial class Worksheet
 
         if (!IsUpdating)
         {
-            // Re-evaluate the changed cell and its transitive dependents only. The per-cell
-            // overload returns the dependents but not the cell itself, so evaluate it first.
-            EvaluateFormula(cell);
-
-            foreach (var c in graph.GetTopologicallySortedDependencies(cell))
-            {
-                EvaluateFormula(c);
-            }
+            EvaluateFormulas([cell, .. graph.GetTopologicallySortedDependencies(cell)]);
         }
     }
 
@@ -473,10 +472,7 @@ public partial class Worksheet
             return;
         }
 
-        foreach (var cell in graph.GetTopologicallySortedDependencies())
-        {
-            EvaluateFormula(cell);
-        }
+        EvaluateFormulas(graph.GetTopologicallySortedDependencies());
 
         Selection.TriggerPendingChange();
     }

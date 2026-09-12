@@ -154,6 +154,25 @@ public class FormulaEvaluationTests
     }
 
     [Fact]
+    public void ShouldEvaluateMutuallyReferencingRangesWithoutExponentialBlowup()
+    {
+        var sheet = new Worksheet(10, 2);
+
+        sheet.BeginUpdate();
+
+        for (var row = 1; row <= 10; row++)
+        {
+            sheet.Cells[$"A{row}"].Formula = "=SUM(B1:B10)";
+            sheet.Cells[$"B{row}"].Formula = "=SUM(A1:A10)";
+        }
+
+        sheet.EndUpdate();
+
+        Assert.Equal(CellError.Circular, sheet.Cells["A1"].Value);
+        Assert.Equal(CellError.Circular, sheet.Cells["B10"].Value);
+    }
+
+    [Fact]
     public void ShouldReturnNameErrorForUnknownFunction()
     {
         sheet.Cells["A1"].Formula = "=UNKNOWN()";

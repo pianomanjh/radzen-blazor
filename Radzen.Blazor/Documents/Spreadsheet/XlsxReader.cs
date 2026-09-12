@@ -470,7 +470,15 @@ static class XlsxReader
 
         ParseColumnWidths(sheetDoc, sNs, sheet, styleInfo);
 
-        ParseRowsAndCells(sheetDoc, sNs, sheet, styleInfo, sharedStrings, defaultRowHeight);
+        sheet.BeginUpdate();
+        try
+        {
+            ParseRowsAndCells(sheetDoc, sNs, sheet, styleInfo, sharedStrings, defaultRowHeight);
+        }
+        finally
+        {
+            sheet.EndUpdate();
+        }
 
         ParseMergedCells(sheetDoc, sNs, sheet);
 
