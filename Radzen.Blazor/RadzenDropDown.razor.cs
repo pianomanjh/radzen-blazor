@@ -344,7 +344,7 @@ namespace Radzen.Blazor
             {
                 if (!Multiple)
                 {
-                    return selectedItem != null ? $"{GetItemOrValueFromProperty(selectedItem, TextProperty ?? string.Empty)}" : EmptyAriaLabel;
+                    return selectedItem != null ? GetItemAriaLabel(selectedItem) : EmptyAriaLabel;
                 }
 
                 if (selectedItems.Count == 0)
@@ -354,11 +354,23 @@ namespace Radzen.Blazor
 
                 if (selectedItems.Count < MaxSelectedLabels)
                 {
-                    return string.Join(Separator, selectedItems.Select(i => $"{GetItemOrValueFromProperty(i, TextProperty ?? string.Empty)}"));
+                    var labels = selectedItems.Select(GetItemAriaLabel).ToList();
+
+                    if (labels.All(label => label != null))
+                    {
+                        return string.Join(Separator, labels);
+                    }
                 }
 
                 return $"{selectedItems.Count} {SelectedItemsText}";
             }
+        }
+
+        internal string GetChipRemoveLabel(object item)
+        {
+            var label = GetItemAriaLabel(item);
+
+            return label != null ? $"{RemoveChipTitle} {label}" : RemoveChipTitle;
         }
 
         /// <summary>
