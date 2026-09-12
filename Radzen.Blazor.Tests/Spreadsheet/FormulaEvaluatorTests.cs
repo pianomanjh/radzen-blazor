@@ -190,7 +190,7 @@ public class FormulaEvaluationTests
         sheet.Cells["A3"].Formula = "=+A1&+B1";
         sheet.Cells["A4"].Formula = "=+A1+1";
 
-        Assert.Equal(sheet.Cells["A1"].Value, sheet.Cells["A2"].Value);
+        Assert.Equal(0d, sheet.Cells["A2"].Value);
         Assert.Equal("", sheet.Cells["A3"].Value);
         Assert.Equal(1d, sheet.Cells["A4"].Value);
     }
@@ -311,6 +311,20 @@ public class FormulaEvaluationTests
 
         Assert.Equal(3d, sheet.Cells["B1"].Value);
         Assert.Equal(CellError.NA, sheet.Cells["B2"].Value);
+    }
+
+    [Fact]
+    public void FormulaReturningAnEmptyCellDisplaysZero()
+    {
+        sheet.Cells["B1"].Formula = "=A1";
+        sheet.Cells["B2"].Formula = "=IF(TRUE,A1,1)";
+        sheet.Cells["B3"].Formula = "=INDEX(A1:A3,2)";
+        sheet.Cells["B4"].Formula = "=A1&\"\"";
+
+        Assert.Equal(0d, sheet.Cells["B1"].Value);
+        Assert.Equal(0d, sheet.Cells["B2"].Value);
+        Assert.Equal(0d, sheet.Cells["B3"].Value);
+        Assert.Equal("", sheet.Cells["B4"].Value);
     }
 
     [Fact]

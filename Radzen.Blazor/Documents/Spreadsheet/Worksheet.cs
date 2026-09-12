@@ -374,6 +374,12 @@ public partial class Worksheet
             {
                 var visitor = new FormulaEvaluator(this, cell, evaluated);
                 var eval = visitor.Evaluate(tree.Root);
+
+                if (eval.IsEmpty)
+                {
+                    eval = CellData.FromNumber(0d);
+                }
+
                 cell.Data = eval;
                 evaluated[cell] = eval;
             }
