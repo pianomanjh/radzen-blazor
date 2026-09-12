@@ -30,15 +30,48 @@ static class XlsxReader
         var sharedStrings = ParseSharedStrings(archive);
         var sheetInfos = ParseSheetDefinitions(archive);
 
+        ParseDefinedNames(archive, workbook);
+
         foreach (var sheetInfo in sheetInfos)
         {
             var sheet = LoadSheet(archive, sheetInfo, styleInfo, sharedStrings);
             workbook.AddSheet(sheet);
         }
 
+        foreach (var sheet in workbook.Sheets)
+        {
+            sheet.EndUpdate();
+        }
+
         ParseWorkbookProtection(archive, workbook);
 
         return workbook;
+    }
+
+    // ECMA-376 part 1, 18.2.5 (definedName)
+    private static void ParseDefinedNames(ZipArchive archive, Workbook workbook)
+    {
+        var entry = archive.GetEntry("xl/workbook.xml");
+        if (entry is null)
+        {
+            return;
+        }
+
+        using var stream = entry.Open();
+        var doc = XDocument.Load(stream);
+        var ns = doc.Root!.Name.Namespace;
+
+        foreach (var element in doc.Descendants(ns + "definedName"))
+        {
+            var name = element.Attribute("name")?.Value;
+
+            if (string.IsNullOrEmpty(name) || name.StartsWith("_xlnm.", StringComparison.Ordinal) || element.Attribute("localSheetId") is not null)
+            {
+                continue;
+            }
+
+            workbook.DefinedNames[name] = element.Value;
+        }
     }
 
     private static StyleInfo ParseStyles(ZipArchive archive)
@@ -463,6 +496,7 @@ static class XlsxReader
 
         var (rows, columns) = ComputeSheetSize(sheetDoc, sNs);
         var sheet = new Worksheet(rows, columns);
+        sheet.BeginUpdate();
 
         var defaultRowHeight = ParseDefaultRowHeight(sheetDoc, sNs);
 
@@ -470,15 +504,7 @@ static class XlsxReader
 
         ParseColumnWidths(sheetDoc, sNs, sheet, styleInfo);
 
-        sheet.BeginUpdate();
-        try
-        {
-            ParseRowsAndCells(sheetDoc, sNs, sheet, styleInfo, sharedStrings, defaultRowHeight);
-        }
-        finally
-        {
-            sheet.EndUpdate();
-        }
+        ParseRowsAndCells(sheetDoc, sNs, sheet, styleInfo, sharedStrings, defaultRowHeight);
 
         ParseMergedCells(sheetDoc, sNs, sheet);
 

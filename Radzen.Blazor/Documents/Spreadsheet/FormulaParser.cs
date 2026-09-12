@@ -15,6 +15,7 @@ internal interface IFormulaSyntaxNodeVisitor
     void VisitCell(CellSyntaxNode cellSyntaxNode);
     void VisitFunction(FunctionSyntaxNode functionSyntaxNode);
     void VisitRange(RangeSyntaxNode rangeSyntaxNode);
+    void VisitName(NameSyntaxNode nameSyntaxNode);
 }
 
 internal class FormulaSyntaxTree(FormulaSyntaxNode root, List<string> errors)
@@ -109,6 +110,11 @@ abstract class FormulaSyntaxNodeVisitorBase : IFormulaSyntaxNodeVisitor
         rangeSyntaxNode.End.Accept(this);
 
         Visit(rangeSyntaxNode);
+    }
+
+    public virtual void VisitName(NameSyntaxNode nameSyntaxNode)
+    {
+        Visit(nameSyntaxNode);
     }
 
     protected virtual void Visit(FormulaSyntaxNode node)
@@ -280,6 +286,16 @@ internal class FunctionSyntaxNode(FormulaToken token, FormulaToken openParenToke
     }
 }
 
+internal class NameSyntaxNode(FormulaToken token) : FormulaSyntaxNode(token)
+{
+    public string Name { get; } = token.Value;
+
+    public override void Accept(IFormulaSyntaxNodeVisitor visitor)
+    {
+        visitor.VisitName(this);
+    }
+}
+
 internal class CellSyntaxNode(FormulaToken token) : FormulaSyntaxNode(token)
 {
     public override void Accept(IFormulaSyntaxNodeVisitor visitor)
@@ -440,7 +456,7 @@ internal class FormulaParser
 
         if (token.Type == FormulaTokenType.Identifier)
         {
-            return ParseFunctionCall();
+            return ParseFunctionCallOrName();
         }
 
         if (token.Type == FormulaTokenType.BooleanLiteral)
@@ -503,13 +519,13 @@ internal class FormulaParser
         return ParseNumberLiteral();
     }
 
-    private FormulaSyntaxNode ParseFunctionCall()
+    private FormulaSyntaxNode ParseFunctionCallOrName()
     {
         var token = Expect(FormulaTokenType.Identifier);
 
         // Support dotted function names (STDEV.S, MODE.SNGL, RANK.EQ): the lexer splits them into
         // Identifier '.' Identifier, so re-join into one name token spanning both so the registry resolves them.
-        if (Peek().Type == FormulaTokenType.Dot)
+        while (Peek().Type == FormulaTokenType.Dot && Peek(1).Type == FormulaTokenType.Identifier)
         {
             Advance(1);
             var suffix = Expect(FormulaTokenType.Identifier);
@@ -518,6 +534,11 @@ internal class FormulaParser
                 Start = token.Start,
                 End = suffix.End
             };
+        }
+
+        if (Peek().Type != FormulaTokenType.OpenParen)
+        {
+            return new NameSyntaxNode(token);
         }
 
         var openParenToken = Expect(FormulaTokenType.OpenParen);

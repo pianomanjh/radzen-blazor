@@ -46,6 +46,7 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
 {
     private object? value;
     private readonly HashSet<Cell> evaluationStack = [];
+    private readonly HashSet<string> nameStack = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Cell, CellData> evaluated = evaluated ?? [];
 
     public void VisitNumberLiteral(NumberLiteralSyntaxNode numberLiteralSyntaxNode)
@@ -323,6 +324,26 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
         }
 
         value = EvaluateCell(cell);
+    }
+
+    public void VisitName(NameSyntaxNode nameSyntaxNode)
+    {
+        var tree = sheet.Workbook.ResolveDefinedName(nameSyntaxNode.Name);
+
+        if (tree is null || tree.Errors.Count > 0)
+        {
+            value = CellData.FromError(CellError.Name);
+            return;
+        }
+
+        if (!nameStack.Add(nameSyntaxNode.Name))
+        {
+            value = CellData.FromError(CellError.Circular);
+            return;
+        }
+
+        tree.Root.Accept(this);
+        nameStack.Remove(nameSyntaxNode.Name);
     }
 
     public CellData Evaluate(FormulaSyntaxNode node)
