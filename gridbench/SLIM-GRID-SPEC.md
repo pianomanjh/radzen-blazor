@@ -13278,8 +13278,8 @@ against this one, and moving FastGrid's export onto it. Both come after the fork
 | `e15108d35` | table and media counters on the writer, since an async method takes no `ref` |
 | `cf67bf498` | tables written after the sheet |
 | `a027d917c` | rows from a source, appended to the only sheet, text written inline |
-| `1e37372e4` | `StreamedCell`, a value with its own format |
-| `279cb7f93` | the EF demo, on the new API |
+| `bfc7829f6` | `StreamedCell`, a value with its own format |
+| `fbb1bb9ee` | the EF demo, on the new API |
 
 The per-cell format became a `public readonly struct StreamedCell(CellData? data, Format? format = null)`
 instead of a tuple, at Josh's suggestion. It is the same 16 bytes and allocates nothing, and it is
@@ -13346,8 +13346,8 @@ our own reader. Excel has not opened it.
 
 ### A cell that holds its value, as a commit that can be dropped
 
-`a5a09a866` sits on top of the rework and depends on nothing else, so it can go if akorchev does
-not want it. Without it, the branch ends at `279cb7f93`, the demo.
+`8728167ee` sits on top of the rework and depends on nothing else, so it can go if akorchev does
+not want it. Without it, the branch ends at `fbb1bb9ee`, the demo.
 
 The first `StreamedCell` wrapped a `CellData`, so it cost the same 232 B/row as his signature. This
 one holds the value itself. A string is a reference; a number, date or boolean is a `double` in the
@@ -13400,7 +13400,7 @@ Measured with five fresh unique strings per row, held memory at the source's las
 
 The fix writes streamed text inline (`t="inlineStr"`). It was built as `3bead2965` and then folded
 into `a027d917c`, so the branch never shows the shared-table version. Every rewritten commit was
-built and tested on its own: 5,228 at `a027d917c`, 5,235 at `1e37372e4` and `279cb7f93`, 5,259 at
+built and tested on its own: 5,228 at `a027d917c`, 5,237 at `bfc7829f6` and `fbb1bb9ee`, 5,262 at
 the tip, and the gate read 16 parts, 0 differing, at the first commit and the tip. The frame's own text
 stays in the shared table, which is valid mixed in one sheet, and the reader has taken `inlineStr`
 since #2710, including its quote prefix. A test streams 2,000 distinct strings and checks that the shared table holds only
@@ -13434,3 +13434,22 @@ the fix, alternated over three rounds. The GC counts were identical in every rou
 Unique text is faster, smaller and collects nothing past gen0. Repeated text costs 13% in file
 size, and its speed is within this machine's drift. Josh accepted that trade on 2026-09-11, so no
 bounded table of frequent values is kept.
+
+### A blank cell dropped its format, found in review
+
+A review of pianomanjh#15 found that a streamed cell with no value was skipped before its format
+was looked at, so `StreamedCell.From(null, shaded)` wrote nothing and a shaded row had holes at
+its nulls. A cell with no value and a format that sets anything is now written as an empty
+`<c r s/>` in that format, and one `IsWritten` rule on the cell decides both the row's column range
+and what is written. A null format or a default one still writes nothing. The fix is folded into
+`bfc7829f6`, where formats arrived, and carried through `8728167ee`. Four tests hold it, and seven
+mutations are killed across the two commits.
+
+A column whose format sets only a number format now writes an empty cell for each null, as Excel
+keeps a number format on an empty cell. That costs file size on a grid with many nulls, not memory.
+
+The built path has the same gap on master, and the reader too, and neither is fixed here.
+`XlsxWriter.IsWritten` writes a cell only with a value or a formula, so a formatted empty cell is
+lost on save, and `XlsxReader` returns before resolving the style of a `<c>` with no value, so it is
+lost on load as well. Fixing either changes the bytes of a save with no source, so it belongs in its
+own upstream PR.
