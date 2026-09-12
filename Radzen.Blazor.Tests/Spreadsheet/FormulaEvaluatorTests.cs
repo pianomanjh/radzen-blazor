@@ -184,11 +184,15 @@ public class FormulaEvaluationTests
     }
 
     [Fact]
-    public void UnaryPlusShouldTreatEmptyCellAsZero()
+    public void UnaryPlusShouldKeepEmptyCellEmptySoConcatenationDoesNotProduceZero()
     {
         sheet.Cells["A2"].Formula = "=+A1";
+        sheet.Cells["A3"].Formula = "=+A1&+B1";
+        sheet.Cells["A4"].Formula = "=+A1+1";
 
-        Assert.Equal(0d, sheet.Cells["A2"].Value);
+        Assert.Equal(sheet.Cells["A1"].Value, sheet.Cells["A2"].Value);
+        Assert.Equal("", sheet.Cells["A3"].Value);
+        Assert.Equal(1d, sheet.Cells["A4"].Value);
     }
 
     [Fact]
@@ -282,6 +286,31 @@ public class FormulaEvaluationTests
         Assert.Equal(false, sheet.Cells["B3"].Value);
         Assert.Equal("empty", sheet.Cells["B4"].Value);
         Assert.Equal(true, sheet.Cells["B5"].Value);
+    }
+
+    [Fact]
+    public void MatchWithEmptyLookupValueReturnsNotAvailable()
+    {
+        sheet.Cells["A1"].Value = "x";
+        sheet.Cells["A2"].Value = "";
+        sheet.Cells["B1"].Formula = "=MATCH(C1,A1:A3,0)";
+        sheet.Cells["B2"].Formula = "=MATCH(C1,A1:A3,1)";
+
+        Assert.Equal(CellError.NA, sheet.Cells["B1"].Value);
+        Assert.Equal(CellError.NA, sheet.Cells["B2"].Value);
+    }
+
+    [Fact]
+    public void MatchSkipsErrorCellsInTheLookupArray()
+    {
+        sheet.Cells["A1"].Value = "a";
+        sheet.Cells["A2"].Formula = "=1/0";
+        sheet.Cells["A3"].Value = "x";
+        sheet.Cells["B1"].Formula = "=MATCH(\"x\",A1:A3,0)";
+        sheet.Cells["B2"].Formula = "=MATCH(\"z\",A1:A3,0)";
+
+        Assert.Equal(3d, sheet.Cells["B1"].Value);
+        Assert.Equal(CellError.NA, sheet.Cells["B2"].Value);
     }
 
     [Fact]

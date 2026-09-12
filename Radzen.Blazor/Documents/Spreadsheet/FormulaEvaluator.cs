@@ -227,15 +227,15 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
             return;
         }
 
-        if (operand.IsEmpty)
-        {
-            operand = CellData.FromNumber(0d);
-        }
-
         if (unaryExpressionSyntaxNode.Operator == UnaryOperator.Plus)
         {
             value = operand;
             return;
+        }
+
+        if (operand.IsEmpty)
+        {
+            operand = CellData.FromNumber(0d);
         }
 
         if (unaryExpressionSyntaxNode.Operator == UnaryOperator.Negate)
