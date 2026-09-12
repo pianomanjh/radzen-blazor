@@ -13452,4 +13452,9 @@ The built path has the same gap on master, and the reader too, and neither is fi
 `XlsxWriter.IsWritten` writes a cell only with a value or a formula, so a formatted empty cell is
 lost on save, and `XlsxReader` returns before resolving the style of a `<c>` with no value, so it is
 lost on load as well. Fixing either changes the bytes of a save with no source, so it belongs in its
-own upstream PR.
+own upstream PR. It is built as `a67db6ce0` on `fix/xlsx-formatted-blank-cells`, off upstream master
+`0abfbf32c`, and not yet sent: the writer writes a cell with any formatting, `HasCellFormatting`
+included so a quote-prefixed blank survives, and the reader styles a `<c>` with no value. A covered
+cell of a merge now keeps its own format instead of the anchor's placeholder, as Excel writes it.
+5,249 pass, seven tests hold it, and the gate read 16/0 against that master, which only says a
+workbook without formatted blanks is unchanged: its workbook has none.
