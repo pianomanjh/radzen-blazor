@@ -757,10 +757,10 @@ static class XlsxReader
                     _ => valueElem!.Value
                 };
 
-                // ECMA-376 part 1, 18.8.45 (quotePrefix)
-                if (style is { QuotePrefix: true } && cellType is "s" or "str" or "inlineStr")
+                // ECMA-376 part 1, 18.18.11 (ST_CellType) and 18.8.45 (quotePrefix)
+                if (cellType is "s" or "str" or "inlineStr")
                 {
-                    sheet.Cells[address.Row, address.Column].SetText(value);
+                    sheet.Cells[address.Row, address.Column].SetText(value, style is { QuotePrefix: true });
                 }
                 else
                 {
