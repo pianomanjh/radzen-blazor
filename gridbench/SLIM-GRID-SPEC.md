@@ -13408,3 +13408,17 @@ characters where it was 155,458: the inline text costs file size, not memory.
 Found on the way, and not fixed here: neither the shared-string writer nor the inline one writes
 `xml:space="preserve"`, so a reader that trims leading or trailing spaces will. That was already so
 on master.
+
+**GC and file size, before and after**, 200,000 rows by 5 text columns, the fix's parent against
+the fix, alternated over three rounds. The GC counts were identical in every round.
+
+| | unique text, before | after | repeated text, before | after |
+| --- | --- | --- | --- | --- |
+| gen0 / gen1 / gen2 | 12 / 5 / 2 | 11 / 0 / 0 | 3 / 0 / 0 | 3 / 0 / 0 |
+| GC pause | 101–161 ms | 4–10 ms | 1.7–3.3 ms | 0.9–1.0 ms |
+| heap after the save | 112–118 MB | 0.2 MB | — | 0.2 MB |
+| `.xlsx` | 6.3 MB | 4.1 MB | 3.0 MB | 3.4 MB |
+
+Unique text is faster, smaller and collects nothing past gen0. Repeated text costs 13% in file
+size, and its speed is within this machine's drift. Josh accepted that trade on 2026-09-11, so no
+bounded table of frequent values is kept.
