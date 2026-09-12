@@ -13270,16 +13270,18 @@ against this one, and moving FastGrid's export onto it. Both come after the fork
 
 ### Built, and what it measured
 
-`upstream/xlsx-stream-rows`, off master `778839fb3`:
+`upstream/xlsx-stream-rows`, off master `0abfbf32c`. It was rebased there from `778839fb3` on
+2026-09-12, cleanly, and every commit was built, tested and gated again against the new master: 5,244
+through the table commit, then 5,271, 5,280, 5,280 and 5,305, the gate 16/0 at each, demos building.
 
 | commit | piece |
 | --- | --- |
-| `032940bed`, `317dca1e0` | the two commits kept from #2716 |
-| `e15108d35` | table and media counters on the writer, since an async method takes no `ref` |
-| `cf67bf498` | tables written after the sheet |
-| `a027d917c` | rows from a source, appended to the only sheet, text written inline |
-| `bfc7829f6` | `StreamedCell`, a value with its own format |
-| `fbb1bb9ee` | the EF demo, on the new API |
+| `44c44ec72`, `3da157464` | the two commits kept from #2716 |
+| `e3b4b2a65` | table and media counters on the writer, since an async method takes no `ref` |
+| `74711dce4` | tables written after the sheet |
+| `880ce8712` | rows from a source, appended to the only sheet, text written inline |
+| `e3d89ece6` | `StreamedCell`, a value with its own format |
+| `814e26b05` | the EF demo, on the new API |
 
 The per-cell format became a `public readonly struct StreamedCell(CellData? data, Format? format = null)`
 instead of a tuple, at Josh's suggestion. It is the same 16 bytes and allocates nothing, and it is
@@ -13346,8 +13348,8 @@ our own reader. Excel has not opened it.
 
 ### A cell that holds its value, as a commit that can be dropped
 
-`8728167ee` sits on top of the rework and depends on nothing else, so it can go if akorchev does
-not want it. Without it, the branch ends at `fbb1bb9ee`, the demo.
+`e1cfd55da` sits on top of the rework and depends on nothing else, so it can go if akorchev does
+not want it. Without it, the branch ends at `814e26b05`, the demo.
 
 The first `StreamedCell` wrapped a `CellData`, so it cost the same 232 B/row as his signature. This
 one holds the value itself. A string is a reference; a number, date or boolean is a `double` in the
@@ -13399,8 +13401,8 @@ Measured with five fresh unique strings per row, held memory at the source's las
 | after, inline, 20,000 to 200,000 rows | **15, falling as the range grows** |
 
 The fix writes streamed text inline (`t="inlineStr"`). It was built as `3bead2965` and then folded
-into `a027d917c`, so the branch never shows the shared-table version. Every rewritten commit was
-built and tested on its own: 5,228 at `a027d917c`, 5,237 at `bfc7829f6` and `fbb1bb9ee`, 5,262 at
+into `880ce8712`, so the branch never shows the shared-table version. Every rewritten commit was
+built and tested on its own: 5,271 at `880ce8712`, 5,280 at `e3d89ece6` and `814e26b05`, 5,305 at
 the tip, and the gate read 16 parts, 0 differing, at the first commit and the tip. The frame's own text
 stays in the shared table, which is valid mixed in one sheet, and the reader has taken `inlineStr`
 since #2710, including its quote prefix. A test streams 2,000 distinct strings and checks that the shared table holds only
@@ -13442,8 +13444,8 @@ was looked at, so `StreamedCell.From(null, shaded)` wrote nothing and a shaded r
 its nulls. A cell with no value and a format that sets anything is now written as an empty
 `<c r s/>` in that format, and one `IsWritten` rule on the cell decides both the row's column range
 and what is written. A null format or a default one still writes nothing. The fix is folded into
-`bfc7829f6`, where formats arrived, and carried through `8728167ee`. Four tests hold it, and eight
-mutations are killed: five at `bfc7829f6` and three at the tip.
+`e3d89ece6`, where formats arrived, and carried through `e1cfd55da`. Four tests hold it, and eight
+mutations are killed: five at `e3d89ece6` and three at the tip.
 
 A column whose format sets only a number format now writes an empty cell for each null, as Excel
 keeps a number format on an empty cell. That costs file size on a grid with many nulls, not memory.
