@@ -119,16 +119,16 @@
 
         await foreach (var line in lines)
         {
-            row[0] = new StreamedCell(CellData.FromNumber(line.OrderId));
-            row[1] = new StreamedCell(CellData.FromDate(line.OrderDate), DateFormat);
-            row[2] = new StreamedCell(CellData.FromString(line.Customer));
-            row[3] = new StreamedCell(CellData.FromString(line.Country));
-            row[4] = new StreamedCell(CellData.FromString(line.Employee));
-            row[5] = new StreamedCell(CellData.FromString(line.Category));
-            row[6] = new StreamedCell(CellData.FromString(line.Product));
-            row[7] = new StreamedCell(CellData.FromNumber(line.Quantity));
-            row[8] = new StreamedCell(CellData.FromNumber((double)line.UnitPrice), MoneyFormat);
-            row[9] = new StreamedCell(CellData.FromNumber((double)line.LineTotal), MoneyFormat);
+            row[0] = StreamedCell.FromNumber(line.OrderId);
+            row[1] = StreamedCell.FromDate(line.OrderDate, DateFormat);
+            row[2] = StreamedCell.FromString(line.Customer);
+            row[3] = StreamedCell.FromString(line.Country);
+            row[4] = StreamedCell.FromString(line.Employee);
+            row[5] = StreamedCell.FromString(line.Category);
+            row[6] = StreamedCell.FromString(line.Product);
+            row[7] = StreamedCell.FromNumber(line.Quantity);
+            row[8] = StreamedCell.FromNumber((double)line.UnitPrice, MoneyFormat);
+            row[9] = StreamedCell.FromNumber((double)line.LineTotal, MoneyFormat);
 
             yield return row;
         }

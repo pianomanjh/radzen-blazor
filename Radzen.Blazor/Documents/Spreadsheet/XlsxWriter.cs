@@ -1515,16 +1515,27 @@ partial class XlsxWriter(Workbook sourceWorkbook)
 
             for (var column = firstColumn; column >= 0 && column <= lastColumn; column++)
             {
-                if (!line[column].IsWritten)
+                ref readonly var cell = ref line[column];
+
+                if (!cell.IsWritten)
                 {
                     continue;
                 }
 
                 var address = new CellRef(row, column);
+                var type = cell.Type;
+                var format = cell.Format;
 
-                if (line[column] is not { Data: { Value: { } value, Type: var type }, Format: var format })
+                if (!cell.HasValue)
                 {
-                    WritePlaceholder(writer, address, StreamedStyle(styles, line[column].Format, CellDataType.Empty, quoted: false, styleTracker));
+                    WritePlaceholder(writer, address, StreamedStyle(styles, format, CellDataType.Empty, quoted: false, styleTracker));
+
+                    continue;
+                }
+
+                if (cell.Value is not { } value)
+                {
+                    WriteScalarCell(writer, address, cell.Number, type, StreamedStyle(styles, format, type, quoted: false, styleTracker));
 
                     continue;
                 }
@@ -1831,6 +1842,24 @@ partial class XlsxWriter(Workbook sourceWorkbook)
         }
 
         WriteTypedValue(writer, value, valueType);
+        writer.WriteEndElement();
+    }
+
+    private void WriteScalarCell(XmlWriter writer, CellRef address, double number, CellDataType valueType, int? style)
+    {
+        WriteCellStart(writer, address, style);
+
+        if (valueType == CellDataType.Boolean)
+        {
+            writer.WriteAttributeString("t", "b");
+            WriteValue(writer, number != 0 ? "1" : "0");
+        }
+        else
+        {
+            number.TryFormat(scratch, out var length, default, CultureInfo.InvariantCulture);
+            WriteRawValue(writer, length);
+        }
+
         writer.WriteEndElement();
     }
 
