@@ -224,17 +224,7 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
 
         if (unaryExpressionSyntaxNode.Operator == UnaryOperator.Plus)
         {
-            // Excel: unary plus is a no-op for booleans (=+TRUE returns TRUE)
-            if (operand.Type == CellDataType.Boolean)
-            {
-                return;
-            }
-
-            if (operand.Type != CellDataType.Number)
-            {
-                value = CellData.FromError(CellError.Value);
-                return;
-            }
+            value = operand;
             return;
         }
 

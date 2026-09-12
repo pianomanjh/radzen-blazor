@@ -173,6 +173,25 @@ public class FormulaEvaluationTests
     }
 
     [Fact]
+    public void UnaryPlusShouldReturnTextUnchanged()
+    {
+        sheet.Cells["A1"].Value = "abc";
+        sheet.Cells["A2"].Formula = "=+A1";
+        sheet.Cells["A3"].Formula = "=+\"abc\"";
+
+        Assert.Equal("abc", sheet.Cells["A2"].Value);
+        Assert.Equal("abc", sheet.Cells["A3"].Value);
+    }
+
+    [Fact]
+    public void UnaryPlusShouldTreatEmptyCellAsZero()
+    {
+        sheet.Cells["A2"].Formula = "=+A1";
+
+        Assert.Equal(0d, sheet.Cells["A2"].Value);
+    }
+
+    [Fact]
     public void ShouldReturnNameErrorForUnknownFunction()
     {
         sheet.Cells["A1"].Formula = "=UNKNOWN()";
