@@ -13456,5 +13456,5 @@ own upstream PR. It is built as `a67db6ce0` on `fix/xlsx-formatted-blank-cells`,
 `0abfbf32c`, and not yet sent: the writer writes a cell with any formatting, `HasCellFormatting`
 included so a quote-prefixed blank survives, and the reader styles a `<c>` with no value. A covered
 cell of a merge now keeps its own format instead of the anchor's placeholder, as Excel writes it.
-5,249 pass, seven tests hold it, and the gate read 16/0 against that master, which only says a
+5,249 pass, six tests hold it, and the gate read 16/0 against that master, which only says a
 workbook without formatted blanks is unchanged: its workbook has none.
