@@ -13442,8 +13442,8 @@ was looked at, so `StreamedCell.From(null, shaded)` wrote nothing and a shaded r
 its nulls. A cell with no value and a format that sets anything is now written as an empty
 `<c r s/>` in that format, and one `IsWritten` rule on the cell decides both the row's column range
 and what is written. A null format or a default one still writes nothing. The fix is folded into
-`bfc7829f6`, where formats arrived, and carried through `8728167ee`. Four tests hold it, and seven
-mutations are killed across the two commits.
+`bfc7829f6`, where formats arrived, and carried through `8728167ee`. Four tests hold it, and eight
+mutations are killed: five at `bfc7829f6` and three at the tip.
 
 A column whose format sets only a number format now writes an empty cell for each null, as Excel
 keeps a number format on an empty cell. That costs file size on a grid with many nulls, not memory.
