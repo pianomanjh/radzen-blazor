@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -98,6 +99,12 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
         if (right.IsError)
         {
             value = right;
+            return;
+        }
+
+        if (binaryExpressionSyntaxNode.Operator == BinaryOperator.Concat)
+        {
+            value = CellData.FromString(ToText(left) + ToText(right));
             return;
         }
 
@@ -243,6 +250,17 @@ class FormulaEvaluator(Worksheet sheet, Cell currentCell, Dictionary<Cell, CellD
             value = CellData.FromNumber(-operand.GetValueOrDefault<double>());
             return;
         }
+    }
+
+    private static string ToText(CellData data)
+    {
+        return data.Type switch
+        {
+            CellDataType.Empty => string.Empty,
+            CellDataType.Number => data.GetValueOrDefault<double>().ToString(CultureInfo.InvariantCulture),
+            CellDataType.Date => data.GetValueOrDefault<DateTime>().ToNumber().ToString(CultureInfo.InvariantCulture),
+            _ => data.ToString()
+        };
     }
 
     private CellData EvaluateCell(Cell cell)

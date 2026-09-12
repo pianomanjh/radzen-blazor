@@ -133,6 +133,7 @@ internal enum BinaryOperator
     Minus,
     Multiply,
     Divide,
+    Concat,
     Equals,
     NotEquals,
     LessThan,
@@ -157,6 +158,7 @@ static class FormulaTokenTypeExtensions
             FormulaTokenType.Minus => BinaryOperator.Minus,
             FormulaTokenType.Star => BinaryOperator.Multiply,
             FormulaTokenType.Slash => BinaryOperator.Divide,
+            FormulaTokenType.Ampersand => BinaryOperator.Concat,
             FormulaTokenType.Equals => BinaryOperator.Equals,
             FormulaTokenType.EqualsGreaterThan => BinaryOperator.GreaterThanOrEqual,
             FormulaTokenType.LessThanGreaterThan => BinaryOperator.NotEquals,
@@ -353,12 +355,26 @@ internal class FormulaParser
 
     private FormulaSyntaxNode ParseComparison()
     {
-        var left = ParseArithmetic();
+        var left = ParseConcatenation();
 
         while (Peek().Type is FormulaTokenType.Equals or FormulaTokenType.EqualsGreaterThan or
                FormulaTokenType.LessThanGreaterThan or
                FormulaTokenType.LessThan or FormulaTokenType.LessThanOrEqual or
                FormulaTokenType.GreaterThan or FormulaTokenType.GreaterThanOrEqual)
+        {
+            var token = tokens[position];
+            Advance(1);
+            left = new BinaryExpressionSyntaxNode(token, left, ParseConcatenation(), token.Type.ToBinaryOperator());
+        }
+
+        return left;
+    }
+
+    private FormulaSyntaxNode ParseConcatenation()
+    {
+        var left = ParseArithmetic();
+
+        while (Peek().Type is FormulaTokenType.Ampersand)
         {
             var token = tokens[position];
             Advance(1);

@@ -216,6 +216,43 @@ public class FormulaEvaluationTests
     }
 
     [Fact]
+    public void AmpersandShouldConcatenateValuesAsText()
+    {
+        sheet.Cells["A1"].Value = "abc";
+        sheet.Cells["A2"].Value = 5;
+        sheet.Cells["A3"].Value = true;
+        sheet.Cells["B1"].Formula = "=A1&A2";
+        sheet.Cells["B2"].Formula = "=A2&A4";
+        sheet.Cells["B3"].Formula = "=+A1&+A2";
+        sheet.Cells["B4"].Formula = "=A1&\" \"&A3";
+
+        Assert.Equal("abc5", sheet.Cells["B1"].Value);
+        Assert.Equal("5", sheet.Cells["B2"].Value);
+        Assert.Equal("abc5", sheet.Cells["B3"].Value);
+        Assert.Equal("abc TRUE", sheet.Cells["B4"].Value);
+    }
+
+    [Fact]
+    public void AmpersandShouldBindLooserThanArithmeticAndTighterThanComparison()
+    {
+        sheet.Cells["A1"].Formula = "=\"a\"&1+2";
+        sheet.Cells["A2"].Formula = "=\"a\"&\"b\"=\"ab\"";
+        sheet.Cells["A3"].Formula = "=1&2*3";
+
+        Assert.Equal("a3", sheet.Cells["A1"].Value);
+        Assert.Equal(true, sheet.Cells["A2"].Value);
+        Assert.Equal("16", sheet.Cells["A3"].Value);
+    }
+
+    [Fact]
+    public void AmpersandShouldPropagateErrors()
+    {
+        sheet.Cells["A1"].Formula = "=\"a\"&1/0";
+
+        Assert.Equal(CellError.Div0, sheet.Cells["A1"].Value);
+    }
+
+    [Fact]
     public void ShouldReturnNameErrorForUnknownFunction()
     {
         sheet.Cells["A1"].Formula = "=UNKNOWN()";
