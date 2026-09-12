@@ -966,11 +966,64 @@ public partial class Worksheet
             builder.Append('"');
         }
 
+        public override void VisitBooleanLiteral(BooleanLiteralSyntaxNode booleanLiteralSyntaxNode)
+        {
+            builder.Append(booleanLiteralSyntaxNode.Token.Value);
+        }
+
+        public override void VisitErrorLiteral(ErrorLiteralSyntaxNode errorLiteralSyntaxNode)
+        {
+            builder.Append(errorLiteralSyntaxNode.Token.Value);
+        }
+
+        public override void VisitName(NameSyntaxNode nameSyntaxNode)
+        {
+            builder.Append(nameSyntaxNode.Name);
+        }
+
+        public override void VisitUnaryExpression(UnaryExpressionSyntaxNode unaryExpressionSyntaxNode)
+        {
+            builder.Append(unaryExpressionSyntaxNode.Operator == UnaryOperator.Negate ? '-' : '+');
+            AppendOperand(unaryExpressionSyntaxNode.Operand, Precedence(unaryExpressionSyntaxNode), wrapEqual: false);
+        }
+
         public override void VisitBinaryExpression(BinaryExpressionSyntaxNode binaryExpressionSyntaxNode)
         {
-            binaryExpressionSyntaxNode.Left.Accept(this);
+            var precedence = Precedence(binaryExpressionSyntaxNode);
+            AppendOperand(binaryExpressionSyntaxNode.Left, precedence, wrapEqual: false);
             builder.Append(TokenToOperator(binaryExpressionSyntaxNode.Token));
-            binaryExpressionSyntaxNode.Right.Accept(this);
+            AppendOperand(binaryExpressionSyntaxNode.Right, precedence, wrapEqual: true);
+        }
+
+        private void AppendOperand(FormulaSyntaxNode operand, int parentPrecedence, bool wrapEqual)
+        {
+            var precedence = Precedence(operand);
+            var wrap = precedence < parentPrecedence || (wrapEqual && precedence == parentPrecedence);
+
+            if (wrap)
+            {
+                builder.Append('(');
+            }
+
+            operand.Accept(this);
+
+            if (wrap)
+            {
+                builder.Append(')');
+            }
+        }
+
+        private static int Precedence(FormulaSyntaxNode node)
+        {
+            return node switch
+            {
+                BinaryExpressionSyntaxNode { Operator: BinaryOperator.Multiply or BinaryOperator.Divide } => 4,
+                BinaryExpressionSyntaxNode { Operator: BinaryOperator.Plus or BinaryOperator.Minus } => 3,
+                BinaryExpressionSyntaxNode { Operator: BinaryOperator.Concat } => 2,
+                BinaryExpressionSyntaxNode => 1,
+                UnaryExpressionSyntaxNode => 5,
+                _ => 6
+            };
         }
 
         public override void VisitCell(CellSyntaxNode cellSyntaxNode)
@@ -1098,6 +1151,7 @@ public partial class Worksheet
                 FormulaTokenType.Minus => "-",
                 FormulaTokenType.Star => "*",
                 FormulaTokenType.Slash => "/",
+                FormulaTokenType.Ampersand => "&",
                 FormulaTokenType.Equals => "=",
                 FormulaTokenType.GreaterThan => ">",
                 FormulaTokenType.GreaterThanOrEqual => ">=",
