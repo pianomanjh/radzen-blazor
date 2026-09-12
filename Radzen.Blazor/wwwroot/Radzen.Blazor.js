@@ -4839,13 +4839,9 @@ window.Radzen = {
     context.table.remove();
   },
   getEditorHtml: function (ref) {
-    if (!ref.querySelector('img.rz-state-selected')) {
-      return ref.innerHTML;
-    }
+    var selected = Array.from(ref.querySelectorAll('img.rz-state-selected'));
 
-    var copy = document.implementation.createHTMLDocument('').importNode(ref, true);
-
-    for (var img of copy.querySelectorAll('img.rz-state-selected')) {
+    for (var img of selected) {
       img.classList.remove('rz-state-selected');
 
       if (!img.getAttribute('class')) {
@@ -4853,7 +4849,13 @@ window.Radzen = {
       }
     }
 
-    return copy.innerHTML;
+    var html = ref.innerHTML;
+
+    for (var img of selected) {
+      img.classList.add('rz-state-selected');
+    }
+
+    return html;
   },
   queryCommands: function (ref) {
     return {
@@ -5326,8 +5328,6 @@ window.Radzen = {
         for (var img of ref.querySelectorAll('img.rz-state-selected')) {
           ref.deselectImage(img);
         }
-
-        ref.removeImageHandles();
 
         if (e.target.matches('img')) {
           ref.selectImage(e.target);
