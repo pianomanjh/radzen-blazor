@@ -3562,8 +3562,10 @@ window.Radzen = {
     var tooltipPoint = null;
 
     ref.navHover = function (e) {
+      if (!ref.navTooltipPoints.length) return;
+
       var tooltip = ref.querySelector('.rz-range-nav-tooltip');
-      if (!tooltip || dragging || !ref.navTooltipPoints.length || !isOverTrack(e)) {
+      if (!tooltip || dragging || !isOverTrack(e)) {
         ref.navHideTooltip();
         return;
       }

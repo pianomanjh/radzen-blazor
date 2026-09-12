@@ -238,11 +238,14 @@ namespace Radzen.Blazor.Tests
             using var ctx = CreateChartContext();
 
             var component = RenderNavigatorWithDateSeries(ctx, parameters =>
-                parameters.Add(p => p.HandleLabelFormatString, "{0:yyyy-MM-dd}"));
+            {
+                parameters.Add(p => p.HandleLabelFormatString, "{0:yyyy-MM-dd}");
+                parameters.Add(p => p.Culture, CultureInfo.InvariantCulture);
+            });
 
             var points = component.Instance.GetTooltipPoints();
 
-            Assert.Equal(new[] { "2024-01-01: 3", "2024-01-02: 5" }, points.Select(Describe));
+            Assert.Equal(new[] { "2024-01-01: 3.00", "2024-01-02: 5.00" }, points.Select(Describe));
         }
 
         [Fact]
@@ -261,10 +264,14 @@ namespace Radzen.Blazor.Tests
         {
             using var ctx = CreateChartContext();
 
-            RenderNavigatorWithLineSeries(ctx, parameters => parameters.Add(p => p.ShowTooltip, true));
+            RenderNavigatorWithLineSeries(ctx, parameters =>
+            {
+                parameters.Add(p => p.ShowTooltip, true);
+                parameters.Add(p => p.Culture, CultureInfo.InvariantCulture);
+            });
 
             Assert.Single(ctx.JSInterop.Invocations, i => i.Identifier == "Radzen.updateRangeNavigatorTooltip");
-            Assert.Equal(new[] { "A: 10", "B: 20", "C: 15" }, LastSentTexts(ctx));
+            Assert.Equal(new[] { "A: 10.00", "B: 20.00", "C: 15.00" }, LastSentTexts(ctx));
         }
 
         [Fact]
@@ -340,6 +347,29 @@ namespace Radzen.Blazor.Tests
 
             Assert.False(component.Instance.ShowTooltip);
             Assert.DoesNotContain(ctx.JSInterop.Invocations, i => i.Identifier == "Radzen.updateRangeNavigatorTooltip");
+        }
+
+        [Fact]
+        public void RangeNavigator_Tooltip_RefreshesFormattingAndClearsDisabledPoints()
+        {
+            using var ctx = CreateChartContext();
+            var component = RenderNavigatorWithLineSeries(ctx, p =>
+            {
+                p.Add(x => x.ShowTooltip, true);
+                p.Add(x => x.Culture, CultureInfo.InvariantCulture);
+            });
+            Assert.Equal("A: 10.00", LastSentTexts(ctx)[0]);
+
+            component.SetParametersAndRender(p => p.Add(x => x.TooltipFormatString, "{0:N1}"));
+            Assert.Equal("A: 10.0", LastSentTexts(ctx)[0]);
+
+            component.SetParametersAndRender(p => p.Add(x => x.Culture, CultureInfo.GetCultureInfo("de-DE")));
+            Assert.Equal("A: 10,0", LastSentTexts(ctx)[0]);
+
+            component.SetParametersAndRender(p => p.Add(x => x.ShowTooltip, false));
+            Assert.Empty(LastSentTexts(ctx));
+            component.SetParametersAndRender(p => p.Add(x => x.ShowTooltip, true));
+            Assert.Equal("A: 10,0", LastSentTexts(ctx)[0]);
         }
 
         private static IRenderedComponent<RadzenRangeNavigator> RenderNavigatorWithLineSeries(TestContext ctx,

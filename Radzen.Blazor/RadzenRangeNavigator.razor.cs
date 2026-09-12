@@ -71,7 +71,7 @@ namespace Radzen.Blazor
         public bool ShowTooltip { get; set; }
 
         /// <summary>
-        /// Gets or sets the format string for the value shown in the tooltip, e.g. <c>"{0:N0}"</c>.
+        /// Gets or sets the format string for the value shown in the tooltip, e.g. <c>"{0:N0}"</c>. Defaults to <c>"{0:N}"</c> when not set.
         /// </summary>
         [Parameter]
         public string? TooltipFormatString { get; set; }
@@ -124,7 +124,9 @@ namespace Radzen.Blazor
         /// <inheritdoc />
         public override async Task SetParametersAsync(ParameterView parameters)
         {
-            tooltipChanged |= parameters.DidParameterChange(nameof(ShowTooltip), ShowTooltip);
+            tooltipChanged |= parameters.DidParameterChange(nameof(ShowTooltip), ShowTooltip)
+                || parameters.DidParameterChange(nameof(TooltipFormatString), TooltipFormatString)
+                || parameters.DidParameterChange(nameof(Culture), Culture);
 
             await base.SetParametersAsync(parameters);
         }
@@ -316,16 +318,21 @@ namespace Radzen.Blazor
 
         private void UpdateJSTooltipConfig()
         {
+            if (!ShowTooltip && !tooltipChanged)
+            {
+                return;
+            }
+
             tooltipChanged = false;
 
-            if (!ShowTooltip || JSRuntime == null || firstRender)
+            if (JSRuntime == null || firstRender)
             {
                 return;
             }
 
             try
             {
-                JSRuntime.InvokeVoidAsync("Radzen.updateRangeNavigatorTooltip", Element, GetTooltipPoints());
+                JSRuntime.InvokeVoidAsync("Radzen.updateRangeNavigatorTooltip", Element, ShowTooltip ? GetTooltipPoints() : new List<TooltipPoint>());
             }
             catch
             {
@@ -355,7 +362,7 @@ namespace Radzen.Blazor
                     }
 
                     points.Add(new TooltipPoint(Math.Clamp(x, 0, 1), Math.Clamp(y, 0, 1), series.Color,
-                        GetTooltipCategory(point.X), string.Format(Culture, TooltipFormatString ?? "{0}", point.Y)));
+                        GetTooltipCategory(point.X), string.Format(Culture, TooltipFormatString ?? "{0:N}", point.Y)));
                 }
             }
 
