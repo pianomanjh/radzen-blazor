@@ -609,6 +609,13 @@ namespace Radzen
             return GetItemOrValueFromProperty(item, TextProperty ?? string.Empty)?.ToString();
         }
 
+        internal string GetChipRemoveLabel(object item)
+        {
+            var label = GetItemAriaLabel(item);
+
+            return label != null ? $"{RemoveChipTitle} {label}" : RemoveChipTitle;
+        }
+
         /// <inheritdoc/>
         protected override async Task OnDataChanged()
         {

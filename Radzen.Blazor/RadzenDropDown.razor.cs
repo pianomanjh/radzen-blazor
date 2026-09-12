@@ -366,13 +366,6 @@ namespace Radzen.Blazor
             }
         }
 
-        internal string GetChipRemoveLabel(object item)
-        {
-            var label = GetItemAriaLabel(item);
-
-            return label != null ? $"{RemoveChipTitle} {label}" : RemoveChipTitle;
-        }
-
         /// <summary>
         /// Callback for when a dropdown is opened.
         /// </summary>
