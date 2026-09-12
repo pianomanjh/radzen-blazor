@@ -13277,9 +13277,9 @@ against this one, and moving FastGrid's export onto it. Both come after the fork
 | `032940bed`, `317dca1e0` | the two commits kept from #2716 |
 | `e15108d35` | table and media counters on the writer, since an async method takes no `ref` |
 | `cf67bf498` | tables written after the sheet |
-| `24e8b9e40` | rows from a source, appended to the only sheet, text written inline |
-| `63a8cfd20` | `StreamedCell`, a value with its own format |
-| `65e617cf0` | the EF demo, on the new API |
+| `a027d917c` | rows from a source, appended to the only sheet, text written inline |
+| `1e37372e4` | `StreamedCell`, a value with its own format |
+| `279cb7f93` | the EF demo, on the new API |
 
 The per-cell format became a `public readonly struct StreamedCell(CellData? data, Format? format = null)`
 instead of a tuple, at Josh's suggestion. It is the same 16 bytes and allocates nothing, and it is
@@ -13346,8 +13346,8 @@ our own reader. Excel has not opened it.
 
 ### A cell that holds its value, as a commit that can be dropped
 
-`b20aff200` sits on top of the rework and depends on nothing else, so it can go if akorchev does
-not want it. Without it, the branch ends at `65e617cf0`, the demo.
+`a5a09a866` sits on top of the rework and depends on nothing else, so it can go if akorchev does
+not want it. Without it, the branch ends at `279cb7f93`, the demo.
 
 The first `StreamedCell` wrapped a `CellData`, so it cost the same 232 B/row as his signature. This
 one holds the value itself. A string is a reference; a number, date or boolean is a `double` in the
@@ -13399,18 +13399,27 @@ Measured with five fresh unique strings per row, held memory at the source's las
 | after, inline, 20,000 to 200,000 rows | **15, falling as the range grows** |
 
 The fix writes streamed text inline (`t="inlineStr"`). It was built as `3bead2965` and then folded
-into `24e8b9e40`, so the branch never shows the shared-table version. Every rewritten commit was
-built and tested on its own: 1,995 spreadsheet tests at `24e8b9e40`, 5,232 at `63a8cfd20` and
-`65e617cf0`, 5,255 at the tip, and the gate read 16 parts, 0 differing, there. The frame's own text
+into `a027d917c`, so the branch never shows the shared-table version. Every rewritten commit was
+built and tested on its own: 5,228 at `a027d917c`, 5,235 at `1e37372e4` and `279cb7f93`, 5,259 at
+the tip, and the gate read 16 parts, 0 differing, at the first commit and the tip. The frame's own text
 stays in the shared table, which is valid mixed in one sheet, and the reader has taken `inlineStr`
 since #2710, including its quote prefix. A test streams 2,000 distinct strings and checks that the shared table holds only
 the three header titles. The fix sits below the droppable commit, so dropping that commit keeps it.
 Typed rows still allocate 0 B/row, and the two paths still write identical XML, now 199,302
 characters where it was 155,458: the inline text costs file size, not memory.
 
-Found on the way, and not fixed here: neither the shared-string writer nor the inline one writes
-`xml:space="preserve"`, so a reader that trims leading or trailing spaces will. That was already so
-on master.
+Neither text writer wrote `xml:space="preserve"`, and that was so on master for shared strings. Our
+own reader loads a sheet with `XDocument.Load`, which drops text that is only whitespace unless the
+attribute is in scope, so a streamed `"   "` read back empty. Inline text now carries the attribute
+when its first or last character is XML whitespace, and only then. Shared strings are left as master
+has them: fixing them would change the bytes of a save with no source, so that belongs in its own
+upstream PR. Four tests hold it, one on the `StreamedCell` path, and six mutations of the condition
+are killed, including `char.IsWhiteSpace` for XML's four characters.
+
+The prologue that opens a cell (`<c>`, `r`, and `s` when there is a style) was written out in six
+writers, four of them added by this branch. It is now one `WriteCellStart`, folded into the commits
+that brought each copy. The gate read 16/0 after it, and 1 differing when the helper was broken, so it
+sees this code.
 
 **GC and file size, before and after**, 200,000 rows by 5 text columns, the fix's parent against
 the fix, alternated over three rounds. The GC counts were identical in every round.
