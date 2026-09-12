@@ -10,7 +10,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
-using StreamedCell = (Radzen.Documents.Spreadsheet.CellData? Data, Radzen.Documents.Spreadsheet.Format? Format);
 namespace Radzen.Documents.Spreadsheet;
 
 #nullable enable
@@ -39,6 +38,8 @@ partial class XlsxWriter(Workbook sourceWorkbook)
     private const int MaxColumns = 16_384;
 
     private const int MaxCellCharacters = 32_767;
+
+    private const int MaxCachedStyles = 1_024;
 
     public void Write(Stream stream) => WriteAsync(stream, null, CancellationToken.None).GetAwaiter().GetResult();
 
@@ -104,7 +105,7 @@ partial class XlsxWriter(Workbook sourceWorkbook)
 
             for (var column = 0; column < row.Length; column++)
             {
-                line[column] = (row[column], null);
+                line[column] = new StreamedCell(row[column]);
             }
 
             yield return line;
@@ -1476,7 +1477,7 @@ partial class XlsxWriter(Workbook sourceWorkbook)
     private async Task<int> WriteSourceRowsAsync(XmlWriter writer, Worksheet sheet, StyleTracker styleTracker,
         IAsyncEnumerable<StreamedCell[]> rows, int row, CancellationToken cancellationToken)
     {
-        var styles = new Dictionary<(CellDataType Type, bool Quoted), int?>();
+        var styles = new Dictionary<(Format? Format, CellDataType Type, bool Quoted), int?>();
         var last = row - 1;
 
         await foreach (var line in rows.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -1499,7 +1500,7 @@ partial class XlsxWriter(Workbook sourceWorkbook)
 
             for (var column = 0; column < line.Length; column++)
             {
-                if (line[column].Data?.Value is not null)
+                if (line[column].IsWritten)
                 {
                     if (firstColumn < 0)
                     {
@@ -1514,12 +1515,19 @@ partial class XlsxWriter(Workbook sourceWorkbook)
 
             for (var column = firstColumn; column >= 0 && column <= lastColumn; column++)
             {
-                if (line[column].Data is not { Value: { } value, Type: var type })
+                if (!line[column].IsWritten)
                 {
                     continue;
                 }
 
                 var address = new CellRef(row, column);
+
+                if (line[column] is not { Data: { Value: { } value, Type: var type }, Format: var format })
+                {
+                    WritePlaceholder(writer, address, StreamedStyle(styles, line[column].Format, CellDataType.Empty, quoted: false, styleTracker));
+
+                    continue;
+                }
 
                 var quoted = false;
 
@@ -1535,14 +1543,7 @@ partial class XlsxWriter(Workbook sourceWorkbook)
                         && CellData.TryConvertFromString(text, CultureInfo.InvariantCulture, out _, out _);
                 }
 
-                if (!styles.TryGetValue((type, quoted), out var style))
-                {
-                    style = type == CellDataType.Date || quoted
-                        ? GetOrCreateCellStyle(DefaultFormat, type, quoted, styleTracker)
-                        : null;
-
-                    styles[(type, quoted)] = style;
-                }
+                var style = StreamedStyle(styles, format, type, quoted, styleTracker);
 
                 if (type == CellDataType.String)
                 {
@@ -1562,6 +1563,25 @@ partial class XlsxWriter(Workbook sourceWorkbook)
         cancellationToken.ThrowIfCancellationRequested();
 
         return last;
+    }
+
+    private int? StreamedStyle(Dictionary<(Format? Format, CellDataType Type, bool Quoted), int?> styles, Format? format, CellDataType type, bool quoted, StyleTracker styleTracker)
+    {
+        if (!styles.TryGetValue((format, type, quoted), out var style))
+        {
+            style = format?.IsDefault == false || type == CellDataType.Date || quoted
+                ? GetOrCreateCellStyle(format ?? DefaultFormat, type, quoted, styleTracker)
+                : null;
+
+            if (styles.Count == MaxCachedStyles)
+            {
+                styles.Clear();
+            }
+
+            styles[(format, type, quoted)] = style;
+        }
+
+        return style;
     }
 
     private int WriteRows(XmlWriter writer, Worksheet sheet, Cell[] cells, StyleTracker styleTracker, SharedStringTable sharedStrings, Dictionary<CellRef, (int Si, string? Ref)> sharedFormulas)

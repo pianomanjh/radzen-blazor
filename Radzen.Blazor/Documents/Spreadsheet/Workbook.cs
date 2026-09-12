@@ -209,6 +209,34 @@ public class Workbook
     }
 
     /// <summary>
+    /// Saves the workbook to the specified stream in the Open XML Spreadsheet format (XLSX), appending
+    /// rows whose cells each carry a format to its only sheet.
+    /// </summary>
+    /// <remarks>
+    /// Written as <see cref="SaveToStreamAsync(Stream, IAsyncEnumerable{CellData[]}, CancellationToken)"/>
+    /// writes, with each value in the <see cref="Format"/> beside it, so a row can differ from the next,
+    /// as alternating backgrounds do. A cell with no value is written empty in its format when the
+    /// format sets anything, so a shaded row stays shaded across its nulls. A format is resolved to a
+    /// style the first time a save meets it, and the resolution is remembered for the most recent
+    /// formats only, so a new instance per cell is correct and costs a lookup each: reuse one instance
+    /// for cells that look alike, and pass a new instance rather than changing one already passed.
+    /// </remarks>
+    /// <param name="stream">Destination stream. Not closed by this method.</param>
+    /// <param name="rows">The rows to append.</param>
+    /// <param name="cancellationToken">Cancels the save between rows.</param>
+    /// <exception cref="InvalidOperationException">
+    /// The workbook has more than one sheet, the rows run past the 1,048,576 a worksheet holds, a row
+    /// has more than 16,384 cells, or a string is longer than the 32,767 characters a cell holds.
+    /// </exception>
+    public Task SaveToStreamAsync(Stream stream, IAsyncEnumerable<StreamedCell[]> rows, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        return new XlsxWriter(this).WriteAsync(stream, rows, cancellationToken);
+    }
+
+    /// <summary>
     /// Loads a workbook from the specified stream in the Open XML Spreadsheet format (XLSX).
     /// </summary>
     /// <param name="stream"></param>
