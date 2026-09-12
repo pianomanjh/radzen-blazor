@@ -192,6 +192,30 @@ public class FormulaEvaluationTests
     }
 
     [Fact]
+    public void IfShouldIgnoreErrorsInTheBranchThatIsNotTaken()
+    {
+        sheet.Cells["A1"].Formula = "=IF(1=1,\"\",1/0)";
+        sheet.Cells["A2"].Formula = "=IF(1=0,1/0,\"ok\")";
+        sheet.Cells["A3"].Formula = "=IF(1=1,1/0,\"ok\")";
+        sheet.Cells["A4"].Formula = "=IF(1/0,1,2)";
+
+        Assert.Equal("", sheet.Cells["A1"].Value);
+        Assert.Equal("ok", sheet.Cells["A2"].Value);
+        Assert.Equal(CellError.Div0, sheet.Cells["A3"].Value);
+        Assert.Equal(CellError.Div0, sheet.Cells["A4"].Value);
+    }
+
+    [Fact]
+    public void NaShouldReturnTheNotAvailableError()
+    {
+        sheet.Cells["A1"].Formula = "=NA()";
+        sheet.Cells["A2"].Formula = "=IFERROR(NA(),\"caught\")";
+
+        Assert.Equal(CellError.NA, sheet.Cells["A1"].Value);
+        Assert.Equal("caught", sheet.Cells["A2"].Value);
+    }
+
+    [Fact]
     public void ShouldReturnNameErrorForUnknownFunction()
     {
         sheet.Cells["A1"].Formula = "=UNKNOWN()";
