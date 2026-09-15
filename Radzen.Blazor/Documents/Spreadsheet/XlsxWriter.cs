@@ -39,6 +39,8 @@ class XlsxWriter(Workbook sourceWorkbook)
 
     private const int MaxCellCharacters = 32_767;
 
+    private const int MaxStreamedStyles = 4096;
+
     private readonly Dictionary<(Format Format, CellDataType Type, bool Quoted), int?> streamedStyles = new(StreamedStyleComparer.Instance);
 
     private sealed class StreamedStyleComparer : IEqualityComparer<(Format Format, CellDataType Type, bool Quoted)>
@@ -1583,7 +1585,7 @@ class XlsxWriter(Workbook sourceWorkbook)
         {
             var cell = getCell(line[column]);
 
-            if (cell.Data?.Value is not null || cell.Format is not null)
+            if (cell.Data?.Value is not null || cell.Format?.IsDefault == false)
             {
                 if (firstColumn < 0)
                 {
@@ -1602,7 +1604,7 @@ class XlsxWriter(Workbook sourceWorkbook)
             var value = data?.Value;
             var type = data?.Type ?? default;
 
-            if (value is null && format is null)
+            if (value is null && format?.IsDefault != false)
             {
                 continue;
             }
@@ -1631,15 +1633,19 @@ class XlsxWriter(Workbook sourceWorkbook)
                     ? GetOrCreateCellStyle(format, type, quoted, styleTracker)
                     : null;
 
-                streamedStyles[(format, type, quoted)] = style;
+                // Keep reused formats cached without retaining every instance from the source.
+                // The style tracker still deduplicates uncached formats by value.
+                if (streamedStyles.Count < MaxStreamedStyles)
+                {
+                    streamedStyles[(format, type, quoted)] = style;
+                }
             }
 
             if (value is null)
             {
                 if (style is not null)
                 {
-                    WriteCellStart(writer, address, style);
-                    writer.WriteEndElement();
+                    WritePlaceholder(writer, address, style);
                 }
             }
             else if (type == CellDataType.String && useInlineStrings)

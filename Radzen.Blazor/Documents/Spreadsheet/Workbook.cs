@@ -225,10 +225,10 @@ public class Workbook
     /// <remarks>
     /// Rows, tables, text and failure cleanup behave as in the value-only overload.
     /// Each tuple represents one column. A null format uses the default format for the value's type;
-    /// a null value with a format writes a styled blank cell.
+    /// a null value with a non-default format writes a styled blank cell.
     /// Reuse a Format instance across rows (for example, one per column). Formats and their border
     /// styles must not be mutated during the save: styles are cached by format instance, value type
-    /// and quoting. Cache memory grows with the distinct instances and type/quoting combinations.
+    /// and quoting.
     /// </remarks>
     /// <param name="stream">Destination stream. Not closed by this method.</param>
     /// <param name="rows">The values and formats to append.</param>

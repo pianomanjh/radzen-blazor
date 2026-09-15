@@ -122,7 +122,7 @@ public class WorkbookStreamedRowsTests
     }
 
     [Fact]
-    public async Task Reused_format_distinguishes_value_type_and_quoting_without_growing_styles()
+    public async Task Reused_format_distinguishes_value_type_and_quoting()
     {
         var format = new Format { Bold = true };
         var row = new (CellData? Data, Format? Format)[]
@@ -138,6 +138,57 @@ public class WorkbookStreamedRowsTests
         Assert.NotEqual(first[0], first[1]);
         Assert.NotEqual(first[2], first[3]);
         Assert.Equal(4, Part(stream, "xl/styles.xml").Root!.Element(Main + "cellXfs")!.Elements().Count());
+    }
+
+    [Fact]
+    public async Task Default_formatted_blanks_do_not_expand_row_spans()
+    {
+        using var stream = new MemoryStream();
+        await Framed().SaveToStreamAsync(stream, FormattedRows(
+            [(null, new Format()), (CellData.FromNumber(1), null), (null, new Format())],
+            [(null, new Format())],
+            [(null, new Format { Bold = true })]));
+
+        var populated = Row(stream, 2);
+        Assert.Equal("2:2", (string?)populated.Attribute("spans"));
+        Assert.Equal("B2", (string?)Assert.Single(populated.Elements(Main + "c")).Attribute("r"));
+        var empty = Row(stream, 3);
+        Assert.Null(empty.Attribute("spans"));
+        Assert.Empty(empty.Elements(Main + "c"));
+        Assert.Equal("A4", (string?)Assert.Single(Row(stream, 4).Elements(Main + "c")).Attribute("r"));
+    }
+
+    [Fact]
+    public async Task Fresh_format_instances_are_not_all_retained_during_the_save()
+    {
+        static int CountAlive(WeakReference<Format>[] formats) =>
+            formats.Count(reference => reference.TryGetTarget(out _));
+
+        static async IAsyncEnumerable<(CellData? Data, Format? Format)[]> FreshFormats()
+        {
+            var formats = new WeakReference<Format>[10_000];
+            for (var i = 0; i < formats.Length; i++)
+            {
+                var format = new Format { NumberFormat = i % 2 == 0 ? "0.0000" : "0%" };
+                formats[i] = new WeakReference<Format>(format);
+                yield return [(CellData.FromNumber(i), format)];
+            }
+
+            await Task.Yield();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Assert.InRange(CountAlive(formats), 0, 4097);
+        }
+
+        using var stream = new MemoryStream();
+        await Framed().SaveToStreamAsync(stream, FreshFormats());
+        var sheet = Read(stream);
+        Assert.Equal(9998d, sheet.Cells[9999, 0].Value);
+        Assert.Equal("0.0000", sheet.Cells[9999, 0].Format.NumberFormat);
+        Assert.Equal(9999d, sheet.Cells[10000, 0].Value);
+        Assert.Equal("0%", sheet.Cells[10000, 0].Format.NumberFormat);
+        Assert.Equal(3, Part(stream, "xl/styles.xml").Root!.Element(Main + "cellXfs")!.Elements().Count());
     }
 
     private sealed class EqualFormat : Format
