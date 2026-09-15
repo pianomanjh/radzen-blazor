@@ -1,0 +1,33 @@
+runtime=.NET 10.0.11; architecture=Arm64; serverGC=False
+rows=50000; columns=11; cells=550000; passes=3; warmups=1
+arm,pass,allocated_bytes,elapsed_ms,gen0,gen1,gen2,output_bytes
+values-shared,1,152944,341.087,0,0,0,3006155
+values-inline,1,152904,303.842,0,0,0,2777825
+tuples-null-inline,1,152304,305.504,0,0,0,2777827
+formats-reused-shared,1,156720,377.056,0,0,0,2933319
+formats-reused-inline,1,154952,324.554,0,0,0,2687031
+formats-fresh-inline,1,121725792,582.773,9,5,1,2687031
+calibration,1,79201768,53.725,9,5,1,0
+values-inline,2,152736,294.543,0,0,0,2777827
+tuples-null-inline,2,152136,297.923,0,0,0,2777825
+formats-reused-shared,2,156672,370.188,0,0,0,2933320
+formats-reused-inline,2,154952,325.553,0,0,0,2687032
+formats-fresh-inline,2,121724112,555.452,9,5,1,2687030
+calibration,2,79201768,54.756,9,5,1,0
+values-shared,2,152776,329.615,0,0,0,3006154
+tuples-null-inline,3,153816,298.461,0,0,0,2777829
+formats-reused-shared,3,156672,367.333,0,0,0,2933320
+formats-reused-inline,3,154952,325.043,0,0,0,2687033
+formats-fresh-inline,3,121724112,550.078,9,5,1,2687033
+calibration,3,79201768,55.523,9,5,1,0
+values-shared,3,151096,360.548,0,0,0,3006153
+values-inline,3,151792,309.171,0,0,0,2777826
+MEDIANS: arm,allocated_bytes,elapsed_ms
+values-shared,152776,341.087
+values-inline,152736,303.842
+tuples-null-inline,152304,298.461
+formats-reused-shared,156672,370.188
+formats-reused-inline,154952,325.043
+formats-fresh-inline,121724112,555.452
+calibration,79201768,54.756
+calibration_expected_bytes=79200048

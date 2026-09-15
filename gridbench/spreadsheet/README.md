@@ -127,3 +127,10 @@ results.
 
 `SpreadsheetAlloc.csproj.template` is one that worked; the `ProjectReference` path in it is absolute and
 needs changing.
+
+## Tuple-format streaming follow-up
+
+[Streamed row formatting benchmark](STREAMED-FORMATS.md) adapts the streamed harness to the merged
+workbook API and compares master, the tuple overload before capping its cache, and the capped version.
+It includes a reusable project, reproduction commands, raw runs, allocation calibration and the limits
+of interpreting warm allocations when buffers are pooled.
