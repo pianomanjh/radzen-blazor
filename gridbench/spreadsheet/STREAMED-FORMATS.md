@@ -62,3 +62,35 @@ Raw measurements, including all elapsed times, collection counts and output byte
 - [Master](results/streamed-formats-2026-09-15/master.txt)
 - [Before cap](results/streamed-formats-2026-09-15/uncapped.txt)
 - [Current PR](results/streamed-formats-2026-09-15/current.txt)
+
+## Capped cache versus direct style lookup
+
+Follow-up on the same machine/runtime and workload. The experiment removes only the instance cache and its comparer, resolving each cell through the existing value-based style tracker. No production PR changes were made for this experiment.
+
+- Capped implementation: `6e0e6e34c9d1183f1b3af12e9de3020ef6325328`.
+- No-cache experiment: [`450cd6cf7`](https://github.com/pianomanjh/radzen-blazor/commit/450cd6cf7), branch `gridbench/streamed-formats-no-cache`.
+- Same harness and binaries, compiled in Release with `FormattedRows=true`.
+- Process order: capped, no cache, no cache, capped. Each process warms every arm and performs three rotating/interleaved passes: six measured passes per implementation. No build overlapped measurement.
+
+| Arm | Capped allocated MiB | No-cache allocated MiB | Capped median ms | No-cache median ms |
+| --- | ---: | ---: | ---: | ---: |
+| Values, shared strings | 0.146 | 0.145 | 341 | 363 |
+| Values, inline strings | 0.146 | 0.145 | 293 | 319 |
+| Tuples, null formats, inline strings | 0.145 | 0.145 | 296 | 318 |
+| Reused formats, shared strings | 0.149 | 0.148 | 367 | 405 |
+| Reused formats, inline strings | 0.148 | 0.148 | 331 | 359 |
+| Fresh format per cell, inline strings | 72.035 | 71.483 | 394 | 373 |
+| Calibration | 75.533 | 75.533 | 62 | 63 |
+
+Times are observed six-pass medians, not a general throughput guarantee. Both process orders showed the same direction: per-process medians for reused/shared were 364–376 ms capped versus 403–411 ms direct; reused/inline were 323–335 versus 353–373 ms. This repeated comparison supports a modest CPU benefit for caching in this workload, while preserving the original harness warning about noisy timing on this machine.
+
+For reused formats, allocation differences are roughly one kilobyte or less and overlap run variation. The instance cache retains additional bookkeeping and format references; this test does not measure their retained heap size. For fresh formats, removing the cap/cache saves another **0.552 MiB of total allocation** (72.035 to 71.483 MiB), since those instances mostly miss a full cache anyway. Most of that arm's allocation is still the caller's 550,000 new formats.
+
+**Decision informed by this measurement:** the cache is a CPU optimization for reused formats, not a memory optimization. Direct lookup simplifies the implementation and reads the current format on each cell, so mutations between rows are naturally reflected without change-event subscriptions. It trades that behavior for repeated style resolution (roughly 9–10% longer elapsed time on the reused-format arms in this run). The PR retains the maintainer-requested cache pending a decision to change that API contract.
+
+Raw paired runs:
+
+- [Capped, first](results/streamed-formats-2026-09-15/capped-pair1.txt)
+- [No cache, first](results/streamed-formats-2026-09-15/no-cache-pair1.txt)
+- [No cache, reverse order](results/streamed-formats-2026-09-15/no-cache-pair2.txt)
+- [Capped, reverse order](results/streamed-formats-2026-09-15/capped-pair2.txt)
