@@ -220,6 +220,43 @@ public class Workbook
     }
 
     /// <summary>
+    /// Saves the workbook as XLSX, appending formatted source rows below the built rows in its only sheet.
+    /// </summary>
+    /// <remarks>
+    /// Rows, tables, text and failure cleanup behave as in the value-only overload.
+    /// Each tuple represents one column. A null format uses the default format for the value's type;
+    /// a null value with a format writes a styled blank cell.
+    /// Reuse a Format instance across rows (for example, one per column). Formats and their border
+    /// styles must not be mutated during the save: styles are cached by format instance, value type
+    /// and quoting. Cache memory grows with the distinct instances and type/quoting combinations.
+    /// </remarks>
+    /// <param name="stream">Destination stream. Not closed by this method.</param>
+    /// <param name="rows">The values and formats to append.</param>
+    /// <param name="cancellationToken">Cancels the save between rows.</param>
+    public Task SaveToStreamAsync(Stream stream, IAsyncEnumerable<(CellData? Data, Format? Format)[]> rows, CancellationToken cancellationToken = default) =>
+        SaveToStreamAsync(stream, rows, useInlineStrings: false, cancellationToken);
+
+    /// <summary>
+    /// Saves the workbook and appends formatted rows to its only sheet, with a choice of text storage.
+    /// </summary>
+    /// <remarks>
+    /// Reuse format instances across rows and do not mutate them or their border styles during the save.
+    /// Inline strings keep appended text out of the shared string table. Built cells still use shared strings.
+    /// Rows, tables and failure cleanup behave as in the value-only overload.
+    /// </remarks>
+    /// <param name="stream">Destination stream. Not closed by this method.</param>
+    /// <param name="rows">The values and formats to append.</param>
+    /// <param name="useInlineStrings">Whether to store appended text in each cell instead of the shared string table.</param>
+    /// <param name="cancellationToken">Cancels the save between rows.</param>
+    public Task SaveToStreamAsync(Stream stream, IAsyncEnumerable<(CellData? Data, Format? Format)[]> rows, bool useInlineStrings, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        return new XlsxWriter(this).WriteAsync(stream, rows, useInlineStrings, cancellationToken);
+    }
+
+    /// <summary>
     /// Loads a workbook from the specified stream in the Open XML Spreadsheet format (XLSX).
     /// </summary>
     /// <param name="stream"></param>

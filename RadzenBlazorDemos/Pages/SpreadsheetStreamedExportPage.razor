@@ -8,7 +8,8 @@
     never built as cells. Shared strings retain distinct text values; use the save overload with
     <code>useInlineStrings: true</code> to avoid retaining the appended text. Here the finished file is
     held in memory to hand to the browser; write to a file or a response stream to avoid that too.
-    Exported dates and numbers use the writer's default formats.
+    The tuple overload keeps exported dates and numbers typed while applying explicit date and
+    four-decimal currency formats. Format instances are created once and reused across rows.
 </RadzenText>
 
 <RadzenExample ComponentName="Spreadsheet" Example="SpreadsheetStreamedExport">
