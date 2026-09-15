@@ -5,7 +5,6 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
@@ -38,21 +37,6 @@ class XlsxWriter(Workbook sourceWorkbook)
     private const int MaxColumns = 16_384;
 
     private const int MaxCellCharacters = 32_767;
-
-    private const int MaxStreamedStyles = 4096;
-
-    private readonly Dictionary<(Format Format, CellDataType Type, bool Quoted), int?> streamedStyles = new(StreamedStyleComparer.Instance);
-
-    private sealed class StreamedStyleComparer : IEqualityComparer<(Format Format, CellDataType Type, bool Quoted)>
-    {
-        public static readonly StreamedStyleComparer Instance = new();
-
-        public bool Equals((Format Format, CellDataType Type, bool Quoted) x, (Format Format, CellDataType Type, bool Quoted) y) =>
-            ReferenceEquals(x.Format, y.Format) && x.Type == y.Type && x.Quoted == y.Quoted;
-
-        public int GetHashCode((Format Format, CellDataType Type, bool Quoted) key) =>
-            HashCode.Combine(RuntimeHelpers.GetHashCode(key.Format), key.Type, key.Quoted);
-    }
 
     public void Write(Stream stream)
     {
@@ -1627,19 +1611,9 @@ class XlsxWriter(Workbook sourceWorkbook)
 
             format ??= DefaultFormat;
 
-            if (!streamedStyles.TryGetValue((format, type, quoted), out var style))
-            {
-                style = !format.IsDefault || type == CellDataType.Date || quoted
-                    ? GetOrCreateCellStyle(format, type, quoted, styleTracker)
-                    : null;
-
-                // Keep reused formats cached without retaining every instance from the source.
-                // The style tracker still deduplicates uncached formats by value.
-                if (streamedStyles.Count < MaxStreamedStyles)
-                {
-                    streamedStyles[(format, type, quoted)] = style;
-                }
-            }
+            var style = !format.IsDefault || type == CellDataType.Date || quoted
+                ? GetOrCreateCellStyle(format, type, quoted, styleTracker)
+                : (int?)null;
 
             if (value is null)
             {
