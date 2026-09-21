@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RootNamespace>Radzen.FastGrid.Export</RootNamespace>
+    <PackageId>Radzen.Blazor.FastGrid.Export</PackageId>
+    <Description>Exports a RadzenFastGrid to a spreadsheet workbook, using the writer already inside Radzen.Blazor.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>blazor;radzen;datagrid;grid;export;xlsx;excel</PackageTags>
+    <Version>11.3.2-jakks.3</Version>
+    <Copyright>InventiveCoders, LLC</Copyright>
+    <Authors>InventiveCoders, LLC</Authors>
+    <Company>InventiveCoders, LLC</Company>
+    <PackageProjectUrl>https://www.radzen.com</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/pianomanjh/radzen-blazor</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <ProjectReference Include="..\Radzen.Blazor.FastGrid\Radzen.Blazor.FastGrid.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Label="Allow internal members to be visible to the unit tests">
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Radzen.Blazor.FastGrid.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

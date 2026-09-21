@@ -1,0 +1,67 @@
+# Publishes the two FastGrid packages to this account's own GitHub Packages feed.
+#
+# GITHUB_TOKEN works here and only here: this workflow runs in pianomanjh/radzen-blazor, which is the
+# feed's own account. A consumer in another organisation cannot use it and needs a PAT.
+name: Publish FastGrid packages
+
+on:
+  push:
+    tags:
+      - 'fastgrid-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      # Chromium, because part of the suite measures rendered geometry through it - GeometryParityTests,
+      # PopupGeometryTests and some of FastGridAutoFitTests. Installed the way fastgrid-parity.yml
+      # installs it, globally, because the measurement script resolves Playwright from the global npm
+      # root.
+      #
+      # Filtering those classes out instead was tried and abandoned: the first tag failed on
+      # GeometryParityTests, the second on PopupGeometryTests, and there is no trait to filter on - so
+      # excluding them by name is a list that goes stale silently, which is worse than a slower job.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright and Chromium
+        run: |
+          npm install -g playwright
+          playwright install --with-deps chromium
+
+      # The suite is the gate. A package that ships a red build is worse than one that ships late.
+      - name: Test
+        run: dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj -c Release
+
+      - name: Pack
+        run: |
+          dotnet pack Radzen.Blazor.FastGrid/Radzen.Blazor.FastGrid.csproj -c Release -o packages
+          dotnet pack Radzen.Blazor.FastGrid.Export/Radzen.Blazor.FastGrid.Export.csproj -c Release -o packages
+
+      # --skip-duplicate so re-running a tag is not an error; a version is immutable once pushed, so a
+      # change means a new version rather than a re-push of this one.
+      - name: Push
+        env:
+          # Through the environment rather than interpolated into the command line, so the token is
+          # never part of an argument list a process listing or a trace could show.
+          NUGET_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push "packages/*.nupkg" \
+            --source https://nuget.pkg.github.com/pianomanjh/index.json \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate

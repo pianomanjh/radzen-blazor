@@ -1,0 +1,76 @@
+@*
+    Authored the way a page would author it, which the hand-built render fragments elsewhere in this
+    project cannot check: every generic parameter here is inferred by Razor. If CollectionColumn's
+    TElement stopped being inferable from Property, this file would fail to compile rather than fail a
+    test - which is the point of it.
+*@
+<RadzenFastGrid Data="@Data" AllowSorting="true" AllowFiltering="true" FilterMode="FilterMode.CheckBoxList">
+    <PropertyColumn Property="@(p => p.First)" Title="First" />
+    <PropertyColumn Property="@(p => p.Customer.Name)" Title="Customer" />
+    <PropertyColumn Property="@(p => p.Salary)" Format="C" Title="Salary" />
+    <PropertyColumn Property="@(p => p.Regions)" Separator=" / " Title="Regions" />
+    <CollectionColumn Property="@(p => p.Accounts)"
+                      DisplayProperty="@(a => a.Name)"
+                      Title="Accounts" />
+    <CollectionColumn Property="@(p => p.Accounts)"
+                      DisplayProperty="@(a => a.Name)"
+                      FilterProperty="@(a => a.Region)"
+                      SortBy="@(FastGridSort<Person>.By(p => p.First))"
+                      Separator="; "
+                      Title="Accounts by region" />
+    <TemplateColumn TItem="Person" Title="Template"
+                    SortBy="@(FastGridSort<Person>.By(p => p.Last))">
+        <Template Context="row">@row.Last</Template>
+    </TemplateColumn>
+</RadzenFastGrid>
+
+@* The layout, chrome, row and selection surface, authored the same way. Razor has to infer TItem for
+   every callback here too - a Func<Person, string> and an EventCallback<ICollection<Person>> both
+   come from the cascaded type parameter, not from anything written on the tag. *@
+<RadzenFastGrid Data="@Data" ColumnWidth="120px" ShowHeader="true" Responsive="true"
+                GridLines="DataGridGridLines.Both" Density="Density.Compact"
+                AllowAlternatingRows="false" ShowCellDataAsTooltip="true"
+                RowClass="@(p => p.Salary > 2500 ? "senior" : null)"
+                RowStyle="@(p => p.Bonus is null ? "opacity:.6" : null)"
+                SelectionMode="DataGridSelectionMode.Multiple"
+                @bind-Selection="@Chosen"
+                RowSelect="@((Person p) => { })" RowDeselect="@((Person p) => { })"
+                RowClick="@((Person p) => { })" RowDoubleClick="@((Person p) => { })"
+                CellClick="@((FastGridCellEventArgs<Person> args) => { })"
+                CellContextMenu="@((FastGridCellEventArgs<Person> args) => { })">
+    <PropertyColumn Property="@(p => p.First)" Title="First" Width="200px" OrderIndex="1" />
+    <PropertyColumn Property="@(p => p.Last)" Title="Last" Visible="false" />
+    <PropertyColumn Property="@(p => p.Id)" Title="Id" OrderIndex="0"
+                    TextAlign="TextAlign.Right" MinWidth="60px" MaxWidth="90px" />
+    <PropertyColumn Property="@(p => p.Salary)" Title="Salary" Format="C"
+                    TextAlign="TextAlign.Right" WhiteSpace="WhiteSpace.Nowrap"
+                    SortOrder="SortOrder.Descending" />
+</RadzenFastGrid>
+
+@* Header and footer templates, sorting by more than one column, and stored state. The footer
+   deliberately renders a field rather than an aggregate expression: written inline it would be a scan
+   of the data on every render. *@
+<RadzenFastGrid Data="@Data" AllowSorting="true"
+                AllowMultiColumnSorting="true" ShowMultiColumnSortingIndex="true"
+                Settings="@Stored" SettingsChanged="@(s => Stored = s)">
+    <PropertyColumn Property="@(p => p.First)" SortOrder="SortOrder.Ascending">
+        <HeaderTemplate>Given <em>name</em></HeaderTemplate>
+        <FooterTemplate>@Total rows</FooterTemplate>
+    </PropertyColumn>
+    <PropertyColumn Property="@(p => p.Salary)" Format="C" Title="Salary"
+                    SortOrder="SortOrder.Descending" FooterCssClass="total">
+        <FooterTemplate>@TotalSalary</FooterTemplate>
+    </PropertyColumn>
+</RadzenFastGrid>
+
+@code {
+    [Parameter] public IEnumerable<Person> Data { get; set; } = Array.Empty<Person>();
+
+    ICollection<Person> Chosen { get; set; } = new List<Person>();
+
+    FastGridSettings Stored { get; set; }
+
+    int Total { get; set; }
+
+    decimal TotalSalary { get; set; }
+}

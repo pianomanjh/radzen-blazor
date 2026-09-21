@@ -1,0 +1,598 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+
+<h1>RadzenFastGrid playground</h1>
+
+<div class="toolbar">
+    <fieldset>
+        <legend>Columns</legend>
+        <label><input type="checkbox" @bind="allowResize" /> Resize</label>
+        <label><input type="checkbox" @bind="allowReorder" /> Reorder</label>
+        <label><input type="checkbox" @bind="frozen" /> Freeze Id + Name</label>
+        <label><input type="checkbox" @bind="allowPicking" /> Column picker</label>
+        <label><input type="checkbox" @bind="declaredWidths" /> Declared widths</label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Auto-fit</legend>
+        <label>When
+            <select @bind="autoFit">
+                <option value="@AutoFitMode.None">off</option>
+                <option value="@AutoFitMode.Once">once</option>
+                <option value="@AutoFitMode.OnDemand">on demand</option>
+            </select>
+        </label>
+        <label>Too wide
+            <select @bind="autoFitOverflow">
+                <option value="@AutoFitOverflow.Scroll">scroll</option>
+                <option value="@AutoFitOverflow.Fit">fit container</option>
+            </select>
+        </label>
+        <label><input type="checkbox" @bind="requireIdentity" /> Id + Name required</label>
+        <label title="Best-effort columns are never taken below this">Floor
+            <input type="number" @bind="floorPx" style="width:5rem" min="0" max="400" step="10" />
+        </label>
+        <button @onclick="FitColumns" disabled="@(autoFit == AutoFitMode.None)">Fit columns</button>
+        <button @onclick="ResetWidths">Reset widths</button>
+    </fieldset>
+
+    <fieldset>
+        <legend>Stage width</legend>
+        <label>
+            <input type="range" min="320" max="1600" step="20" @bind="stageWidth" @bind:event="oninput" />
+            @(stageWidth)px
+        </label>
+        <label><input type="checkbox" @bind="stageFull" /> Full width</label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Rows</legend>
+        <label><input type="checkbox" @bind="allowSorting" /> Sorting</label>
+        <label><input type="checkbox" @bind="allowFiltering" /> Filtering</label>
+        @* §35. Both UIs over the same data and the same columns, which is the only way to compare
+           them - and switching between them with a filter applied is how §32's browser pass found the
+           CheckBoxList circuit crash in the first place. *@
+        <label>Filter in
+            <select @bind="filterUI" disabled="@(!allowFiltering)">
+                <option value="@FilterUI.Row">a row</option>
+                <option value="@FilterUI.Menu">a menu</option>
+            </select>
+        </label>
+        <label title="A lookup column's list is the lookup itself; every other column scans the data"
+               >Filter with
+            <select @bind="filterMode" disabled="@(!allowFiltering || filterUI == FilterUI.Menu)">
+                <option value="@FilterMode.Simple">a box</option>
+                <option value="@FilterMode.CheckBoxList">check boxes</option>
+            </select>
+        </label>
+        @* §37. Independent of "Filter in" and of Filtering itself, which is the point: turn Filtering
+           off with pills on and the bar still says what is hidden, because that is where an
+           explanation is worth most. The pill body goes to the menu under one and to the filter box
+           under the other. *@
+        <label title="Applied filters, said in words, above the scroll container"
+               ><input type="checkbox" @bind="showPills" /> Filter pills</label>
+        @* §39's band half. Here rather than in a test because the whole question the section left open
+           was how tall the band is with a menu in it, which only a browser answers. *@
+        <label title="The grid's own verbs, in the same band as the pills"
+               ><input type="checkbox" @bind="showGridMenu" /> Grid menu</label>
+        @* §34, and the reason it is here rather than in a test: a token survives a settings round trip
+           only if what the page holds is a blob rather than a live object, and this is the one place
+           where pressing "Round-trip through JSON" after it proves that end to end. *@
+        <button @onclick="FilterLastThirtyDays" disabled="@(!allowFiltering)"
+                title="Hired between today-29d and today@end - stored as those words, read when the query runs"
+                >Hired: last 30 days</button>
+        <label><input type="checkbox" @bind="allowPaging" /> Paging</label>
+        <label><input type="checkbox" @bind="virtualize" /> Virtualize</label>
+        <label><input type="checkbox" @bind="alternating" /> Alternating</label>
+        <label><input type="checkbox" @bind="rowDetail" /> Row detail</label>
+        <label>Count <input type="number" @bind="rowCount" style="width:6rem" min="1" max="200000" /></label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Lookups</legend>
+        <label title="Where the names come from. Only a query is fetched, and only it leaves the cells blank for a render."
+               >Team names from
+            <select @bind="provenance">
+                <option value="@Provenance.Map">a map</option>
+                <option value="@Provenance.Items">a sequence</option>
+                <option value="@Provenance.Query">a query</option>
+            </select>
+        </label>
+        <label><input type="checkbox" @bind="slowLookup" /> Take a second over it</label>
+        <button @onclick="ReloadLookups">Reload (drops the names)</button>
+    </fieldset>
+
+    <fieldset>
+        <legend>Lookup popup</legend>
+        <label title="Content grows the panel and then fits inside it; Columns only apportions the width it already has"
+               >Sizing
+            <select @bind="popupFit">
+                <option value="@PopupFit.None">off</option>
+                <option value="@PopupFit.Columns">fit columns</option>
+                <option value="@PopupFit.Content">grow to content</option>
+            </select>
+        </label>
+        <label title="Under 'grow to content' this is the cap rather than the width. Blank means the viewport is the only cap."
+               >Width
+            <input @bind="popupWidth" style="width:6rem" placeholder="e.g. 40rem" />
+        </label>
+        <label title="Rows shown before the popup scrolls. Needs a sizing mode: the height is measured, not multiplied out."
+               >Rows
+            <input type="number" @bind="popupRows" style="width:5rem" min="0" max="30" />
+        </label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Interaction</legend>
+        <label><input type="checkbox" @bind="keyboard" /> Keyboard</label>
+        <label><input type="checkbox" @bind="responsive" /> Responsive</label>
+        <label><input type="checkbox" checked="@selectable" @onchange="SelectableChanged" /> Selection</label>
+        <label><input type="checkbox" @bind="multiSelect" /> Multi-select</label>
+    </fieldset>
+
+    <fieldset>
+        <legend>Source</legend>
+        <label><input type="checkbox" checked="@useEf" @onchange="UseEfChanged" /> Entity Framework</label>
+        <button @onclick="Rebuild">Apply</button>
+        <button @onclick="@(() => metrics.Reset())">Reset metrics</button>
+    </fieldset>
+
+    @* §32. Nothing here could reach the settings fault before this: the page held the blob as a live
+       object, so every value kept the type it was captured with, and the whole class of bug is what a
+       serializer does to `object`. Sort, filter, resize, then press this - it is a page reload with a
+       real store behind it. *@
+    <fieldset>
+        <legend>Settings</legend>
+        <button @onclick="RoundTripSettings" disabled="@(settings is null)">Round-trip through JSON</button>
+        <button @onclick="@(() => { settings = null; Log("settings dropped"); })">Forget</button>
+
+        @* §39, and the reason this is here rather than only in a test: localStorage is a browser and
+           bUnit is not one. A private window, a browser told to block site data and a full quota all
+           throw from the accessor itself, and the only way to see that the grid goes on working
+           unremembered is to open one and try it. Tick it, sort and resize, then reload the page. *@
+        <label title="Keeps sort, filters, widths, order and the page in this browser under the key below">
+            <input type="checkbox" checked="@persist" @onchange="TogglePersist" /> Remember in localStorage
+        </label>
+        <button @onclick="ClearStoredSettings" disabled="@(!persist)">Reset layout</button>
+    </fieldset>
+</div>
+
+<div class="metrics">
+    <span><b>@(useEf ? "EF / SQLite" : "in-memory list")</b></span>
+    <span>renders <b>@metrics.Renders</b></span>
+    <span>per sec <b class="@(metrics.RendersPerSecond > 5 ? "bad" : null)">@metrics.RendersPerSecond.ToString("F1")</b></span>
+    <span>last render <b>@metrics.LastRenderMs.ToString("F1") ms</b></span>
+    <span>alloc/render <b>@Kb(metrics.LastRenderBytes)</b></span>
+    <span>heap <b>@Kb(metrics.ManagedHeapBytes)</b></span>
+    <span>GC <b>@metrics.Gen0 / @metrics.Gen1 / @metrics.Gen2</b></span>
+    <span>settings raised <b>@settingsRaised</b></span>
+</div>
+
+@* Against the right edge on purpose. A popup that never has to shift never exercises the branch
+   most likely to be wrong - the leftward expansion, and the viewport cap behind it - so a lookup
+   sitting comfortably in the middle of the page would demonstrate the feature without testing it.
+   The control is narrow for the same reason: a panel wider than its control is the ordinary case. *@
+<div class="lookup-bar">
+    <RadzenFastDropDownDataGrid TItem="Row" TValue="int" @bind-Value="lookupValue"
+                                Data="@Data"
+                                TextProperty="@(x => x.Name)"
+                                ValueProperty="@(x => x.Id)"
+                                Placeholder="Pick a row"
+                                PopupFit="@popupFit"
+                                PopupWidth="@PopupWidthOrNull"
+                                MaxRows="@popupRows"
+                                AllowPaging="@allowPaging"
+                                PageSize="8"
+                                AllowVirtualization="@virtualize"
+                                Style="width:180px">
+        @* MinWidth on every one of them, and it is load-bearing rather than decoration. A column with
+           no floor of its own is given one at its own body width, so it never truncates and the fit
+           has nothing to take - which means a capped popup ends up with a table wider than its panel
+           and a horizontal scrollbar. That is §13's rule working, not a fault, but it is only visible
+           here with the floors present to compare against. *@
+        <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" MinWidth="@Floor" />
+        <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" MinWidth="@Floor" />
+        <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department" MinWidth="@Floor" />
+        <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes" MinWidth="@Floor" />
+    </RadzenFastDropDownDataGrid>
+</div>
+
+<div class="stage" style="@StageStyle">
+    <RadzenFastGrid TItem="Row" Data="@Data" @ref="grid"
+                    AutoFitColumns="@autoFit"
+                    AutoFitOverflow="@autoFitOverflow"
+                    AllowColumnResize="@allowResize"
+                    AllowColumnReorder="@allowReorder"
+                    AllowSorting="@allowSorting"
+                    AllowFiltering="@allowFiltering"
+                    FilterMode="@filterMode"
+                    FilterUI="@filterUI"
+                    ShowFilterPills="@showPills"
+                    ShowGridMenu="@showGridMenu"
+                    AllowPaging="@allowPaging"
+                    AllowVirtualization="@virtualize"
+                    AllowColumnPicking="@allowPicking"
+                    AllowKeyboardNavigation="@keyboard"
+                    AllowAlternatingRows="@alternating"
+                    Responsive="@responsive"
+                    AllowRowSelectOnRowClick="@selectable"
+                    SelectionMode="@(multiSelect ? DataGridSelectionMode.Multiple : DataGridSelectionMode.Single)"
+                    Selection="@selection"
+                    SelectionChanged="@OnSelectionChanged"
+                    PageSize="25"
+                    ShowPagingSummary="true"
+                    Template="@(rowDetail ? DetailTemplate : null)"
+                    ColumnResized="@(a => Log($"resized {a.Column.Title} -> {a.Width:F0}px"))"
+                    ColumnReordered="@(a => Log($"reordered {a.Column.Title} -> {a.OrderIndex}"))"
+                    RowClick="@(r => Log($"row click: {r.Name}"))"
+                    RowDoubleClick="@(r => Log($"row dblclick: {r.Name}"))"
+                    CellClick="@(a => Log($"cell click: {a.Data.Name} / {a.Column.Title}"))"
+                    CellContextMenu="@(a => Log($"cell menu: {a.Data.Name} / {a.Column.Title}"))"
+                    Settings="@settings"
+                    StorageKey="@(persist ? "playground-grid" : null)"
+                    SettingsChanged="@OnSettingsChanged">
+        <ChildContent>
+            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Id)" Title="Id" Width="@Wide("80px")"
+                            AutoFitPriority="@Identity" MinWidth="@Floor" Frozen="@frozen" />
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Name)" Title="Name" Width="@Wide("220px")"
+                            AutoFitPriority="@Identity" MinWidth="@Floor" Frozen="@frozen" />
+            @* §36. Declared, not discovered: the author is the only party who knows this column holds
+               five values rather than fifty thousand, and FilterMode.CheckBoxList is where they say so.
+               Under a menu it is offered "Is in" and the scan runs once, when the panel is opened. *@
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Department)" Title="Department"
+                            MinWidth="@Floor" Width="@Wide("260px")"
+                            FilterMode="FilterMode.CheckBoxList" />
+            @* §36. The type holds the members, so this list costs no query at all - and offers Staff,
+               which no row is. *@
+            <PropertyColumn TItem="Row" TProp="Level" Property="@(x => x.Level)" Title="Level"
+                            MinWidth="@Floor" Width="@Wide("140px")" />
+            @* §36. Nullable, declared, and no lookup behind it - the blank entry's own case. Tick
+               (Blank) with two numbers beside it to see "these two or nothing" in one filter. *@
+            <PropertyColumn TItem="Row" TProp="int?" Property="@(x => x.Rating)" Title="Rating"
+                            MinWidth="@Floor" Width="@Wide("140px")"
+                            FilterMode="FilterMode.CheckBoxList" />
+            <PropertyColumn TItem="Row" TProp="int" Property="@(x => x.Age)" Title="Age" MinWidth="@Floor" Width="@Wide("90px")" />
+            <PropertyColumn TItem="Row" TProp="DateTime" Property="@(x => x.Hired)" Title="Hired" MinWidth="@Floor" Format="d" Width="@Wide("180px")" @ref="hiredColumn" />
+            <PropertyColumn TItem="Row" TProp="decimal" Property="@(x => x.Salary)" Title="Salary" MinWidth="@Floor" Format="C0" Width="@Wide("180px")" />
+            @* One id per row, nullable - so the check-box list offers an entry for the rows carrying
+               none, and the Simple box matches what is typed against the names rather than the ids. *@
+            <LookupColumn TItem="Row" TKey="int?" Property="@(x => x.TeamId)" Lookup="@TeamLookup"
+                          Title="Team" MinWidth="@Floor" Width="@Wide("160px")"
+                          SortBy="@(FastGridSort<Row>.By(r => r.TeamId))" />
+            @* Many ids per row. Over the Entity Framework source its filter composes
+               TagIds.Any(id => selected.Contains(id)) into SQL rather than running in memory. *@
+            <LookupCollectionColumn TItem="Row" TKey="int" Property="@(x => x.TagIds)" Lookup="@TagLookup"
+                                    Title="Tags" MinWidth="@Floor" Width="@Wide("200px")" />
+            <PropertyColumn TItem="Row" TProp="string" Property="@(x => x.Notes)" Title="Notes (fixed)"
+                            Width="@Wide("260px")" MinWidth="@Floor" Resizable="false" Reorderable="false"
+                            Frozen="@frozen" FrozenPosition="FrozenColumnPosition.Right" />
+        </ChildContent>
+    </RadzenFastGrid>
+</div>
+
+<div class="readout">@readout<br />selected: @SelectionText</div>
+
+@code {
+    bool allowResize = true;
+    bool allowReorder = true;
+    bool frozen;
+    bool allowSorting = true;
+    bool allowFiltering = true;
+    bool allowPaging = true;
+    bool virtualize;
+    bool allowPicking;
+    bool alternating = true;
+    bool rowDetail;
+    bool keyboard = true;
+    // Off by default: it repeats a title in every cell, so it changes what the other toggles look
+    // like. Narrow the window under 768px to see it stack the rows into cards.
+    bool responsive;
+    // Auto-fit measures what is rendered, so it can only widen a column the markup has not already
+    // pinned - which is every column on this page. Turning the declared widths off is what gives it
+    // something to do, and is why the two controls sit beside each other.
+    AutoFitMode autoFit = AutoFitMode.None;
+    bool declaredWidths = true;
+
+    // Fit mode is only visible while the columns cannot all fit, so the stage carries its own width
+    // control: dragging the browser window works too, but it is a poor way to find the edges.
+    AutoFitOverflow autoFitOverflow = AutoFitOverflow.Scroll;
+    bool requireIdentity = true;
+    int floorPx = 80;
+    int stageWidth = 900;
+    bool stageFull = true;
+
+    string? StageStyle => stageFull ? null : $"width:{stageWidth}px";
+
+    // The popup's own sizing, which is a different question from the grid's: the grid fits inside a
+    // container somebody else decided, and the popup decides its own. §29.
+    PopupFit popupFit = PopupFit.Content;
+    string popupWidth = "";
+    int popupRows = 6;
+    int lookupValue;
+
+    string? PopupWidthOrNull => string.IsNullOrWhiteSpace(popupWidth) ? null : popupWidth;
+
+    AutoFitPriority Identity =>
+        requireIdentity ? AutoFitPriority.Required : AutoFitPriority.BestEffort;
+
+    string Floor => $"{floorPx}px";
+
+    RadzenFastGrid<Row>? grid;
+
+    FilterMode filterMode = FilterMode.Simple;
+
+    FilterUI filterUI = FilterUI.Menu;
+
+    bool showPills = true;
+    bool showGridMenu = true;
+
+    /// <summary>Where a lookup's names come from. Only a query is fetched.</summary>
+    enum Provenance { Map, Items, Query }
+
+    Provenance provenance = Provenance.Map;
+    bool slowLookup;
+
+    /// <summary>
+    /// Rebuilt on every read, the way markup does. Only the map and the sequence compare equal across
+    /// two of those - a query's members include expressions, which are a fresh object graph every
+    /// time - so this is also where a column re-resolving on identity rather than once would show up
+    /// as a fetch per render in the metrics.
+    /// </summary>
+    FastGridLookup<int?> TeamLookup => provenance switch
+    {
+        Provenance.Map => FastGridLookup.Map(
+            Lookups.Teams.ToDictionary(t => (int?)t.Id, t => t.Name)),
+        Provenance.Items => FastGridLookup.Items(Lookups.Teams, t => (int?)t.Id, t => t.Name),
+        _ => FastGridLookup.Query(TeamQuery, t => (int?)t.Id, t => t.Name),
+    };
+
+    /// <summary>
+    /// The lookup's own source, which decides whether the fetch goes through the executor - not
+    /// whether the grid's data does. Over Entity Framework it is a real query; over the list it is
+    /// still fetched after the render, which is what leaves the cells blank for one of them.
+    /// </summary>
+    IQueryable<Team> TeamQuery => slowLookup
+        ? Lookups.Teams.AsQueryable().Select(Slowly)
+        : useEf ? ef.Teams : Lookups.Teams.AsQueryable();
+
+    /// <summary>
+    /// Sleep folded into the projection - a fifth of a second per team, so about a second in all -
+    /// which makes the render the cells are blank in one a person can see, and with it the auto-fit
+    /// that waits for the names rather than measuring the blanks.
+    /// </summary>
+    /// <remarks>
+    /// It blocks while it runs, and that is the honest picture: a lookup over a source the executor
+    /// cannot run asynchronously is materialized on the thread that asked for it. What the design
+    /// buys is that the thread is not the one drawing the rows - the fetch happens after the render,
+    /// so the grid is on screen throughout.
+    /// </remarks>
+    static readonly System.Linq.Expressions.Expression<Func<Team, Team>> Slowly =
+        team => new Team { Id = Pause(team.Id), Name = team.Name };
+
+    static int Pause(int id)
+    {
+        Thread.Sleep(200);
+
+        return id;
+    }
+
+    readonly FastGridLookup<int> TagLookup =
+        FastGridLookup.Map(Lookups.Tags.ToDictionary(t => t.Id, t => t.Name));
+
+    async Task ReloadLookups()
+    {
+        if (grid is not null)
+        {
+            await grid.Reload();
+
+            Log("Reload() dropped the names; nothing else does");
+        }
+    }
+
+    bool selectable = true;
+    bool multiSelect;
+    bool useEf;
+    int rowCount = 500;
+
+    readonly Metrics metrics = new();
+    readonly EfSource ef = new();
+
+    List<Row> rows = Row.Make(500);
+    ICollection<Row>? selection;
+    FastGridSettings? settings;
+
+    /// <summary>
+    /// §39. On, because a key that arrives after the grid has drawn is not a case the grid serves -
+    /// it reads it and the restored state does not reach the composed view, which the playground is
+    /// what found. Declared from the start is how an application sets it and is the path that works.
+    /// Untick it to stop storing; "Reset layout" is how to get back to the markup's own state.
+    /// </summary>
+    bool persist = true;
+
+    // Held so the relative-date button has a column to filter; nothing else needs one.
+    PropertyColumn<Row, DateTime>? hiredColumn;
+    int settingsRaised;
+    string readout = "Click a row to select it, drag a column edge to resize, drag the grip to reorder. Freeze pins Id and Name left and Notes right - scroll sideways to see it. Tab into the grid and the arrows move a cell: Enter opens a row, Space selects one, and arrowing off the end turns the page. With Multi-select on, holding Shift extends the selection from the last row Space chose.";
+
+    // The grid takes IEnumerable either way; what differs is whether it is a queryable the executor
+    // will run asynchronously, which is what AsyncOwnsData decides.
+    IEnumerable<Row> Data => useEf ? ef.Rows : rows;
+
+    // Building the database happens here rather than in Data: a render is no place to create and seed
+    // one, and an exception thrown from a render takes the circuit down instead of showing up.
+    void UseEfChanged(ChangeEventArgs args)
+    {
+        useEf = args.Value is true;
+        selection = null;
+        settings = null;
+
+        if (useEf)
+        {
+            ef.Prepare(rowCount);
+        }
+
+        Log(useEf ? "switched to Entity Framework over SQLite" : "switched to the in-memory list");
+    }
+
+    string SelectionText => selection is { Count: > 0 }
+        ? string.Join(", ", selection.Select(r => r.Name).Take(5)) + (selection.Count > 5 ? $" (+{selection.Count - 5})" : "")
+        : "none";
+
+    static string Kb(long bytes) => (bytes / 1024d).ToString("N0") + " KB";
+
+    protected override bool ShouldRender()
+    {
+        metrics.BeginRender();
+
+        return true;
+    }
+
+    protected override void OnAfterRender(bool firstRender) => metrics.EndRender();
+
+    void Rebuild()
+    {
+        rows = Row.Make(rowCount);
+        selection = null;
+
+        if (useEf)
+        {
+            ef.Prepare(rowCount);
+        }
+    }
+
+    // The declared width, or nothing, so auto-fit has columns it is allowed to size. A column that
+    // declares a Width is left alone by a fit, which is every column here until this is switched off.
+    string? Wide(string width) => declaredWidths ? width : null;
+
+    async Task FitColumns()
+    {
+        if (grid is not null)
+        {
+            await grid.AutoFitAsync();
+
+            Log("fitted every column to what is in it");
+        }
+    }
+
+    void ResetWidths()
+    {
+        settings = null;
+        rows = Row.Make(rowCount);
+        Log("widths reset to what the markup declares");
+    }
+
+    void OnSelectionChanged(ICollection<Row> value)
+    {
+        selection = value;
+        Log($"selection: {value?.Count ?? 0} row(s)");
+    }
+
+    // Turning selection off drives AllowRowSelectOnRowClick, so the grid stops running the selection
+    // path rather than the page throwing its answer away - which is the difference between measuring a
+    // grid without selection and measuring one that selects into a bin.
+    void SelectableChanged(ChangeEventArgs args)
+    {
+        selectable = args.Value is true;
+        selection = null;
+        Log(selectable ? "row clicks select again" : "row clicks no longer select");
+    }
+
+    void OnSettingsChanged(FastGridSettings value)
+    {
+        settings = value;
+        settingsRaised++;
+    }
+
+    /// <summary>
+    /// Filters the Hired column to §34's headline case, as the column menu will once it exists.
+    /// </summary>
+    /// <remarks>
+    /// Two tokens rather than one: a relative date resolves to a single instant, so a range takes two of
+    /// them, and the upper bound is the <em>end</em> of today because Between is inclusive at both ends
+    /// and a bare `today` would stop at midnight and drop the whole of it.
+    /// </remarks>
+    async Task FilterLastThirtyDays()
+    {
+        if (grid is null || hiredColumn is null)
+        {
+            Log("no Hired column to filter");
+
+            return;
+        }
+
+        await grid.Filter(hiredColumn, new FastGridFilter(new FastGridFilterCondition(
+            FastGridFilterOperator.Between,
+            new object?[]
+            {
+                new FastGridRelativeDate(FastGridRelativeDateAnchor.Today, -29,
+                    FastGridRelativeDateUnit.Days, endOfDay: false),
+                FastGridRelativeDate.TodayEnd,
+            })));
+
+        Log("Hired filtered to today-29d .. today@end - round-trip the settings and it stays relative");
+    }
+
+    void TogglePersist(ChangeEventArgs args)
+    {
+        persist = args.Value is true;
+
+        Log(persist
+            ? "persisting to localStorage under \"playground-grid\" - sort, resize, then reload the page"
+            : "no longer persisting; what is already stored is left where it is");
+    }
+
+    async Task ClearStoredSettings()
+    {
+        if (grid is null)
+        {
+            return;
+        }
+
+        await grid.ClearSettings();
+
+        // The page's own copy too: it holds the last blob the grid raised, and leaving it would hand
+        // the grid its own pre-reset state back as a parameter on the very next render.
+        settings = null;
+
+        Log("layout reset and the key forgotten");
+    }
+
+    /// <summary>
+    /// What a consumer that actually persists settings does to them, done on demand. §32's subject and
+    /// §33's answer: a stored value is invariant text now, so nothing here depends on what the
+    /// serializer makes of an `object` - and §34's relative dates go out as the words they were written
+    /// as rather than as the dates they currently mean.
+    /// </summary>
+    void RoundTripSettings()
+    {
+        if (settings is null)
+        {
+            return;
+        }
+
+        var json = System.Text.Json.JsonSerializer.Serialize(settings);
+
+        settings = System.Text.Json.JsonSerializer.Deserialize<FastGridSettings>(json);
+
+        var filters = settings?.Columns?.Count(c => c.FilterOperator is not null) ?? 0;
+
+        var stored = string.Join(", ",
+            settings?.Columns?.Where(c => c.FilterValues is { Count: > 0 })
+                .SelectMany(c => c.FilterValues!) ?? Enumerable.Empty<string?>());
+
+        Log($"settings round-tripped through JSON: {json.Length} chars, {filters} filtered column(s) came back"
+            + (stored.Length > 0 ? $" - stored as [{stored}]" : string.Empty));
+    }
+
+    void Log(string line) => readout = line;
+
+    public void Dispose() => ef.Dispose();
+
+    // Passed as a parameter rather than declared as markup: a Template that is merely empty still
+    // switches the expand column on, because having one is what the grid keys the column off.
+    RenderFragment<Row> DetailTemplate => row =>
+        @<div style="padding:.75rem 1rem">
+            Detail for <b>@row.Name</b> - @row.Department, hired @row.Hired.ToShortDateString()
+        </div>;
+}

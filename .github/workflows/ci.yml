@@ -25,5 +25,12 @@ jobs:
     
     - name: Build
       run: dotnet build Radzen.Blazor/Radzen.Blazor.csproj
+    # The packable library built alongside it. It was compiled by no job, so a breaking change in
+    # Radzen.Blazor left CI green while the package that depends on it no longer built.
+    - name: Build FastGrid
+      run: dotnet build Radzen.Blazor.FastGrid/Radzen.Blazor.FastGrid.csproj
     - name: Test
       run: dotnet test Radzen.Blazor.Tests/Radzen.Blazor.Tests.csproj
+    # Everything except the rendered-geometry check, which needs Chromium and has its own workflow.
+    - name: Test FastGrid
+      run: dotnet test Radzen.Blazor.FastGrid.Tests/Radzen.Blazor.FastGrid.Tests.csproj --filter "FullyQualifiedName!~GeometryParityTests"
